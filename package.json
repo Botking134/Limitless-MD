@@ -1,0 +1,16 @@
+{
+  "name": "limitless-bot",
+  "version": "1.0.0",
+  "description": "A modular WhatsApp bot named Limitless with AI capabilities",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "@hapi/boom": "^10.0.1",
+    "@itsliaaa/baileys": "latest",
+    "pino": "^9.0.0",
+    "wa-sticker-formatter": "^4.4.4"
+  }
+}
