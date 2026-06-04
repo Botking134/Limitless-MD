@@ -1,6 +1,7 @@
 // plugins/owner.js
 const settings = require('../settings'); // Up one level to settings.js
 const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js persistently [1]
+const { exec } = require('child_process'); // Process runner for system commands
 
 // Highly versatile target parser supporting replied JID, @mentions, and digits
 function parseTarget(msg, args) {
@@ -24,7 +25,120 @@ function parseTarget(msg, args) {
 }
 
 module.exports = [
-    // 1. TOGGLE PUBLIC/PRIVATE MODE (Owner & Sudo Authorized) [1]
+    // 1. SYSTEM UPDATE COMMAND
+    {
+        name: 'update',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return; // Strict Sudo/Owner Guard
+
+            const parts = args ? args.split(' ') : [];
+            const action = parts[0] ? parts[0].toLowerCase().trim() : '';
+
+            // Git Auto-Setup bypass for Spaceify/Pterodactyl
+            if (action === 'setup') {
+                const repoUrl = parts[1] ? parts[1].trim() : '';
+                if (!repoUrl || !repoUrl.startsWith('http')) {
+                    return await sock.sendMessage(jid, { 
+                        text: `❌ Please provide your GitHub link.\n\nExample:\n\`${settings.prefix}update setup https://github.com/your-username/your-repo-name.git\`` 
+                    }, { quoted: msg });
+                }
+
+                await sock.sendMessage(jid, { text: "⏳ *Initializing Git and linking your repository directly from the server...*" }, { quoted: msg });
+
+                // Run the initialization chain on the server
+                const setupCommand = `git init && git remote add origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+                
+                exec(setupCommand, async (err, stdout, stderr) => {
+                    if (err) {
+                        // If origin already exists, re-target it
+                        if (err.message.includes('already exists')) {
+                            exec(`git remote set-url origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`, async (retryErr) => {
+                                if (retryErr) {
+                                    return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n\`\`\`${retryErr.message}\`\`\`` }, { quoted: msg });
+                                }
+                                return await sock.sendMessage(jid, { text: "✅ *Git tracking successfully initialized and linked!* You can now use standard `⚡ update` commands." }, { quoted: msg });
+                            });
+                            return;
+                        }
+                        return await sock.sendMessage(jid, { text: `❌ *Git Setup Failed:*\n\`\`\`${err.message}\`\`\`` }, { quoted: msg });
+                    }
+                    return await sock.sendMessage(jid, { text: "✅ *Git tracking successfully initialized and linked!* You can now use standard `⚡ update` commands." }, { quoted: msg });
+                });
+                return;
+            }
+
+            // Handle confirmation action: Apply the update
+            if (action === 'yes' || action === 'confirm') {
+                await sock.sendMessage(jid, { text: "⏳ *Channelling dynamic updates from upstream... Please wait.*" }, { quoted: msg });
+
+                exec('git pull', async (err, stdout, stderr) => {
+                    if (err) {
+                        return await sock.sendMessage(jid, { 
+                            text: `❌ *Update Failed!*\n\n\`\`\`${err.message}\`\`\`` 
+                        }, { quoted: msg });
+                    }
+
+                    await sock.sendMessage(jid, { 
+                        text: `✅ *Update Successful!*\n\n${stdout}\n\n🔄 _Restarting system..._` 
+                    }, { quoted: msg });
+
+                    setTimeout(() => {
+                        process.exit(1); // Panel restarts the process
+                    }, 3000);
+                });
+                return;
+            }
+
+            // Handle decline action: Cancel update
+            if (action === 'no' || action === 'cancel') {
+                return await sock.sendMessage(jid, { text: "🔮 *Process aborted.* Infinite Void update cancelled." }, { quoted: msg });
+            }
+
+            // Default Action: Check for updates
+            await sock.sendMessage(jid, { text: "🔍 *Checking for system updates...*" }, { quoted: msg });
+
+            exec('git fetch && git status -uno', async (err, stdout, stderr) => {
+                if (err) {
+                    return await sock.sendMessage(jid, { 
+                        text: `❌ *Error accessing repository:*\n\`\`\`${err.message}\`\`\`\n\n💡 _If Git is not set up, run:_\n\`${settings.prefix}update setup <your-github-link>\`` 
+                    }, { quoted: msg });
+                }
+
+                // If git status output indicates the branch is behind the remote
+                const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
+
+                if (isBehind) {
+                    const promptText = `👁️ *My six eyes perceive an update.*\n\nWanna check it out?\n\n` +
+                                       `_Reply with *${settings.prefix}update yes* to apply update._\n` +
+                                       `_Reply with *${settings.prefix}update no* to cancel._`;
+
+                    // Prepare interactive button structures
+                    const buttonMessage = {
+                        text: promptText,
+                        buttons: [
+                            { buttonId: `${settings.prefix}update yes`, buttonText: { displayText: 'Yes' }, type: 1 },
+                            { buttonId: `${settings.prefix}update no`, buttonText: { displayText: 'No' }, type: 1 }
+                        ],
+                        headerType: 1
+                    };
+
+                    try {
+                        await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                    } catch (buttonError) {
+                        await sock.sendMessage(jid, { text: promptText }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { 
+                        text: "❄️ *There's no Update available at the moment.*" 
+                    }, { quoted: msg });
+                }
+            });
+        }
+    },
+
+    // 2. TOGGLE PUBLIC/PRIVATE MODE (Owner & Sudo Authorized) [1]
     {
         name: 'mode',
         isPrefixless: false,
@@ -54,7 +168,7 @@ module.exports = [
         }
     },
 
-    // 2. ADD SUDO (Owner Only - Sudoers cannot run this) [1]
+    // 3. ADD SUDO (Owner Only - Sudoers cannot run this) [1]
     {
         name: 'setsudo',
         isPrefixless: false,
@@ -82,7 +196,7 @@ module.exports = [
         }
     },
 
-    // 3. REMOVE SUDO (Owner Only) [1]
+    // 4. REMOVE SUDO (Owner Only) [1]
     {
         name: 'delsudo',
         isPrefixless: false,
@@ -110,7 +224,7 @@ module.exports = [
         }
     },
 
-    // 4. ADD BOT OWNER (Owner Only) [1]
+    // 5. ADD BOT OWNER (Owner Only) [1]
     {
         name: 'addowner',
         isPrefixless: false,
@@ -138,7 +252,7 @@ module.exports = [
         }
     },
 
-    // 5. REMOVE OWNER (Owner Only) [1]
+    // 6. REMOVE OWNER (Owner Only) [1]
     {
         name: 'delowner',
         isPrefixless: false,
@@ -170,7 +284,7 @@ module.exports = [
         }
     },
 
-    // 6. SYSTEM RESTART (Owner & Sudo Authorized) [1]
+    // 7. SYSTEM RESTART (Owner & Sudo Authorized) [1]
     {
         name: 'restart',
         isPrefixless: false,
@@ -184,7 +298,7 @@ module.exports = [
         }
     },
 
-    // 7. SYSTEM SHUTDOWN (Owner & Sudo Authorized) [1]
+    // 8. SYSTEM SHUTDOWN (Owner & Sudo Authorized) [1]
     {
         name: 'shutdown',
         isPrefixless: false,
@@ -198,7 +312,7 @@ module.exports = [
         }
     },
 
-    // 8. GLOBAL BOT BAN CONTROLLER (Owner & Sudo Authorized) [1]
+    // 9. GLOBAL BOT BAN CONTROLLER (Owner & Sudo Authorized) [1]
     {
         name: 'ban',
         isPrefixless: false,
@@ -230,7 +344,7 @@ module.exports = [
         }
     },
 
-    // 9. GLOBAL BOT UNBAN CONTROLLER (Owner & Sudo Authorized) [1]
+    // 10. GLOBAL BOT UNBAN CONTROLLER (Owner & Sudo Authorized) [1]
     {
         name: 'unban',
         isPrefixless: false,
@@ -258,7 +372,7 @@ module.exports = [
         }
     },
 
-    // 10. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard) [1.1]
+    // 11. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard) [1.1]
     {
         name: 'adddev',
         isPrefixless: false,
@@ -286,7 +400,7 @@ module.exports = [
         }
     },
 
-    // 11. REMOVE DEVELOPER [1.1]
+    // 12. REMOVE DEVELOPER [1.1]
     {
         name: 'deldev',
         isPrefixless: false,
@@ -319,7 +433,7 @@ module.exports = [
         }
     },
 
-    // 12. AFK TOGGLE COMMAND (Owner & Sudo Authorized)
+    // 13. AFK TOGGLE COMMAND (Owner & Sudo Authorized)
     {
         name: 'afk',
         isPrefixless: false,
@@ -349,7 +463,7 @@ module.exports = [
         }
     },
 
-    // 13. DYNAMIC CONFIGURATION EDITOR (.setvar) (Owner & Sudo Authorized) [1]
+    // 14. DYNAMIC CONFIGURATION EDITOR (.setvar) (Owner & Sudo Authorized) [1]
     {
         name: 'setvar',
         isPrefixless: false,
@@ -413,7 +527,7 @@ module.exports = [
         }
     },
 
-    // 14. GET SYSTEM SETTINGS (.settings) (Owner & Sudo Authorized) [1]
+    // 15. GET SYSTEM SETTINGS (.settings) (Owner & Sudo Authorized) [1]
     {
         name: 'settings',
         isPrefixless: false,
