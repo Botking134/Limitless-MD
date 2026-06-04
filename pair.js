@@ -241,7 +241,12 @@ async function startBot() {
                 return; 
             }
 
-            let body = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+            // INTERCEPT BUTTON RESPONSES: Extracts and pipes button click payloads into command logic
+            let body = msg.message.conversation || 
+                       msg.message.extendedTextMessage?.text || 
+                       msg.message.buttonsResponseMessage?.selectedButtonId || 
+                       msg.message.templateButtonReplyMessage?.selectedId || 
+                       '';
 
             // STICKER COMMAND INTERCEPTOR
             if (msg.message.stickerMessage) {
