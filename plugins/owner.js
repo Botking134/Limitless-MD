@@ -104,9 +104,8 @@ module.exports = [
                 const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
 
                 if (isBehind) {
-                    const promptText = `👁️ *My six eyes perceive an update.*\n\nWanna check it out?\n\n` +
-                                       `_Reply with *${settings.prefix}update yes* to apply update._\n` +
-                                       `_Reply with *${settings.prefix}update no* to cancel._`;
+                    // Clean prompt with no manual reply instructions
+                    const promptText = `👁️ *My six eyes perceive an update.*\n\nWanna check it out?`;
 
                     // Prepare interactive button structures
                     const buttonMessage = {
@@ -121,7 +120,10 @@ module.exports = [
                     try {
                         await sock.sendMessage(jid, buttonMessage, { quoted: msg });
                     } catch (buttonError) {
-                        await sock.sendMessage(jid, { text: promptText }, { quoted: msg });
+                        // Text instruction fallback only used if Baileys completely fails to send buttons
+                        await sock.sendMessage(jid, { 
+                            text: `${promptText}\n\n_Reply with *${settings.prefix}update yes* to apply._\n_Reply with *${settings.prefix}update no* to cancel._` 
+                        }, { quoted: msg });
                     }
                 } else {
                     await sock.sendMessage(jid, { 
