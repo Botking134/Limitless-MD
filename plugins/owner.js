@@ -2,6 +2,8 @@
 const settings = require('../settings'); // Up one level to settings.js
 const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js persistently [1]
 const { exec } = require('child_process'); // Process runner for system commands
+const fs = require('fs');
+const path = require('path');
 
 // Highly versatile target parser supporting replied JID, @mentions, and digits
 function parseTarget(msg, args) {
@@ -25,7 +27,40 @@ function parseTarget(msg, args) {
 }
 
 module.exports = [
-    // 1. SYSTEM UPDATE COMMAND
+    // NEW: SYSTEM DIAGNOSTIC TOOL
+    {
+        name: 'diagnose',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
+            const filesToTest = ['plugins/utilities.js', 'plugins/group.js', 'plugins/ai.js'];
+
+            for (const file of filesToTest) {
+                const filePath = path.join(__dirname, '..', file);
+                
+                if (!fs.existsSync(filePath)) {
+                    report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n• *Details:* This file does not exist on your server.\n\n`;
+                    continue;
+                }
+
+                try {
+                    // Decache and attempt a compile-time require test
+                    delete require.cache[require.resolve(filePath)];
+                    require(filePath);
+                    report += `✅ *${file}*:\n• *Status:* Loaded successfully!\n\n`;
+                } catch (err) {
+                    report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`\`\`${err.message}\`\`\`\n\n`;
+                }
+            }
+
+            await sock.sendMessage(jid, { text: report }, { quoted: msg });
+        }
+    },
+
+    // 1. SYSTEM UPDATE & REPAIR COMMAND
     {
         name: 'update',
         isPrefixless: false,
@@ -37,16 +72,36 @@ module.exports = [
             const action = parts[0] ? parts[0].toLowerCase().trim() : '';
             const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
 
+            // Package Repair Tool
+            if (action === 'install' || action === 'repair' || action === 'npm') {
+                await sock.sendMessage(jid, { text: "⏳ *Running npm install to download and repair missing packages...*" }, { quoted: msg });
+
+                exec('npm install', async (err, stdout, stderr) => {
+                    if (err) {
+                        return await sock.sendMessage(jid, { 
+                            text: `❌ *Package Installation Failed:*\n\`\`\`${err.message}\`\`\`` 
+                        }, { quoted: msg });
+                    }
+
+                    await sock.sendMessage(jid, { 
+                        text: `✅ *All packages successfully installed and repaired!*\n\n${stdout || 'Ready.'}\n\n🔄 _Restarting the system to load plugins..._` 
+                    }, { quoted: msg });
+
+                    setTimeout(() => {
+                        process.exit(1); // Panel restarts the process
+                    }, 3000);
+                });
+                return;
+            }
+
             // Git Auto-Setup bypass using hardcoded URL
             if (action === 'setup') {
                 await sock.sendMessage(jid, { text: "⏳ *Initializing Git and linking your repository directly from the server...*" }, { quoted: msg });
 
-                // Run the initialization chain on the server
                 const setupCommand = `git init && git remote add origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`;
                 
                 exec(setupCommand, async (err, stdout, stderr) => {
                     if (err) {
-                        // If origin already exists, re-target it
                         if (err.message.includes('already exists')) {
                             exec(`git remote set-url origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`, async (retryErr) => {
                                 if (retryErr) {
@@ -100,14 +155,11 @@ module.exports = [
                     }, { quoted: msg });
                 }
 
-                // If git status output indicates the branch is behind the remote
                 const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
 
                 if (isBehind) {
-                    // Clean prompt with no manual reply instructions
                     const promptText = `👁️ *My six eyes perceive an update.*\n\nWanna check it out?`;
 
-                    // Prepare interactive button structures
                     const buttonMessage = {
                         text: promptText,
                         buttons: [
@@ -120,7 +172,6 @@ module.exports = [
                     try {
                         await sock.sendMessage(jid, buttonMessage, { quoted: msg });
                     } catch (buttonError) {
-                        // Text instruction fallback only used if Baileys completely fails to send buttons
                         await sock.sendMessage(jid, { 
                             text: `${promptText}\n\n_Reply with *${settings.prefix}update yes* to apply._\n_Reply with *${settings.prefix}update no* to cancel._` 
                         }, { quoted: msg });
