@@ -72,7 +72,7 @@ async function forceMetadataRewrite(buffer) {
     return buffer; 
 }
 
-// Helper to upload media buffer natively to a multi-host pipeline (Bypasses all Node boundary & datacenter blocks) [2]
+// Helper to upload media buffer natively to a multi-host pipeline [2]
 async function uploadToCloud(buffer, mimeType) {
     const ext = mimeType.split('/')[1] || 'bin';
     const filename = `file_${Date.now()}.${ext}`;
@@ -99,7 +99,7 @@ async function uploadToCloud(buffer, mimeType) {
     // 2. Fallback to Pomf Clones using safe Blob appending [2]
     const formData = new FormData();
     const blob = new Blob([buffer], { type: mimeType });
-    formData.append('files[]', blob, filename); // Highly compatible boundary construction [2]
+    formData.append('files[]', blob, filename); 
 
     const hosts = [
         'https://qu.ax/upload.php',
@@ -214,17 +214,15 @@ async function renderMenu(sock, msg) {
         `👑 *Owner:* ${settings.ownerName}`;
 
     try {
-        // Send the randomly selected image with the menu text as caption
         await sock.sendMessage(jid, {
             image: { url: randomImage },
             caption: menuText
         }, { quoted: msg });
 
-        // Drop the audio clip immediately after sending the menu [2]
         await sock.sendMessage(jid, {
             audio: { url: "https://qu.ax/sHoAn" },
             mimetype: "audio/mp4",
-            ptt: true // Voice note format for automatic inline play [2]
+            ptt: true 
         });
 
     } catch (error) {
@@ -234,7 +232,7 @@ async function renderMenu(sock, msg) {
 }
 
 module.exports = [
-    // 1. PING COMMAND (Gojo-Themed Dual-Loop Animation) [2]
+    // 1. PING COMMAND
     {
         name: 'ping',
         isPrefixless: false,
@@ -242,30 +240,25 @@ module.exports = [
             const jid = msg.key.remoteJid;
 
             try {
-                // 1. Measure Network Latency (Corrected string payload) [2]
                 const start = Date.now();
                 const sentPong = await sock.sendMessage(jid, { text: "🏓 *Pong!!*" }, { quoted: msg });
                 const networkPing = Date.now() - start;
 
-                // 2. Initialize the loading message [2]
                 const loadingMsg = await sock.sendMessage(jid, { text: "[□□□□]" }, { quoted: msg });
                 const frames = ["[□□□□]", "[■□□□]", "[■■□□]", "[■■■□]", "[■■■■]"];
                 
-                // Loop the 4-box loading animation exactly 2 times [2]
                 for (let cycle = 0; cycle < 2; cycle++) {
                     for (const frame of frames) {
-                        if (cycle > 0 && frame === "[□□□□]") continue; // Skip first frame on second loop
+                        if (cycle > 0 && frame === "[□□□□]") continue; 
                         await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
-                        await delay(600); // 0.6 seconds delay between frames [2]
+                        await delay(600); 
                     }
                     if (cycle === 0) {
-                        // Reset loader back to empty for the second cycle
                         await sock.sendMessage(jid, { text: "[□□□□]", edit: loadingMsg.key });
                         await delay(600);
                     }
                 }
 
-                // 3. Edit the loading message to the final metrics [2]
                 const cursedEnergy = networkPing * 100;
                 await sock.sendMessage(jid, {
                     text: `🌀 *Void speed:* ∞\n` +
@@ -319,7 +312,7 @@ module.exports = [
         }
     },
 
-    // 5. MESSAGE DELETER (Double Deletion Engine - LID-Safe) [2]
+    // 5. MESSAGE DELETER
     {
         name: 'delete',
         isPrefixless: false,
@@ -332,13 +325,11 @@ module.exports = [
             }
 
             try {
-                // Safely resolve bot's LID and JID formats for LID accounts [2]
                 const botJid = settings.botJid || (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net');
                 const botLid = settings.botLid || (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '');
 
                 const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
 
-                // Construct target message payload [2]
                 const quotedKey = {
                     remoteJid: jid,
                     id: quoted.stanzaId,
@@ -346,15 +337,11 @@ module.exports = [
                     participant: quoted.participant
                 };
 
-                // 1. Delete the replied-to target message [2]
                 await sock.sendMessage(jid, { delete: quotedKey });
 
-                // 2. Delete the command message itself (.del) [2]
                 try {
                     await sock.sendMessage(jid, { delete: msg.key });
-                } catch (err) {
-                    // Fail silently inside DMs since you cannot delete other users' texts there [2]
-                }
+                } catch (err) {}
             } catch (error) {
                 console.error("Delete Command Error:", error);
                 await sock.sendMessage(jid, { text: "❌ Failed to delete message. If inside a group, ensure the bot is an administrator." }, { quoted: msg });
@@ -403,27 +390,23 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            // 1. Sequential Reaction Animation: Cycles through the 5 specified emojis
             const emojis = ["⚡", "❄", "🕴", "🤞", "🥷"];
             for (const emoji of emojis) {
                 try {
                     await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
-                    await delay(300); // 300ms transition delay between reaction updates
+                    await delay(300); 
                 } catch (err) {
                     console.error("Reaction step failed:", err.message);
                 }
             }
 
-            // 2. Measure Bot (Internal) Ping
             const msgTime = msg.messageTimestamp * 1000;
             const internalPing = Date.now() - msgTime;
 
-            // 3. Measure Network (Round-trip) Ping
             const start = Date.now();
             const sent = await sock.sendMessage(jid, { text: "⚡" }, { quoted: msg });
             const networkPing = Date.now() - start;
 
-            // 4. Arrogant Gojo statements
             const statements = [
                 "Are you crying? Don't worry, I'm simply the strongest. Your perception of time is basically standing still to me.",
                 "Speed? Please. I don't run, the space around me just gets out of my way. You're too slow.",
@@ -433,7 +416,6 @@ module.exports = [
             ];
             const selectedStatement = statements[Math.floor(Math.random() * statements.length)];
 
-            // 5. Update the reaction with the final speed report (without trailing explanation labels)
             await sock.sendMessage(jid, {
                 text: `🤞 *${selectedStatement}*\n\n` +
                       `> *Cursed amplification:* \`${internalPing}ms\`\n` +
@@ -443,7 +425,7 @@ module.exports = [
         }
     },
 
-    // 8. VIEW ONCE UNLOCKER (.vv) [2]
+    // 8. VIEW ONCE UNLOCKER (.vv)
     {
         name: 'vv',
         isPrefixless: false,
@@ -474,14 +456,12 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Extracting from the conceptual void... 👁️🔓" }, { quoted: msg });
 
-                // Stream and download the decrypted media buffer using downloadContentFromMessage [2]
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                // Resend back as a regular, saveable message [2]
                 if (mediaType === "image") {
                     await sock.sendMessage(jid, {
                         image: buffer,
@@ -503,7 +483,7 @@ module.exports = [
         }
     },
 
-    // 9. STANDARD STICKER CONVERTER (.sticker / .s) (Polymorphic Media Detection & Compiled WebP Output) [2]
+    // 9. STANDARD STICKER CONVERTER
     {
         name: 'sticker',
         isPrefixless: false,
@@ -511,8 +491,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            
-            // Extract the core media payload, handling standard and ephemeral/view-once wrappers [2]
             let mediaContent = getRawMessage(quoted || msg.message);
             
             let mediaMessage = null;
@@ -538,14 +516,12 @@ module.exports = [
 
                 const mimeType = mediaMessage.mimetype || (mediaType === "image" ? "image/jpeg" : (mediaType === "sticker" ? "image/webp" : "video/mp4"));
 
-                // Download the media stream directly from keys [2]
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                // Compile the media buffer to a WebP sticker natively using wa-sticker-formatter [2]
                 const sticker = new Sticker(buffer, {
                     pack: settings.packName,
                     author: settings.author,
@@ -555,7 +531,6 @@ module.exports = [
 
                 const stickerBuffer = await sticker.toBuffer();
 
-                // Send the compiled WebP sticker [2]
                 await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
 
             } catch (error) {
@@ -565,7 +540,7 @@ module.exports = [
         }
     },
 
-    // 10. CROPPED SQUARE STICKER (.crop) (Upgraded to crop GIFs, Images, & Stickers) [2]
+    // 10. CROPPED SQUARE STICKER
     {
         name: 'crop',
         isPrefixless: false,
@@ -588,24 +563,21 @@ module.exports = [
                 const targetMessage = mediaType === "image" ? mediaContent.imageMessage : (mediaType === "video" ? mediaContent.videoMessage : mediaContent.stickerMessage);
                 const mimeType = targetMessage.mimetype || (mediaType === "image" ? "image/jpeg" : (mediaType === "video" ? "video/mp4" : "image/webp"));
 
-                // Download original stream [2]
                 const stream = await downloadContentFromMessage(targetMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                // Crop the buffer natively to a square sticker using wa-sticker-formatter [2]
                 const sticker = new Sticker(buffer, {
                     pack: settings.packName,
                     author: settings.author,
-                    type: StickerTypes.CROPPED, // Natively center-crops [2]
+                    type: StickerTypes.CROPPED, 
                     quality: 75
                 });
 
                 const stickerBuffer = await sticker.toBuffer();
 
-                // Send the compiled cropped WebP sticker [2]
                 await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
 
             } catch (error) {
@@ -615,7 +587,7 @@ module.exports = [
         }
     },
 
-    // 11. METADATA STEALER (.take / .steal) (Upgraded with direct EXIF compilation) [2]
+    // 11. METADATA STEALER
     {
         name: 'take',
         isPrefixless: false,
@@ -635,29 +607,25 @@ module.exports = [
 
                 const targetMessage = rawContent.stickerMessage;
 
-                // Download sticker stream [2]
                 const stream = await downloadContentFromMessage(targetMessage, 'sticker');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                // Parse custom name/publisher from arguments (Falls back to settings if not provided) [2]
                 const parts = args.split('|');
                 const packName = parts[0] ? parts[0].trim() : settings.packName;
                 const publisher = parts[1] ? parts[1].trim() : settings.author;
 
-                // Re-compile the WebP buffer with new metadata [2]
                 const sticker = new Sticker(buffer, {
                     pack: packName,
                     author: publisher,
                     type: StickerTypes.FULL,
-                    quality: 100 // Preserves original quality
+                    quality: 100 
                 });
 
                 const stickerBuffer = await sticker.toBuffer();
 
-                // Send the modified sticker [2]
                 await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
 
             } catch (error) {
@@ -667,14 +635,13 @@ module.exports = [
         }
     },
 
-    // 12. STICKER COMMAND TRIGGERS (.setcmd) [2]
+    // 12. STICKER COMMAND TRIGGERS
     {
         name: 'setcmd',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo }) => {
             const jid = msg.key.remoteJid;
 
-            // Restrict to Sudo/Owner to prevent system hijacking
             if (!isOwner && !isSudo) {
                 return await sock.sendMessage(jid, { text: "❌ Access Denied. Only Owners and Sudo users can set sticker commands." }, { quoted: msg });
             }
@@ -683,7 +650,6 @@ module.exports = [
             const rawContent = getRawMessage(quoted);
             const isSticker = rawContent?.stickerMessage;
 
-            // List command triggers if no arguments are provided
             if (!args) {
                 const keys = Object.keys(settings.stickerCommands || {});
                 if (keys.length === 0) {
@@ -697,7 +663,6 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `🔮 *Limitless Sticker Commands List:*\n\n${list}` }, { quoted: msg });
             }
 
-            // Ensure our in-memory mappings are initialized [2]
             if (!settings.stickerCommands) {
                 settings.stickerCommands = {};
             }
@@ -713,7 +678,6 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `🔮 *Limitless Sticker Commands List:*\n\n${list}` }, { quoted: msg });
             }
 
-            // Requires replying to a sticker to add or delete a mapping [2]
             if (!isSticker) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker with this command." }, { quoted: msg });
             }
@@ -732,13 +696,12 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `✅ Removed sticker command mapping for: \`${removedCmd}\`` }, { quoted: msg });
             }
 
-            // Save the sticker mapping [2]
             settings.stickerCommands[fileHash] = action;
             await sock.sendMessage(jid, { text: `✅ Successfully assigned command \`${action}\` to this sticker.` }, { quoted: msg });
         }
     },
 
-    // 13. REGULAR TO VIEW ONCE CONVERTER (.tovv) [2]
+    // 13. REGULAR TO VIEW ONCE CONVERTER
     {
         name: 'tovv',
         isPrefixless: false,
@@ -760,17 +723,15 @@ module.exports = [
                 const targetMessage = rawContent.imageMessage || rawContent.videoMessage;
                 const mimeType = targetMessage.mimetype || (mediaType === "image" ? "image/jpeg" : "video/mp4");
 
-                // Download standard media stream [2]
                 const stream = await downloadContentFromMessage(targetMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                // Construct View Once wrapper payload [2]
                 const payload = {
                     caption: args || targetMessage.caption || "",
-                    viewOnce: true // Wraps natively [2]
+                    viewOnce: true 
                 };
                 payload[mediaType] = buffer;
                 payload.mimetype = mimeType;
@@ -784,7 +745,7 @@ module.exports = [
         }
     },
 
-    // 14. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url) (Restored with Multi-Host Fallback) [2]
+    // 14. MEDIA TO DIRECT WEB URL CONVERTER
     {
         name: 'tourl',
         isPrefixless: false,
@@ -810,7 +771,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Uploading to cloud storage... 🌐" }, { quoted: msg });
 
-                // Stream and download the binary payload [2]
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
@@ -819,7 +779,6 @@ module.exports = [
 
                 const mimeType = mediaMessage.mimetype || "application/octet-stream";
 
-                // Upload directly to Cloud using multi-host Pomf logic [2]
                 const url = await uploadToCloud(buffer, mimeType);
 
                 await sock.sendMessage(jid, {
@@ -835,7 +794,7 @@ module.exports = [
         }
     },
 
-    // 15. PREFIXLESS SILENT KAMUI DM DECODER [2]
+    // 15. PREFIXLESS SILENT KAMUI DM DECODER
     {
         name: 'kamui',
         isPrefixless: true,
@@ -844,7 +803,7 @@ module.exports = [
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             
             if (!quoted) {
-                return; // Silent fail in public group chat [2]
+                return; 
             }
             
             const rawContent = getRawMessage(quoted);
@@ -852,21 +811,18 @@ module.exports = [
             let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : "");
             
             if (!mediaMessage) {
-                return; // Silent fail in public group chat [2]
+                return; 
             }
 
             try {
-                // React with Obito's Sharingan/Kamui visual (the only public feedback) [2]
                 await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
 
-                // Download decrypted media stream [2]
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                // Destination: Target the exact, raw sender JID directly (handles standard and LID formats) [2]
                 const targetDmJid = msg.key.participant || msg.key.remoteJid;
                 
                 if (mediaType === 'image') {
@@ -878,12 +834,11 @@ module.exports = [
 
             } catch (e) {
                 console.error("Kamui Error:", e.message);
-                // Silent fail to preserve stealth [2]
             }
         }
     },
 
-    // 16. VIEW ONCE UNLOCKER (.vv) [2]
+    // 16. VIEW ONCE UNLOCKER
     {
         name: 'vv',
         isPrefixless: false,
@@ -914,14 +869,12 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Extracting from the conceptual void... 👁️🔓" }, { quoted: msg });
 
-                // Stream and download the decrypted media buffer [2]
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                // Resend back as a regular, saveable message [2]
                 if (mediaType === "image") {
                     await sock.sendMessage(jid, {
                         image: buffer,
@@ -943,36 +896,30 @@ module.exports = [
         }
     },
 
-    // 17. BOT LATENCY COMPARISON TEST (.ping2) [2]
+    // 17. BOT LATENCY COMPARISON TEST (.ping2)
     {
         name: 'ping2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            // 1. Send the initial testing reply [2]
             await sock.sendMessage(jid, { text: "Testing..." }, { quoted: msg });
 
-            // 2. Initialize the 8-character block loader message [2]
             const loadingMsg = await sock.sendMessage(jid, { text: "▮▯▯▯▯▯▯▯" }, { quoted: msg });
 
-            // Generate the exact 8 frames programmatically [2]
             const frames = [];
             for (let i = 1; i <= 8; i++) {
                 frames.push("▮".repeat(i) + "▯".repeat(8 - i));
             }
 
-            // Loop and edit sequentially through all 8 frames with a 0.7 second delay [2]
             for (const frame of frames) {
                 await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
-                await delay(700); // 0.7 seconds delay [2]
+                await delay(700); 
             }
 
-            // 3. Calculate internal bot processing speed [2]
             const msgTime = msg.messageTimestamp * 1000;
             const botSpeed = Date.now() - msgTime;
 
-            // 4. Update the loading message with the final internal latency [2]
             await sock.sendMessage(jid, {
                 text: `Latency: \`${botSpeed}ms\``,
                 edit: loadingMsg.key
@@ -981,7 +928,6 @@ module.exports = [
     }
 ];
 
-// Add structural aliases manually [2]
 module.exports.forEach(cmd => {
     if (cmd.name === 'sticker') {
         module.exports.push({ ...cmd, name: 's' });
