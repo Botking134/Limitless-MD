@@ -1,483 +1,752 @@
-// plugins/owner.js
+// plugins/group.js
+const { downloadMediaMessage } = require('@itsliaaa/baileys');
 const settings = require('../settings'); // Up one level to settings.js
-const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js persistently [1]
+const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js
 
-// Highly versatile target parser supporting replied JID, @mentions, and digits
-function parseTarget(msg, args) {
-    let target = '';
+// Reusable Helper to verify if the sender has admin/owner rights (LID-Safe)
+async function verifyPermissions(sock, msg, jid, isOwner) {
+    const groupMetadata = await sock.groupMetadata(jid);
+    const participants = groupMetadata.participants;
+
+    const senderJid = msg.key.participant || msg.key.remoteJid || '';
     
-    // 1. Quoted participant JID (Replying)
-    const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
-    if (quotedParticipant) {
-        target = quotedParticipant.split('@')[0];
+    let sender = participants.find(p => p.id === senderJid);
+    
+    if (!sender && senderJid.endsWith('@lid')) {
+        try {
+            const resolved = await sock.findUserId(senderJid);
+            if (resolved && resolved.phoneNumber) {
+                sender = participants.find(p => p.id === resolved.phoneNumber);
+            }
+        } catch (e) {}
     }
-    // 2. Mentioned JIDs (@user)
-    else if (msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
-        target = msg.message.extendedTextMessage.contextInfo.mentionedJid[0].split('@')[0];
+
+    if (!sender) {
+        try {
+            const resolvedSender = await sock.findUserId(senderJid);
+            if (resolvedSender && resolvedSender.lid) {
+                sender = participants.find(p => p.id === resolvedSender.lid);
+            }
+        } catch (e) {}
     }
-    // 3. Arguments containing a number
+    
+    const isAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
+
+    return isAdmin || isOwner;
+}
+
+// Reusable Helper to parse target user from message (Handles reply & mentions)
+function parseTargetUser(msg, args) {
+    let targetJid = '';
+    
+    if (msg.message.extendedTextMessage?.contextInfo?.participant) {
+        targetJid = msg.message.extendedTextMessage.contextInfo.participant;
+    } 
     else if (args) {
-        target = args.replace(/[^0-9]/g, '');
+        targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
     }
     
-    return target;
+    return targetJid;
+}
+
+// Duration string parser (e.g., '10s' -> 10000ms, '5m' -> 300000ms, '1h' -> 3600000ms)
+function parseDuration(str) {
+    const match = str.match(/^(\d+)([smh])$/i);
+    if (!match) return null;
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    if (unit === 's') return value * 1000;
+    if (unit === 'm') return value * 60 * 1000;
+    if (unit === 'h') return value * 60 * 60 * 1000;
+    return null;
 }
 
 module.exports = [
-    // 1. TOGGLE PUBLIC/PRIVATE MODE (Owner & Sudo Authorized) [1]
+    // 1. TIMED GROUP MODE
     {
-        name: 'mode',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; // Strict Sudo/Owner Guard
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `💻 *Current Bot Mode:* ${settings.isPublic ? 'Public 🌐' : 'Private 🛡️'}\n\n` +
-                          `Use \`${settings.prefix}mode public\` or \`${settings.prefix}mode private\` to change it.` 
-                }, { quoted: msg });
-            }
-
-            const targetMode = args.toLowerCase().trim();
-
-            if (targetMode === 'public') {
-                settings.isPublic = true;
-                await sock.sendMessage(jid, { text: `🌐 *Limitless Mode Updated:* Public\n_Everyone can now interact._` }, { quoted: msg });
-            } else if (targetMode === 'private') {
-                settings.isPublic = false;
-                await sock.sendMessage(jid, { text: `🛡️ *Limitless Mode Updated:* Private\n_Only authorized owners and sudoers can interact._` }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, { text: `❌ Invalid option. Use \`public\` or \`private\`.` }, { quoted: msg });
-            }
-            saveSettings(); // Physically rewrites settings.js [1]
-        }
-    },
-
-    // 2. ADD SUDO (Owner Only - Sudoers cannot run this) [1]
-    {
-        name: 'setsudo',
+        name: 'gmode',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return; // Locked strictly to Owners/Devs
+            const isGroup = jid.endsWith('@g.us');
 
-            if (!Array.isArray(settings.sudo)) settings.sudo = [];
-
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user (@user), or type their number." }, { quoted: msg });
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
             }
 
-            if (settings.sudo.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is already in the sudo list.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
-            }
-
-            settings.sudo.push(targetNumber);
-            await sock.sendMessage(jid, { 
-                text: `✅ Added @${targetNumber} to the sudo list.\n_They can now use the bot in Private mode._`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
-            }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 3. REMOVE SUDO (Owner Only) [1]
-    {
-        name: 'delsudo',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!Array.isArray(settings.sudo)) settings.sudo = [];
-
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            if (!settings.sudo.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is not in the sudo list.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
-            }
-
-            settings.sudo = settings.sudo.filter(num => num !== targetNumber);
-            await sock.sendMessage(jid, { 
-                text: `👋 Removed @${targetNumber} from the sudo list.`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
-            }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 4. ADD BOT OWNER (Owner Only) [1]
-    {
-        name: 'addowner',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerNumber];
-
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            if (settings.owners.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is already registered as an owner.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
-            }
-
-            settings.owners.push(targetNumber);
-            await sock.sendMessage(jid, { 
-                text: `👑 Added @${targetNumber} as a Bot Owner.\n_They now possess full system administrative capabilities._`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
-            }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 5. REMOVE OWNER (Owner Only) [1]
-    {
-        name: 'delowner',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerNumber];
-
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            if (targetNumber === settings.ownerNumber) {
-                return await sock.sendMessage(jid, { text: "❌ You cannot remove the primary Bot Owner." }, { quoted: msg });
-            }
-
-            if (!settings.owners.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is not a secondary owner.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
-            }
-
-            settings.owners = settings.owners.filter(num => num !== targetNumber);
-            await sock.sendMessage(jid, { 
-                text: `👋 Removed @${targetNumber} from the secondary owners list.`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
-            }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 6. SYSTEM RESTART (Owner & Sudo Authorized) [1]
-    {
-        name: 'restart',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
-
-            await sock.sendMessage(jid, { text: "🔄 _Rebooting Satoru Gojo's visual and physical engines..._" }, { quoted: msg });
-            console.log("🔄 Process terminated cleanly for restart by Owner.");
-            process.exit(1); 
-        }
-    },
-
-    // 7. SYSTEM SHUTDOWN (Owner & Sudo Authorized) [1]
-    {
-        name: 'shutdown',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
-
-            await sock.sendMessage(jid, { text: "💤 _Deactivating Infinite Void. System shutting down..._" }, { quoted: msg });
-            console.log("🔌 Bot process terminated by Owner.");
-            process.exit(0); 
-        }
-    },
-
-    // 8. GLOBAL BOT BAN CONTROLLER (Owner & Sudo Authorized) [1]
-    {
-        name: 'ban',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
-
-            if (!Array.isArray(settings.banned)) settings.banned = [];
-
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            if (targetNumber === settings.ownerNumber) {
-                return await sock.sendMessage(jid, { text: "❌ You cannot blacklist Satoru Gojo's creator." }, { quoted: msg });
-            }
-
-            if (settings.banned.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is already blacklisted.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
-            }
-            
-            settings.banned.push(targetNumber);
-            await sock.sendMessage(jid, { 
-                text: `🚫 Blacklisted @${targetNumber}.\n_They can no longer interact with any Satoru Gojo systems._`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
-            }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 9. GLOBAL BOT UNBAN CONTROLLER (Owner & Sudo Authorized) [1]
-    {
-        name: 'unban',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
-
-            if (!Array.isArray(settings.banned)) settings.banned = [];
-
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            if (!settings.banned.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is not on the blacklist.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
-            }
-
-            settings.banned = settings.banned.filter(num => num !== targetNumber);
-            await sock.sendMessage(jid, { 
-                text: `✅ Restored access for @${targetNumber}.`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
-            }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 10. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard) [1.1]
-    {
-        name: 'adddev',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isDev }) => {
-            const jid = msg.key.remoteJid;
-
-            // Completely private: strictly ignored if called by non-devs [1.1]
-            if (!isDev) return;
-
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
-                return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
-            }
-
-            if (settings.devs.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer." }, { quoted: msg });
-            }
-
-            settings.devs.push(targetNumber);
-            await sock.sendMessage(jid, { 
-                text: `👑 Developer registered successfully: @${targetNumber}`, 
-                mentions: [`${targetNumber}@s.whatsapp.net`] 
-            }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 11. REMOVE DEVELOPER [1.1]
-    {
-        name: 'deldev',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isDev }) => {
-            const jid = msg.key.remoteJid;
-
-            if (!isDev) return;
-
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
-                return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
-            }
-
-            // Prevent removing base core developers
-            const baseDevs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
-            if (baseDevs.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: "❌ You cannot remove a base core developer." }, { quoted: msg });
-            }
-
-            if (!settings.devs.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: "❌ Target is not a registered developer." }, { quoted: msg });
-            }
-
-            settings.devs = settings.devs.filter(num => num !== targetNumber);
-            await sock.sendMessage(jid, { 
-                text: `👋 Removed developer privileges for: @${targetNumber}`, 
-                mentions: [`${targetNumber}@s.whatsapp.net`] 
-            }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 12. AFK TOGGLE COMMAND (Owner & Sudo Authorized)
-    {
-        name: 'afk',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, senderNumber }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
-
-            if (!settings.afk) settings.afk = {};
-
-            const isAlreadyAfk = settings.afk[senderNumber];
-
-            if (isAlreadyAfk) {
-                delete settings.afk[senderNumber];
-                await sock.sendMessage(jid, { 
-                    text: `👋 *Welcome Back!* AFK mode has been deactivated.` 
-                }, { quoted: msg });
-            } else {
-                settings.afk[senderNumber] = {
-                    time: Date.now(),
-                    reason: args || "Infinite Void meditation"
-                };
-                await sock.sendMessage(jid, { 
-                    text: `💤 *AFK Mode Activated.* Mentions of your name in group chats will be auto-replied by my infinity.` 
-                }, { quoted: msg });
-            }
-            saveSettings(); // Syncs to settings.js [1]
-        }
-    },
-
-    // 13. DYNAMIC CONFIGURATION EDITOR (.setvar) (Owner & Sudo Authorized) [1]
-    {
-        name: 'setvar',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; // Owner & Sudo Authorized [1]
-
-            const eqIndex = args.indexOf('=');
-            if (eqIndex === -1) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Invalid format.\nUsage: \`${settings.prefix}setvar KEY=VALUE\`\nExample: \`${settings.prefix}setvar prefix=⚡\`` 
-                }, { quoted: msg });
-            }
-
-            const key = args.slice(0, eqIndex).trim();
-            const valueStr = args.slice(eqIndex + 1).trim();
-
-            const keyMapping = {
-                botname: "botName",
-                ownername: "ownerName",
-                prefix: "prefix",
-                packname: "packName",
-                author: "author",
-                ispublic: "isPublic",
-                ownernumber: "ownerNumber",
-                geminiapikey: "geminiApiKey"
-            };
-
-            const mappedKey = keyMapping[key.toLowerCase()];
-            if (!mappedKey) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Variable "${key}" cannot be configured dynamically. Only customizable system variables are permitted.` 
-                }, { quoted: msg });
-            }
-
-            let finalValue = valueStr;
-            if (mappedKey === 'isPublic') {
-                if (valueStr.toLowerCase() === 'true') finalValue = true;
-                else if (valueStr.toLowerCase() === 'false') finalValue = false;
-                else {
-                    return await sock.sendMessage(jid, { text: "❌ isPublic must be either \`true\` or \`false\`." }, { quoted: msg });
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
                 }
+
+                if (!args) {
+                    return await sock.sendMessage(jid, { 
+                        text: `🔮 *Group Mode Settings:*\n\n` +
+                              `• \`${settings.prefix}gmode open <duration>\` — Unlock group (e.g. open 10m).\n` +
+                              `• \`${settings.prefix}gmode close <duration>\` — Lock group (e.g. close 1h).` 
+                    }, { quoted: msg });
+                }
+
+                const parts = args.split(' ');
+                const action = parts[0].toLowerCase().trim();
+                const timeString = parts[1] || '';
+                const durationMs = timeString ? parseDuration(timeString) : null;
+
+                if (action === 'open' || action === 'unlock') {
+                    await sock.groupSettingUpdate(jid, 'not_announcement');
+                    let timeNotice = "";
+
+                    if (durationMs) {
+                        timeNotice = `\n_This domain will automatically close in ${timeString}._`;
+                        if (settings.groupTimers[jid]) clearTimeout(settings.groupTimers[jid]);
+                        settings.groupTimers[jid] = setTimeout(async () => {
+                            await sock.groupSettingUpdate(jid, 'announcement');
+                            await sock.sendMessage(jid, { 
+                                text: "🔒 *Group Status Updated:*\n\nTime is up. Infinite Void restricted. Only Administrators can speak." 
+                            });
+                            delete settings.groupTimers[jid];
+                        }, durationMs);
+                    }
+
+                    await sock.sendMessage(jid, { 
+                        text: `🔓 *Group Status Updated:*\n\nUnlimited Void expanded. Everyone is now free to speak.${timeNotice}` 
+                    }, { quoted: msg });
+
+                } else if (action === 'close' || action === 'lock') {
+                    await sock.groupSettingUpdate(jid, 'announcement');
+                    let timeNotice = "";
+
+                    if (durationMs) {
+                        timeNotice = `\n_This domain will automatically open in ${timeString}._`;
+                        if (settings.groupTimers[jid]) clearTimeout(settings.groupTimers[jid]);
+                        settings.groupTimers[jid] = setTimeout(async () => {
+                            await sock.groupSettingUpdate(jid, 'not_announcement');
+                            await sock.sendMessage(jid, { 
+                                text: "🔓 *Group Status Updated:*\n\nTime is up. Unlimited Void expanded. Everyone is now free to speak." 
+                            });
+                            delete settings.groupTimers[jid];
+                        }, durationMs);
+                    }
+
+                    await sock.sendMessage(jid, { 
+                        text: `🔒 *Group Status Updated:*\n\nInfinite Void restricted. Only Administrators can speak.${timeNotice}` 
+                    }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { text: "❌ Invalid action. Use `open` or `close` followed by time (e.g. `open 5m`)." }, { quoted: msg });
+                }
+
+            } catch (error) {
+                console.error("Group Mode Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to change group settings. Ensure the bot is an admin." }, { quoted: msg });
             }
-
-            // Update in-memory configuration
-            settings[mappedKey] = finalValue;
-            
-            // Physically write straight to settings.js persistently [1]
-            saveSettings();
-
-            // Rebuild the command registry triggers in real-time [1]
-            const commandsList = require('../commands');
-            commandsList.reload();
-
-            await sock.sendMessage(jid, {
-                text: `✅ *Variable Configured Successfully!*\n\n` +
-                      `• *Key:* \`${mappedKey}\`\n` +
-                      `• *Value:* \`${finalValue}\`\n\n` +
-                      `_Bot settings.js file has been updated, and command registries have been hot-reloaded successfully._`
-            }, { quoted: msg });
         }
     },
 
-    // 14. GET SYSTEM SETTINGS (.settings) (Owner & Sudo Authorized) [1]
+    // 2. KICK MEMBER
     {
-        name: 'settings',
+        name: 'kick',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; // Strict Sudo/Owner Guard [1]
+            const isGroup = jid.endsWith('@g.us');
 
-            // Format dynamic arrays securely with mentions
-            const ownersList = (settings.owners || []).length > 0 ? settings.owners.map(n => `@${n}`).join(', ') : '_None_';
-            const sudoList = (settings.sudo || []).length > 0 ? settings.sudo.map(n => `@${n}`).join(', ') : '_None_';
-            const bannedList = (settings.banned || []).length > 0 ? settings.banned.map(n => `@${n}`).join(', ') : '_None_';
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
 
-            // Gather active group automation counts [1]
-            const antilinkCount = Object.keys(settings.antilink || {}).filter(k => settings.antilink[k] !== 'off').length;
-            const antitagCount = Object.keys(settings.antitag || {}).filter(k => settings.antitag[k] !== 'off').length;
-            const antibotCount = Object.keys(settings.antibot || {}).filter(k => settings.antibot[k] !== 'off').length;
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
 
-            const isKeyConfigured = settings.geminiApiKey && settings.geminiApiKey !== "YOUR_GEMINI_API_KEY_HERE" ? "Yes ✅" : "No ❌";
+                const targetJid = parseTargetUser(msg, args);
+                if (!targetJid) {
+                    return await sock.sendMessage(jid, { text: "❌ Please reply to a message or mention a user to kick." }, { quoted: msg });
+                }
 
-            const settingsText = 
-                `💻 *${settings.botName.toUpperCase()} SYSTEM SETTINGS* 💻\n` +
-                `━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🤖 *Bot Name:* \`${settings.botName}\`\n` +
-                `👑 *Creator Name:* \`${settings.ownerName}\`\n` +
-                `⚡ *Command Prefix:* \`${settings.prefix}\`\n` +
-                `🌐 *Bot Privacy:* \`${settings.isPublic ? 'Public' : 'Private'}\`\n` +
-                `📱 *Primary Owner Number:* \`${settings.ownerNumber}\`\n\n` +
+                const targetNumber = targetJid.split('@')[0];
+                if (targetNumber === settings.ownerNumber) {
+                    return await sock.sendMessage(jid, { text: "❌ You cannot kick Satoru Gojo's creator." }, { quoted: msg });
+                }
+
+                await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
                 
-                `📦 *Sticker Pack:* \`${settings.packName}\`\n` +
-                `🎨 *Sticker Author:* \`${settings.author}\`\n` +
-                `❄️ *Automated React:* \`${settings.autoReact}\`\n\n` +
-                
-                `👥 *Secondary Owners:* ${ownersList}\n` +
-                `🛡️ *Sudo Users:* ${sudoList}\n` +
-                `🚫 *Banned Users:* ${bannedList}\n\n` +
-                
-                `🛡️ *Active Group Protections:*\n` +
-                `• *Antilink Groups:* \`${antilinkCount}\` chat(s)\n` +
-                `• *Antitag Groups:* \`${antitagCount}\` chat(s)\n` +
-                `• *Antibot Groups:* \`${antibotCount}\` chat(s)\n\n` +
-                
-                `🧠 *Gemini AI Engine Key:* \`${isKeyConfigured}\``;
+                await sock.sendMessage(jid, { 
+                    text: `Sayonara! Weakling\n@${targetNumber}\nKuso yaro 🥷`, 
+                    mentions: [targetJid] 
+                });
 
-            // Combine JIDs to render @mentions cleanly inside WhatsApp [1]
-            const allMentions = [
-                ...(settings.owners || []).map(num => `${num}@s.whatsapp.net`),
-                ...(settings.sudo || []).map(num => `${num}@s.whatsapp.net`),
-                ...(settings.banned || []).map(num => `${num}@s.whatsapp.net`)
-            ];
+            } catch (error) {
+                console.error("Kick Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to execute. Ensure the bot is a Group Administrator." }, { quoted: msg });
+            }
+        }
+    },
 
-            await sock.sendMessage(jid, {
-                text: settingsText,
-                mentions: allMentions
-            }, { quoted: msg });
+    // 3. PROMOTE TO ADMIN
+    {
+        name: 'promote',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                const targetJid = parseTargetUser(msg, args);
+                if (!targetJid) {
+                    return await sock.sendMessage(jid, { text: "❌ Please reply to a message or mention a user to promote." }, { quoted: msg });
+                }
+
+                const targetNumber = targetJid.split('@')[0];
+                await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
+                
+                await sock.sendMessage(jid, { 
+                    text: `@${targetNumber} You have been chosen by a higher power`, 
+                    mentions: [targetJid] 
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Promote Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to execute. Ensure the bot is a Group Administrator." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 4. DEMOTE FROM ADMIN
+    {
+        name: 'demote',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                const targetJid = parseTargetUser(msg, args);
+                if (!targetJid) {
+                    return await sock.sendMessage(jid, { text: "❌ Please reply to a message or mention a user to demote." }, { quoted: msg });
+                }
+
+                const targetNumber = targetJid.split('@')[0];
+                if (targetNumber === settings.ownerNumber) {
+                    return await sock.sendMessage(jid, { text: "❌ You cannot demote Satoru Gojo's creator." }, { quoted: msg });
+                }
+
+                await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
+                
+                await sock.sendMessage(jid, { 
+                    text: `@${targetNumber} My master has no use for you anymore`, 
+                    mentions: [targetJid] 
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Demote Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to execute. Ensure the bot is a Group Administrator." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 5. TAG ALL PARTICIPANTS
+    {
+        name: 'tagall',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                const messageText = args ? args : "Attention everyone!";
+
+                await sock.sendMessage(jid, {
+                    text: `🔮 *${settings.botName.toUpperCase()} SUMMON:* @all\n\n_${messageText}_`,
+                    mentionAll: true
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Tagall Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to execute tagall." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 6. GHOST TAG
+    {
+        name: 'tag',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants.map(p => p.id);
+
+                const quoted = msg.message.extendedTextMessage?.contextInfo;
+                let targetQuotedMsg = msg; 
+                let quotedText = '';
+                
+                if (quoted && quoted.stanzaId) {
+                    targetQuotedMsg = {
+                        key: {
+                            remoteJid: jid,
+                            id: quoted.stanzaId,
+                            participant: quoted.participant
+                        },
+                        message: quoted.quotedMessage || {}
+                    };
+                    
+                    const qMsg = quoted.quotedMessage;
+                    quotedText = qMsg?.conversation || qMsg?.extendedTextMessage?.text || qMsg?.imageMessage?.caption || qMsg?.videoMessage?.caption || '';
+                }
+
+                const messageText = args ? args : (quotedText ? quotedText : "🤞 *Summoned by Satoru Gojo.*");
+
+                await sock.sendMessage(jid, {
+                    text: messageText,
+                    mentions: participants
+                }, { quoted: targetQuotedMsg });
+
+            } catch (error) {
+                console.error("Tag Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to execute ghost tag." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 7. FETCH GROUP LINK
+    {
+        name: 'link',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                const code = await sock.groupInviteCode(jid);
+                const inviteLink = `https://chat.whatsapp.com/${code}`;
+
+                await sock.sendMessage(jid, { 
+                    text: `🔮 *Limitless Domain Link:*\n\n${inviteLink}` 
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Link Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to fetch group invite code. Ensure the bot is an Administrator." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 8. ANTILINK CONTROLLER
+    {
+        name: 'antilink',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                if (!args) {
+                    const current = settings.antilink[jid] || 'off';
+                    return await sock.sendMessage(jid, {
+                        text: `🔮 *Limitless Antilink settings:* (Current: \`${current}\`)\n\n` +
+                              `• \`${settings.prefix}antilink warn\` — Delete links & warn the user.\n` +
+                              `• \`${settings.prefix}antilink delete\` — Just delete the link message.\n` +
+                              `• \`${settings.prefix}antilink kick\` — Delete links & instantly kick the user.\n` +
+                              `• \`${settings.prefix}antilink off\` — Disable antilink in this chat.`
+                    }, { quoted: msg });
+                }
+
+                const action = args.toLowerCase().trim();
+
+                if (['warn', 'delete', 'kick', 'off'].includes(action)) {
+                    settings.antilink[jid] = action;
+                    
+                    if (action === 'off') {
+                        await sock.sendMessage(jid, { text: "🔮 *Antilink Deactivated.* Everyone is now free to send links." }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(jid, {
+                            text: `⚡ *Infinity has been activated in this chat*\n*Status:* ${action}`
+                        }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { text: "❌ Invalid option. Use `warn`, `delete`, `kick`, or `off`." }, { quoted: msg });
+                }
+                saveSettings(); 
+
+            } catch (error) {
+                console.error("Antilink Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to change antilink settings. Ensure the bot is an admin." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 9. ADMINS-ONLY TAG
+    {
+        name: 'admins',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants;
+                const admins = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin');
+                
+                const adminJids = admins.map(a => a.id);
+                const mentionsList = admins.map(a => `@${a.id.split('@')[0]}`).join(' ');
+
+                await sock.sendMessage(jid, {
+                    text: `🔮 *Limitless Admin Summon:*\n\n${mentionsList}`,
+                    mentions: adminJids
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Admins Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to summon administrators." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 10. ANTITAG MODE CONTROLLER
+    {
+        name: 'antitag',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                if (!args) {
+                    const current = settings.antitag[jid] || 'off';
+                    return await sock.sendMessage(jid, {
+                        text: `🔮 *Limitless Antitag Setting:* (Current: \`${current}\`)\n\n` +
+                              `• \`${settings.prefix}antitag on\` — Delete tags & warn non-admins.\n` +
+                              `• \`${settings.prefix}antitag off\` — Allow non-admins to tag the bot.`
+                    }, { quoted: msg });
+                }
+
+                const action = args.toLowerCase().trim();
+
+                if (action === 'on') {
+                    settings.antitag[jid] = 'on';
+                    await sock.sendMessage(jid, { text: "🔒 *Antitag Activated:* Non-admins are now barred from tagging Satoru Gojo systems." }, { quoted: msg });
+                } else if (action === 'off') {
+                    settings.antitag[jid] = 'off';
+                    await sock.sendMessage(jid, { text: "🔓 *Antitag Deactivated.*" }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { text: "❌ Invalid option. Use `on` or `off`." }, { quoted: msg });
+                }
+                saveSettings(); 
+
+            } catch (error) {
+                console.error("Antitag Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to toggle Antitag." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 11. ANTIBOT CONFIGURABLE MODE CONTROLLER
+    {
+        name: 'antibot',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                if (!args) {
+                    const current = settings.antibot[jid] || 'off';
+                    return await sock.sendMessage(jid, {
+                        text: `🔮 *Limitless Antibot Setting:* (Current: \`${current}\`)\n\n` +
+                              `• \`${settings.prefix}antibot warn\` — Delete other bots' messages & warn them.\n` +
+                              `• \`${settings.prefix}antibot delete\` — Just delete other bots' messages.\n` +
+                              `• \`${settings.prefix}antibot kick\` — Delete & instantly kick other bots.\n` +
+                              `• \`${settings.prefix}antibot off\` — Allow other bots in the group.`
+                    }, { quoted: msg });
+                }
+
+                const action = args.toLowerCase().trim();
+
+                if (['warn', 'delete', 'kick', 'off'].includes(action)) {
+                    settings.antibot[jid] = action;
+                    
+                    if (action === 'off') {
+                        await sock.sendMessage(jid, { text: "🔓 *Antibot Deactivated.* Other bots are free to enter." }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(jid, { 
+                            text: `🔒 *Antibot Activated:*\n*Status:* ${action}` 
+                        }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { text: "❌ Invalid option. Use `warn`, `delete`, `kick`, or `off`." }, { quoted: msg });
+                }
+                saveSettings(); 
+
+            } catch (error) {
+                console.error("Antibot Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to toggle Antibot." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 12. WARNINGS SYSTEM COMMAND
+    {
+        name: 'warn',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                const quoted = msg.message.extendedTextMessage?.contextInfo;
+                if (!quoted || !quoted.stanzaId) {
+                    return await sock.sendMessage(jid, { text: "❌ Please reply to the message you want to warn." }, { quoted: msg });
+                }
+
+                const targetJid = quoted.participant;
+                const targetNumber = targetJid.split('@')[0];
+                const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+
+                if (targetNumber === settings.ownerNumber) {
+                    return await sock.sendMessage(jid, { text: "❌ You cannot warn Satoru Gojo's creator." }, { quoted: msg });
+                }
+
+                try {
+                    await sock.sendMessage(jid, { 
+                        delete: { 
+                            remoteJid: jid, 
+                            id: quoted.stanzaId, 
+                            fromMe: targetJid === botJid, 
+                            participant: targetJid 
+                        } 
+                    });
+                } catch (e) {
+                    console.error("Warning deletion failed:", e.message);
+                }
+
+                const warnKey = `${jid}_${targetNumber}`;
+                settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
+                const count = settings.warns[warnKey];
+
+                const gojoWarnings = [
+                    "Tch. Don't push your luck, weakling.",
+                    "I suggest you behave. My Infinity has its limits when it comes to annoying pests.",
+                    "Keep acting up and I'll show you what Purple looks like up close.",
+                    "You're starting to irritate me. And trust me, you don't want the strongest irritated."
+                ];
+                const selectedWarning = gojoWarnings[Math.floor(Math.random() * gojoWarnings.length)];
+
+                if (count >= 5) {
+                    try {
+                        await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
+                        await sock.sendMessage(jid, {
+                            text: `Sayonara! Weakling\n@${targetNumber}\nKuso yaro 🥷`,
+                            mentions: [targetJid]
+                        });
+                        settings.warns[warnKey] = 0;
+                    } catch (err) {
+                        console.error("Auto-kick on warn failed:", err.message);
+                    }
+                } else {
+                    await sock.sendMessage(jid, {
+                        text: `🤞 *${selectedWarning}*\n\n@${targetNumber}\n*Warns:* ${count}/5`,
+                        mentions: [targetJid]
+                    });
+                }
+                saveSettings(); 
+
+            } catch (error) {
+                console.error("Warn Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to execute warning." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 13. SEND VIDEO/IMAGE/TEXT TO GROUP STATUS (Polymorphic Handler)
+    {
+        name: 'togcstatus',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
+            }
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                }
+
+                if (quoted && (quoted.videoMessage || quoted.imageMessage || quoted.viewOnceMessageV2?.message || quoted.viewOnceMessage?.message)) {
+                    
+                    let mediaMessage = null;
+                    let mediaType = "";
+
+                    if (quoted.videoMessage) {
+                        mediaMessage = quoted.videoMessage;
+                        mediaType = "video";
+                    } else if (quoted.imageMessage) {
+                        mediaMessage = quoted.imageMessage;
+                        mediaType = "image";
+                    } else if (quoted.viewOnceMessageV2?.message?.videoMessage) {
+                        mediaMessage = quoted.viewOnceMessageV2.message.videoMessage;
+                        mediaType = "video";
+                    } else if (quoted.viewOnceMessageV2?.message?.imageMessage) {
+                        mediaMessage = quoted.viewOnceMessageV2.message.imageMessage;
+                        mediaType = "image";
+                    } else if (quoted.viewOnceMessage?.message?.videoMessage) {
+                        mediaMessage = quoted.viewOnceMessage.message.videoMessage;
+                        mediaType = "video";
+                    } else if (quoted.viewOnceMessage?.message?.imageMessage) {
+                        mediaMessage = quoted.viewOnceMessage.message.imageMessage;
+                        mediaType = "image";
+                    }
+
+                    if (!mediaMessage) {
+                        return await sock.sendMessage(jid, { text: "❌ Unsupported media format." }, { quoted: msg });
+                    }
+
+                    await sock.sendMessage(jid, { text: `Sending ${mediaType} to Group Status... 🎞️` }, { quoted: msg });
+
+                    const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+                    const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) {
+                        buffer = Buffer.concat([buffer, chunk]);
+                    }
+
+                    const mimeType = mediaMessage.mimetype || (mediaType === "video" ? "video/mp4" : "image/jpeg");
+
+                    const payload = {
+                        caption: args || mediaMessage.caption || '',
+                        groupStatus: true
+                    };
+                    payload[mediaType] = buffer;
+                    payload.mimetype = mimeType;
+
+                    await sock.sendMessage(jid, payload);
+
+                } 
+                else {
+                    let textToSend = args || '';
+                    if (!textToSend && quoted) {
+                        textToSend = quoted.conversation || quoted.extendedTextMessage?.text || '';
+                    }
+
+                    if (!textToSend) {
+                        return await sock.sendMessage(jid, { text: "❌ Please reply to a text/media message, or provide text arguments after the command." }, { quoted: msg });
+                    }
+
+                    await sock.sendMessage(jid, { text: "Sending text to Group Status... 📝" }, { quoted: msg });
+
+                    await sock.sendMessage(jid, {
+                        text: textToSend,
+                        groupStatus: true
+                    });
+                }
+
+            } catch (error) {
+                console.error("ToGCStatus Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to send content to Group Status." }, { quoted: msg });
+            }
         }
     }
 ];
 
-// Add structural aliases manually
 module.exports.forEach(cmd => {
-    if (cmd.name === 'adddev') {
-        module.exports.push({ ...cmd, name: 'add-dev' });
-    }
-    if (cmd.name === 'deldev') {
-        module.exports.push({ ...cmd, name: 'del-dev' });
+    if (cmd.name === 'antilink') {
+        module.exports.push({ ...cmd, name: 'infinity' });
     }
 });
