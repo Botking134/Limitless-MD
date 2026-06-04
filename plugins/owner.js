@@ -35,16 +35,10 @@ module.exports = [
 
             const parts = args ? args.split(' ') : [];
             const action = parts[0] ? parts[0].toLowerCase().trim() : '';
+            const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
 
-            // Git Auto-Setup bypass for Spaceify/Pterodactyl
+            // Git Auto-Setup bypass using hardcoded URL
             if (action === 'setup') {
-                const repoUrl = parts[1] ? parts[1].trim() : '';
-                if (!repoUrl || !repoUrl.startsWith('http')) {
-                    return await sock.sendMessage(jid, { 
-                        text: `❌ Please provide your GitHub link.\n\nExample:\n\`${settings.prefix}update setup https://github.com/your-username/your-repo-name.git\`` 
-                    }, { quoted: msg });
-                }
-
                 await sock.sendMessage(jid, { text: "⏳ *Initializing Git and linking your repository directly from the server...*" }, { quoted: msg });
 
                 // Run the initialization chain on the server
@@ -102,7 +96,7 @@ module.exports = [
             exec('git fetch && git status -uno', async (err, stdout, stderr) => {
                 if (err) {
                     return await sock.sendMessage(jid, { 
-                        text: `❌ *Error accessing repository:*\n\`\`\`${err.message}\`\`\`\n\n💡 _If Git is not set up, run:_\n\`${settings.prefix}update setup <your-github-link>\`` 
+                        text: `❌ *Error accessing repository:*\n\`\`\`${err.message}\`\`\`\n\n💡 _If Git is not set up, run:_\n\`${settings.prefix}update setup\`` 
                     }, { quoted: msg });
                 }
 
