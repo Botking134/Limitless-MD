@@ -1,4 +1,4 @@
-// pair.js 
+// pair.js
 const readline = require('readline');
 const { Boom } = require('@hapi/boom');
 const commands = require('./commands');
@@ -23,6 +23,21 @@ function getAfkDuration(ms) {
 }
 
 async function startBot() {
+    // 1. AUTO-SETUP DURING DEPLOYMENT
+    // Automatically runs git initialization using your hardcoded repository URL
+    if (!fs.existsSync(path.join(__dirname, '.git'))) {
+        console.log("⚙️ [GIT AUTO-SETUP] No .git tracking directory found. Attempting automatic setup...");
+        const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
+        const { execSync } = require('child_process');
+        
+        try {
+            execSync(`git init && git remote add origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`);
+            console.log("✅ [GIT AUTO-SETUP] Git successfully initialized and linked automatically.");
+        } catch (setupError) {
+            console.error("❌ [GIT AUTO-SETUP] Automatic git initialization failed:", setupError.message);
+        }
+    }
+
     // Dynamically import the ES Module version of Baileys
     const { 
         default: makeWASocket, 
