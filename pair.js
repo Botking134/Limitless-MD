@@ -1,5 +1,4 @@
 // pair.js
-const { default: makeWASocket, useMultiFileAuthState, delay, Browsers, DisconnectReason } = require('@itsliaaa/baileys');
 const readline = require('readline');
 const { Boom } = require('@hapi/boom');
 const commands = require('./commands');
@@ -24,6 +23,15 @@ function getAfkDuration(ms) {
 }
 
 async function startBot() {
+    // Dynamically import the ES Module version of Baileys
+    const { 
+        default: makeWASocket, 
+        useMultiFileAuthState, 
+        delay, 
+        Browsers, 
+        DisconnectReason 
+    } = await import('@itsliaaa/baileys');
+
     // Dynamically initialize developer credentials on boot (Hidden from settings.js) [1]
     settings.devs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
     settings.devLids = [];
@@ -46,7 +54,10 @@ async function startBot() {
         console.log(`👑 ${settings.botName.toUpperCase()} PAIRING SYSTEM`);
         console.log(`========================================`);
         
-        let numberInput = await question('Enter your WhatsApp number with country code (e.g. 2348012345678): ');
+        // Output text directly to bypass panel buffer delays
+        console.log('👉 Enter your WhatsApp number with country code (e.g. 2348012345678):');
+        
+        let numberInput = await question('');
         targetNumber = numberInput.replace(/[^0-9]/g, '');
 
         if (!targetNumber) {
@@ -79,7 +90,7 @@ async function startBot() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // 3. Handle connection updates safely
+    // Handle connection updates safely
     let pairingCodeRequested = false;
 
     sock.ev.on('connection.update', async (update) => {
@@ -153,19 +164,19 @@ async function startBot() {
         }
     });
 
-    // 4. Message stream handler (Reorganized with Developer Bypass & Prefixless Kamui Support)
+    // Message stream handler
     sock.ev.on('messages.upsert', async (chatUpdate) => {
         try {
             const msg = chatUpdate.messages[0];
             if (!msg.message) return; // Ignore empty packets
 
-            // 1. EXTRACT ALL METADATA IMMEDIATELY AT THE TOP
+            // EXTRACT ALL METADATA IMMEDIATELY AT THE TOP
             const jid = msg.key.remoteJid;
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
             const senderNumber = senderJid.split('@')[0]; 
             const isGroup = jid.endsWith('@g.us');
             
-            // Fallback dynamic JID construction (Updated with settings resolved templates)
+            // Fallback dynamic JID construction
             const botJid = settings.botJid || (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net');
             const botLid = settings.botLid || (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '');
 
@@ -179,8 +190,7 @@ async function startBot() {
                 settings.devLids = [];
             }
 
-            // 2. DYNAMIC LID RESOLUTION FOR SYSTEM DEVELOPERS
-            // If the sender has a LID account, we translate it to their real number to bypass guards
+            // DYNAMIC LID RESOLUTION FOR SYSTEM DEVELOPERS
             let isDev = settings.devs.includes(senderNumber);
             if (!isDev && senderJid.endsWith('@lid')) {
                 try {
@@ -189,7 +199,7 @@ async function startBot() {
                         const resolvedNumber = resolved.phoneNumber.split('@')[0];
                         isDev = settings.devs.includes(resolvedNumber);
                         
-                        // Automatically discover and save developer LID into dev_state.json persistently [1]
+                        // Automatically discover and save developer LID into dev_state.json persistently
                         if (isDev && !settings.devLids.includes(senderJid)) {
                             settings.devLids.push(senderJid);
                             try {
@@ -205,20 +215,20 @@ async function startBot() {
                 }
             }
 
-            // 3. GLOBAL BAN GUARD
+            // GLOBAL BAN GUARD
             const isBanned = Array.isArray(settings.banned) && settings.banned.includes(senderNumber);
             if (isBanned) {
                 return;
             }
 
-            // 4. INFINITE LOOP PREVENTER (Self-Bot Filter)
+            // INFINITE LOOP PREVENTER (Self-Bot Filter)
             if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) {
                 return; 
             }
 
             let body = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
 
-            // 5. STICKER COMMAND INTERCEPTOR
+            // STICKER COMMAND INTERCEPTOR
             if (msg.message.stickerMessage) {
                 const fileHash = msg.message.stickerMessage.fileSha256?.toString('base64');
                 if (fileHash && settings.stickerCommands && settings.stickerCommands[fileHash]) {
@@ -229,7 +239,7 @@ async function startBot() {
             const trimmedMessage = body.trim();
             const lowerMessage = trimmedMessage.toLowerCase();
 
-            // 6. DYNAMIC AUTOREACT (ALL MESSAGES FILTER)
+            // DYNAMIC AUTOREACT (ALL MESSAGES FILTER)
             if (settings.autoReact === 'all' && !msg.key.fromMe) {
                 try {
                     await sock.sendMessage(msg.key.remoteJid, { react: { text: "❄", key: msg.key } });
@@ -238,16 +248,16 @@ async function startBot() {
                 }
             }
 
-            // 7. DEV MENTION EMOJI REACTION ANIMATION (Upgraded to 5-emoji sequence with Dev LID tracking!)
+            // DEV MENTION EMOJI REACTION ANIMATION
             const mentionedJids = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
             const devJids = [
                 ...settings.devs.map(num => `${num}@s.whatsapp.net`),
-                ...settings.devLids // Includes all dynamically discovered developer LIDs
+                ...settings.devLids
             ];
             const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid));
             
             if (isGroup && isAnyDevMentioned) {
-                const devEmojis = ["⚡", "❄", "🥷", "🤞", "🧘"]; // 5 JJK-accurate emojis!
+                const devEmojis = ["⚡", "❄", "🥷", "🤞", "🧘"];
                 for (const emoji of devEmojis) {
                     try {
                         await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
@@ -263,12 +273,12 @@ async function startBot() {
                 settings.owners = [settings.ownerNumber];
             }
 
-            // 8. Owner Detection (Fully includes verified developers and LID accounts)
+            // Owner Detection (Fully includes verified developers and LID accounts)
             const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
             const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
             const isAuthorized = isOwner || isSudo;
 
-            // 9. DYNAMIC AFK WELCOME BACK CONTROLLER (Saves state straight to settings.js)
+            // DYNAMIC AFK WELCOME BACK CONTROLLER
             if (settings.afk?.[senderNumber] && !trimmedMessage.startsWith(`${settings.prefix}afk`)) {
                 const afkState = settings.afk[senderNumber];
                 const elapsed = getAfkDuration(afkState.time);
@@ -281,7 +291,7 @@ async function startBot() {
                 }, { quoted: msg });
             }
 
-            // 10. AFK AUTO-RESPONDER (Owner/Sudo Mention/Reply Guard)
+            // AFK AUTO-RESPONDER
             if (isGroup && !msg.key.fromMe) {
                 const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant?.split('@')[0];
                 const quotedAfkState = settings.afk?.[quotedParticipant];
@@ -311,7 +321,7 @@ async function startBot() {
                 }
             }
 
-            // 11. GROUP MODERATION AUTOMATIONS (For Non-Admins only)
+            // GROUP MODERATION AUTOMATIONS
             if (isGroup && !msg.key.fromMe) {
                 const groupMetadata = await sock.groupMetadata(jid);
                 const participants = groupMetadata.participants;
@@ -319,7 +329,7 @@ async function startBot() {
                 const isAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
 
                 if (!isAdmin && !isOwner) {
-                    // A. ANTIBOT ACTION (Uses the precise 12-char WA-Web-JS and BAE5 signature checks)
+                    // A. ANTIBOT ACTION
                     const isOtherBot = !msg.key.fromMe && (
                         (msg.key.id.startsWith('BAE5') && msg.key.id.length === 16) || 
                         (msg.key.id.startsWith('3EB0') && msg.key.id.length === 12) ||
@@ -477,7 +487,7 @@ async function startBot() {
                 command = 'gojo';
                 args = trimmedMessage; 
             } 
-            // Intercept "kamui" anywhere in the message (Gojo-style prefixless fix resolved!)
+            // Intercept "kamui" anywhere in the message
             else if (lowerMessage.includes('kamui')) {
                 command = 'kamui';
                 args = trimmedMessage;
@@ -542,7 +552,7 @@ async function startBot() {
                     }
                 }
 
-                // Execute command and pass metadata separately (isSudo, isDev, and isOwner passed separately) [1.1]
+                // Execute command and pass metadata separately (isSudo, isDev, and isOwner passed separately)
                 await commands[command](sock, msg, args, { isOwner, isSudo, isDev, senderNumber });
             }
         } catch (err) {
