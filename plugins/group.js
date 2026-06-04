@@ -1,5 +1,4 @@
 // plugins/group.js
-const { downloadMediaMessage } = require('@itsliaaa/baileys');
 const settings = require('../settings'); // Up one level to settings.js
 const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js
 
@@ -397,7 +396,7 @@ module.exports = [
             try {
                 const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
                 if (!isAuthorized) {
-                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
                 }
 
                 if (!args) {
@@ -700,7 +699,7 @@ module.exports = [
 
                     await sock.sendMessage(jid, { text: `Sending ${mediaType} to Group Status... 🎞️` }, { quoted: msg });
 
-                    const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                     const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) {
