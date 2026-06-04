@@ -1,7 +1,6 @@
 // plugins/utilities.js
 const settings = require('../settings'); // Up one level to settings.js
-const { delay, downloadContentFromMessage } = require('@itsliaaa/baileys');
-const { Sticker, StickerTypes } = require('wa-sticker-formatter'); // Standard JJK/Kord sticker compiler [2]
+const { Sticker, StickerTypes } = require('wa-sticker-formatter'); // Standard JJK/Kord sticker compiler
 
 // Helper function to format system uptime
 function formatUptime(seconds) {
@@ -13,7 +12,7 @@ function formatUptime(seconds) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
 }
 
-// Recursive Helper to automatically unwrap ephemeral, view-once, and document-caption envelopes [2]
+// Recursive Helper to automatically unwrap ephemeral, view-once, and document-caption envelopes
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -24,10 +23,10 @@ function getRawMessage(message) {
     return message;
 }
 
-// Helper to crop an image, WebP Sticker, or GIF buffer to a square [2]
+// Helper to crop an image, WebP Sticker, or GIF buffer to a square
 async function cropToSquare(buffer) {
     try {
-        const { getImageProcessingLibrary } = require('@itsliaaa/baileys');
+        const { getImageProcessingLibrary } = await import('@itsliaaa/baileys');
         const lib = await getImageProcessingLibrary();
         
         if (lib.sharp?.default) {
@@ -49,10 +48,10 @@ async function cropToSquare(buffer) {
     return buffer; 
 }
 
-// Helper to convert WebP sticker buffer back to PNG buffer to force EXIF rewrites [2]
+// Helper to convert WebP sticker buffer back to PNG buffer to force EXIF rewrites
 async function forceMetadataRewrite(buffer) {
     try {
-        const { getImageProcessingLibrary } = require('@itsliaaa/baileys');
+        const { getImageProcessingLibrary } = await import('@itsliaaa/baileys');
         const lib = await getImageProcessingLibrary();
         
         if (lib.sharp?.default) {
@@ -72,12 +71,11 @@ async function forceMetadataRewrite(buffer) {
     return buffer; 
 }
 
-// Helper to upload media buffer natively to a multi-host pipeline [2]
+// Helper to upload media buffer natively to a multi-host pipeline
 async function uploadToCloud(buffer, mimeType) {
     const ext = mimeType.split('/')[1] || 'bin';
     const filename = `file_${Date.now()}.${ext}`;
 
-    // 1. Try Pixeldrain PUT (Raw stream - 100% immune to FormData boundary issues) [2]
     try {
         console.log(`🌐 [UPLOADER] Trying Pixeldrain PUT...`);
         const response = await fetch(`https://pixeldrain.com/api/file/${filename}`, {
@@ -96,7 +94,6 @@ async function uploadToCloud(buffer, mimeType) {
         console.error(`⚠️ [UPLOADER] Pixeldrain PUT failed:`, err.message);
     }
 
-    // 2. Fallback to Pomf Clones using safe Blob appending [2]
     const formData = new FormData();
     const blob = new Blob([buffer], { type: mimeType });
     formData.append('files[]', blob, filename); 
@@ -129,7 +126,7 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("All upload hosts failed.");
 }
 
-// Unified, Gojo-themed Menu Renderer with dynamic image selection and sequential audio drop [2]
+// Unified, Gojo-themed Menu Renderer with dynamic image selection and sequential audio drop
 async function renderMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const p = settings.prefix;
@@ -157,21 +154,21 @@ async function renderMenu(sock, msg) {
         
         `📁 *Utility Commands*\n` +
         `• \`${p}menu\` / \`${p}domain\` — Expand this menu.\n` +
-        `• \`${p}ping\` — Check response speed (Cursed Energy) [2].\n` +
-        `• \`${p}ping2\` — Check latency (Internal) [2].\n` +
+        `• \`${p}ping\` — Check response speed (Cursed Energy).\n` +
+        `• \`${p}ping2\` — Check latency (Internal).\n` +
         `• \`${p}alive\` — Verify status with image.\n` +
-        `• \`${p}del\` / \`${p}delete\` — Delete the replied message and command [2].\n` +
+        `• \`${p}del\` / \`${p}delete\` — Delete the replied message and command.\n` +
         `• \`${p}vv\` — Unlock and resend replied View Once image/video.\n` +
         `• \`${p}tovv\` — Convert replied image/video to View Once.\n` +
         `• \`${p}tourl\` / \`${p}url\` — Convert replied media to direct web URL.\n` +
         `• \`${p}sticker\` / \`${p}s\` — Convert replied image/video to sticker.\n` +
-        `• \`${p}crop\` — Convert replied image/gif/sticker to cropped square sticker [2].\n` +
-        `• \`${p}take\` / \`${p}steal\` — Steal sticker with custom metadata [2].\n` +
+        `• \`${p}crop\` — Convert replied image/gif/sticker to cropped square sticker.\n` +
+        `• \`${p}take\` / \`${p}steal\` — Steal sticker with custom metadata.\n` +
         `• \`${p}smeme <top|bottom>\` — Convert replied image to meme sticker.\n` +
-        `• \`${p}setcmd <command>\` — Assign custom command to replied sticker [2].\n` +
+        `• \`${p}setcmd <command>\` — Assign custom command to replied sticker.\n` +
         `• \`${p}autoreact <on/off/all/cmd>\` — Toggle automated reactions.\n` +
         `• \`Speed\` _(Prefixless)_ — Check bot and network response delay.\n` +
-        `• \`Kamui\` _(Prefixless)_ — Decrypt View Once & send silently to DM [2].\n\n` +
+        `• \`Kamui\` _(Prefixless)_ — Decrypt View Once & send silently to DM.\n\n` +
         
         `📁 *AI Commands* (Gemini 1.5 Flash)\n` +
         `• \`${p}ai <prompt>\` — General knowledge query.\n` +
@@ -184,18 +181,18 @@ async function renderMenu(sock, msg) {
         `  _(For you, use \`${p}gojo <message>\` to bypass)_\n\n` +
         
         `📁 *Group Commands*\n` +
-        `• \`${p}gmode <open/close> <time>\` — Lock/Unlock group with timed duration [2].\n` +
-        `• \`${p}kick <reply/mention>\` — Exorcise a weakling from the group [2].\n` +
+        `• \`${p}gmode <open/close> <time>\` — Lock/Unlock group with timed duration.\n` +
+        `• \`${p}kick <reply/mention>\` — Exorcise a weakling from the group.\n` +
         `• \`${p}promote <reply/mention>\` — Elevate regular member to Admin.\n` +
         `• \`${p}demote <reply/mention>\` — Demote Admin back to regular member.\n` +
         `• \`${p}tagall <message>\` — Visible tag summon for everyone.\n` +
         `• \`${p}tag <message>\` — Ghost tag everyone on the replied message.\n` +
         `• \`${p}admins\` — Tag group administrators.\n` +
-        `• \`${p}warn\` — Issue warning & delete target message [2].\n` +
-        `• \`${p}togcstatus <caption/reply>\` — Send replied text/image/video to group status [2].\n` +
+        `• \`${p}warn\` — Issue warning & delete target message.\n` +
+        `• \`${p}togcstatus <caption/reply>\` — Send replied text/image/video to group status.\n` +
         `• \`${p}antilink <warn/delete/kick/off>\` — Toggle link protection settings.\n` +
         `• \`${p}antitag <on/off>\` — Bar non-admins from tagging the bot.\n` +
-        `• \`${p}antibot <on/off>\` — Instantly exorcise other bots in the group [2].\n` +
+        `• \`${p}antibot <on/off>\` — Instantly exorcise other bots in the group.\n` +
         `• \`${p}link\` — Fetch group invite link.\n\n` +
         
         `📁 *Owner Commands*\n` +
@@ -232,7 +229,7 @@ async function renderMenu(sock, msg) {
 }
 
 module.exports = [
-    // 1. PING COMMAND
+    // 1. PING COMMAND (Gojo-Themed Dual-Loop Animation)
     {
         name: 'ping',
         isPrefixless: false,
@@ -240,6 +237,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
 
             try {
+                const { delay } = await import('@itsliaaa/baileys');
                 const start = Date.now();
                 const sentPong = await sock.sendMessage(jid, { text: "🏓 *Pong!!*" }, { quoted: msg });
                 const networkPing = Date.now() - start;
@@ -312,7 +310,7 @@ module.exports = [
         }
     },
 
-    // 5. MESSAGE DELETER
+    // 5. MESSAGE DELETER (LID-Safe)
     {
         name: 'delete',
         isPrefixless: false,
@@ -389,6 +387,7 @@ module.exports = [
         isPrefixless: true,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
+            const { delay } = await import('@itsliaaa/baileys');
 
             const emojis = ["⚡", "❄", "🕴", "🤞", "🥷"];
             for (const emoji of emojis) {
@@ -454,6 +453,7 @@ module.exports = [
             }
 
             try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Extracting from the conceptual void... 👁️🔓" }, { quoted: msg });
 
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
@@ -483,7 +483,7 @@ module.exports = [
         }
     },
 
-    // 9. STANDARD STICKER CONVERTER
+    // 9. STANDARD STICKER CONVERTER (.sticker / .s)
     {
         name: 'sticker',
         isPrefixless: false,
@@ -512,6 +512,7 @@ module.exports = [
             }
 
             try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Formulating sticker... 📃" }, { quoted: msg });
 
                 const mimeType = mediaMessage.mimetype || (mediaType === "image" ? "image/jpeg" : (mediaType === "sticker" ? "image/webp" : "video/mp4"));
@@ -540,7 +541,7 @@ module.exports = [
         }
     },
 
-    // 10. CROPPED SQUARE STICKER
+    // 10. CROPPED SQUARE STICKER (.crop)
     {
         name: 'crop',
         isPrefixless: false,
@@ -555,6 +556,7 @@ module.exports = [
             }
 
             try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Cropping to square... 📐" }, { quoted: msg });
 
                 let mediaContent = getRawMessage(quoted || msg.message);
@@ -587,7 +589,7 @@ module.exports = [
         }
     },
 
-    // 11. METADATA STEALER
+    // 11. METADATA STEALER (.take / .steal)
     {
         name: 'take',
         isPrefixless: false,
@@ -603,6 +605,7 @@ module.exports = [
             }
 
             try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Stealing metadata... 🥷" }, { quoted: msg });
 
                 const targetMessage = rawContent.stickerMessage;
@@ -635,7 +638,7 @@ module.exports = [
         }
     },
 
-    // 12. STICKER COMMAND TRIGGERS
+    // 12. STICKER COMMAND TRIGGERS (.setcmd)
     {
         name: 'setcmd',
         isPrefixless: false,
@@ -701,7 +704,7 @@ module.exports = [
         }
     },
 
-    // 13. REGULAR TO VIEW ONCE CONVERTER
+    // 13. REGULAR TO VIEW ONCE CONVERTER (.tovv)
     {
         name: 'tovv',
         isPrefixless: false,
@@ -717,6 +720,7 @@ module.exports = [
             }
 
             try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Encrypting into a fleeting glimpse... 👁️🔒" }, { quoted: msg });
 
                 const mediaType = rawContent.imageMessage ? "image" : "video";
@@ -745,7 +749,7 @@ module.exports = [
         }
     },
 
-    // 14. MEDIA TO DIRECT WEB URL CONVERTER
+    // 14. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url)
     {
         name: 'tourl',
         isPrefixless: false,
@@ -769,6 +773,7 @@ module.exports = [
             }
 
             try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Uploading to cloud storage... 🌐" }, { quoted: msg });
 
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
@@ -815,6 +820,7 @@ module.exports = [
             }
 
             try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
 
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
@@ -838,70 +844,13 @@ module.exports = [
         }
     },
 
-    // 16. VIEW ONCE UNLOCKER
-    {
-        name: 'vv',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a View Once image or video." }, { quoted: msg });
-            }
-
-            const rawContent = getRawMessage(quoted);
-            let mediaMessage = null;
-            let mediaType = "";
-
-            if (rawContent?.imageMessage) {
-                mediaMessage = rawContent.imageMessage;
-                mediaType = "image";
-            } else if (rawContent?.videoMessage) {
-                mediaMessage = rawContent.videoMessage;
-                mediaType = "video";
-            }
-
-            if (!mediaMessage) {
-                return await sock.sendMessage(jid, { text: "❌ Quoted message is not an image or video." }, { quoted: msg });
-            }
-
-            try {
-                await sock.sendMessage(jid, { text: "Extracting from the conceptual void... 👁️🔓" }, { quoted: msg });
-
-                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) {
-                    buffer = Buffer.concat([buffer, chunk]);
-                }
-
-                if (mediaType === "image") {
-                    await sock.sendMessage(jid, {
-                        image: buffer,
-                        caption: mediaMessage.caption || "Unlocked View Once Image 👁️🔓"
-                    }, { quoted: msg });
-                } else if (mediaType === "video") {
-                    const mimeType = mediaMessage.mimetype || "video/mp4";
-                    await sock.sendMessage(jid, {
-                        video: buffer,
-                        mimetype: mimeType,
-                        caption: mediaMessage.caption || "Unlocked View Once Video 👁️🔓"
-                    }, { quoted: msg });
-                }
-
-            } catch (error) {
-                console.error("View Once Unlock Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to unlock View Once media." }, { quoted: msg });
-            }
-        }
-    },
-
-    // 17. BOT LATENCY COMPARISON TEST (.ping2)
+    // 16. BOT LATENCY COMPARISON TEST (.ping2)
     {
         name: 'ping2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
+            const { delay } = await import('@itsliaaa/baileys');
 
             await sock.sendMessage(jid, { text: "Testing..." }, { quoted: msg });
 
@@ -928,17 +877,20 @@ module.exports = [
     }
 ];
 
+// Safely generate aliases
+const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'sticker') {
-        module.exports.push({ ...cmd, name: 's' });
+        aliases.push({ ...cmd, name: 's' });
     }
     if (cmd.name === 'take') {
-        module.exports.push({ ...cmd, name: 'steal' });
+        aliases.push({ ...cmd, name: 'steal' });
     }
     if (cmd.name === 'tourl') {
-        module.exports.push({ ...cmd, name: 'url' });
+        aliases.push({ ...cmd, name: 'url' });
     }
     if (cmd.name === 'delete') {
-        module.exports.push({ ...cmd, name: 'del' });
+        aliases.push({ ...cmd, name: 'del' });
     }
 });
+module.exports.push(...aliases);
