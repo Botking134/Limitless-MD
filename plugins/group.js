@@ -34,13 +34,20 @@ async function verifyPermissions(sock, msg, jid, isOwner) {
     return isAdmin || isOwner;
 }
 
-// Reusable Helper to parse target user from message (Handles reply & mentions)
+// Reusable Helper to parse target user from message (Issue 2 Repaired)
 function parseTargetUser(msg, args) {
     let targetJid = '';
     
-    if (msg.message.extendedTextMessage?.contextInfo?.participant) {
+    // 1. Check mentioned JIDs first to preserve native format (handles LID accounts)
+    const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid;
+    if (mentions && mentions.length > 0) {
+        targetJid = mentions[0];
+    } 
+    // 2. Check if replying to a user
+    else if (msg.message.extendedTextMessage?.contextInfo?.participant) {
         targetJid = msg.message.extendedTextMessage.contextInfo.participant;
     } 
+    // 3. Fallback to parsing digits from args
     else if (args) {
         targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
     }
