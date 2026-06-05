@@ -13,7 +13,7 @@ if (settings.geminiApiKey && settings.geminiApiKey !== "YOUR_GEMINI_API_KEY_HERE
     try {
         const ai = new GoogleGenerativeAI(settings.geminiApiKey);
         
-        // Corrected back to gemini-3.5-flash as requested
+        // Ensure all configurations use gemini-3.5-flash natively
         generalModel = ai.getGenerativeModel({ model: "gemini-3.5-flash" });
         visionModel = ai.getGenerativeModel({ model: "gemini-3.5-flash" });
         
@@ -212,6 +212,7 @@ module.exports = [
             }
 
             try {
+                // Dynamically import Baileys helper for vision stream decoding
                 const { downloadMediaMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Processing visual data... 👁️" }, { quoted: msg });
 
