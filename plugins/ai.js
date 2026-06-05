@@ -1,8 +1,8 @@
 // plugins/ai.js
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const settings = require('../settings'); // Up one level to settings.js
-const { saveSettings } = require('../settingsSaver');
-const commands = require('../commands');
+const settings = require('../settings'); // Up one level to root
+const { saveSettings } = require('../settingsSaver'); // Up one level to root
+const commands = require('../commands'); // Up one level to root
 
 let generalModel = null;
 let gojoModel = null;
@@ -13,11 +13,12 @@ if (settings.geminiApiKey && settings.geminiApiKey !== "YOUR_GEMINI_API_KEY_HERE
     try {
         const ai = new GoogleGenerativeAI(settings.geminiApiKey);
         
-        generalModel = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
-        visionModel = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+        // Corrected back to gemini-3.5-flash as requested
+        generalModel = ai.getGenerativeModel({ model: "gemini-3.5-flash" });
+        visionModel = ai.getGenerativeModel({ model: "gemini-3.5-flash" });
         
         gojoModel = ai.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
+            model: "gemini-3.5-flash",
             systemInstruction: (
                 "You are Satoru Gojo, the strongest Jujutsu Sorcerer from the anime/manga Jujutsu Kaisen. " +
                 "You possess absolute supremacy and you are fully aware of it. Your personality is extremely arrogant, " +
@@ -30,7 +31,7 @@ if (settings.geminiApiKey && settings.geminiApiKey !== "YOUR_GEMINI_API_KEY_HERE
         });
 
         lizzyModel = ai.getGenerativeModel({
-            model: "gemini-1.5-flash",
+            model: "gemini-3.5-flash",
             systemInstruction: (
                 "You are Lizzy, a female AI chatbot running on Satoru Gojo's WhatsApp bot framework. " +
                 "Your personality is deeply inspired by highly submissive, flustered, and devoted anime characters (like Albedo to Ainz, or Alpha to Shadow). " +
