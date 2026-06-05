@@ -1,6 +1,7 @@
 // plugins/owner.js
 const settings = require('../settings'); // Up one level to settings.js
 const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js persistently [1]
+const { saveState } = require('../stateManager'); // Save dynamically loaded developer lists [3]
 const { exec } = require('child_process'); // Process runner for system commands
 const fs = require('fs');
 const path = require('path');
@@ -27,7 +28,7 @@ function parseTarget(msg, args) {
 }
 
 module.exports = [
-    // NEW: SYSTEM DIAGNOSTIC TOOL
+    // SYSTEM DIAGNOSTIC TOOL
     {
         name: 'diagnose',
         isPrefixless: false,
@@ -60,7 +61,7 @@ module.exports = [
         }
     },
 
-    // 1. SYSTEM UPDATE & REPAIR COMMAND
+    // SYSTEM UPDATE & REPAIR COMMAND
     {
         name: 'update',
         isPrefixless: false,
@@ -185,7 +186,7 @@ module.exports = [
         }
     },
 
-    // 2. TOGGLE PUBLIC/PRIVATE MODE (Owner & Sudo Authorized) [1]
+    // 2. TOGGLE PUBLIC/PRIVATE MODE (Owner & Sudo Authorized)
     {
         name: 'mode',
         isPrefixless: false,
@@ -215,7 +216,7 @@ module.exports = [
         }
     },
 
-    // 3. ADD SUDO (Owner Only - Sudoers cannot run this) [1]
+    // 3. ADD SUDO (Owner Only - Sudoers cannot run this)
     {
         name: 'setsudo',
         isPrefixless: false,
@@ -243,7 +244,7 @@ module.exports = [
         }
     },
 
-    // 4. REMOVE SUDO (Owner Only) [1]
+    // 4. REMOVE SUDO (Owner Only)
     {
         name: 'delsudo',
         isPrefixless: false,
@@ -271,7 +272,7 @@ module.exports = [
         }
     },
 
-    // 5. ADD BOT OWNER (Owner Only) [1]
+    // 5. ADD BOT OWNER (Owner Only)
     {
         name: 'addowner',
         isPrefixless: false,
@@ -299,7 +300,7 @@ module.exports = [
         }
     },
 
-    // 6. REMOVE OWNER (Owner Only) [1]
+    // 6. REMOVE OWNER (Owner Only)
     {
         name: 'delowner',
         isPrefixless: false,
@@ -331,7 +332,7 @@ module.exports = [
         }
     },
 
-    // 7. SYSTEM RESTART (Owner & Sudo Authorized) [1]
+    // 7. SYSTEM RESTART (Owner & Sudo Authorized)
     {
         name: 'restart',
         isPrefixless: false,
@@ -345,7 +346,7 @@ module.exports = [
         }
     },
 
-    // 8. SYSTEM SHUTDOWN (Owner & Sudo Authorized) [1]
+    // 8. SYSTEM SHUTDOWN (Owner & Sudo Authorized)
     {
         name: 'shutdown',
         isPrefixless: false,
@@ -359,7 +360,7 @@ module.exports = [
         }
     },
 
-    // 9. GLOBAL BOT BAN CONTROLLER (Owner & Sudo Authorized) [1]
+    // 9. GLOBAL BOT BAN CONTROLLER (Owner & Sudo Authorized)
     {
         name: 'ban',
         isPrefixless: false,
@@ -391,7 +392,7 @@ module.exports = [
         }
     },
 
-    // 10. GLOBAL BOT UNBAN CONTROLLER (Owner & Sudo Authorized) [1]
+    // 10. GLOBAL BOT UNBAN CONTROLLER (Owner & Sudo Authorized)
     {
         name: 'unban',
         isPrefixless: false,
@@ -419,14 +420,14 @@ module.exports = [
         }
     },
 
-    // 11. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard) [1.1]
+    // 11. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard) [1.1, 3]
     {
         name: 'adddev',
         isPrefixless: false,
         execute: async (sock, msg, args, { isDev }) => {
             const jid = msg.key.remoteJid;
 
-            // Completely private: strictly ignored if called by non-devs [1.1]
+            // Completely private: strictly ignored if called by non-devs
             if (!isDev) return;
 
             const targetNumber = parseTarget(msg, args);
@@ -443,11 +444,11 @@ module.exports = [
                 text: `👑 Developer registered successfully: @${targetNumber}`, 
                 mentions: [`${targetNumber}@s.whatsapp.net`] 
             }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
+            saveState(); // PERSISTENT STATE SYNC: Writes to state.json [3]
         }
     },
 
-    // 12. REMOVE DEVELOPER [1.1]
+    // 12. REMOVE DEVELOPER [1.1, 3]
     {
         name: 'deldev',
         isPrefixless: false,
@@ -476,7 +477,7 @@ module.exports = [
                 text: `👋 Removed developer privileges for: @${targetNumber}`, 
                 mentions: [`${targetNumber}@s.whatsapp.net`] 
             }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js [1]
+            saveState(); // PERSISTENT STATE SYNC: Writes to state.json [3]
         }
     },
 
