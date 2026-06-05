@@ -235,7 +235,7 @@ module.exports = [
                 }
 
                 await sock.sendMessage(jid, { 
-                    text: `👑 Elevated ${cleanTargets.length} member(s) to Administative status.`,
+                    text: `👑 Elevated ${cleanTargets.length} member(s) to Administrative status.`,
                     mentions: cleanTargets
                 }, { quoted: msg });
 
@@ -667,7 +667,7 @@ module.exports = [
         }
     },
 
-    // 13. SEND VIDEO/IMAGE/TEXT TO GROUP STATUS (Polymorphic Handler - Issue 4 Fixed)
+    // 13. SEND VIDEO/IMAGE/TEXT TO GROUP STATUS (Polymorphic Handler)
     {
         name: 'togcstatus',
         isPrefixless: false,
@@ -718,8 +718,7 @@ module.exports = [
 
                     await sock.sendMessage(jid, { text: `Sending ${mediaType} to Group Status... 🎞️` }, { quoted: msg });
 
-                    // Dynamic Import to resolve Baileys require issue (Issue 4 Fixed)
-                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                    const { downloadContentFromMessage } = require('@itsliaaa/baileys');
                     const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) {
@@ -763,7 +762,46 @@ module.exports = [
         }
     },
 
-    // 23. CREATE NEW GROUP CHAT (.creategc) (Issue 3 Fixed)
+    // 19. CREATE GROUP POLL (.poll) (Issue 5 Fixed: Parses custom parentheses layout)
+    {
+        name: 'poll',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            
+            // Check if input matches exactly: Question? (Option1/Option2)
+            const match = args ? args.match(/^(.+?)\s*\((.+?)\)$/) : null;
+
+            if (!match) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ *Invalid Poll Format!*\n\n*Format:* \`${settings.prefix}poll Question? (Option1/Option2/Option3...)\`\n*Example:* \`${settings.prefix}poll Are you gay? (Yes/No)\`` 
+                }, { quoted: msg });
+            }
+
+            const question = match[1].trim();
+            const options = match[2].split('/').map(o => o.trim()).filter(o => o);
+
+            if (options.length < 2) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ A poll requires at least 2 options separated by a slash (/).\n\n*Example:* `(Yes/No/Maybe)`" 
+                }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, {
+                    poll: {
+                        name: question,
+                        values: options,
+                        selectableCount: 1 // Single-choice constraint
+                    }
+                }, { quoted: msg });
+            } catch (e) {
+                console.error("Poll Creation Error:", e.message);
+            }
+        }
+    },
+
+    // 23. CREATE NEW GROUP CHAT (.creategc)
     {
         name: 'creategc',
         isPrefixless: false,
@@ -796,7 +834,7 @@ module.exports = [
         }
     },
 
-    // 28. TIMED KICK CONTROLLER (.tkick) (Issue 1 Repaired)
+    // 28. TIMED KICK CONTROLLER (.tkick)
     {
         name: 'tkick',
         isPrefixless: false,
@@ -834,7 +872,6 @@ module.exports = [
                         list += `${idx + 1}. @${task.targetJid.split('@')[0]} — Remaining: *${remainingSec}s*\n`;
                     });
 
-                    // Single button to cancel all pending kicks in this group
                     const buttonMessage = {
                         text: list,
                         buttons: [
