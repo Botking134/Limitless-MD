@@ -7,6 +7,24 @@ const commands = require('../commands'); // Access command registry for redirect
 if (!global.tkickTimers) global.tkickTimers = {};
 if (!global.kickallActive) global.kickallActive = {};
 
+// Reusable Helper to resolve any JID (such as LID) to standard Phone format (Issue 3 Fixed)
+async function resolveToPhoneJid(sock, jid) {
+    if (!jid) return '';
+    if (jid.endsWith('@s.whatsapp.net')) return jid;
+    if (jid.endsWith('@lid')) {
+        try {
+            const res = await sock.findUserId(jid);
+            if (res && res.phoneNumber) {
+                return res.phoneNumber;
+            }
+        } catch (e) {
+            console.error("Failed to resolve LID JID to Phone:", e.message);
+        }
+    }
+    const num = jid.split('@')[0].split(':')[0];
+    return `${num}@s.whatsapp.net`;
+}
+
 // Reusable Helper to verify if the sender has admin/owner rights (LID-Safe)
 async function verifyPermissions(sock, msg, jid, isOwner) {
     const groupMetadata = await sock.groupMetadata(jid);
@@ -450,7 +468,7 @@ module.exports = [
             try {
                 const groupMetadata = await sock.groupMetadata(jid);
                 const participants = groupMetadata.participants;
-                const admins = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin');
+                const admins = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin').length;
                 
                 const adminJids = admins.map(a => a.id);
                 const mentionsList = admins.map(a => `@${a.id.split('@')[0]}`).join(' ');
@@ -649,7 +667,7 @@ module.exports = [
         }
     },
 
-    // 13. SEND VIDEO/IMAGE/TEXT TO GROUP STATUS (Polymorphic Handler)
+    // 13. SEND VIDEO/IMAGE/TEXT TO GROUP STATUS (Polymorphic Handler - Issue 4 Fixed)
     {
         name: 'togcstatus',
         isPrefixless: false,
@@ -700,7 +718,8 @@ module.exports = [
 
                     await sock.sendMessage(jid, { text: `Sending ${mediaType} to Group Status... 🎞️` }, { quoted: msg });
 
-                    const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+                    // Dynamic Import to resolve Baileys require issue (Issue 4 Fixed)
+                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                     const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) {
@@ -744,97 +763,35 @@ module.exports = [
         }
     },
 
-    // 14. MASS KICK COUNTDOWN ACTION (.kickall) (Issue 2 Fixed: Preserves Cancel Button during edit iterations)
+    // 23. CREATE NEW GROUP CHAT (.creategc) (Issue 3 Fixed)
     {
-        name: 'kickall',
+        name: 'creategc',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return;
+            if (!isOwner && !isSudo) return;
+
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Provide a group name." }, { quoted: msg });
 
             try {
-                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
-                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
-
-                const action = args ? args.toLowerCase().trim() : '';
-
-                if (action === 'cancel' || action === 'stop') {
-                    if (!global.kickallActive[jid]) {
-                        return await sock.sendMessage(jid, { text: "❌ No active kickall command running." }, { quoted: msg });
-                    }
-                    clearInterval(global.kickallActive[jid].intervalId);
-                    delete global.kickallActive[jid];
-                    return await sock.sendMessage(jid, { text: "✅ Mass-exorcism aborted. Kicks cancelled successfully." }, { quoted: msg });
+                const senderJid = msg.key.participant || msg.key.remoteJid;
+                const phoneJid = await resolveToPhoneJid(sock, senderJid);
+                
+                if (!phoneJid) {
+                    return await sock.sendMessage(jid, { text: "❌ Could not resolve your standard Phone format." }, { quoted: msg });
                 }
 
-                if (global.kickallActive[jid]) {
-                    return await sock.sendMessage(jid, { text: "❌ A kickall command is already active in this domain." }, { quoted: msg });
-                }
-
-                const groupMetadata = await sock.groupMetadata(jid);
-                const participants = groupMetadata.participants;
-
-                // Only target standard members (protect bot and group admins)
-                const targets = participants.filter(p => p.admin === null && p.id !== sock.user.id).map(p => p.id);
-
-                if (targets.length === 0) {
-                    return await sock.sendMessage(jid, { text: "✅ There are no standard members left to kick." }, { quoted: msg });
-                }
-
-                let countdown = 10;
-                const prompt = `⚠️ *DOMAIN COLLAPSE WARNING* ⚠️\n\n` +
-                               `Mass-exorcising *${targets.length}* members from this domain in *${countdown}* seconds.\n\n` +
-                               `_Administrators: Click the cancel button below to abort immediately._`;
-
-                const buttonMessage = {
-                    text: prompt,
-                    buttons: [
-                        { buttonId: `${settings.prefix}kickall cancel`, buttonText: { displayText: 'Cancel Exorcism' }, type: 1 }
-                    ],
-                    headerType: 1
-                };
-
-                const sentWarn = await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-
-                // Initialize interval countdown (Issue 2 Fixed: Re-injects buttons in every edit tick)
-                global.kickallActive[jid] = {
-                    targets: targets,
-                    intervalId: setInterval(async () => {
-                        countdown--;
-                        if (countdown > 0) {
-                            const tickPrompt = `⚠️ *DOMAIN COLLAPSE WARNING* ⚠️\n\n` +
-                                               `Mass-exorcising *${targets.length}* members from this domain in *${countdown}* seconds.\n\n` +
-                                               `_Administrators: Click the cancel button below to abort immediately._`;
-
-                            const editPayload = {
-                                text: tickPrompt,
-                                buttons: [
-                                    { buttonId: `${settings.prefix}kickall cancel`, buttonText: { displayText: 'Cancel Exorcism' }, type: 1 }
-                                ],
-                                headerType: 1,
-                                edit: sentWarn.key
-                            };
-
-                            await sock.sendMessage(jid, editPayload);
-                        } else {
-                            clearInterval(global.kickallActive[jid].intervalId);
-                            await sock.sendMessage(jid, { text: "🌪️ *COUNTDOWN ELAPSED. INITIATING MASS EXORCISM.*" });
-
-                            for (const target of targets) {
-                                try {
-                                    await sock.groupParticipantsUpdate(jid, [target], "remove");
-                                } catch (e) {
-                                    console.error("Mass-kick single participant error:", e.message);
-                                }
-                            }
-                            delete global.kickallActive[jid];
-                        }
-                    }, 1000)
-                };
-
+                const group = await sock.groupCreate(args, [phoneJid]);
+                
+                await sock.sendMessage(jid, { 
+                    text: `✅ *Group Domain Manifested successfully!*\n\n` +
+                          `• *Name:* \`${args}\`\n` +
+                          `• *ID:* \`${group.id}\`\n\n` +
+                          `_Link to join:_ https://chat.whatsapp.com/${await sock.groupInviteCode(group.id)}`
+                }, { quoted: msg });
             } catch (e) {
-                console.error(e);
+                console.error("CreateGC Error:", e);
+                await sock.sendMessage(jid, { text: `❌ Failed to create group: ${e.message}` }, { quoted: msg });
             }
         }
     },
@@ -857,7 +814,7 @@ module.exports = [
 
                 const cleanTargets = targets.filter(t => t && t.split('@')[0] !== settings.ownerNumber);
 
-                // Check manual typing redirection (If user types "⚡tkick cancel" or "⚡tkick stop")
+                // Check manual typing redirection
                 const durationString = args.replace(/@[^ ]+/g, '').trim().split(' ')[0] || '';
                 if (durationString.toLowerCase() === 'cancel' || durationString.toLowerCase() === 'stop') {
                     return await commands[`${settings.prefix}tkick_cancel_all`](sock, msg, args, { isOwner });
