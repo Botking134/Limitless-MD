@@ -2,6 +2,10 @@
 const settings = require('../settings'); // Up one level to settings.js
 const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js
 
+// Timed tasks and mass-actions storage
+if (!global.tkickTimers) global.tkickTimers = {};
+if (!global.kickallActive) global.kickallActive = {};
+
 // Reusable Helper to verify if the sender has admin/owner rights (LID-Safe)
 async function verifyPermissions(sock, msg, jid, isOwner) {
     const groupMetadata = await sock.groupMetadata(jid);
@@ -34,20 +38,17 @@ async function verifyPermissions(sock, msg, jid, isOwner) {
     return isAdmin || isOwner;
 }
 
-// Reusable Helper to parse target user from message (Issue 2 Repaired)
+// Reusable Helper to parse target user from message (LID-Safe)
 function parseTargetUser(msg, args) {
     let targetJid = '';
     
-    // 1. Check mentioned JIDs first to preserve native format (handles LID accounts)
     const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid;
     if (mentions && mentions.length > 0) {
         targetJid = mentions[0];
     } 
-    // 2. Check if replying to a user
     else if (msg.message.extendedTextMessage?.contextInfo?.participant) {
         targetJid = msg.message.extendedTextMessage.contextInfo.participant;
     } 
-    // 3. Fallback to parsing digits from args
     else if (args) {
         targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
     }
@@ -149,7 +150,7 @@ module.exports = [
         }
     },
 
-    // 2. KICK MEMBER
+    // 2. KICK MEMBER (Supports Multi-Mentions)
     {
         name: 'kick',
         isPrefixless: false,
@@ -157,41 +158,38 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
 
-            if (!isGroup) {
-                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
-            }
+            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ This command can only be used inside groups." }, { quoted: msg });
 
             try {
                 const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
-                if (!isAuthorized) {
-                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin privileges required." }, { quoted: msg });
+
+                // Multi-Target Parser: extract all mentions or fallback to quoted target
+                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const targets = mentions.length > 0 ? mentions : [parseTargetUser(msg, args)];
+
+                const cleanTargets = targets.filter(t => t && t.split('@')[0] !== settings.ownerNumber);
+
+                if (cleanTargets.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ No valid targets provided." }, { quoted: msg });
                 }
 
-                const targetJid = parseTargetUser(msg, args);
-                if (!targetJid) {
-                    return await sock.sendMessage(jid, { text: "❌ Please reply to a message or mention a user to kick." }, { quoted: msg });
+                for (const target of cleanTargets) {
+                    await sock.groupParticipantsUpdate(jid, [target], "remove");
                 }
 
-                const targetNumber = targetJid.split('@')[0];
-                if (targetNumber === settings.ownerNumber) {
-                    return await sock.sendMessage(jid, { text: "❌ You cannot kick Satoru Gojo's creator." }, { quoted: msg });
-                }
-
-                await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
-                
                 await sock.sendMessage(jid, { 
-                    text: `Sayonara! Weakling\n@${targetNumber}\nKuso yaro 🥷`, 
-                    mentions: [targetJid] 
-                });
+                    text: `👋 Exorcised ${cleanTargets.length} target(s) from this domain.\n\nKuso yaro 🥷`,
+                    mentions: cleanTargets
+                }, { quoted: msg });
 
             } catch (error) {
-                console.error("Kick Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to execute. Ensure the bot is a Group Administrator." }, { quoted: msg });
+                console.error("Kick Error:", error);
             }
         }
     },
 
-    // 3. PROMOTE TO ADMIN
+    // 3. PROMOTE TO ADMIN (Supports Multi-Mentions)
     {
         name: 'promote',
         isPrefixless: false,
@@ -199,37 +197,37 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
 
-            if (!isGroup) {
-                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
-            }
+            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ Group required." }, { quoted: msg });
 
             try {
                 const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
-                if (!isAuthorized) {
-                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin privileges required." }, { quoted: msg });
+
+                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const targets = mentions.length > 0 ? mentions : [parseTargetUser(msg, args)];
+
+                const cleanTargets = targets.filter(t => t);
+
+                if (cleanTargets.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ Identify targets to promote." }, { quoted: msg });
                 }
 
-                const targetJid = parseTargetUser(msg, args);
-                if (!targetJid) {
-                    return await sock.sendMessage(jid, { text: "❌ Please reply to a message or mention a user to promote." }, { quoted: msg });
+                for (const target of cleanTargets) {
+                    await sock.groupParticipantsUpdate(jid, [target], "promote");
                 }
 
-                const targetNumber = targetJid.split('@')[0];
-                await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
-                
                 await sock.sendMessage(jid, { 
-                    text: `@${targetNumber} You have been chosen by a higher power`, 
-                    mentions: [targetJid] 
+                    text: `👑 Elevated ${cleanTargets.length} member(s) to Administative status.`,
+                    mentions: cleanTargets
                 }, { quoted: msg });
 
             } catch (error) {
-                console.error("Promote Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to execute. Ensure the bot is a Group Administrator." }, { quoted: msg });
+                console.error(error);
             }
         }
     },
 
-    // 4. DEMOTE FROM ADMIN
+    // 4. DEMOTE FROM ADMIN (Supports Multi-Mentions)
     {
         name: 'demote',
         isPrefixless: false,
@@ -237,36 +235,32 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
 
-            if (!isGroup) {
-                return await sock.sendMessage(jid, { text: "❌ This command can only be used inside group chats." }, { quoted: msg });
-            }
+            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ Group required." }, { quoted: msg });
 
             try {
                 const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
-                if (!isAuthorized) {
-                    return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin privileges required." }, { quoted: msg });
+
+                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const targets = mentions.length > 0 ? mentions : [parseTargetUser(msg, args)];
+
+                const cleanTargets = targets.filter(t => t && t.split('@')[0] !== settings.ownerNumber);
+
+                if (cleanTargets.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ Identify targets to demote." }, { quoted: msg });
                 }
 
-                const targetJid = parseTargetUser(msg, args);
-                if (!targetJid) {
-                    return await sock.sendMessage(jid, { text: "❌ Please reply to a message or mention a user to demote." }, { quoted: msg });
+                for (const target of cleanTargets) {
+                    await sock.groupParticipantsUpdate(jid, [target], "demote");
                 }
 
-                const targetNumber = targetJid.split('@')[0];
-                if (targetNumber === settings.ownerNumber) {
-                    return await sock.sendMessage(jid, { text: "❌ You cannot demote Satoru Gojo's creator." }, { quoted: msg });
-                }
-
-                await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
-                
                 await sock.sendMessage(jid, { 
-                    text: `@${targetNumber} My master has no use for you anymore`, 
-                    mentions: [targetJid] 
+                    text: `👋 Demoted ${cleanTargets.length} admin(s) back to standard members.`,
+                    mentions: cleanTargets
                 }, { quoted: msg });
 
             } catch (error) {
-                console.error("Demote Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to execute. Ensure the bot is a Group Administrator." }, { quoted: msg });
+                console.error(error);
             }
         }
     },
@@ -706,7 +700,7 @@ module.exports = [
 
                     await sock.sendMessage(jid, { text: `Sending ${mediaType} to Group Status... 🎞️` }, { quoted: msg });
 
-                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                    const { downloadContentFromMessage } = require('@itsliaaa/baileys');
                     const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) {
@@ -748,11 +742,929 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "❌ Failed to send content to Group Status." }, { quoted: msg });
             }
         }
+    },
+
+    // 14. GROUP SETTINGS INTERACTIVE CONTROLLER (.gsettings) (Issue 7-10 Repaired)
+    {
+        name: 'gsettings',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ Group required." }, { quoted: msg });
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+            if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin privileges required." }, { quoted: msg });
+
+            if (!settings.welcome) settings.welcome = {};
+            if (!settings.goodbye) settings.goodbye = {};
+
+            const parts = args ? args.split(' ') : [];
+            const action = parts[0] ? parts[0].toLowerCase().trim() : '';
+
+            // A. FETCH GROUP PROFILE PICTURE (.gsettings getgpp)
+            if (action === 'getgpp') {
+                try {
+                    const profileUrl = await sock.profilePictureUrl(jid, 'image');
+                    await sock.sendMessage(jid, { image: { url: profileUrl }, caption: "🖼️ Current Group Profile Picture" }, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: "❌ Failed to fetch Group Profile Picture. Ensure it is set to public." }, { quoted: msg });
+                }
+                return;
+            }
+
+            // B. UPDATE GROUP PROFILE PICTURE FROM REPLIED MEDIA (.gsettings setpp)
+            if (action === 'setpp') {
+                const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+                if (!quoted || !quoted.imageMessage) {
+                    return await sock.sendMessage(jid, { text: "❌ Please reply to an image with `.gsettings setpp`." }, { quoted: msg });
+                }
+
+                try {
+                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                    const stream = await downloadContentFromMessage(quoted.imageMessage, 'image');
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) {
+                        buffer = Buffer.concat([buffer, chunk]);
+                    }
+
+                    await sock.updateProfilePicture(jid, buffer);
+                    await sock.sendMessage(jid, { text: "✅ Successfully updated Group Profile Picture!" }, { quoted: msg });
+                } catch (e) {
+                    console.error(e);
+                    await sock.sendMessage(jid, { text: "❌ Failed to update profile picture." }, { quoted: msg });
+                }
+                return;
+            }
+
+            // C. WELCOME INTERACTIVE CONTROLLER (.gsettings welcome <on/off/set>)
+            if (action === 'welcome') {
+                const subAction = parts[1] ? parts[1].toLowerCase().trim() : '';
+
+                if (subAction === 'on') {
+                    settings.welcome[jid] = settings.welcome[jid] || { active: true, msg: "" };
+                    settings.welcome[jid].active = true;
+                    await sock.sendMessage(jid, { text: "✅ Welcoming sequence activated for new members." }, { quoted: msg });
+                } else if (subAction === 'off') {
+                    settings.welcome[jid] = settings.welcome[jid] || { active: false, msg: "" };
+                    settings.welcome[jid].active = false;
+                    await sock.sendMessage(jid, { text: "❌ Welcoming sequence deactivated." }, { quoted: msg });
+                } else if (subAction === 'set') {
+                    const customMsg = parts.slice(2).join(' ').trim();
+                    if (!customMsg) return await sock.sendMessage(jid, { text: "❌ Provide a custom message." }, { quoted: msg });
+
+                    settings.welcome[jid] = settings.welcome[jid] || { active: true };
+                    settings.welcome[jid].msg = customMsg;
+                    await sock.sendMessage(jid, { text: `✅ Custom welcome message set:\n"${customMsg}"` }, { quoted: msg });
+                } else {
+                    // Send Button Toggles
+                    const prompt = "🌸 *Welcome Module configuration:*\nSelect an option below:";
+                    const buttonMessage = {
+                        text: prompt,
+                        buttons: [
+                            { buttonId: `${settings.prefix}gsettings welcome on`, buttonText: { displayText: 'Enable' }, type: 1 },
+                            { buttonId: `${settings.prefix}gsettings welcome off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                        ],
+                        headerType: 1
+                    };
+                    try { await sock.sendMessage(jid, buttonMessage, { quoted: msg }); } catch (e) { await sock.sendMessage(jid, { text: prompt }, { quoted: msg }); }
+                }
+                saveSettings();
+                return;
+            }
+
+            // D. GOODBYE INTERACTIVE CONTROLLER (.gsettings goodbye <on/off/set>)
+            if (action === 'goodbye') {
+                const subAction = parts[1] ? parts[1].toLowerCase().trim() : '';
+
+                if (subAction === 'on') {
+                    settings.goodbye[jid] = settings.goodbye[jid] || { active: true, msg: "" };
+                    settings.goodbye[jid].active = true;
+                    await sock.sendMessage(jid, { text: "✅ Goodbye notification sequence activated." }, { quoted: msg });
+                } else if (subAction === 'off') {
+                    settings.goodbye[jid] = settings.goodbye[jid] || { active: false, msg: "" };
+                    settings.goodbye[jid].active = false;
+                    await sock.sendMessage(jid, { text: "❌ Goodbye notification sequence deactivated." }, { quoted: msg });
+                } else if (subAction === 'set') {
+                    const customMsg = parts.slice(2).join(' ').trim();
+                    if (!customMsg) return await sock.sendMessage(jid, { text: "❌ Provide custom goodbye message." }, { quoted: msg });
+
+                    settings.goodbye[jid] = settings.goodbye[jid] || { active: true };
+                    settings.goodbye[jid].msg = customMsg;
+                    await sock.sendMessage(jid, { text: `✅ Custom goodbye message set:\n"${customMsg}"` }, { quoted: msg });
+                } else {
+                    // Send Button Toggles
+                    const prompt = "🌸 *Goodbye Module configuration:*\nSelect an option below:";
+                    const buttonMessage = {
+                        text: prompt,
+                        buttons: [
+                            { buttonId: `${settings.prefix}gsettings goodbye on`, buttonText: { displayText: 'Enable' }, type: 1 },
+                            { buttonId: `${settings.prefix}gsettings goodbye off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                        ],
+                        headerType: 1
+                    };
+                    try { await sock.sendMessage(jid, buttonMessage, { quoted: msg }); } catch (e) { await sock.sendMessage(jid, { text: prompt }, { quoted: msg }); }
+                }
+                saveSettings();
+                return;
+            }
+
+            // E. DELETE WELCOME/GOODBYE CONFIGS (.gsettings delwelcome / delgoodbye)
+            if (action === 'delwelcome') {
+                if (settings.welcome[jid]) delete settings.welcome[jid];
+                await sock.sendMessage(jid, { text: "✅ Welcome settings removed." }, { quoted: msg });
+                saveSettings();
+                return;
+            }
+
+            if (action === 'delgoodbye') {
+                if (settings.goodbye[jid]) delete settings.goodbye[jid];
+                await sock.sendMessage(jid, { text: "✅ Goodbye settings removed." }, { quoted: msg });
+                saveSettings();
+                return;
+            }
+
+            // Fallback Menu
+            const generalPrompt = `💻 *GSETTINGS MANUAL* 💻\n\n` +
+                                  `• \`${settings.prefix}gsettings getgpp\` — Retrieve Group Avatar.\n` +
+                                  `• \`${settings.prefix}gsettings setpp\` — Update Avatar from replied image.\n` +
+                                  `• \`${settings.prefix}gsettings welcome\` — Configure Welcomer.\n` +
+                                  `• \`${settings.prefix}gsettings goodbye\` — Configure Goodbye notifications.\n` +
+                                  `• \`${settings.prefix}gsettings delwelcome\` — Clear welcome configs.\n` +
+                                  `• \`${settings.prefix}gsettings delgoodbye\` — Clear goodbye configs.`;
+
+            await sock.sendMessage(jid, { text: generalPrompt }, { quoted: msg });
+        }
+    },
+
+    // 15. EXIT GROUP (.exit)
+    {
+        name: 'exit',
+        isPrefixless: true,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            if (!isOwner) return; // Locked to Owner/Dev
+
+            await sock.sendMessage(jid, { text: "Deactivating Domain. Exiting domain expansion safely... 👋" }, { quoted: msg });
+            await sock.groupLeave(jid);
+        }
+    },
+
+    // 16. JOIN GROUP VIA LINK (.join)
+    {
+        name: 'join',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Provide a group invite link." }, { quoted: msg });
+
+            const codeMatch = args.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/i);
+            if (!codeMatch) return await sock.sendMessage(jid, { text: "❌ Invalid invite link format." }, { quoted: msg });
+
+            try {
+                await sock.groupAcceptInvite(codeMatch[1]);
+                await sock.sendMessage(jid, { text: "✅ Successfully entered and secured the group domain!" }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to join group: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 17. ADD USER TO GROUP (.add)
+    {
+        name: 'add',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ Group required." }, { quoted: msg });
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized && !isSudo) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                const targetNum = args.replace(/[^0-9]/g, '');
+                if (!targetNum) return await sock.sendMessage(jid, { text: "❌ Provide number to add." }, { quoted: msg });
+
+                const targetJid = `${targetNum}@s.whatsapp.net`;
+                await sock.groupParticipantsUpdate(jid, [targetJid], "add");
+                await sock.sendMessage(jid, { text: `✅ Added target member successfully: @${targetNum}`, mentions: [targetJid] }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to add member. Ensure the bot is an Administrator.` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 18. GENERATE VCF CONTACT LIST (.vcf)
+    {
+        name: 'vcf',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants;
+
+                let vcardString = "";
+                participants.forEach((p, i) => {
+                    const num = p.id.split('@')[0];
+                    vcardString += `BEGIN:VCARD\nVERSION:3.0\nFN:${settings.botName} Contact ${i + 1}\nTEL;TYPE=CELL:${num}\nEND:VCARD\n`;
+                });
+
+                const buffer = Buffer.from(vcardString, 'utf-8');
+                await sock.sendMessage(jid, {
+                    document: buffer,
+                    mimetype: 'text/vcard',
+                    fileName: `${groupMetadata.subject || 'Group'}_Contacts.vcf`
+                }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 19. CREATE GROUP POLL (.poll)
+    {
+        name: 'poll',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return await sock.sendMessage(jid, { text: `❌ Usage: \`${settings.prefix}poll Question, option1, option2...\`` }, { quoted: msg });
+
+            const parts = args.split(',');
+            const question = parts[0].trim();
+            const options = parts.slice(1).map(o => o.trim()).filter(o => o);
+
+            if (options.length < 2) {
+                return await sock.sendMessage(jid, { text: "❌ A poll requires at least 2 options." }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, {
+                    poll: {
+                        name: question,
+                        values: options,
+                        selectableCount: 1 // Single-choice poll constraint
+                    }
+                }, { quoted: msg });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 20. ANTI STATUS GROUP MENTION (.antigm)
+    {
+        name: 'antigm',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                if (!settings.antigm) settings.antigm = {};
+
+                if (!args) {
+                    const current = settings.antigm[jid] || 'off';
+                    return await sock.sendMessage(jid, {
+                        text: `🔮 *Limitless AntiGroup-Mention status:* (Current: \`${current}\`)\n\n` +
+                              `• \`${settings.prefix}antigm warn\` — Warn and delete status tags.\n` +
+                              `• \`${settings.prefix}antigm delete\` — Delete status tags.\n` +
+                              `• \`${settings.prefix}antigm kick\` — Instantly kick offenders.\n` +
+                              `• \`${settings.prefix}antigm off\` — Disable protection.`
+                    }, { quoted: msg });
+                }
+
+                const action = args.toLowerCase().trim();
+                if (['warn', 'delete', 'kick', 'off'].includes(action)) {
+                    settings.antigm[jid] = action;
+                    await sock.sendMessage(jid, { text: `🔒 *AntiGroup-Mention protection updated:* \`${action}\`` }, { quoted: msg });
+                    saveSettings();
+                } else {
+                    await sock.sendMessage(jid, { text: "❌ Use `warn`, `delete`, `kick`, or `off`." }, { quoted: msg });
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 21. STATUS DOWNLOADER (.save)
+    {
+        name: 'save',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            
+            if (!quoted) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to the status/story content you want to save." }, { quoted: msg });
+            }
+
+            try {
+                let mediaMessage = null;
+                let mediaType = "";
+
+                if (quoted.imageMessage) { mediaMessage = quoted.imageMessage; mediaType = "image"; }
+                else if (quoted.videoMessage) { mediaMessage = quoted.videoMessage; mediaType = "video"; }
+
+                if (!mediaMessage) {
+                    return await sock.sendMessage(jid, { text: "❌ Replies must contain image or video status files." }, { quoted: msg });
+                }
+
+                const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+
+                if (mediaType === "image") {
+                    await sock.sendMessage(jid, { image: buffer, caption: mediaMessage.caption || "Saved Status Image 📂" }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { video: buffer, mimetype: mediaMessage.mimetype || "video/mp4", caption: mediaMessage.caption || "Saved Status Video 📂" }, { quoted: msg });
+                }
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 22. SHIP USERS (.ship)
+    {
+        name: 'ship',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants.map(p => p.id);
+
+                const senderJid = msg.key.participant || msg.key.remoteJid || '';
+                
+                // Exclude sender from target list
+                const filtered = participants.filter(p => p !== senderJid);
+                if (filtered.length === 0) return;
+
+                const randomPartner = filtered[Math.floor(Math.random() * filtered.length)];
+
+                const percent = Math.floor(Math.random() * 101);
+                let matchMessage = "";
+
+                if (percent < 30) {
+                    matchMessage = "💔 *Tragic Compatibility.* Your cursed energy is repelled by theirs.";
+                } else if (percent < 70) {
+                    matchMessage = "🤝 *Equal partnership.* A stable resonance in character.";
+                } else {
+                    matchMessage = "💖 *Throughout Heaven and Earth, you alone are their honored one.* Perfect dynamic.";
+                }
+
+                await sock.sendMessage(jid, {
+                    text: `🤞 *Limitless Matchmaker:* @${senderJid.split('@')[0]} ⚔️ @${randomPartner.split('@')[0]}\n\n` +
+                          `🔥 *Love Compatibility:* \`${percent}%\`\n` +
+                          `${matchMessage}`,
+                    mentions: [senderJid, randomPartner]
+                }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 23. CREATE NEW GROUP CHAT (.creategc)
+    {
+        name: 'creategc',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Provide a group name." }, { quoted: msg });
+
+            try {
+                const group = await sock.groupCreate(args, [msg.key.participant || msg.key.remoteJid]);
+                await sock.sendMessage(jid, { text: `✅ Group successfully created!\n\n• *Name:* ${args}\n• *Jid:* ${group.id}` }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to create group: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 24. KICKALL COUNTDOWN ENGINE (.kickall) (Features Cancel Buttons)
+    {
+        name: 'kickall',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                const action = args ? args.toLowerCase().trim() : '';
+
+                if (action === 'cancel' || action === 'stop') {
+                    if (!global.kickallActive[jid]) {
+                        return await sock.sendMessage(jid, { text: "❌ No active kickall command running." }, { quoted: msg });
+                    }
+                    clearInterval(global.kickallActive[jid].intervalId);
+                    delete global.kickallActive[jid];
+                    return await sock.sendMessage(jid, { text: "✅ Mass-exorcism aborted. Kicks cancelled successfully." }, { quoted: msg });
+                }
+
+                if (global.kickallActive[jid]) {
+                    return await sock.sendMessage(jid, { text: "❌ A kickall command is already active in this domain." }, { quoted: msg });
+                }
+
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants;
+
+                // Only target standard members (protect bot and group admins)
+                const targets = participants.filter(p => p.admin === null && p.id !== sock.user.id).map(p => p.id);
+
+                if (targets.length === 0) {
+                    return await sock.sendMessage(jid, { text: "✅ There are no standard members left to kick." }, { quoted: msg });
+                }
+
+                let countdown = 10;
+                const prompt = `⚠️ *DOMAIN COLLAPSE WARNING* ⚠️\n\n` +
+                               `Mass-exorcising *${targets.length}* members from this domain in *${countdown}* seconds.\n\n` +
+                               `_Administrators: Click the cancel button below to abort immediately._`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}kickall cancel`, buttonText: { displayText: 'Cancel Exorcism' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                const sentWarn = await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+
+                // Initialize interval countdown
+                global.kickallActive[jid] = {
+                    targets: targets,
+                    intervalId: setInterval(async () => {
+                        countdown--;
+                        if (countdown > 0) {
+                            await sock.sendMessage(jid, {
+                                text: `⚠️ *DOMAIN COLLAPSE WARNING* ⚠️\n\nMass-exorcising *${targets.length}* members in *${countdown}* seconds.`,
+                                edit: sentWarn.key
+                            });
+                        } else {
+                            clearInterval(global.kickallActive[jid].intervalId);
+                            await sock.sendMessage(jid, { text: "🌪️ *COUNTDOWN ELAPSED. INITIATING MASS EXORCISM.*" });
+
+                            for (const target of targets) {
+                                try {
+                                    await sock.groupParticipantsUpdate(jid, [target], "remove");
+                                } catch (e) {
+                                    console.error("Mass-kick single participant error:", e.message);
+                                }
+                            }
+                            delete global.kickallActive[jid];
+                        }
+                    }, 1000)
+                };
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 25. LIST MESSAGE COUNTS (.msgs)
+    {
+        name: 'msgs',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            if (!settings.msgCount || !settings.msgCount[jid]) {
+                return await sock.sendMessage(jid, { text: "📊 No activity has been logged in this domain yet." }, { quoted: msg });
+            }
+
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants;
+
+                const sortedData = Object.keys(settings.msgCount[jid])
+                    .map(user => {
+                        return { user, count: settings.msgCount[jid][user].count };
+                    })
+                    .sort((a, b) => b.count - a.count);
+
+                let leaderboard = `📊 *LIMITLESS ACTIVITY LEADERBOARD*\n`;
+                leaderboard += `*Group:* ${groupMetadata.subject || 'This chat'}\n\n`;
+
+                sortedData.forEach((entry, idx) => {
+                    leaderboard += `${idx + 1}. @${entry.user.split('@')[0]} — *${entry.count}* msg(s)\n`;
+                });
+
+                await sock.sendMessage(jid, {
+                    text: leaderboard,
+                    mentions: sortedData.map(e => e.user)
+                }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 26. LIST ACTIVE MEMBERS (listactive)
+    {
+        name: 'listactive',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            if (!settings.msgCount || !settings.msgCount[jid]) {
+                return await sock.sendMessage(jid, { text: "📊 No activity records found." }, { quoted: msg });
+            }
+
+            try {
+                const startOfDay = new Date().setHours(0, 0, 0, 0);
+
+                const activeMembers = Object.keys(settings.msgCount[jid])
+                    .filter(user => settings.msgCount[jid][user].lastMsgTime >= startOfDay)
+                    .map(user => {
+                        return { user, count: settings.msgCount[jid][user].count };
+                    });
+
+                if (activeMembers.length === 0) {
+                    return await sock.sendMessage(jid, { text: "📊 No members have sent messages yet today." }, { quoted: msg });
+                }
+
+                let report = `📊 *ACTIVE DOMAIN MEMBERS TODAY (${activeMembers.length})*\n\n`;
+                activeMembers.forEach((entry, idx) => {
+                    report += `• @${entry.user.split('@')[0]}\n`;
+                });
+
+                await sock.sendMessage(jid, {
+                    text: report,
+                    mentions: activeMembers.map(m => m.user)
+                }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 27. LIST INACTIVE MEMBERS (listinactive)
+    {
+        name: 'listinactive',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants.map(p => p.id);
+
+                const startOfDay = new Date().setHours(0, 0, 0, 0);
+                const activeJids = Object.keys(settings.msgCount?.[jid] || {})
+                    .filter(user => settings.msgCount[jid][user].lastMsgTime >= startOfDay);
+
+                // Filter out active members, bot itself, and owner
+                const inactiveMembers = participants.filter(p => !activeJids.includes(p) && p !== sock.user.id);
+
+                if (inactiveMembers.length === 0) {
+                    return await sock.sendMessage(jid, { text: "📊 Exceptional! Everyone is active today." }, { quoted: msg });
+                }
+
+                let report = `📊 *INACTIVE DOMAIN MEMBERS TODAY (${inactiveMembers.length})*\n\n`;
+                inactiveMembers.forEach(user => {
+                    report += `• @${user.split('@')[0]}\n`;
+                });
+
+                await sock.sendMessage(jid, {
+                    text: report,
+                    mentions: inactiveMembers
+                }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 28. TIMED KICK CONTROLLER (.tkick) (Supports Cancel Buttons)
+    {
+        name: 'tkick',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const targets = mentions.length > 0 ? mentions : [parseTargetUser(msg, args)];
+
+                const cleanTargets = targets.filter(t => t && t.split('@')[0] !== settings.ownerNumber);
+
+                // Case A: Show Pending Kicks (No arguments or mentions passed)
+                if (cleanTargets.length === 0) {
+                    const activeKeys = Object.keys(global.tkickTimers).filter(k => k.startsWith(jid));
+                    if (activeKeys.length === 0) {
+                        return await sock.sendMessage(jid, { text: "❌ No pending timed kicks running in this domain." }, { quoted: msg });
+                    }
+
+                    let list = "⏳ *PENDING TIMED KICKS:*\n\n";
+                    const buttons = [];
+
+                    activeKeys.forEach((key, idx) => {
+                        const task = global.tkickTimers[key];
+                        const remainingSec = Math.max(0, Math.floor((task.endTime - Date.now()) / 1000));
+                        list += `${idx + 1}. @${task.targetJid.split('@')[0]} — Remaining: *${remainingSec}s*\n`;
+                        
+                        // Add single cancel button dynamically
+                        buttons.push({
+                            buttonId: `${settings.prefix}tkick_cancel ${task.targetJid}`,
+                            buttonText: { displayText: `Cancel @${task.targetJid.split('@')[0]}` },
+                            type: 1
+                        });
+                    });
+
+                    const buttonMessage = {
+                        text: list,
+                        buttons: buttons.slice(0, 3), // Limit button structures to maximum 3
+                        headerType: 1,
+                        mentions: activeKeys.map(k => global.tkickTimers[k].targetJid)
+                    };
+
+                    try {
+                        return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                    } catch (e) {
+                        return await sock.sendMessage(jid, { text: list, mentions: activeKeys.map(k => global.tkickTimers[k].targetJid) }, { quoted: msg });
+                    }
+                }
+
+                // Parse duration from text arguments (e.g. 10s, 5m, etc.)
+                const durationString = args.replace(/@[^ ]+/g, '').trim().split(' ')[0] || '';
+                const durationMs = parseDuration(durationString);
+
+                if (!durationMs) {
+                    return await sock.sendMessage(jid, { text: `❌ Please provide a valid duration string (e.g. \`10s\`, \`5m\`).` }, { quoted: msg });
+                }
+
+                // Register Timers
+                for (const target of cleanTargets) {
+                    const timerKey = `${jid}_${target}`;
+                    
+                    if (global.tkickTimers[timerKey]) {
+                        clearTimeout(global.tkickTimers[timerKey].timeoutId);
+                    }
+
+                    const timeoutId = setTimeout(async () => {
+                        try {
+                            await sock.groupParticipantsUpdate(jid, [target], "remove");
+                            await sock.sendMessage(jid, { text: `🌪️ *Timer Elapsed.* Exorcising member: @${target.split('@')[0]}`, mentions: [target] });
+                        } catch (err) {}
+                        delete global.tkickTimers[timerKey];
+                    }, durationMs);
+
+                    global.tkickTimers[timerKey] = {
+                        timeoutId,
+                        targetJid: target,
+                        endTime: Date.now() + durationMs
+                    };
+                }
+
+                await sock.sendMessage(jid, {
+                    text: `⏳ Registered timed kick for *${cleanTargets.length}* member(s).\n\n*Delay:* ${durationString}`,
+                    mentions: cleanTargets
+                }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 29. CANCEL INDIVIDUAL TIMED KICK (.tkick_cancel)
+    {
+        name: 'tkick_cancel',
+        isPrefixless: true,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+            if (!isAuthorized) return;
+
+            const targetJid = args.trim();
+            const timerKey = `${jid}_${targetJid}`;
+
+            if (global.tkickTimers[timerKey]) {
+                clearTimeout(global.tkickTimers[timerKey].timeoutId);
+                delete global.tkickTimers[timerKey];
+                await sock.sendMessage(jid, { text: `✅ Timed kick cancelled for: @${targetJid.split('@')[0]}`, mentions: [targetJid] }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: "❌ Timer already elapsed or was never registered." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 30. CONVERSATION LOGGER & SUMMARIZER (.gclog)
+    {
+        name: 'gclog',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                if (!settings.gclogActive) settings.gclogActive = {};
+
+                const action = args ? args.toLowerCase().trim() : '';
+
+                if (action === 'on') {
+                    settings.gclogActive[jid] = true;
+                    await sock.sendMessage(jid, { text: "🔒 *GCLOG Activated.* Recording conversation flow in real-time." }, { quoted: msg });
+                    saveSettings();
+                    return;
+                }
+
+                if (action === 'off') {
+                    settings.gclogActive[jid] = false;
+                    await sock.sendMessage(jid, { text: "🔓 *GCLOG Deactivated.* Log records cleared." }, { quoted: msg });
+                    if (settings.conversationLogs?.[jid]) delete settings.conversationLogs[jid];
+                    saveSettings();
+                    return;
+                }
+
+                // Check/Retrieve summary logs (.gclog check)
+                if (action === 'check' || !action) {
+                    const active = settings.gclogActive[jid];
+                    const logs = settings.conversationLogs?.[jid] || [];
+
+                    if (!active) {
+                        return await sock.sendMessage(jid, { text: "⚠️ Log recorder is currently offline. Type `.gclog on` to enable." }, { quoted: msg });
+                    }
+
+                    if (logs.length === 0) {
+                        return await sock.sendMessage(jid, { text: "📊 No message flow logged yet. Let members speak first." }, { quoted: msg });
+                    }
+
+                    await sock.sendMessage(jid, { text: `⏳ *Summarizing ${logs.length} logged message(s) using Gemini AI...*` }, { quoted: msg });
+
+                    // Format conversations into text string
+                    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+
+                    // Import AI Generative Engine dynamically
+                    const { GoogleGenerativeAI } = require('@google/generative-ai');
+                    const ai = new GoogleGenerativeAI(settings.geminiApiKey);
+                    const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+                    const prompt = `You are the ultimate Satoru Gojo conversation logs analyst. Analyze the following highly condensed WhatsApp group chat logs. Provide a very short, summarized, and extremely engaging outline of the core discussion topics, drama, or key decisions. Keep your tone cocky, playful, and completely in Gojo style:\n\n${logString}`;
+
+                    const result = await model.generateContent(prompt);
+                    const responseText = result.response.text();
+
+                    await sock.sendMessage(jid, { text: `🤞 *LIMITLESS SYSTEM LOG SUMMARY:* 🤞\n━━━━━━━━━━━━━━━━━━━\n\n${responseText}` }, { quoted: msg });
+                }
+
+            } catch (e) {
+                console.error(e);
+                await sock.sendMessage(jid, { text: `❌ Summary generation failed: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 31. SET GROUP DESCRIPTION (.gdesc)
+    {
+        name: 'gdesc',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                if (!args) return await sock.sendMessage(jid, { text: "❌ Provide text to set." }, { quoted: msg });
+
+                await sock.groupUpdateDescription(jid, args);
+                await sock.sendMessage(jid, { text: `✅ Group description set successfully to:\n"${args}"` }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 32. FETCH GROUP INFO (.ginfo)
+    {
+        name: 'ginfo',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants;
+
+                const admins = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin').length;
+                const standard = participants.length - admins;
+
+                const desc = groupMetadata.desc ? groupMetadata.desc.toString() : '_None_';
+
+                const infoText = 
+                    `📱 *GROUP INFO MANUAL* 📱\n` +
+                    `━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `• *Name:* \`${groupMetadata.subject || 'Unknown'}\`\n` +
+                    `• *ID:* \`${groupMetadata.id}\`\n` +
+                    `• *Owner/Creator:* @${(groupMetadata.owner || '').split('@')[0]}\n` +
+                    `• *Total Members:* \`${participants.length}\`\n` +
+                    `  - *Admins:* \`${admins}\`\n` +
+                    `  - *Members:* \`${standard}\`\n\n` +
+                    `📖 *Description:*\n${desc}`;
+
+                await sock.sendMessage(jid, {
+                    text: infoText,
+                    mentions: groupMetadata.owner ? [groupMetadata.owner] : []
+                }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
+    // 33. RESET/REVOKE GROUP LINK (.reset / .revoke)
+    {
+        name: 'reset',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                const code = await sock.groupRevokeInvite(jid);
+                await sock.sendMessage(jid, { text: "✅ Invite link successfully revoked and reset." }, { quoted: msg });
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
     }
 ];
 
+// Add structural aliases
+const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'antilink') {
-        module.exports.push({ ...cmd, name: 'infinity' });
+        aliases.push({ ...cmd, name: 'infinity' });
+    }
+    if (cmd.name === 'reset') {
+        aliases.push({ ...cmd, name: 'revoke' });
     }
 });
+module.exports.push(...aliases);
