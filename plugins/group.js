@@ -1,6 +1,7 @@
 // plugins/group.js
 const settings = require('../settings'); // Up one level to settings.js
 const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js
+const commands = require('../commands'); // Access command registry for redirection
 
 // Timed tasks and mass-actions storage
 if (!global.tkickTimers) global.tkickTimers = {};
@@ -188,7 +189,7 @@ module.exports = [
         }
     },
 
-    // 3. PROMOTE TO ADMIN (Supports Multi-Mentions)
+    // 3. PROMOTE TO ADMIN
     {
         name: 'promote',
         isPrefixless: false,
@@ -226,7 +227,7 @@ module.exports = [
         }
     },
 
-    // 4. DEMOTE FROM ADMIN (Supports Multi-Mentions)
+    // 4. DEMOTE FROM ADMIN
     {
         name: 'demote',
         isPrefixless: false,
@@ -699,7 +700,7 @@ module.exports = [
 
                     await sock.sendMessage(jid, { text: `Sending ${mediaType} to Group Status... 🎞️` }, { quoted: msg });
 
-                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                    const { downloadContentFromMessage } = require('@itsliaaa/baileys');
                     const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) {
@@ -761,6 +762,12 @@ module.exports = [
 
                 const cleanTargets = targets.filter(t => t && t.split('@')[0] !== settings.ownerNumber);
 
+                // Check manual typing redirection (Issue 1 Repaired: If user types "⚡tkick cancel" or "⚡tkick stop")
+                const durationString = args.replace(/@[^ ]+/g, '').trim().split(' ')[0] || '';
+                if (durationString.toLowerCase() === 'cancel' || durationString.toLowerCase() === 'stop') {
+                    return await commands[`${settings.prefix}tkick_cancel_all`](sock, msg, args, { isOwner });
+                }
+
                 // If no targets are mentioned, display pending timers status
                 if (cleanTargets.length === 0) {
                     const activeKeys = Object.keys(global.tkickTimers).filter(k => k.startsWith(jid));
@@ -792,8 +799,6 @@ module.exports = [
                     }
                 }
 
-                // Parse duration from text arguments (e.g. 10s, 5m, etc.)
-                const durationString = args.replace(/@[^ ]+/g, '').trim().split(' ')[0] || '';
                 const durationMs = parseDuration(durationString);
 
                 if (!durationMs) {
@@ -834,10 +839,10 @@ module.exports = [
         }
     },
 
-    // 29. CANCEL ALL TIMED KICKS IN GROUP (.tkick_cancel_all / mapped from button) (Issue 1 Repaired)
+    // 29. CANCEL ALL TIMED KICKS IN GROUP (Issue 1 Repaired: corrected `isPrefixless` to `false` for button click matching)
     {
         name: 'tkick_cancel_all',
-        isPrefixless: true,
+        isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
