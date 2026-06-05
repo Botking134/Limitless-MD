@@ -5,6 +5,7 @@ const { saveState } = require('../stateManager'); // Save dynamically loaded dev
 const { exec } = require('child_process'); // Process runner for system commands
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm'); // Safe compilation parser [1]
 
 // Highly versatile target parser supporting replied JID, @mentions, and digits
 function parseTarget(msg, args) {
@@ -28,32 +29,47 @@ function parseTarget(msg, args) {
 }
 
 module.exports = [
-    // SYSTEM DIAGNOSTIC TOOL
+    // DEVELOPER-ONLY FULL SYSTEM SCANNER (Issue Upgraded)
     {
         name: 'diagnose',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isDev }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
 
-            let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
-            const filesToTest = ['plugins/utilities.js', 'plugins/group.js', 'plugins/ai.js'];
+            // Strict Developer Guard: Completely ignores non-developers
+            if (!isDev) return;
 
-            for (const file of filesToTest) {
+            let report = "👁️ *Limitless Six-Eyes System Scan:* 👁️\n━━━━━━━━━━━━━━━━━━━\n\n";
+
+            // Complete list of all root files and plugins
+            const filesToScan = [
+                'index.js',
+                'pair.js',
+                'commands.js',
+                'settings.js',
+                'settingsSaver.js',
+                'stateManager.js',
+                'plugins/utilities.js',
+                'plugins/group.js',
+                'plugins/owner.js',
+                'plugins/ai.js'
+            ];
+
+            for (const file of filesToScan) {
                 const filePath = path.join(__dirname, '..', file);
-                
+
                 if (!fs.existsSync(filePath)) {
-                    report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n• *Details:* This file does not exist on your server.\n\n`;
+                    report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n\n`;
                     continue;
                 }
 
                 try {
-                    // Decache and attempt a compile-time require test
-                    delete require.cache[require.resolve(filePath)];
-                    require(filePath);
-                    report += `✅ *${file}*:\n• *Status:* Loaded successfully!\n\n`;
+                    const code = fs.readFileSync(filePath, 'utf-8');
+                    // Compiles the file to verify syntax without executing side-effects [1]
+                    new vm.Script(code); 
+                    report += `✅ *${file}*:\n• *Status:* Syntax Valid\n\n`;
                 } catch (err) {
-                    report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`\`\`${err.message}\`\`\`\n\n`;
+                    report += `❌ *${file}*:\n• *Status:* Syntax Error\n• *Details:* \`\`\`${err.message}\`\`\`\n\n`;
                 }
             }
 
@@ -61,7 +77,7 @@ module.exports = [
         }
     },
 
-    // SYSTEM UPDATE & REPAIR COMMAND (Hot-reloaded natively)
+    // SYSTEM UPDATE & REPAIR COMMAND (Zero-Downtime Hot-Reloading Enabled)
     {
         name: 'update',
         isPrefixless: false,
@@ -119,7 +135,7 @@ module.exports = [
                 return;
             }
 
-            // Handle confirmation action: Apply the update (Hot-loaded natively)
+            // Handle confirmation action: Apply the update (Zero-Downtime Hot-Reload)
             if (action === 'yes' || action === 'confirm') {
                 await sock.sendMessage(jid, { text: "⏳ *Channelling dynamic updates from upstream... Please wait.*" }, { quoted: msg });
 
@@ -130,13 +146,23 @@ module.exports = [
                         }, { quoted: msg });
                     }
 
-                    // Hot-reload the files instantly in server memory without exiting!
-                    const commandsList = require('../commands');
-                    commandsList.reload();
+                    try {
+                        // Hot-reload all updated plugin files instantly in memory
+                        const commandsList = require('../commands');
+                        commandsList.reload();
 
-                    await sock.sendMessage(jid, { 
-                        text: `✅ *Update Successful!*\n\nRecompiled modified code and hot-reloaded active plugins successfully without going offline.\n\n\`\`\`${stdout}\`\`\`` 
-                    }, { quoted: msg });
+                        await sock.sendMessage(jid, { 
+                            text: `✅ *Update Successful!*\n\nRecompiled modified code and hot-reloaded active plugins successfully without going offline.\n\n\`\`\`${stdout}\`\`\`` 
+                        }, { quoted: msg });
+                    } catch (reloadErr) {
+                        // Fallback safety guard: If compiling fails due to syntax typos, alert user and reboot cleanly
+                        await sock.sendMessage(jid, { 
+                            text: `⚠️ *Update Pulled but Hot-Reload Failed:*\n\n\`\`\`${reloadErr.message}\`\`\`\n\n_Rebooting process to apply cleanly..._` 
+                        }, { quoted: msg });
+                        setTimeout(() => {
+                            process.exit(1);
+                        }, 3000);
+                    }
                 });
                 return;
             }
@@ -186,7 +212,7 @@ module.exports = [
         }
     },
 
-    // 2. TOGGLE PUBLIC/PRIVATE MODE (Owner & Sudo Authorized)
+    // TOGGLE PUBLIC/PRIVATE MODE (Owner & Sudo Authorized)
     {
         name: 'mode',
         isPrefixless: false,
@@ -216,7 +242,7 @@ module.exports = [
         }
     },
 
-    // 3. ADD SUDO (Owner Only - Sudoers cannot run this)
+    // ADD SUDO (Owner Only - Sudoers cannot run this)
     {
         name: 'setsudo',
         isPrefixless: false,
@@ -244,7 +270,7 @@ module.exports = [
         }
     },
 
-    // 4. REMOVE SUDO (Owner Only)
+    // REMOVE SUDO (Owner Only)
     {
         name: 'delsudo',
         isPrefixless: false,
@@ -272,7 +298,7 @@ module.exports = [
         }
     },
 
-    // 5. ADD BOT OWNER (Owner Only)
+    // ADD BOT OWNER (Owner Only)
     {
         name: 'addowner',
         isPrefixless: false,
@@ -300,7 +326,7 @@ module.exports = [
         }
     },
 
-    // 6. REMOVE OWNER (Owner Only)
+    // REMOVE OWNER (Owner Only)
     {
         name: 'delowner',
         isPrefixless: false,
@@ -332,7 +358,7 @@ module.exports = [
         }
     },
 
-    // 7. SYSTEM RESTART (Owner & Sudo Authorized)
+    // SYSTEM RESTART (Owner & Sudo Authorized)
     {
         name: 'restart',
         isPrefixless: false,
@@ -346,7 +372,7 @@ module.exports = [
         }
     },
 
-    // 8. SYSTEM SHUTDOWN (Owner & Sudo Authorized)
+    // SYSTEM SHUTDOWN (Owner & Sudo Authorized)
     {
         name: 'shutdown',
         isPrefixless: false,
@@ -360,7 +386,7 @@ module.exports = [
         }
     },
 
-    // 9. GLOBAL BOT BAN CONTROLLER (Owner & Sudo Authorized)
+    // GLOBAL BOT BAN CONTROLLER (Owner & Sudo Authorized)
     {
         name: 'ban',
         isPrefixless: false,
@@ -392,7 +418,7 @@ module.exports = [
         }
     },
 
-    // 10. GLOBAL BOT UNBAN CONTROLLER (Owner & Sudo Authorized)
+    // GLOBAL BOT UNBAN CONTROLLER (Owner & Sudo Authorized)
     {
         name: 'unban',
         isPrefixless: false,
@@ -420,7 +446,7 @@ module.exports = [
         }
     },
 
-    // 11. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard) [1.1, 3]
+    // SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard) [1.1, 3]
     {
         name: 'adddev',
         isPrefixless: false,
@@ -448,7 +474,7 @@ module.exports = [
         }
     },
 
-    // 12. REMOVE DEVELOPER [1.1, 3]
+    // REMOVE DEVELOPER [1.1, 3]
     {
         name: 'deldev',
         isPrefixless: false,
@@ -481,7 +507,7 @@ module.exports = [
         }
     },
 
-    // 13. AFK TOGGLE COMMAND (Owner & Sudo Authorized)
+    // AFK TOGGLE COMMAND (Owner & Sudo Authorized)
     {
         name: 'afk',
         isPrefixless: false,
@@ -511,7 +537,7 @@ module.exports = [
         }
     },
 
-    // 14. DYNAMIC CONFIGURATION EDITOR (.setvar) (Owner & Sudo Authorized) [1]
+    // DYNAMIC CONFIGURATION EDITOR (.setvar) (Owner & Sudo Authorized) [1]
     {
         name: 'setvar',
         isPrefixless: false,
@@ -575,7 +601,7 @@ module.exports = [
         }
     },
 
-    // 15. GET SYSTEM SETTINGS (.settings) (Owner & Sudo Authorized) [1]
+    // GET SYSTEM SETTINGS (.settings) (Owner & Sudo Authorized) [1]
     {
         name: 'settings',
         isPrefixless: false,
