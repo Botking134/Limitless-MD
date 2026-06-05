@@ -744,6 +744,101 @@ module.exports = [
         }
     },
 
+    // 14. MASS KICK COUNTDOWN ACTION (.kickall) (Issue 2 Fixed: Preserves Cancel Button during edit iterations)
+    {
+        name: 'kickall',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin rights required." }, { quoted: msg });
+
+                const action = args ? args.toLowerCase().trim() : '';
+
+                if (action === 'cancel' || action === 'stop') {
+                    if (!global.kickallActive[jid]) {
+                        return await sock.sendMessage(jid, { text: "❌ No active kickall command running." }, { quoted: msg });
+                    }
+                    clearInterval(global.kickallActive[jid].intervalId);
+                    delete global.kickallActive[jid];
+                    return await sock.sendMessage(jid, { text: "✅ Mass-exorcism aborted. Kicks cancelled successfully." }, { quoted: msg });
+                }
+
+                if (global.kickallActive[jid]) {
+                    return await sock.sendMessage(jid, { text: "❌ A kickall command is already active in this domain." }, { quoted: msg });
+                }
+
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants;
+
+                // Only target standard members (protect bot and group admins)
+                const targets = participants.filter(p => p.admin === null && p.id !== sock.user.id).map(p => p.id);
+
+                if (targets.length === 0) {
+                    return await sock.sendMessage(jid, { text: "✅ There are no standard members left to kick." }, { quoted: msg });
+                }
+
+                let countdown = 10;
+                const prompt = `⚠️ *DOMAIN COLLAPSE WARNING* ⚠️\n\n` +
+                               `Mass-exorcising *${targets.length}* members from this domain in *${countdown}* seconds.\n\n` +
+                               `_Administrators: Click the cancel button below to abort immediately._`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}kickall cancel`, buttonText: { displayText: 'Cancel Exorcism' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                const sentWarn = await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+
+                // Initialize interval countdown (Issue 2 Fixed: Re-injects buttons in every edit tick)
+                global.kickallActive[jid] = {
+                    targets: targets,
+                    intervalId: setInterval(async () => {
+                        countdown--;
+                        if (countdown > 0) {
+                            const tickPrompt = `⚠️ *DOMAIN COLLAPSE WARNING* ⚠️\n\n` +
+                                               `Mass-exorcising *${targets.length}* members from this domain in *${countdown}* seconds.\n\n` +
+                                               `_Administrators: Click the cancel button below to abort immediately._`;
+
+                            const editPayload = {
+                                text: tickPrompt,
+                                buttons: [
+                                    { buttonId: `${settings.prefix}kickall cancel`, buttonText: { displayText: 'Cancel Exorcism' }, type: 1 }
+                                ],
+                                headerType: 1,
+                                edit: sentWarn.key
+                            };
+
+                            await sock.sendMessage(jid, editPayload);
+                        } else {
+                            clearInterval(global.kickallActive[jid].intervalId);
+                            await sock.sendMessage(jid, { text: "🌪️ *COUNTDOWN ELAPSED. INITIATING MASS EXORCISM.*" });
+
+                            for (const target of targets) {
+                                try {
+                                    await sock.groupParticipantsUpdate(jid, [target], "remove");
+                                } catch (e) {
+                                    console.error("Mass-kick single participant error:", e.message);
+                                }
+                            }
+                            delete global.kickallActive[jid];
+                        }
+                    }, 1000)
+                };
+
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    },
+
     // 28. TIMED KICK CONTROLLER (.tkick) (Issue 1 Repaired)
     {
         name: 'tkick',
