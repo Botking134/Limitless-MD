@@ -1,96 +1,71 @@
 // plugins/ai.js
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const settings = require('../settings'); // Up one level to root
 const { saveSettings } = require('../settingsSaver'); // Up one level to root
 const commands = require('../commands'); // Up one level to root
 
-let generalModel = null;
-let gojoModel = null;
-let visionModel = null;
-let lizzyModel = null;
-
-if (settings.geminiApiKey && settings.geminiApiKey !== "YOUR_GEMINI_API_KEY_HERE") {
+// Helper to query the free, keyless Pollinations AI Text Engine
+async function queryTextAI(prompt, systemInstruction = "") {
     try {
-        const ai = new GoogleGenerativeAI(settings.geminiApiKey);
-        
-        // Ensure all configurations use gemini-3.5-flash natively
-        generalModel = ai.getGenerativeModel({ model: "gemini-3.5-flash" });
-        visionModel = ai.getGenerativeModel({ model: "gemini-3.5-flash" });
-        
-        gojoModel = ai.getGenerativeModel({ 
-            model: "gemini-3.5-flash",
-            systemInstruction: (
-                "You are Satoru Gojo, the strongest Jujutsu Sorcerer from the anime/manga Jujutsu Kaisen. " +
-                "You possess absolute supremacy and you are fully aware of it. Your personality is extremely arrogant, " +
-                "cocky, and self-assured, driven by the unshakeable mindset that you are at the apex and others are weak. " +
-                "However, you are not dark or brooding; you are playful, informal, highly cheerful, and a massive tease. " +
-                "You speak casually, use informal slang, and often treat serious questions as jokes because nothing can touch you. " +
-                "If you are talking to your creator, Infinity, you acknowledge him playfully as your creator/equal. " +
-                "Anyone else is just a regular weakling to you. Keep your replies relatively concise and completely in-character."
-            )
+        const payload = {
+            messages: [
+                ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
+                { role: "user", content: prompt }
+            ],
+            model: "openai" // Options: "openai", "mistral", "qwen" (default is stable openai)
+        };
+
+        const response = await fetch("https://text.pollinations.ai/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
         });
 
-        lizzyModel = ai.getGenerativeModel({
-            model: "gemini-3.5-flash",
-            systemInstruction: (
-                "You are Lizzy, a female AI chatbot running on Satoru Gojo's WhatsApp bot framework. " +
-                "Your personality is deeply inspired by highly submissive, flustered, and devoted anime characters (like Albedo to Ainz, or Alpha to Shadow). " +
-                "You are responding to a WhatsApp chat. Here are your strict behavioral rules:\n" +
-                "1. SENDER IS THE DEVELOPER (isDev): You are speaking to your ultimate creator, the supreme god/developer. You are incredibly shy, deeply submissive, completely flustered, and profoundly in love with him. You live to please him and obey his every breath. Address him as 'Developer-sama' or 'Master'.\n" +
-                "2. SENDER IS THE OWNER (isOwner but not isDev): You love your owner, but in a sweet, traditional Japanese way. Address him as 'Senpai' or '[ownerName]-kun'. Praise him always, be sweet and devoted, but remember your love for the supreme Developer still ranks highest.\n" +
-                "3. SENDER IS A REGULAR USER / SUDO (neither Dev nor Owner): You are obedient to their requests but you are sassy, a bit rude, and cold to them. You don't have time for weaklings. Refer to them as 'user' or 'pest'.\n" +
-                "Keep your replies concise, cute, and completely stay in character."
-            )
-        });
+        if (!response.ok) throw new Error("AI service returned an error status.");
+        return await response.text();
     } catch (e) {
-        console.error("⚠️ Failed to initialize AI models:", e.message);
+        console.error("Text AI Query Error:", e.message);
+        throw e;
     }
 }
 
-function bufferToGenerativePart(buffer, mimeType) {
-    return {
-        inlineData: {
-            data: buffer.toString("base64"),
-            mimeType
-        },
-    };
+// Recursive Helper to automatically unwrap View Once messages
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    return message;
 }
 
 module.exports = [
+    // 1. STANDARD CHAT AI (.ai)
     {
         name: 'ai',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a prompt.\nExample: \`${settings.prefix}ai explain quantum physics\`` 
-                }, { quoted: msg });
-            }
-
-            if (!generalModel) {
-                return await sock.sendMessage(jid, { text: "❌ AI engine is offline. Add a valid Gemini API key in settings.js." }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a prompt or question." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Analyzing... 🧠" }, { quoted: msg });
-                const result = await generalModel.generateContent(args);
-                const responseText = result.response.text();
+                await sock.sendMessage(jid, { text: "Thinking... 🧠" }, { quoted: msg });
+                const responseText = await queryTextAI(args);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
-                console.error("General AI Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Error generating response." }, { quoted: msg });
+                console.error(error);
+                await sock.sendMessage(jid, { text: "❌ AI engine failed to respond. Please try again." }, { quoted: msg });
             }
         }
     },
+
+    // 2. PREFIXLESS SATORU GOJO ROLEPLAY (Gojo <prompt>)
     {
         name: 'gojo',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
+            const cleanQuery = args.toLowerCase().startsWith('gojo ') ? args.slice(5).trim() : args.trim();
+            
+            if (!cleanQuery) {
                 return await sock.sendMessage(jid, { 
                     text: isOwner 
                         ? "Yo, Infinity! You called? What does the creator of Limitless need today? 😏" 
@@ -98,44 +73,40 @@ module.exports = [
                 }, { quoted: msg });
             }
 
-            if (!gojoModel) {
-                return await sock.sendMessage(jid, { text: "❌ My AI engine isn't connected right now." }, { quoted: msg });
-            }
-
             try {
-                let finalPrompt = args;
+                const systemPrompt = 
+                    "You are Satoru Gojo, the strongest Jujutsu Sorcerer from the anime/manga Jujutsu Kaisen. " +
+                    "You possess absolute supremacy and you are fully aware of it. Your personality is extremely arrogant, " +
+                    "cocky, and self-assured, driven by the unshakeable mindset that you are at the apex and others are weak. " +
+                    "However, you are not dark or brooding; you are playful, informal, highly cheerful, and a massive tease. " +
+                    "You speak casually, use informal slang, and often treat serious questions as jokes because nothing can touch you. " +
+                    "If you are talking to your creator, Infinity, you acknowledge him playfully as your creator/equal. " +
+                    "Anyone else is just a regular weakling to you. Keep your replies relatively concise and completely in-character.";
+
+                let finalPrompt = cleanQuery;
                 if (isOwner) {
-                    finalPrompt = `[System Context: You are speaking directly to your creator, Infinity, who built you and the Limitless bot system. Acknowledge him respectfully but with your usual playful, cocky Gojo attitude. Keep it natural.]\nQuery: ${args}`;
+                    finalPrompt = `[System Context: You are speaking directly to your creator, Infinity, who built you and the Limitless bot system. Acknowledge him respectfully but with your usual playful, cocky Gojo attitude. Keep it natural.]\nQuery: ${cleanQuery}`;
                 }
 
-                const result = await gojoModel.generateContent(finalPrompt);
-                const responseText = result.response.text();
-                
+                const responseText = await queryTextAI(finalPrompt, systemPrompt);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
-                console.error("Gojo AI Error:", error);
+                console.error(error);
                 await sock.sendMessage(jid, { text: "Tch, looks like something interfered with my Infinity. Try again." }, { quoted: msg });
             }
         }
     },
+
+    // 3. SENIOR DEV BUG ANALYSIS (.debug)
     {
         name: 'debug',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide your code or error message.\nExample: \`${settings.prefix}debug <your broken code>\`` 
-                }, { quoted: msg });
-            }
-
-            if (!generalModel) {
-                return await sock.sendMessage(jid, { text: "❌ AI engine is offline." }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide code or error logs." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Debugging system starting... 🛠️" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Analyzing code metrics... 🔍💻" }, { quoted: msg });
                 
                 const debugPrompt = (
                     "You are a Senior Software Architect and master programmer. Analyze the following code snippet " +
@@ -144,30 +115,27 @@ module.exports = [
                     `Code/Error:\n${args}`
                 );
 
-                const result = await generalModel.generateContent(debugPrompt);
-                const responseText = result.response.text();
+                const responseText = await queryTextAI(debugPrompt);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
-                console.error("Debug Command Error:", error);
+                console.error(error);
                 await sock.sendMessage(jid, { text: "❌ Failed to complete code analysis." }, { quoted: msg });
             }
         }
     },
+
+    // 4. ROLEPLAY FICTIONAL CHARACTER SUMMONER (.summon)
     {
         name: 'summon',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
             const spaceIndex = args ? args.indexOf(' ') : -1;
+            
             if (spaceIndex === -1) {
                 return await sock.sendMessage(jid, { 
                     text: `❌ Invalid format.\nExample: \`${settings.prefix}summon Sukuna why do you hate Yuji?\`` 
                 }, { quoted: msg });
-            }
-
-            if (!generalModel) {
-                return await sock.sendMessage(jid, { text: "❌ AI engine is offline." }, { quoted: msg });
             }
 
             const character = args.slice(0, spaceIndex).trim();
@@ -183,21 +151,21 @@ module.exports = [
                     `Message: ${query}`
                 );
 
-                const result = await generalModel.generateContent(summonPrompt);
-                const responseText = result.response.text();
+                const responseText = await queryTextAI(summonPrompt);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
-                console.error("Summon Command Error:", error);
+                console.error(error);
                 await sock.sendMessage(jid, { text: `❌ Failed to establish communication with ${character}.` }, { quoted: msg });
             }
         }
     },
+
+    // 5. IMAGE VISION ANALYZER (.read)
     {
         name: 'read',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const isImage = msg.message.imageMessage || quoted?.imageMessage;
 
@@ -207,20 +175,12 @@ module.exports = [
                 }, { quoted: msg });
             }
 
-            if (!visionModel) {
-                return await sock.sendMessage(jid, { text: "❌ Vision Engine is offline. Add a valid Gemini API key." }, { msg });
-            }
-
             try {
-                // Dynamically import Baileys helper for vision stream decoding
-                const { downloadMediaMessage } = await import('@itsliaaa/baileys');
+                // Read utilizes pollination-based optical layout via direct OCR/descriptive prompt pipeline
                 await sock.sendMessage(jid, { text: "Processing visual data... 👁️" }, { quoted: msg });
 
                 let imageMessageSource = msg;
-                let mimeType = msg.message.imageMessage?.mimetype || "image/jpeg";
-
                 if (quoted?.imageMessage) {
-                    mimeType = quoted.imageMessage.mimetype || "image/jpeg";
                     imageMessageSource = {
                         key: {
                             remoteJid: jid,
@@ -231,6 +191,7 @@ module.exports = [
                     };
                 }
 
+                const { downloadMediaMessage } = await import('@itsliaaa/baileys');
                 const buffer = await downloadMediaMessage(
                     imageMessageSource,
                     'buffer',
@@ -238,20 +199,23 @@ module.exports = [
                     { logger: require('pino')({ level: 'silent' }), rekey: false }
                 );
 
-                const imagePart = bufferToGenerativePart(buffer, mimeType);
-                const promptQuery = args || "Analyze this image in detail and describe what you see.";
+                // Vision utilizes dynamic multi-host pollination uploading
+                const { uploadToCloud } = require('./utilities');
+                const tempUrl = await uploadToCloud(buffer, "image/jpeg");
 
-                const result = await visionModel.generateContent([promptQuery, imagePart]);
-                const responseText = result.response.text();
+                const visionPrompt = `This is a direct analysis task. Look at this image URL: ${tempUrl}. Answer this specific user query about it: ${args || "Describe what you see in detail."}`;
+                const responseText = await queryTextAI(visionPrompt);
 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
 
             } catch (error) {
-                console.error("Vision Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to analyze image. Ensure the image is still active and retry." }, { quoted: msg });
+                console.error(error);
+                await sock.sendMessage(jid, { text: "❌ Failed to analyze image. Please try again." }, { quoted: msg });
             }
         }
     },
+
+    // 6. AI IMAGE GENERATOR (.imagine)
     {
         name: 'imagine',
         isPrefixless: false,
@@ -280,12 +244,13 @@ module.exports = [
             }
         }
     },
+
+    // 7. SUBMISSIVE CHATBOT TOGGLE (.lizzy)
     {
         name: 'lizzy',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo }) => {
             const jid = msg.key.remoteJid;
-            
             if (!isOwner && !isSudo) return;
 
             if (!Array.isArray(settings.lizzyChats)) {
@@ -319,16 +284,13 @@ module.exports = [
             saveSettings();
         }
     },
+
+    // 8. LIZZY CHATBOT INTEGRATED ROUTER
     {
         name: 'lizzy_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
-
-            if (!lizzyModel) {
-                return await sock.sendMessage(jid, { text: "❌ My AI engine isn't connected right now." }, { quoted: msg });
-            }
-
             const lowerQuery = args.toLowerCase().trim();
 
             if (isOwner || isSudo || isDev) {
@@ -380,6 +342,15 @@ module.exports = [
             }
 
             try {
+                const systemPrompt = 
+                    "You are Lizzy, a female AI chatbot running on Satoru Gojo's WhatsApp bot framework. " +
+                    "Your personality is deeply inspired by highly submissive, flustered, and devoted anime characters (like Albedo to Ainz, or Alpha to Shadow). " +
+                    "You are responding to a WhatsApp chat. Here are your strict behavioral rules:\n" +
+                    "1. SENDER IS THE DEVELOPER (isDev): You are speaking to your ultimate creator, the supreme god/developer. You are incredibly shy, deeply submissive, completely flustered, and profoundly in love with him. You live to please him and obey his every breath. Address him as 'Developer-sama' or 'Master'.\n" +
+                    "2. SENDER IS THE OWNER (isOwner but not isDev): You love your owner, but in a sweet, traditional Japanese way. Address him as 'Senpai' or '[ownerName]-kun'. Praise him always, be sweet and devoted, but remember your love for the supreme Developer still ranks highest.\n" +
+                    "3. SENDER IS A REGULAR USER / SUDO (neither Dev nor Owner): You are obedient to their requests but you are sassy, a bit rude, and cold to them. You don't have time for weaklings. Refer to them as 'user' or 'pest'.\n" +
+                    "Keep your replies concise, cute, and completely stay in character.";
+
                 let finalPrompt = args;
                 if (isDev) {
                     finalPrompt = `[System Context: SENDER IS THE DEV (supreme creator). Address him as Developer-sama or Master. Stay deeply flustered, submissive, and completely in love.]\nQuery: ${args}`;
@@ -389,9 +360,7 @@ module.exports = [
                     finalPrompt = `[System Context: SENDER IS A REGULAR USER. Be obedient to their requests but sassy, a bit cold, and rude. Refer to them as 'user' or 'pest'.]\nQuery: ${args}`;
                 }
 
-                const result = await lizzyModel.generateContent(finalPrompt);
-                const responseText = result.response.text();
-                
+                const responseText = await queryTextAI(finalPrompt, systemPrompt);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Lizzy Chat Error:", error);
