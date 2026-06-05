@@ -762,7 +762,7 @@ module.exports = [
 
                 const cleanTargets = targets.filter(t => t && t.split('@')[0] !== settings.ownerNumber);
 
-                // Check manual typing redirection (Issue 1 Repaired: If user types "⚡tkick cancel" or "⚡tkick stop")
+                // Check manual typing redirection (If user types "⚡tkick cancel" or "⚡tkick stop")
                 const durationString = args.replace(/@[^ ]+/g, '').trim().split(' ')[0] || '';
                 if (durationString.toLowerCase() === 'cancel' || durationString.toLowerCase() === 'stop') {
                     return await commands[`${settings.prefix}tkick_cancel_all`](sock, msg, args, { isOwner });
@@ -839,7 +839,7 @@ module.exports = [
         }
     },
 
-    // 29. CANCEL ALL TIMED KICKS IN GROUP (Issue 1 Repaired: corrected `isPrefixless` to `false` for button click matching)
+    // 29. CANCEL ALL TIMED KICKS IN GROUP
     {
         name: 'tkick_cancel_all',
         isPrefixless: false,
