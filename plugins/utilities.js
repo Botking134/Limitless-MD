@@ -166,6 +166,7 @@ async function renderMenu(sock, msg) {
         `• \`${p}take\` / \`${p}steal\` — Steal sticker with custom metadata.\n` +
         `• \`${p}smeme <top|bottom>\` — Convert replied image to meme sticker.\n` +
         `• \`${p}setcmd <command>\` — Assign custom command to replied sticker.\n` +
+        `• \`${p}delcmd\` — Delete mapping of replied sticker command.\n` +
         `• \`${p}autoreact <on/off/all/cmd>\` — Toggle automated reactions.\n` +
         `• \`Speed\` _(Prefixless)_ — Check bot and network response delay.\n` +
         `• \`Kamui\` _(Prefixless)_ — Decrypt View Once & send silently to DM.\n\n` +
@@ -229,7 +230,7 @@ async function renderMenu(sock, msg) {
 }
 
 module.exports = [
-    // 1. PING COMMAND (Gojo-Themed Dual-Loop Animation)
+    // 1. PING COMMAND (Issue 6 Refactored)
     {
         name: 'ping',
         isPrefixless: false,
@@ -239,33 +240,35 @@ module.exports = [
             try {
                 const { delay } = await import('@itsliaaa/baileys');
                 const start = Date.now();
-                const sentPong = await sock.sendMessage(jid, { text: "🏓 *Pong!!*" }, { quoted: msg });
-                const networkPing = Date.now() - start;
 
-                const loadingMsg = await sock.sendMessage(jid, { text: "[□□□□]" }, { quoted: msg });
-                const frames = ["[□□□□]", "[■□□□]", "[■■□□]", "[■■■□]", "[■■■■]"];
+                // Send loading message (6 empty squares)
+                const loadingMsg = await sock.sendMessage(jid, { text: "[□□□□□□]" }, { quoted: msg });
+                const frames = ["[□□□□□□]", "[■□□□□□]", "[■■□□□□]", "[■■■□□□]", "[■■■■□□]", "[■■■■■□]", "[■■■■■■]"];
                 
+                // Animate exactly 2 times with a 400ms buffer
                 for (let cycle = 0; cycle < 2; cycle++) {
                     for (const frame of frames) {
-                        if (cycle > 0 && frame === "[□□□□]") continue; 
+                        if (cycle > 0 && frame === "[□□□□□□]") continue; 
                         await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
-                        await delay(600); 
+                        await delay(400); 
                     }
                     if (cycle === 0) {
-                        await sock.sendMessage(jid, { text: "[□□□□]", edit: loadingMsg.key });
-                        await delay(600);
+                        await sock.sendMessage(jid, { text: "[□□□□□□]", edit: loadingMsg.key });
+                        await delay(400);
                     }
                 }
 
+                const networkPing = Date.now() - start;
                 const cursedEnergy = networkPing * 100;
+
+                // Edit to final output
                 await sock.sendMessage(jid, {
-                    text: `🌀 *Void speed:* ∞\n` +
-                          `🔮 *Cursed Energy:* \`${cursedEnergy}ms\``,
+                    text: `▫️ _Void speed:_   ∞\n` +
+                          `➤ _Cursed Energy:_ _\`${cursedEnergy}ms\`_`,
                     edit: loadingMsg.key
                 });
             } catch (error) {
                 console.error("Ping Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to channel cursed energy." }, { quoted: msg });
             }
         }
     },
@@ -704,7 +707,36 @@ module.exports = [
         }
     },
 
-    // 13. REGULAR TO VIEW ONCE CONVERTER (.tovv)
+    // 13. DEDICATED STICKER TRIGGER DELETER (Issue 4)
+    {
+        name: 'delcmd',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) {
+                return await sock.sendMessage(jid, { text: "❌ Access Denied." }, { quoted: msg });
+            }
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawContent = getRawMessage(quoted);
+            const isSticker = rawContent?.stickerMessage;
+
+            if (!isSticker) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to the sticker whose command you want to delete." }, { quoted: msg });
+            }
+
+            const fileHash = rawContent.stickerMessage.fileSha256?.toString('base64');
+            if (!fileHash || !settings.stickerCommands?.[fileHash]) {
+                return await sock.sendMessage(jid, { text: "❌ This sticker has no assigned command trigger." }, { quoted: msg });
+            }
+
+            const removedCmd = settings.stickerCommands[fileHash];
+            delete settings.stickerCommands[fileHash];
+            await sock.sendMessage(jid, { text: `✅ Successfully removed trigger mapping for: \`${removedCmd}\`` }, { quoted: msg });
+        }
+    },
+
+    // 14. REGULAR TO VIEW ONCE CONVERTER (.tovv)
     {
         name: 'tovv',
         isPrefixless: false,
@@ -749,7 +781,7 @@ module.exports = [
         }
     },
 
-    // 14. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url)
+    // 15. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url)
     {
         name: 'tourl',
         isPrefixless: false,
@@ -799,7 +831,7 @@ module.exports = [
         }
     },
 
-    // 15. PREFIXLESS SILENT KAMUI DM DECODER
+    // 16. PREFIXLESS SILENT KAMUI DM DECODER
     {
         name: 'kamui',
         isPrefixless: true,
@@ -844,7 +876,7 @@ module.exports = [
         }
     },
 
-    // 16. BOT LATENCY COMPARISON TEST (.ping2)
+    // 17. BOT LATENCY COMPARISON TEST (.ping2)
     {
         name: 'ping2',
         isPrefixless: false,
@@ -854,7 +886,7 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "Testing..." }, { quoted: msg });
 
-            const loadingMsg = await sock.sendMessage(jid, { text: "▮▯▯▯▯▯▯▯" }, { quoted: msg });
+            const loadingMsg = await sock.sendMessage(jid, { text: "▮▯▯▯▯▯▯" }, { quoted: msg });
 
             const frames = [];
             for (let i = 1; i <= 8; i++) {
