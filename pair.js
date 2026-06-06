@@ -16,10 +16,10 @@ const devStatePath = path.join(__dirname, 'dev_state.json');
 // Global Cache for deleted message tracking
 global.messageStore = global.messageStore || {};
 
-// Global Cache for spam/antibug block tracking [Mission 13]
+// Global Cache for spam/antibug block tracking
 global.spamTracker = global.spamTracker || {};
 
-// Global bank details wizard session tracker [Mission 17]
+// Global bank details wizard session tracker
 global.azaSessions = global.azaSessions || {};
 
 // Helper to calculate AFK elapsed time
@@ -31,7 +31,7 @@ function getAfkDuration(ms) {
     return `${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 }
 
-// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely in background loops
+// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -40,6 +40,115 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
+}
+
+// Unified Message Deletion Logger Helper
+async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
+    try {
+        const antideleteConfig = settings.antidelete || { status: 'off', logDestination: 'bot' };
+        const status = antideleteConfig.status;
+
+        let shouldLog = false;
+        if (status === 'on') {
+            shouldLog = true;
+        } else if (status === 'here') {
+            shouldLog = (antideleteConfig.hereJid === jid);
+        }
+
+        // Avoid logging self-deletions to prevent endless loopbacks
+        if (shouldLog && !originalMsg.key.fromMe) {
+            const sender = originalMsg.key.participant || originalMsg.key.remoteJid || '';
+            const rawContent = getRawMessage(originalMsg.message);
+            if (!rawContent) return;
+
+            const textContent = rawContent.conversation || 
+                                rawContent.extendedTextMessage?.text || 
+                                rawContent.imageMessage?.caption || 
+                                rawContent.videoMessage?.caption || 
+                                '';
+
+            const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
+            let destJid = `${cleanOwnerNum}@s.whatsapp.net`;
+            if (antideleteConfig.logDestination === 'bot') {
+                destJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+            }
+
+            const logHeader = `🚨 *ANTIDELETE LOG INTEL:* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `👥 *Group/Chat:* @${jid.split('@')[0]}\n` +
+                              `👤 *Sender:* @${sender.split('@')[0]}\n` +
+                              `🗑️ *Deleted by:* @${revokerJid.split('@')[0]}\n`;
+
+            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+
+            if (rawContent.imageMessage) {
+                const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+                await sock.sendMessage(destJid, { 
+                    image: buffer, 
+                    caption: `${logHeader}📷 *Type:* Image\n📝 *Caption:* "${textContent}"`,
+                    mentions: [sender, revokerJid]
+                });
+            } 
+            else if (rawContent.videoMessage) {
+                const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+                const mime = rawContent.videoMessage.mimetype || "video/mp4";
+                await sock.sendMessage(destJid, { 
+                    video: buffer, 
+                    mimetype: mime,
+                    caption: `${logHeader}🎥 *Type:* Video\n📝 *Caption:* "${textContent}"`,
+                    mentions: [sender, revokerJid]
+                });
+            } 
+            else if (rawContent.audioMessage) {
+                const stream = await downloadContentFromMessage(rawContent.audioMessage, 'audio');
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+                const mime = rawContent.audioMessage.mimetype || "audio/ogg; codecs=opus";
+                await sock.sendMessage(destJid, { 
+                    text: `${logHeader}🎵 *Type:* Voice Note/Audio`, 
+                    mentions: [sender, revokerJid] 
+                });
+                await sock.sendMessage(destJid, { 
+                    audio: buffer, 
+                    mimetype: mime, 
+                    ptt: rawContent.audioMessage.ptt || false 
+                });
+            }
+            else if (rawContent.stickerMessage) {
+                const stream = await downloadContentFromMessage(rawContent.stickerMessage, 'sticker');
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+                await sock.sendMessage(destJid, { 
+                    text: `${logHeader}🎨 *Type:* Sticker`, 
+                    mentions: [sender, revokerJid] 
+                });
+                await sock.sendMessage(destJid, { 
+                    sticker: buffer 
+                });
+            }
+            else {
+                if (textContent) {
+                    await sock.sendMessage(destJid, { 
+                        text: `${logHeader}💬 *Type:* Text Message\n📝 *Content:* \n\n"${textContent}"`,
+                        mentions: [sender, revokerJid]
+                    });
+                }
+            }
+        }
+    } catch (err) {
+        console.error("❌ [ANTIDELETE] handleMessageDeletion failed:", err.message);
+    }
 }
 
 async function startBot() {
@@ -113,7 +222,6 @@ async function startBot() {
     // Wrapped sendMessage with simulated auto-typing and auto-recording delays
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
-        // Evaluate dynamic presence triggers for Satoru Gojo
         if (settings.presence && !jid.endsWith('@broadcast')) {
             const autotypingActive = settings.presence.autotyping.all || settings.presence.autotyping.chats.includes(jid);
             const autorecordingActive = settings.presence.autorecording.all || settings.presence.autorecording.chats.includes(jid);
@@ -121,11 +229,11 @@ async function startBot() {
             try {
                 if (autorecordingActive) {
                     await sock.sendPresenceUpdate('recording', jid);
-                    await delay(1500); // 1.5s real-time recording simulation delay
+                    await delay(1500); 
                     await sock.sendPresenceUpdate('paused', jid);
                 } else if (autotypingActive) {
                     await sock.sendPresenceUpdate('composing', jid);
-                    await delay(1200); // 1.2s real-time typing simulation delay
+                    await delay(1200); 
                     await sock.sendPresenceUpdate('paused', jid);
                 }
             } catch (presErr) {}
@@ -205,7 +313,7 @@ async function startBot() {
                 }
             }, 15000);
 
-            // AUTOMATED 3-HOUR NIGERIA TIME LOG SUMMARIZER SCHEDULER (100% Groq-Powered)
+            // AUTOMATED 3-HOUR LOG SUMMARIZER SCHEDULER
             let lastTriggeredHour = -1;
             setInterval(async () => {
                 const now = new Date();
@@ -292,7 +400,7 @@ async function startBot() {
         }
     });
 
-    // MESSAGE DELETION DETECTOR & RECORDER STREAM INTERCEPTOR [Mission 11 Engine]
+    // Fallback Message Deletion Interceptor (messages.update)
     sock.ev.on('messages.update', async (updates) => {
         try {
             for (const update of updates) {
@@ -302,91 +410,7 @@ async function startBot() {
 
                     if (global.messageStore && global.messageStore[deletedMsgId]) {
                         const originalMsg = global.messageStore[deletedMsgId];
-
-                        const antideleteConfig = settings.antidelete || { status: 'off', logDestination: 'bot' };
-                        const status = antideleteConfig.status;
-
-                        let shouldLog = false;
-                        if (status === 'on') {
-                            shouldLog = true;
-                        } else if (status === 'here') {
-                            shouldLog = (antideleteConfig.hereJid === jid);
-                        }
-
-                        // Protect loopbacks (Don't trigger on bot self-deletions)
-                        if (shouldLog && !originalMsg.key.fromMe) {
-                            const sender = originalMsg.key.participant || originalMsg.key.remoteJid;
-                            
-                            // Unpack the deleted payload dynamically (Supports nested Ephemerals and View Once)
-                            const rawContent = getRawMessage(originalMsg.message);
-                            if (!rawContent) continue;
-
-                            const textContent = rawContent.conversation || 
-                                                rawContent.extendedTextMessage?.text || 
-                                                rawContent.imageMessage?.caption || 
-                                                rawContent.videoMessage?.caption || 
-                                                '';
-
-                            // Clean JID Formatting to strip '+' and spaces from your ownerNumber
-                            const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
-                            let destJid = `${cleanOwnerNum}@s.whatsapp.net`;
-                            if (antideleteConfig.logDestination === 'bot') {
-                                destJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                            }
-
-                            const logHeader = `🚨 *ANTIDELETE LOG INTEL:* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                              `👥 *Group/Chat:* @${jid.split('@')[0]}\n` +
-                                              `👤 *Deleted by:* @${sender.split('@')[0]}\n`;
-
-                            // Dynamic Media Download and Forwarding
-                            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-
-                            if (rawContent.imageMessage) {
-                                const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
-                                let buffer = Buffer.from([]);
-                                for await (const chunk of stream) {
-                                    buffer = Buffer.concat([buffer, chunk]);
-                                }
-                                await sock.sendMessage(destJid, { 
-                                    image: buffer, 
-                                    caption: `${logHeader}📷 *Type:* Image Status/Media\n📝 *Caption:* "${textContent}"`,
-                                    mentions: [jid, sender]
-                                });
-                            } 
-                            else if (rawContent.videoMessage) {
-                                const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
-                                let buffer = Buffer.from([]);
-                                for await (const chunk of stream) {
-                                    buffer = Buffer.concat([buffer, chunk]);
-                                }
-                                const mime = rawContent.videoMessage.mimetype || "video/mp4";
-                                await sock.sendMessage(destJid, { 
-                                    video: buffer, 
-                                    mimetype: mime,
-                                    caption: `${logHeader}🎥 *Type:* Video Status/Media\n📝 *Caption:* "${textContent}"`,
-                                    mentions: [jid, sender]
-                                });
-                            } 
-                            else if (rawContent.audioMessage) {
-                                const stream = await downloadContentFromMessage(rawContent.audioMessage, 'audio');
-                                let buffer = Buffer.from([]);
-                                for await (const chunk of stream) {
-                                    buffer = Buffer.concat([buffer, chunk]);
-                                }
-                                const mime = rawContent.audioMessage.mimetype || "audio/ogg; codecs=opus";
-                                await sock.sendMessage(destJid, { text: `${logHeader}🎵 *Type:* Deleted Voice Note/Audio`, mentions: [jid, sender] });
-                                await sock.sendMessage(destJid, { audio: buffer, mimetype: mime, ptt: rawContent.audioMessage.ptt || false });
-                            }
-                            else {
-                                // Default Text Forwarding
-                                if (textContent) {
-                                    await sock.sendMessage(destJid, { 
-                                        text: `${logHeader}💬 *Type:* Deleted Text message\n📝 *Content:* \n\n"${textContent}"`,
-                                        mentions: [jid, sender]
-                                    });
-                                }
-                            }
-                        }
+                        await handleMessageDeletion(sock, originalMsg, jid, update.key.participant || update.key.remoteJid || '');
                     }
                 }
             }
@@ -469,7 +493,7 @@ async function startBot() {
             global.messageStore[msg.key.id] = msg;
             const storeKeys = Object.keys(global.messageStore);
             if (storeKeys.length > 1000) {
-                delete global.messageStore[storeKeys[0]]; // Purge old caching slots
+                delete global.messageStore[storeKeys[0]]; 
             }
 
             if (!Array.isArray(settings.owners)) {
@@ -480,7 +504,7 @@ async function startBot() {
             const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
             const isAuthorized = isOwner || isSudo;
 
-            // 1. AUTOMATED STATUS BROADCAST OBSERVER [Mission 15 Engine]
+            // 1. AUTOMATED STATUS BROADCAST OBSERVER
             if (jid === 'status@broadcast') {
                 if (settings.autoviewstatus === 'on') {
                     try {
@@ -496,7 +520,18 @@ async function startBot() {
                 return; 
             }
 
-            // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR [Mission 13 Engine]
+            // Primary Message Deletion Interceptor (protocolMessage REVOKE)
+            const protocolMessage = msg.message?.protocolMessage;
+            if (protocolMessage && (protocolMessage.type === 0 || protocolMessage.type === 'REVOKE')) {
+                const deletedMsgId = protocolMessage.key?.id;
+                if (deletedMsgId && global.messageStore && global.messageStore[deletedMsgId]) {
+                    const originalMsg = global.messageStore[deletedMsgId];
+                    await handleMessageDeletion(sock, originalMsg, jid, msg.key.participant || msg.key.remoteJid || '');
+                }
+                return;
+            }
+
+            // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR
             if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe) {
                 const now = Date.now();
                 if (!global.spamTracker[senderNumber]) {
@@ -508,27 +543,22 @@ async function startBot() {
 
                 if (global.spamTracker[senderNumber].length >= 5) {
                     try {
-                        // Warn them before blocking
                         await sock.sendMessage(jid, { 
                             text: `can't bypass my infinity huh? @${senderNumber}`, 
                             mentions: [senderJid] 
                         }, { quoted: msg });
 
-                        // Block contact natively on WhatsApp
                         await sock.updateBlockStatus(senderJid, 'block');
-
-                        // Clear chat flow entirely
                         await sock.chatModify({ delete: true, lastMessages: [msg] }, jid);
-
                         delete global.spamTracker[senderNumber];
                     } catch (blockErr) {
                         console.error("Antibug blocking failed:", blockErr.message);
                     }
-                    return; // Terminate execution immediately
+                    return; 
                 }
             }
 
-            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
+            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions
             const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
             if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
                 const session = global.forwardSessions[quotedMsgId];
@@ -559,11 +589,10 @@ async function startBot() {
                 return; 
             }
 
-            // 4. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions [Mission 17 Wizard Engine]
+            // 4. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions
             if (quotedMsgId && global.azaSessions && global.azaSessions[quotedMsgId] && isAuthorized) {
                 const session = global.azaSessions[quotedMsgId];
                 
-                // STEP 1: Process Account Number Response
                 if (session.step === 1) {
                     const cleanNum = trimmedMessage.replace(/[^0-9]/g, '');
                     if (cleanNum.length < 5) {
@@ -571,7 +600,6 @@ async function startBot() {
                         return;
                     }
 
-                    // Prompt Step 2
                     const prompt = await sock.sendMessage(jid, { 
                         text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                               `• *Step 2:* Excellent. Now, please reply directly to *this message* with your *Bank Name* (e.g., Sterling Bank, Access Bank).` 
@@ -585,7 +613,6 @@ async function startBot() {
                     return;
                 }
 
-                // STEP 2: Process Bank Name Response
                 if (session.step === 2) {
                     const bankName = trimmedMessage.trim();
                     if (bankName.length < 2) {
@@ -593,7 +620,6 @@ async function startBot() {
                         return;
                     }
 
-                    // Prompt Step 3
                     const prompt = await sock.sendMessage(jid, { 
                         text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                               `• *Step 3:* Almost done. Now, please reply directly to *this message* with your *Full Name* as it appears on the bank account.` 
@@ -608,7 +634,6 @@ async function startBot() {
                     return;
                 }
 
-                // STEP 3: Process Full Name Response & Save Configuration
                 if (session.step === 3) {
                     const fullName = trimmedMessage.trim();
                     if (fullName.length < 3) {
@@ -616,7 +641,6 @@ async function startBot() {
                         return;
                     }
 
-                    // Sync parameters to memory and write physically to settings.js
                     settings.aza = {
                         set: true,
                         account: session.account,
@@ -638,7 +662,7 @@ async function startBot() {
                 }
             }
 
-            // 5. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR [Mission 12 Engine]
+            // 5. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR
             const isViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
             if (isViewOnce && settings.antiviewonce === 'on' && !msg.key.fromMe) {
                 try {
@@ -682,7 +706,7 @@ async function startBot() {
                 }
             }
 
-            // 6. ANTIPM PRIVATE MESSAGE AUTOBLOCKER [Mission 18 Engine]
+            // 6. ANTIPM PRIVATE MESSAGE AUTOBLOCKER
             if (!isGroup && !msg.key.fromMe && !isAuthorized && settings.antipm === 'on') {
                 try {
                     await sock.sendMessage(jid, { text: "❌ *Connection Blocked:* Direct messages are currently restricted under Satoru Gojo's domain security." });
@@ -793,7 +817,7 @@ async function startBot() {
                 const sender = participants.find(p => p.id === senderJid);
                 const isAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
 
-                // AUTO-READ CHAT CONTROLLER [Mission 10 Engine]
+                // AUTO-READ CHAT CONTROLLER
                 if (settings.presence && settings.presence.autoread) {
                     const autoreadActive = settings.presence.autoread.all || settings.presence.autoread.chats.includes(jid);
                     if (autoreadActive) {
