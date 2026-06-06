@@ -13,6 +13,9 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 const botSentMessageIds = new Set();
 const devStatePath = path.join(__dirname, 'dev_state.json');
 
+// Global Cache for deleted message tracking
+global.messageStore = global.messageStore || {};
+
 // Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
     const seconds = Math.floor((Date.now() - ms) / 1000);
@@ -90,8 +93,27 @@ async function startBot() {
         browser: Browsers.ubuntu('Chrome')
     });
 
+    // Wrapped sendMessage with simulated auto-typing and auto-recording delays
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
+        // Evaluate dynamic presence triggers for Satoru Gojo
+        if (settings.presence && !jid.endsWith('@broadcast')) {
+            const autotypingActive = settings.presence.autotyping.all || settings.presence.autotyping.chats.includes(jid);
+            const autorecordingActive = settings.presence.autorecording.all || settings.presence.autorecording.chats.includes(jid);
+
+            try {
+                if (autorecordingActive) {
+                    await sock.sendPresenceUpdate('recording', jid);
+                    await delay(1500); // 1.5s real-time recording simulation delay
+                    await sock.sendPresenceUpdate('paused', jid);
+                } else if (autotypingActive) {
+                    await sock.sendPresenceUpdate('composing', jid);
+                    await delay(1200); // 1.2s real-time typing simulation delay
+                    await sock.sendPresenceUpdate('paused', jid);
+                }
+            } catch (presErr) {}
+        }
+
         const sent = await originalSendMessage(jid, content, options);
         if (sent && sent.key && sent.key.id) {
             botSentMessageIds.add(sent.key.id);
@@ -156,6 +178,15 @@ async function startBot() {
                     console.error("⚠️ [BOT JIDS] Self-JID resolution failed:", err.message);
                 }
             }
+
+            // Always-Online presence broadcast loop (evaluated every 15 seconds)
+            setInterval(async () => {
+                if (settings.presence && settings.presence.alwaysonline?.all) {
+                    try {
+                        await sock.sendPresenceUpdate('available');
+                    } catch (e) {}
+                }
+            }, 15000);
 
             // AUTOMATED 3-HOUR NIGERIA TIME LOG SUMMARIZER SCHEDULER (100% Groq-Powered)
             let lastTriggeredHour = -1;
@@ -244,6 +275,56 @@ async function startBot() {
         }
     });
 
+    // MESSAGE DELETION DETECTOR & RECORDER STREAM INTERCEPTOR [Mission 11 Engine]
+    sock.ev.on('messages.update', async (updates) => {
+        try {
+            for (const update of updates) {
+                if (update.update.message === null) {
+                    const deletedMsgId = update.key.id;
+                    const jid = update.key.remoteJid;
+
+                    if (global.messageStore && global.messageStore[deletedMsgId]) {
+                        const originalMsg = global.messageStore[deletedMsgId];
+
+                        const antideleteConfig = settings.antidelete || { status: 'off', logDestination: 'bot' };
+                        const status = antideleteConfig.status;
+
+                        let shouldLog = false;
+                        if (status === 'on') {
+                            shouldLog = true;
+                        } else if (status === 'here') {
+                            shouldLog = (antideleteConfig.hereJid === jid);
+                        }
+
+                        // Protect loopbacks (Don't trigger on bot self-deletions)
+                        if (shouldLog && !originalMsg.key.fromMe) {
+                            const sender = originalMsg.key.participant || originalMsg.key.remoteJid;
+                            const textContent = originalMsg.message?.conversation || originalMsg.message?.extendedTextMessage?.text || "";
+
+                            // Determine targeted forwarding DM
+                            let destJid = `${settings.ownerNumber}@s.whatsapp.net`;
+                            if (antideleteConfig.logDestination === 'bot') {
+                                destJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                            }
+
+                            if (textContent) {
+                                await sock.sendMessage(destJid, { 
+                                    text: `🚨 *ANTIDELETE LOG INTEL:* 🚨\n━━━━━━━━━━━━━━━━━━━\n\n` +
+                                          `👥 *Chat:* @${jid.split('@')[0]}\n` +
+                                          `👤 *Sender:* @${sender.split('@')[0]}\n` +
+                                          `📝 *Deleted Content:* \n\n"${textContent}"`,
+                                    mentions: [jid, sender]
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("❌ [ANTIDELETE] Failed to intercept update stream:", e.message);
+        }
+    });
+
     // Message stream handler
     sock.ev.on('messages.upsert', async (chatUpdate) => {
         try {
@@ -314,12 +395,18 @@ async function startBot() {
             const trimmedMessage = body.trim();
             const lowerMessage = trimmedMessage.toLowerCase();
 
+            // Populate global message store cache
+            global.messageStore[msg.key.id] = msg;
+            const storeKeys = Object.keys(global.messageStore);
+            if (storeKeys.length > 1000) {
+                delete global.messageStore[storeKeys[0]]; // Purge old caching slots
+            }
+
             // 1. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
             const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
             if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
                 const session = global.forwardSessions[quotedMsgId];
                 
-                // Use regex to isolate the destination number
                 const parsedNumber = trimmedMessage.replace(/[^0-9]/g, '');
                 if (parsedNumber.length < 7) {
                     await sock.sendMessage(jid, { text: "❌ Invalid target phone number format. Please ensure country code is included." }, { quoted: msg });
@@ -331,7 +418,6 @@ async function startBot() {
                 try {
                     await sock.sendMessage(jid, { text: `Forwarding content to @${parsedNumber}... ⏳`, mentions: [targetDestJid] }, { quoted: msg });
                     
-                    // Natively forward the exact media/text payload using Baileys envelope parameters
                     await sock.sendMessage(targetDestJid, { 
                         forward: { 
                             key: { id: session.originalMsgKey, remoteJid: jid, participant: session.originalParticipant }, 
@@ -344,7 +430,7 @@ async function startBot() {
                 } catch (e) {
                     await sock.sendMessage(jid, { text: `❌ Forwarding session failed: ${e.message}` }, { quoted: msg });
                 }
-                return; // Stop event stream propagation
+                return; 
             }
 
             if (isGroup && !msg.key.fromMe) {
@@ -454,6 +540,16 @@ async function startBot() {
                 const participants = groupMetadata.participants;
                 const sender = participants.find(p => p.id === senderJid);
                 const isAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
+
+                // AUTO-READ CHAT CONTROLLER [Mission 10 Engine]
+                if (settings.presence && settings.presence.autoread) {
+                    const autoreadActive = settings.presence.autoread.all || settings.presence.autoread.chats.includes(jid);
+                    if (autoreadActive) {
+                        try {
+                            await sock.readMessages([msg.key]);
+                        } catch (e) {}
+                    }
+                }
 
                 if (!isAdmin && !isOwner) {
                     const isOtherBot = !msg.key.fromMe && (
@@ -676,4 +772,5 @@ async function startBot() {
     });
 }
 
+// Attach Event Observers directly onto exported runner to ensure hot-reload stability
 module.exports = { startBot };
