@@ -679,7 +679,6 @@ async function startBot() {
                     await sock.sendMessage(jid, { text: `📥 *Downloading selected song:* "${chosen.title}"...` }, { quoted: msg });
 
                     try {
-                        // Dynamically query the working play endpoint using the exact chosen title
                         const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(chosen.title)}`);
                         if (!response.ok) throw new Error("API failed to respond.");
 
@@ -884,7 +883,9 @@ async function startBot() {
                 ...settings.devs.map(num => `${num}@s.whatsapp.net`),
                 ...settings.devLids
             ];
-            const isAnyDevMentioned = mentionedJids.some(jid => jid === jid || jid === botLid);
+            
+            // Fixed verification logic to check if a registered developer or the bot is mentioned
+            const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid) || jid === botJid || jid === botLid);
             
             if (isGroup && isAnyDevMentioned) {
                 const devEmojis = ["⚡", "❄", "🥷", "🤞", "🧘"];
