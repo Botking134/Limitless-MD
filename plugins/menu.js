@@ -192,7 +192,7 @@ _║ ⊱ getnote_`;
 
         try {
             // Buffer the audio on the server first to ensure correct mimetype formatting
-            const audioResponse = await fetch("https://qu.ax/sHoAn");
+            const audioResponse = await fetch("https://qu.ax/Kk5zj");
             if (audioResponse.ok) {
                 const arrayBuffer = await audioResponse.arrayBuffer();
                 await sock.sendMessage(jid, {
@@ -206,7 +206,7 @@ _║ ⊱ getnote_`;
         } catch (audioErr) {
             // Fallback to direct URL if the server download fails
             await sock.sendMessage(jid, {
-                audio: { url: "https://qu.ax/sHoAn" },
+                audio: { url: "https://qu.ax/Kk5zj" },
                 mimetype: "audio/mpeg",
                 ptt: false 
             });
