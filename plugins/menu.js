@@ -190,12 +190,27 @@ _║ ⊱ getnote_`;
             caption: menuText
         }, { quoted: msg });
 
-        // Fixed mimetype to standard MPEG MP3 (audio/mpeg)
-        await sock.sendMessage(jid, {
-            audio: { url: "https://qu.ax/sHoAn" },
-            mimetype: "audio/mpeg",
-            ptt: false 
-        });
+        try {
+            // Buffer the audio on the server first to ensure correct mimetype formatting
+            const audioResponse = await fetch("https://qu.ax/sHoAn");
+            if (audioResponse.ok) {
+                const arrayBuffer = await audioResponse.arrayBuffer();
+                await sock.sendMessage(jid, {
+                    audio: Buffer.from(arrayBuffer),
+                    mimetype: "audio/mpeg",
+                    ptt: false 
+                });
+            } else {
+                throw new Error();
+            }
+        } catch (audioErr) {
+            // Fallback to direct URL if the server download fails
+            await sock.sendMessage(jid, {
+                audio: { url: "https://qu.ax/sHoAn" },
+                mimetype: "audio/mpeg",
+                ptt: false 
+            });
+        }
 
     } catch (error) {
         console.error("Menu Image Render Error:", error);
