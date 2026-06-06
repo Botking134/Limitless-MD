@@ -600,16 +600,27 @@ async function startBot() {
                     args = '';
                 }
             } else {
+                // If no prefix commands matched, hand over to the chatbot routers (Lizzy or General Chatbot)
                 const isLizzyActive = Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid);
-                if (isLizzyActive) {
-                    const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
-                    
-                    const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && msg.message.extendedTextMessage?.contextInfo?.stanzaId);
-                    const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
-                    const containsLizzyName = lowerMessage.includes('lizzy');
+                const isChatbotActive = Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid);
 
+                const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
+                const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && msg.message.extendedTextMessage?.contextInfo?.stanzaId);
+                const isMentioningBot = mentionedJids.some(jid => jid === botJid || jid === botLid);
+
+                // Lizzy Chatbot Router: Triggers when Lizzy is active and user replies, mentions, or writes "lizzy"
+                if (isLizzyActive && !command) {
+                    const containsLizzyName = lowerMessage.includes('lizzy');
                     if (isReplyingToBot || isMentioningBot || containsLizzyName) {
                         command = 'lizzy_chat';
+                        args = trimmedMessage;
+                    }
+                }
+
+                // General AI Chatbot Router: Triggers ONLY when active AND user either replies to bot or mentions bot
+                if (isChatbotActive && !command) {
+                    if (isReplyingToBot || isMentioningBot) {
+                        command = 'chatbot_chat';
                         args = trimmedMessage;
                     }
                 }
