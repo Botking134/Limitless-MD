@@ -71,6 +71,7 @@ module.exports = [
 
             const parts = args ? args.split(' ') : [];
             const action = parts[0] ? parts[0].toLowerCase().trim() : '';
+            const option = parts[1] ? parts[1].toLowerCase().trim() : '';
             const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
 
             // Package Repair Tool
@@ -120,24 +121,46 @@ module.exports = [
             }
 
             // Handle confirmation action: Apply the update
-            if (action === 'yes' || action === 'confirm') {
-                await sock.sendMessage(jid, { text: "⏳ *Channelling dynamic updates from upstream... Please wait.*" }, { quoted: msg });
+            const isForce = action === 'force' || option === 'force';
 
-                exec('git pull', async (err, stdout, stderr) => {
-                    if (err) {
-                        return await sock.sendMessage(jid, { 
-                            text: `❌ *Update Failed!*\n\n\`\`\`${err.message}\`\`\`` 
+            if (action === 'yes' || action === 'confirm' || action === 'force') {
+                if (isForce) {
+                    await sock.sendMessage(jid, { text: "⏳ *Force-pulling updates from upstream (overwriting all local panel changes)... Please wait.*" }, { quoted: msg });
+
+                    exec('git fetch --all && git reset --hard origin/master', async (err, stdout, stderr) => {
+                        if (err) {
+                            return await sock.sendMessage(jid, { 
+                                text: `❌ *Force Update Failed!*\n\n\`\`\`${err.message}\`\`\`` 
+                            }, { quoted: msg });
+                        }
+
+                        await sock.sendMessage(jid, { 
+                            text: `✅ *Force Update Successful!*\n\n${stdout || 'Sync complete.'}\n\n🔄 _Restarting system..._` 
                         }, { quoted: msg });
-                    }
 
-                    await sock.sendMessage(jid, { 
-                        text: `✅ *Update Successful!*\n\n${stdout}\n\n🔄 _Restarting system..._` 
-                    }, { quoted: msg });
+                        setTimeout(() => {
+                            process.exit(1); // Panel restarts the process
+                        }, 3000);
+                    });
+                } else {
+                    await sock.sendMessage(jid, { text: "⏳ *Channelling dynamic updates from upstream... Please wait.*" }, { quoted: msg });
 
-                    setTimeout(() => {
-                        process.exit(1); // Panel restarts the process
-                    }, 3000);
-                });
+                    exec('git pull', async (err, stdout, stderr) => {
+                        if (err) {
+                            return await sock.sendMessage(jid, { 
+                                text: `❌ *Update Failed!*\n\n\`\`\`${err.message}\`\`\`\n\n💡 _If your uncommitted manual edits are preventing the update, run this command to force-overwrite them:_\n\`${settings.prefix}update force\`` 
+                            }, { quoted: msg });
+                        }
+
+                        await sock.sendMessage(jid, { 
+                            text: `✅ *Update Successful!*\n\n${stdout}\n\n🔄 _Restarting system..._` 
+                        }, { quoted: msg });
+
+                        setTimeout(() => {
+                            process.exit(1); // Panel restarts the process
+                        }, 3000);
+                    });
+                }
                 return;
             }
 
@@ -174,7 +197,7 @@ module.exports = [
                         await sock.sendMessage(jid, buttonMessage, { quoted: msg });
                     } catch (buttonError) {
                         await sock.sendMessage(jid, { 
-                            text: `${promptText}\n\n_Reply with *${settings.prefix}update yes* to apply._\n_Reply with *${settings.prefix}update no* to cancel._` 
+                            text: `${promptText}\n\n_Reply with *${settings.prefix}update yes* to apply._\n_Reply with *${settings.prefix}update no* to cancel._\n_Reply with *${settings.prefix}update force* to force-overwrite uncommitted changes._` 
                         }, { quoted: msg });
                     }
                 } else {
