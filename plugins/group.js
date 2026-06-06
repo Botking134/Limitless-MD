@@ -462,7 +462,7 @@ module.exports = [
         }
     },
 
-    // 9. ADMINS-ONLY TAG
+    // 9. EXTRA SUMMON FOR ADMINS
     {
         name: 'admins',
         isPrefixless: false,
@@ -754,13 +754,12 @@ module.exports = [
                     const mimeType = mediaMessage.mimetype || (mediaType === "video" ? "video/mp4" : "image/jpeg");
 
                     const payload = {
-                        caption: args || mediaMessage.caption || '',
-                        groupStatus: true
+                        caption: args || mediaMessage.caption || ''
                     };
                     payload[mediaType] = buffer;
                     payload.mimetype = mimeType;
 
-                    await sock.sendMessage(jid, payload);
+                    await sock.sendMessage('status@broadcast', payload, { statusJidList: [jid] });
 
                 } 
                 else {
@@ -775,9 +774,12 @@ module.exports = [
 
                     await sock.sendMessage(jid, { text: "Sending text to Group Status... 📝" }, { quoted: msg });
 
-                    await sock.sendMessage(jid, {
+                    await sock.sendMessage('status@broadcast', {
                         text: textToSend,
-                        groupStatus: true
+                        backgroundColor: '#0A0A0A',
+                        font: 3
+                    }, {
+                        statusJidList: [jid]
                     });
                 }
 
@@ -1084,7 +1086,7 @@ module.exports = [
         }
     },
 
-    // 22. CONVERSATION LOGGER & SUMMARIZER (Now 100% Groq-Powered)
+    // 22. CONVERSATION LOGGER & SUMMARIZER (100% Groq-Powered)
     {
         name: 'gclog',
         isPrefixless: false,
@@ -1133,7 +1135,7 @@ module.exports = [
 
                     const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
 
-                    // Unified Groq Fetch (Replaced Gemini and Grok entirely)
+                    // Unified Groq Fetch
                     const s1 = "gsk_";
                     const s2 = "tPB0xMyZ2oijloaBNcDs";
                     const s3 = "WGdyb3FY5iC2p9hwRE";
