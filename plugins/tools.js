@@ -445,24 +445,27 @@ module.exports = [
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Uploading to Satoru Gojo Status channel... 🚀" }, { quoted: msg });
 
-                const activeChats = Object.keys(settings.msgCount || {});
+                const activeChats = Object.keys(settings.msgCount || {}).filter(k => k.endsWith('@s.whatsapp.net'));
                 const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                 const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
                 
-                const statusTargets = [selfJid, cleanOwnerNum, ...activeChats].filter((v, i, self) => self.indexOf(v) === i);
+                // Exclude selfJid from target configuration list to prevent protocol rejection
+                const statusTargets = [cleanOwnerNum, ...activeChats]
+                    .filter((v, i, self) => self.indexOf(v) === i && v !== selfJid && v.endsWith('@s.whatsapp.net'));
 
+                if (statusTargets.length === 0) {
+                    statusTargets.push(cleanOwnerNum);
+                }
+
+                const payload = {};
                 if (rawContent.imageMessage) {
                     const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) {
                         buffer = Buffer.concat([buffer, chunk]);
                     }
-                    await sock.sendMessage('status@broadcast', { 
-                        image: buffer, 
-                        caption: args || rawContent.imageMessage.caption || "" 
-                    }, {
-                        statusJidList: statusTargets
-                    });
+                    payload.image = buffer;
+                    payload.caption = args || rawContent.imageMessage.caption || "";
                 } 
                 else if (rawContent.videoMessage) {
                     const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
@@ -470,27 +473,25 @@ module.exports = [
                     for await (const chunk of stream) {
                         buffer = Buffer.concat([buffer, chunk]);
                     }
-                    const mime = rawContent.videoMessage.mimetype || "video/mp4";
-                    await sock.sendMessage('status@broadcast', { 
-                        video: buffer, 
-                        mimetype: mime, 
-                        caption: args || rawContent.videoMessage.caption || "" 
-                    }, {
-                        statusJidList: statusTargets
-                    });
+                    payload.video = buffer;
+                    payload.mimetype = rawContent.videoMessage.mimetype || "video/mp4";
+                    payload.caption = args || rawContent.videoMessage.caption || "";
                 } 
                 else {
                     const text = rawContent.conversation || rawContent.extendedTextMessage?.text || "";
                     if (!text) {
                         return await sock.sendMessage(jid, { text: "❌ Unsupported media format for status upload." }, { quoted: msg });
                     }
-                    await sock.sendMessage('status@broadcast', { 
-                        text: text 
-                    }, {
-                        statusJidList: statusTargets,
-                        backgroundColor: '#000000',
-                        font: 1
-                    });
+                    payload.text = text;
+                    payload.backgroundColor = '#000000';
+                    payload.font = 1;
+                }
+
+                try {
+                    await sock.sendMessage('status@broadcast', payload, { statusJidList: statusTargets });
+                } catch (statusErr) {
+                    console.warn("Status upload with JID list failed, fallback to general status broadcast:", statusErr.message);
+                    await sock.sendMessage('status@broadcast', payload);
                 }
 
                 await sock.sendMessage(jid, { text: "✅ Domain Status successfully updated!" }, { quoted: msg });
@@ -868,7 +869,7 @@ module.exports = [
         }
     },
 
-    // 17. CLEAR CHAT (.clear) [Mission 14]
+    // 17. CLEAR CHAT (.clear)
     {
         name: 'clear',
         isPrefixless: false,
@@ -886,7 +887,7 @@ module.exports = [
         }
     },
 
-    // 18. ARCHIVE CHAT (.archive) [Mission 14]
+    // 18. ARCHIVE CHAT (.archive)
     {
         name: 'archive',
         isPrefixless: false,
@@ -904,7 +905,7 @@ module.exports = [
         }
     },
 
-    // 19. UNARCHIVE CHAT (.unarchive) [Mission 14]
+    // 19. UNARCHIVE CHAT (.unarchive)
     {
         name: 'unarchive',
         isPrefixless: false,
@@ -922,7 +923,7 @@ module.exports = [
         }
     },
 
-    // 20. AUTOMATIC VIEW STATUS MODULE (.autoviewstatus) [Mission 15]
+    // 20. AUTOMATIC VIEW STATUS MODULE (.autoviewstatus)
     {
         name: 'autoviewstatus',
         isPrefixless: false,
@@ -963,7 +964,7 @@ module.exports = [
         }
     },
 
-    // 21. CONFIGURE STATUS REACTION EMOJI (.statusemoji) [Mission 15]
+    // 21. CONFIGURE STATUS REACTION EMOJI (.statusemoji)
     {
         name: 'statusemoji',
         isPrefixless: false,
@@ -984,7 +985,7 @@ module.exports = [
         }
     },
 
-    // 22. AUTOMATIC REACT STATUS MODULE (.autoreactstatus) [Mission 15]
+    // 22. AUTOMATIC REACT STATUS MODULE (.autoreactstatus)
     {
         name: 'autoreactstatus',
         isPrefixless: false,
@@ -1275,7 +1276,7 @@ module.exports = [
         }
     },
 
-    // 29. REAL-TIME ESPN SOCCER SCOREBOARD (.livescore) [Mission 22]
+    // 29. REAL-TIME ESPN SOCCER SCOREBOARD (.livescore)
     {
         name: 'livescore',
         isPrefixless: false,
@@ -1285,7 +1286,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Fetching active scores from ESPN Satellites... 📡🏟️" }, { quoted: msg });
 
-                // Request ESPN's completely open, public livescore JSON scoreboard
                 const response = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard');
                 if (!response.ok) throw new Error("ESPN scoreboard servers currently unreachable.");
 
@@ -1296,7 +1296,6 @@ module.exports = [
                     return await sock.sendMessage(jid, { text: "🏟️ *No active live matches found on the global scoreboard.*" }, { quoted: msg });
                 }
 
-                // If user wants to query a specific team (e.g. .livescore Chelsea)
                 if (args) {
                     const query = args.toLowerCase().trim();
                     const match = events.find(e => e.name.toLowerCase().includes(query));
@@ -1322,7 +1321,6 @@ module.exports = [
                     return await sock.sendMessage(jid, { text: singleCard }, { quoted: msg });
                 }
 
-                // If no team argument is provided, display first 5 ongoing live football matches
                 let scoreboardText = `🏟️ *GLOBAL SOCCER SCORES SUMMARY* 🏟\n`;
                 scoreboardText += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
@@ -1349,7 +1347,7 @@ module.exports = [
         }
     },
 
-    // 30. ESPN GLOBAL FOOTBALL NEWS SCANNER (.football) [Mission 23]
+    // 30. ESPN GLOBAL FOOTBALL NEWS SCANNER (.football)
     {
         name: 'football',
         isPrefixless: false,
@@ -1359,7 +1357,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Scanning ESPN global soccer news wires... 📝⚽" }, { quoted: msg });
 
-                // Request open ESPN global news feed
                 const response = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/news');
                 if (!response.ok) throw new Error("ESPN news wires currently unreachable.");
 
@@ -1373,7 +1370,6 @@ module.exports = [
                 let filtered = articles;
                 let headerLabel = "GLOBAL FOOTBALL NEWS";
 
-                // Filter by specific league if argument is provided
                 if (args) {
                     const query = args.toLowerCase().trim();
                     filtered = articles.filter(art => 
