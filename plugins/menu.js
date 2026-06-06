@@ -190,9 +190,11 @@ _║ ⊱ getnote_`;
             caption: menuText
         }, { quoted: msg });
 
+        const audioUrl = "https://github.com/Botking134/Limitless-MD/raw/refs/heads/master/plugins/AUD-20260604-WA0001.mp3";
+
         try {
             // Buffer the audio on the server first to ensure correct mimetype formatting
-            const audioResponse = await fetch("https://qu.ax/Kk5zj");
+            const audioResponse = await fetch(audioUrl);
             if (audioResponse.ok) {
                 const arrayBuffer = await audioResponse.arrayBuffer();
                 await sock.sendMessage(jid, {
@@ -206,7 +208,7 @@ _║ ⊱ getnote_`;
         } catch (audioErr) {
             // Fallback to direct URL if the server download fails
             await sock.sendMessage(jid, {
-                audio: { url: "https://qu.ax/Kk5zj" },
+                audio: { url: audioUrl },
                 mimetype: "audio/mpeg",
                 ptt: false 
             });
