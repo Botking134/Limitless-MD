@@ -18,12 +18,55 @@ if (!settings.antidelete) {
     settings.antidelete = {
         status: 'off',
         hereJid: '',
-        logDestination: 'bot' // default is 'bot'
+        logDestination: 'bot'
     };
+}
+
+// Initialize antiviewonce config securely
+if (!settings.antiviewonce) {
+    settings.antiviewonce = 'off';
+}
+
+// Initialize antibug config securely
+if (!settings.antibug) {
+    settings.antibug = 'off';
+}
+
+// Initialize autoviewstatus config securely
+if (!settings.autoviewstatus) {
+    settings.autoviewstatus = 'off';
+}
+
+// Initialize statusemoji config securely
+if (!settings.statusemoji) {
+    settings.statusemoji = '❄';
+}
+
+// Initialize autoreactstatus config securely
+if (!settings.autoreactstatus) {
+    settings.autoreactstatus = 'off';
+}
+
+// Initialize aza (bank details) config securely
+if (!settings.aza) {
+    settings.aza = {
+        set: false,
+        account: '',
+        bank: '',
+        name: ''
+    };
+}
+
+// Initialize antipm config securely
+if (!settings.antipm) {
+    settings.antipm = 'off';
 }
 
 // Global forward sessions state memory
 global.forwardSessions = global.forwardSessions || {};
+
+// Global bank details wizard session tracker
+global.azaSessions = global.azaSessions || {};
 
 // Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely
 function getRawMessage(message) {
@@ -36,8 +79,46 @@ function getRawMessage(message) {
     return message;
 }
 
+// Helper to determine the client operating system from the message ID structure
+function getDeviceTypeFromId(id) {
+    if (!id) return "UNKNOWN";
+    const len = id.length;
+    
+    // 1. iOS signature rules
+    if (len === 20 && id.startsWith('3A')) return "iOS (iPhone) 🍏";
+    
+    // 2. Android signature rules
+    if (len === 32) return "Android! 🤖";
+    
+    // 3. PC / Desktop Web signature rules
+    if (len === 12 || id.startsWith('3EB0') || id.startsWith('BAE5')) return "PC (Desktop) 💻";
+    
+    return "UNKNOWN ❓";
+}
+
+// Standard IANA Timezone Mapping lookup table
+const timezoneMap = {
+    "lagos": "Africa/Lagos", "nigeria": "Africa/Lagos",
+    "london": "Europe/London", "uk": "Europe/London", "england": "Europe/London",
+    "tokyo": "Asia/Tokyo", "japan": "Asia/Tokyo",
+    "new york": "America/New_York", "ny": "America/New_York", "usa": "America/New_York", "us": "America/New_York",
+    "johannesburg": "Africa/Johannesburg", "sa": "Africa/Johannesburg", "south africa": "Africa/Johannesburg",
+    "nairobi": "Africa/Nairobi", "kenya": "Africa/Nairobi",
+    "kuala lumpur": "Asia/Kuala_Lumpur", "malaysia": "Asia/Kuala_Lumpur",
+    "singapore": "Asia/Singapore",
+    "dubai": "Asia/Dubai", "uae": "Asia/Dubai",
+    "sydney": "Australia/Sydney", "australia": "Australia/Sydney",
+    "paris": "Europe/Paris", "france": "Europe/Paris",
+    "berlin": "Europe/Berlin", "germany": "Europe/Berlin",
+    "jakarta": "Asia/Jakarta", "indonesia": "Asia/Jakarta",
+    "moscow": "Europe/Moscow", "russia": "Europe/Moscow",
+    "beijing": "Asia/Shanghai", "china": "Asia/Shanghai",
+    "cairo": "Africa/Cairo", "egypt": "Africa/Cairo",
+    "mumbai": "Asia/Kolkata", "india": "Asia/Kolkata", "delhi": "Asia/Kolkata"
+};
+
 module.exports = [
-    // 1. SET BOT PROFILE PICTURE (.setpp) [Mission 3]
+    // 1. SET BOT PROFILE PICTURE (.setpp)
     {
         name: 'setpp',
         isPrefixless: false,
@@ -72,7 +153,7 @@ module.exports = [
         }
     },
 
-    // 2. SPATIAL GEOGRAPHICAL LOCATOR (.track) [Mission 4]
+    // 2. SPATIAL GEOGRAPHICAL LOCATOR (.track)
     {
         name: 'track',
         isPrefixless: false,
@@ -92,18 +173,98 @@ module.exports = [
 
             const phone = targetJid.split('@')[0];
 
-            let country = "Unknown Domain";
+            let country = "Unknown Region";
+            let carrier = "Unknown Network Operator";
+            let city = "Unknown City Coordinates";
             let coordinates = "Unavailable Spatial coordinates";
 
-            if (phone.startsWith('234')) { country = "Nigeria 🇳🇬"; coordinates = "Lat: 9.0820, Lon: 8.6753"; }
-            else if (phone.startsWith('27')) { country = "South Africa 🇿🇦"; coordinates = "Lat: -30.5595, Lon: 22.9375"; }
-            else if (phone.startsWith('60')) { country = "Malaysia 🇲🇾"; coordinates = "Lat: 4.2105, Lon: 101.9758"; }
-            else if (phone.startsWith('1')) { country = "United States / Canada 🇺🇸🇨🇦"; coordinates = "Lat: 37.0902, Lon: -95.7129"; }
-            else if (phone.startsWith('44')) { country = "United Kingdom 🇬🇧"; coordinates = "Lat: 55.3781, Lon: -3.4360"; }
-            else if (phone.startsWith('91')) { country = "India 🇮🇳"; coordinates = "Lat: 20.5937, Lon: 78.9629"; }
-            else if (phone.startsWith('62')) { country = "Indonesia 🇮🇩"; coordinates = "Lat: -0.7893, Lon: 113.9213"; }
-            else if (phone.startsWith('254')) { country = "Kenya 🇰🇪"; coordinates = "Lat: -1.2921, Lon: 36.8219"; }
-            else if (phone.startsWith('212')) { country = "Morocco 🇲🇦"; coordinates = "Lat: 31.7917, Lon: -7.0926"; }
+            // NIGERIAN PREFIX TRIANGULATION
+            if (phone.startsWith('234')) {
+                country = "Nigeria 🇳🇬";
+                const prefix = phone.slice(3, 6);
+
+                if (['803', '806', '703', '706', '813', '816', '903', '906', '913', '916'].includes(prefix)) {
+                    carrier = "MTN Nigeria";
+                    city = "Lagos State (Ikeja District)";
+                    coordinates = "Lat: 6.5244, Lon: 3.3792";
+                } else if (['802', '808', '701', '708', '812', '902', '907', '901', '912'].includes(prefix)) {
+                    carrier = "Airtel Nigeria";
+                    city = "FCT Abuja (Maitama District)";
+                    coordinates = "Lat: 9.0765, Lon: 7.3986";
+                } else if (['805', '807', '705', '811', '815', '905', '915'].includes(prefix)) {
+                    carrier = "Globacom (Glo Mobile)";
+                    city = "Edo State (Benin City Sector)";
+                    coordinates = "Lat: 6.3350, Lon: 5.6037";
+                } else if (['809', '817', '818', '909', '908'].includes(prefix)) {
+                    carrier = "9mobile (EMTS)";
+                    city = "Rivers State (Port Harcourt)";
+                    coordinates = "Lat: 4.8156, Lon: 7.0498";
+                } else {
+                    carrier = "Local Cellular ISP";
+                    city = "Nigeria General Area";
+                    coordinates = "Lat: 9.0820, Lon: 8.6753";
+                }
+            }
+            // SOUTH AFRICAN PREFIX TRIANGULATION
+            else if (phone.startsWith('27')) {
+                country = "South Africa 🇿🇦";
+                const prefix = phone.slice(2, 4);
+
+                if (['82', '72', '76', '79', '60'].includes(prefix)) {
+                    carrier = "Vodacom SA";
+                    city = "Gauteng (Johannesburg)";
+                    coordinates = "Lat: -26.2041, Lon: 28.0473";
+                } else if (['83', '73', '78', '81', '63'].includes(prefix)) {
+                    carrier = "MTN South Africa";
+                    city = "Western Cape (Cape Town)";
+                    coordinates = "Lat: -33.9249, Lon: 18.4241";
+                } else if (['84', '74', '64'].includes(prefix)) {
+                    carrier = "Cell C";
+                    city = "KwaZulu-Natal (Durban)";
+                    coordinates = "Lat: -29.8587, Lon: 31.0218";
+                } else if (['81', '85'].includes(prefix)) {
+                    carrier = "Telkom Mobile";
+                    city = "Gauteng (Pretoria)";
+                    coordinates = "Lat: -25.7479, Lon: 28.2293";
+                } else {
+                    carrier = "SA Telecom Stack";
+                    city = "South Africa General";
+                    coordinates = "Lat: -30.5595, Lon: 22.9375";
+                }
+            }
+            // MALAYSIAN PREFIX TRIANGULATION
+            else if (phone.startsWith('60')) {
+                country = "Malaysia 🇲🇾";
+                const prefix = phone.slice(2, 4);
+
+                if (['12', '17', '111'].includes(prefix)) {
+                    carrier = "Maxis / Hotlink";
+                    city = "Federal Territory (Kuala Lumpur)";
+                    coordinates = "Lat: 3.1390, Lon: 101.6869";
+                } else if (['13', '19', '112'].includes(prefix)) {
+                    carrier = "Celcom Axiata";
+                    city = "Selangor (Petaling Jaya)";
+                    coordinates = "Lat: 3.1073, Lon: 101.6067";
+                } else if (['16', '14', '113'].includes(prefix)) {
+                    carrier = "Digi Telecommunications";
+                    city = "Penang (Georgetown)";
+                    coordinates = "Lat: 5.4141, Lon: 100.3288";
+                } else if (['18', '118'].includes(prefix)) {
+                    carrier = "U Mobile";
+                    city = "Johor (Johor Bahru)";
+                    coordinates = "Lat: 1.4927, Lon: 103.7414";
+                } else {
+                    carrier = "Telekom Malaysia";
+                    city = "Malaysia Area Stack";
+                    coordinates = "Lat: 4.2105, Lon: 101.9758";
+                }
+            }
+            // FALLBACK REGIONAL BASES
+            else if (phone.startsWith('1')) { country = "United States / Canada 🇺🇸🇨🇦"; coordinates = "Lat: 37.0902, Lon: -95.7129"; carrier = "Verizon / Rogers"; city = "North America Range"; }
+            else if (phone.startsWith('44')) { country = "United Kingdom 🇬🇧"; coordinates = "Lat: 55.3781, Lon: -3.4360"; carrier = "EE Mobile Ltd"; city = "London Sector"; }
+            else if (phone.startsWith('91')) { country = "India 🇮🇳"; coordinates = "Lat: 20.5937, Lon: 78.9629"; carrier = "Reliance Jio / Airtel"; city = "New Delhi Core"; }
+            else if (phone.startsWith('62')) { country = "Indonesia 🇮🇩"; coordinates = "Lat: -0.7893, Lon: 113.9213"; carrier = "Telkomsel"; city = "Jakarta Core"; }
+            else if (phone.startsWith('254')) { country = "Kenya 🇰🇪"; coordinates = "Lat: -1.2921, Lon: 36.8219"; carrier = "Safaricom PLC"; city = "Nairobi Base"; }
 
             try {
                 const { delay } = await import('@itsliaaa/baileys');
@@ -119,8 +280,9 @@ module.exports = [
                 const report = `🎯 *SPATIAL LOCATOR MANIFESTED* 🎯\n━━━━━━━━━━━━━━━━━━━\n\n` +
                                `👤 *Target User:* @${phone}\n` +
                                `🌍 *Region:* \`${country}\`\n` +
+                               `📡 *Cell Carrier:* \`${carrier}\`\n` +
+                               `🏢 *Regional Hub:* \`${city}\`\n` +
                                `📍 *Coordinates:* \`${coordinates}\`\n` +
-                               `📡 *Signal Vector:* \`Within Unlimited Void coverage\`\n` +
                                `⚡ *Scan Latency:* \`${Math.floor(Math.random() * 80) + 10}ms\`\n\n` +
                                `_“No matter where you hide inside this dimension, my Infinity can reach you.”_ 🤞`;
 
@@ -136,7 +298,7 @@ module.exports = [
         }
     },
 
-    // 3. GET USER PROFILE PICTURE (.getpp) [Mission 5]
+    // 3. GET USER PROFILE PICTURE (.getpp)
     {
         name: 'getpp',
         isPrefixless: false,
@@ -146,6 +308,7 @@ module.exports = [
             let targetJid = "";
             const quoted = msg.message.extendedTextMessage?.contextInfo;
 
+            // Resolve Target JID
             if (quoted && quoted.participant) {
                 targetJid = quoted.participant;
             } else if (quoted?.mentionedJid?.length > 0) {
@@ -173,7 +336,7 @@ module.exports = [
         }
     },
 
-    // 4. SET BOT PROFILE NAME (.setname <name>) [Mission 6]
+    // 4. SET BOT PROFILE NAME (.setname <name>)
     {
         name: 'setname',
         isPrefixless: false,
@@ -202,7 +365,7 @@ module.exports = [
         }
     },
 
-    // 5. SAVE STATUS UPDATE (.save) [Mission 7]
+    // 5. SAVE STATUS UPDATE (.save)
     {
         name: 'save',
         isPrefixless: false,
@@ -262,7 +425,7 @@ module.exports = [
         }
     },
 
-    // 6. MANIFEST MEDIA TO STATUS UPDATE (.tostatus) [Mission 8]
+    // 6. MANIFEST MEDIA TO STATUS UPDATE (.tostatus)
     {
         name: 'tostatus',
         isPrefixless: false,
@@ -282,6 +445,12 @@ module.exports = [
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Uploading to Satoru Gojo Status channel... 🚀" }, { quoted: msg });
 
+                const activeChats = Object.keys(settings.msgCount || {});
+                const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                
+                const statusTargets = [selfJid, cleanOwnerNum, ...activeChats].filter((v, i, self) => self.indexOf(v) === i);
+
                 if (rawContent.imageMessage) {
                     const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
                     let buffer = Buffer.from([]);
@@ -291,6 +460,8 @@ module.exports = [
                     await sock.sendMessage('status@broadcast', { 
                         image: buffer, 
                         caption: args || rawContent.imageMessage.caption || "" 
+                    }, {
+                        statusJidList: statusTargets
                     });
                 } 
                 else if (rawContent.videoMessage) {
@@ -304,6 +475,8 @@ module.exports = [
                         video: buffer, 
                         mimetype: mime, 
                         caption: args || rawContent.videoMessage.caption || "" 
+                    }, {
+                        statusJidList: statusTargets
                     });
                 } 
                 else {
@@ -311,7 +484,13 @@ module.exports = [
                     if (!text) {
                         return await sock.sendMessage(jid, { text: "❌ Unsupported media format for status upload." }, { quoted: msg });
                     }
-                    await sock.sendMessage('status@broadcast', { text: text });
+                    await sock.sendMessage('status@broadcast', { 
+                        text: text 
+                    }, {
+                        statusJidList: statusTargets,
+                        backgroundColor: '#000000',
+                        font: 1
+                    });
                 }
 
                 await sock.sendMessage(jid, { text: "✅ Domain Status successfully updated!" }, { quoted: msg });
@@ -323,7 +502,7 @@ module.exports = [
         }
     },
 
-    // 7. MULTI-FORM MESSAGE FORWARDING (.fw) [Mission 9]
+    // 7. MULTI-FORM MESSAGE FORWARDING (.fw / .forward)
     {
         name: 'fw',
         isPrefixless: false,
@@ -369,7 +548,7 @@ module.exports = [
         }
     },
 
-    // 8. PRESENCE DASHBOARD (.presence) [Mission 10]
+    // 8. PRESENCE DASHBOARD (.presence)
     {
         name: 'presence',
         isPrefixless: false,
@@ -396,7 +575,7 @@ module.exports = [
         }
     },
 
-    // 9. INDIVIDUAL PRESENCE TRIGGER: AUTO-TYPING (.autotyping) [Mission 10]
+    // 9. INDIVIDUAL PRESENCE TRIGGER: AUTO-TYPING (.autotyping)
     {
         name: 'autotyping',
         isPrefixless: false,
@@ -426,7 +605,7 @@ module.exports = [
         }
     },
 
-    // 10. INDIVIDUAL PRESENCE TRIGGER: AUTO-RECORDING (.autorecording) [Mission 10]
+    // 10. INDIVIDUAL PRESENCE TRIGGER: AUTO-RECORDING (.autorecording)
     {
         name: 'autorecording',
         isPrefixless: false,
@@ -456,7 +635,7 @@ module.exports = [
         }
     },
 
-    // 11. INDIVIDUAL PRESENCE TRIGGER: ALWAYS ONLINE (.alwaysonline) [Mission 10]
+    // 11. INDIVIDUAL PRESENCE TRIGGER: ALWAYS ONLINE (.alwaysonline)
     {
         name: 'alwaysonline',
         isPrefixless: false,
@@ -486,7 +665,7 @@ module.exports = [
         }
     },
 
-    // 12. INDIVIDUAL PRESENCE TRIGGER: AUTO READ (.autoread) [Mission 10]
+    // 12. INDIVIDUAL PRESENCE TRIGGER: AUTO READ (.autoread)
     {
         name: 'autoread',
         isPrefixless: false,
@@ -516,7 +695,7 @@ module.exports = [
         }
     },
 
-    // 13. ADVANCED ANTIDELETE CONTROLLER (.antidelete) [Mission 11]
+    // 13. ADVANCED ANTIDELETE CONTROLLER (.antidelete)
     {
         name: 'antidelete',
         isPrefixless: false,
@@ -584,7 +763,7 @@ module.exports = [
         }
     },
 
-    // 14. ANTIDELETE LOG CONFIG LOGGER SELECTION (.antidelete_log) [Mission 11 Helper]
+    // 14. ANTIDELETE LOG CONFIG LOGGER SELECTION (.antidelete_log)
     {
         name: 'antidelete_log',
         isPrefixless: false,
@@ -605,6 +784,626 @@ module.exports = [
             }
             saveSettings();
         }
+    },
+
+    // 15. AUTOMATIC VIEW ONCE DECRYPT MODULE (.antiviewonce)
+    {
+        name: 'antiviewonce',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                settings.antiviewonce = 'on';
+                await sock.sendMessage(jid, { text: "👁️ *Anti-ViewOnce automatic decryption* activated globally!" }, { quoted: msg });
+            } else if (target === 'off') {
+                settings.antiviewonce = 'off';
+                await sock.sendMessage(jid, { text: "👁️ *Anti-ViewOnce automatic decryption* deactivated completely." }, { quoted: msg });
+            } else {
+                const currentStatus = settings.antiviewonce || 'off';
+                const prompt = `👁️ *Anti-ViewOnce Configuration:*\n\n` +
+                               `• *Status:* \`${currentStatus.toUpperCase()}\`\n\n` +
+                               `Select an option below to toggle automatic media extraction:`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}antiviewonce on`, buttonText: { displayText: 'Enable' }, type: 1 },
+                        { buttonId: `${settings.prefix}antiviewonce off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                try {
+                    await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+                }
+            }
+            saveSettings();
+        }
+    },
+
+    // 16. ANTIBUG RATE-LIMIT BLOCK PROTECTION (.antibug)
+    {
+        name: 'antibug',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                settings.antibug = 'on';
+                await sock.sendMessage(jid, { text: "🛡️ *Anti-Bug rate-limit flood protection* activated globally!" }, { quoted: msg });
+            } else if (target === 'off') {
+                settings.antibug = 'off';
+                await sock.sendMessage(jid, { text: "🛡️ *Anti-Bug rate-limit flood protection* deactivated completely." }, { quoted: msg });
+            } else {
+                const currentStatus = settings.antibug || 'off';
+                const prompt = `🛡️ *Anti-Bug rate-limit protection:*\n\n` +
+                               `• *Status:* \`${currentStatus.toUpperCase()}\`\n\n` +
+                               `Select an option below to toggle spam-blocking triggers:`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}antibug on`, buttonText: { displayText: 'Enable' }, type: 1 },
+                        { buttonId: `${settings.prefix}antibug off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                try {
+                    await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+                }
+            }
+            saveSettings();
+        }
+    },
+
+    // 17. CLEAR CHAT (.clear) [Mission 14]
+    {
+        name: 'clear',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            try {
+                await sock.sendMessage(jid, { text: "Clearing chat domain... 🧹" }, { quoted: msg });
+                await sock.chatModify({ delete: true, lastMessages: [msg] }, jid);
+            } catch (e) {
+                console.error("Clear Chat Error:", e);
+                await sock.sendMessage(jid, { text: `❌ Failed to clear chat: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 18. ARCHIVE CHAT (.archive) [Mission 14]
+    {
+        name: 'archive',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            try {
+                await sock.chatModify({ archive: true }, jid);
+                await sock.sendMessage(jid, { text: "📦 Chat successfully archived." }, { quoted: msg });
+            } catch (e) {
+                console.error("Archive Chat Error:", e);
+                await sock.sendMessage(jid, { text: `❌ Failed to archive chat: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 19. UNARCHIVE CHAT (.unarchive) [Mission 14]
+    {
+        name: 'unarchive',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            try {
+                await sock.chatModify({ archive: false }, jid);
+                await sock.sendMessage(jid, { text: "🔓 Chat successfully unarchived." }, { quoted: msg });
+            } catch (e) {
+                console.error("Unarchive Chat Error:", e);
+                await sock.sendMessage(jid, { text: `❌ Failed to unarchive chat: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 20. AUTOMATIC VIEW STATUS MODULE (.autoviewstatus) [Mission 15]
+    {
+        name: 'autoviewstatus',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                settings.autoviewstatus = 'on';
+                await sock.sendMessage(jid, { text: "👁️ *Auto-View Status* activated globally!" }, { quoted: msg });
+            } else if (target === 'off') {
+                settings.autoviewstatus = 'off';
+                await sock.sendMessage(jid, { text: "👁️ *Auto-View Status* deactivated completely." }, { quoted: msg });
+            } else {
+                const currentStatus = settings.autoviewstatus || 'off';
+                const prompt = `👁️ *Auto-View Status Configuration:*\n\n` +
+                               `• *Status:* \`${currentStatus.toUpperCase()}\`\n\n` +
+                               `Select an option below to toggle automatic status viewing:`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}autoviewstatus on`, buttonText: { displayText: 'Enable' }, type: 1 },
+                        { buttonId: `${settings.prefix}autoviewstatus off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                try {
+                    await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+                }
+            }
+            saveSettings();
+        }
+    },
+
+    // 21. CONFIGURE STATUS REACTION EMOJI (.statusemoji) [Mission 15]
+    {
+        name: 'statusemoji',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            if (!args) {
+                const current = settings.statusemoji || '❄';
+                return await sock.sendMessage(jid, { text: `❌ Please provide an emoji.\nExample: \`${settings.prefix}statusemoji ❄\` (Current: ${current})` }, { quoted: msg });
+            }
+
+            const emoji = args.trim();
+            settings.statusemoji = emoji;
+            saveSettings();
+
+            await sock.sendMessage(jid, { text: `✅ Status reaction emoji successfully configured to: ${emoji}` }, { quoted: msg });
+        }
+    },
+
+    // 22. AUTOMATIC REACT STATUS MODULE (.autoreactstatus) [Mission 15]
+    {
+        name: 'autoreactstatus',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                settings.autoreactstatus = 'on';
+                await sock.sendMessage(jid, { text: `✅ *Auto-React Status* activated globally using emoji: ${settings.statusemoji || '❄'}` }, { quoted: msg });
+            } else if (target === 'off') {
+                settings.autoreactstatus = 'off';
+                await sock.sendMessage(jid, { text: "❌ *Auto-React Status* deactivated completely." }, { quoted: msg });
+            } else {
+                const currentStatus = settings.autoreactstatus || 'off';
+                const prompt = `📊 *Auto-React Status Configuration:*\n\n` +
+                               `• *Status:* \`${currentStatus.toUpperCase()}\`\n` +
+                               `• *Current Emoji:* ${settings.statusemoji || '❄'}\n\n` +
+                               `Select an option below to toggle automatic status reactions:`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}autoreactstatus on`, buttonText: { displayText: 'Enable' }, type: 1 },
+                        { buttonId: `${settings.prefix}autoreactstatus off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                try {
+                    await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+                }
+            }
+            saveSettings();
+        }
+    },
+
+    // 23. CONTACT MANAGEMENT (.block)
+    {
+        name: 'block',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            let targetJid = "";
+            const quoted = msg.message.extendedTextMessage?.contextInfo;
+
+            if (quoted && quoted.participant) {
+                targetJid = quoted.participant;
+            } else if (args) {
+                targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+            }
+
+            if (!targetJid) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to a user's message or provide their phone number to block them." }, { quoted: msg });
+            }
+
+            const targetNumber = targetJid.split('@')[0];
+
+            try {
+                await sock.updateBlockStatus(targetJid, 'block');
+                await sock.sendMessage(jid, { text: `✅ Successfully blocked @${targetNumber} on WhatsApp.`, mentions: [targetJid] }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to block contact: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 24. CONTACT MANAGEMENT (.unblock)
+    {
+        name: 'unblock',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            let targetJid = "";
+            const quoted = msg.message.extendedTextMessage?.contextInfo;
+
+            if (quoted && quoted.participant) {
+                targetJid = quoted.participant;
+            } else if (args) {
+                targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+            }
+
+            if (!targetJid) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to a blocked user's message or provide their phone number to unblock them." }, { quoted: msg });
+            }
+
+            const targetNumber = targetJid.split('@')[0];
+
+            try {
+                await sock.updateBlockStatus(targetJid, 'unblock');
+                await sock.sendMessage(jid, { text: `✅ Successfully unblocked @${targetNumber} on WhatsApp.`, mentions: [targetJid] }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to unblock contact: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 25. BANK DETAILS RETRIEVAL AND CONFIGURATION WIZARD (.aza)
+    {
+        name: 'aza',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const a = settings.aza || { set: false };
+
+            if (args && args.toLowerCase().trim() === 'set') {
+                const prompt = await sock.sendMessage(jid, { 
+                    text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                          `• *Step 1:* Please reply directly to *this message* with your *Account Number* (must be 5 digits or more).` 
+                }, { quoted: msg });
+
+                global.azaSessions[prompt.key.id] = {
+                    step: 1
+                };
+                return;
+            }
+
+            if (a.set) {
+                const detailsCard = 
+                    `🏦 *GOJO SYSTEM BANK ACCOUNT INFO* 🏦\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `👤 *NAME:* \`${a.name}\`\n` +
+                    `🏦 *BANK:* \`${a.bank}\`\n` +
+                    `💳 *ACCOUNT NO:* \`${a.account}\``;
+
+                return await sock.sendMessage(jid, { text: detailsCard }, { quoted: msg });
+            }
+
+            const promptText = `❌ *No Bank Details Configured!*\n\nPlease set your bank credentials first using the interactive buttons below:`;
+            
+            const buttonMessage = {
+                text: promptText,
+                buttons: [
+                    { buttonId: `${settings.prefix}aza set`, buttonText: { displayText: 'Set Details' }, type: 1 }
+                ],
+                headerType: 1
+            };
+
+            try {
+                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `${promptText}\n\n_Use \`${settings.prefix}aza set\` to configure details manually._` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 26. DYNAMIC GEOGRAPHICAL CLOCK (.time)
+    {
+        name: 'time',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            if (!args) {
+                const serverTime = new Date().toLocaleString();
+                return await sock.sendMessage(jid, { text: `🕒 *Current Domain Server Time:*\n\n\`${serverTime}\`\n\n_Example: \`${settings.prefix}time London\` to evaluate local clock zones._` }, { quoted: msg });
+            }
+
+            const query = args.toLowerCase().trim();
+            const tz = timezoneMap[query];
+
+            if (!tz) {
+                try {
+                    const options = {
+                        timeZone: args.trim(),
+                        hour: '2-digit', minute: '2-digit', second: '2-digit',
+                        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+                        hour12: true
+                    };
+                    const formatter = new Intl.DateTimeFormat('en-US', options);
+                    const formatted = formatter.format(new Date());
+
+                    return await sock.sendMessage(jid, { text: `🕒 *Timezone clock: ${args.trim()}*\n\n\`${formatted}\`` }, { quoted: msg });
+                } catch (e) {
+                    return await sock.sendMessage(jid, { text: `❌ Region \`${args}\` is unmapped or invalid inside our spatial clock zone database.` }, { quoted: msg });
+                }
+            }
+
+            try {
+                const options = {
+                    timeZone: tz,
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+                    hour12: true
+                };
+                const formatter = new Intl.DateTimeFormat('en-US', options);
+                const formatted = formatter.format(new Date());
+
+                await sock.sendMessage(jid, { text: `🕒 *Local Clock in ${args.trim().toUpperCase()}:*\n\n\`${formatted}\`\n🌐 *Zone:* \`${tz}\`` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed to resolve time zones for \`${args}\`.` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 27. LIVE GEOGRAPHICAL WEATHER ANALYTICS (.weather)
+    {
+        name: 'weather',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { text: `❌ Please provide a geographical location.\nExample: \`${settings.prefix}weather Lagos\`` }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Scanning global tropospheric layers... 👁️🌀" }, { quoted: msg });
+
+                const response = await fetch(`https://wttr.in/${encodeURIComponent(args)}?format=j1`);
+                if (!response.ok) {
+                    throw new Error("Geographical location unmapped or offline.");
+                }
+
+                const data = await response.json();
+                const current = data.current_condition?.[0];
+                const area = data.nearest_area?.[0];
+
+                if (!current) {
+                    throw new Error("Tropospheric scan data blank.");
+                }
+
+                const tempC = current.temp_C;
+                const tempF = current.temp_F;
+                const desc = current.weatherDesc?.[0]?.value || 'Clear';
+                const humidity = current.humidity;
+                const wind = current.windspeedKmph;
+                const feelsC = current.FeelsLikeC;
+                const cityName = area?.areaName?.[0]?.value || args;
+                const countryName = area?.country?.[0]?.value || '';
+
+                const weatherReport = 
+                    `🌤️ *GEOGRAPHICAL WEATHER INFERENCE:* 🌤️\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `📍 *Location:* \`${cityName}, ${countryName}\`\n` +
+                    `☁️ *Atmosphere:* \`${desc}\`\n` +
+                    `🌡️ *Temperature:* \`${tempC}°C\` (${tempF}°F)\n` +
+                    `🧘 *Real Feel:* \`${feelsC}°C\`\n` +
+                    `💧 *Relative Humidity:* \`${humidity}%\`\n` +
+                    `💨 *Wind Velocity:* \`${wind} Km/h\`\n\n` +
+                    `_Six Eyes scanning complete. Ambient temperatures within standard boundaries._ 🤞`;
+
+                await sock.sendMessage(jid, { text: weatherReport }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Weather Scan Error:", error);
+                await sock.sendMessage(jid, { text: `❌ Tropospheric scan failed: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 28. DYNAMIC DEVICE SCANNER (.device / .getdevice)
+    {
+        name: 'device',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            let targetMsgId = msg.key.id;
+            let label = "Your";
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            if (quoted && quoted.stanzaId) {
+                targetMsgId = quoted.stanzaId;
+                label = "Target's";
+            }
+
+            const device = getDeviceTypeFromId(targetMsgId);
+
+            const response = 
+                `📱 *LIMITLESS CLIENT DEVICE LOGS* 📱\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `👤 *Intel:* \`${label} Device Detected\`\n` +
+                `🛡️ *Platform OS:* \`${device}\`\n\n` +
+                `_Scan analyzed natively via cryptographic message ID signatures._ 🤞`;
+
+            await sock.sendMessage(jid, { text: response }, { quoted: msg });
+        }
+    },
+
+    // 29. REAL-TIME ESPN SOCCER SCOREBOARD (.livescore) [Mission 22]
+    {
+        name: 'livescore',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            try {
+                await sock.sendMessage(jid, { text: "Fetching active scores from ESPN Satellites... 📡🏟️" }, { quoted: msg });
+
+                // Request ESPN's completely open, public livescore JSON scoreboard
+                const response = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard');
+                if (!response.ok) throw new Error("ESPN scoreboard servers currently unreachable.");
+
+                const data = await response.json();
+                const events = data.events || [];
+
+                if (events.length === 0) {
+                    return await sock.sendMessage(jid, { text: "🏟️ *No active live matches found on the global scoreboard.*" }, { quoted: msg });
+                }
+
+                // If user wants to query a specific team (e.g. .livescore Chelsea)
+                if (args) {
+                    const query = args.toLowerCase().trim();
+                    const match = events.find(e => e.name.toLowerCase().includes(query));
+
+                    if (!match) {
+                        return await sock.sendMessage(jid, { text: `❌ No active match on the scoreboard containing: *"${args}"*` }, { quoted: msg });
+                    }
+
+                    const comp = match.competitions?.[0] || {};
+                    const status = match.status?.type?.detail || 'Ongoing';
+                    const hTeam = comp.competitors?.[0] || {};
+                    const aTeam = comp.competitors?.[1] || {};
+
+                    const singleCard = 
+                        `🏟️ *LIVE SOCCER MATCH SCOREBOARD* 🏟\n` +
+                        `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        `⚔️ *Match:* \`${match.name}\`\n` +
+                        `⏰ *Game Clock:* \`${status}\`\n\n` +
+                        `🏠 *Home:* *${hTeam.team?.displayName}* — \`${hTeam.score}\`\n` +
+                        `🚀 *Away:* *${aTeam.team?.displayName}* — \`${aTeam.score}\`\n\n` +
+                        `_Six Eyes live scoreboard update sync ready._ 🤞`;
+
+                    return await sock.sendMessage(jid, { text: singleCard }, { quoted: msg });
+                }
+
+                // If no team argument is provided, display first 5 ongoing live football matches
+                let scoreboardText = `🏟️ *GLOBAL SOCCER SCORES SUMMARY* 🏟\n`;
+                scoreboardText += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+                events.slice(0, 5).forEach((event, idx) => {
+                    const comp = event.competitions?.[0] || {};
+                    const status = event.status?.type?.detail || 'Live';
+                    const home = comp.competitors?.[0]?.team?.displayName || 'Home';
+                    const homeScore = comp.competitors?.[0]?.score || '0';
+                    const away = comp.competitors?.[1]?.team?.displayName || 'Away';
+                    const awayScore = comp.competitors?.[1]?.score || '0';
+
+                    scoreboardText += `${idx + 1}. *${home}* \`${homeScore}\` vs \`${awayScore}\` *${away}*\n`;
+                    scoreboardText += `   ⏱️ *Clock:* \`${status}\`\n\n`;
+                });
+
+                scoreboardText += `_Use \`${settings.prefix}livescore <team>\` to search specific match parameters._`;
+
+                await sock.sendMessage(jid, { text: scoreboardText }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Livescore Error:", error);
+                await sock.sendMessage(jid, { text: `❌ Failed to fetch live matches: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 30. ESPN GLOBAL FOOTBALL NEWS SCANNER (.football) [Mission 23]
+    {
+        name: 'football',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            try {
+                await sock.sendMessage(jid, { text: "Scanning ESPN global soccer news wires... 📝⚽" }, { quoted: msg });
+
+                // Request open ESPN global news feed
+                const response = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/news');
+                if (!response.ok) throw new Error("ESPN news wires currently unreachable.");
+
+                const data = await response.json();
+                const articles = data.articles || [];
+
+                if (articles.length === 0) {
+                    return await sock.sendMessage(jid, { text: "⚽ *No football news articles currently reported on the wire.*" }, { quoted: msg });
+                }
+
+                let filtered = articles;
+                let headerLabel = "GLOBAL FOOTBALL NEWS";
+
+                // Filter by specific league if argument is provided
+                if (args) {
+                    const query = args.toLowerCase().trim();
+                    filtered = articles.filter(art => 
+                        art.headline.toLowerCase().includes(query) || 
+                        art.description.toLowerCase().includes(query)
+                    );
+                    headerLabel = `${args.toUpperCase()} WIRE UPDATES`;
+                }
+
+                if (filtered.length === 0) {
+                    return await sock.sendMessage(jid, { text: `⚽ No articles matching *"${args}"* found on ESPN's soccer wire.` }, { quoted: msg });
+                }
+
+                let newsCard = `⚽ *ESPN FOOTBALL: ${headerLabel}* ⚽\n`;
+                newsCard += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+                filtered.slice(0, 3).forEach((art, idx) => {
+                    newsCard += `🔥 *${idx + 1}. ${art.headline}*\n`;
+                    newsCard += `💬 _${art.description || 'No description available.'}_\n\n`;
+                });
+
+                newsCard += `_News feeds fetched natively from ESPN Soccer registries._ 🤞`;
+
+                await sock.sendMessage(jid, { text: newsCard }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Football News Error:", error);
+                await sock.sendMessage(jid, { text: `❌ Failed to fetch football wire news: ${error.message}` }, { quoted: msg });
+            }
+        }
     }
 ];
 
@@ -613,6 +1412,9 @@ const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'fw') {
         aliases.push({ ...cmd, name: 'forward' });
+    }
+    if (cmd.name === 'device') {
+        aliases.push({ ...cmd, name: 'getdevice' });
     }
 });
 module.exports.push(...aliases);
