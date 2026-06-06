@@ -144,7 +144,6 @@ async function startBot() {
             console.log(`🛡️  System Creator secured: ${settings.ownerName}`);
             console.log(`========================================\n`);
 
-            // Proactive Safety Guard added to protect self-reconnection handshake
             if (sock.user && sock.user.id) {
                 try {
                     const resolved = await sock.findUserId(sock.user.id);
@@ -314,6 +313,39 @@ async function startBot() {
 
             const trimmedMessage = body.trim();
             const lowerMessage = trimmedMessage.toLowerCase();
+
+            // 1. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
+            const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
+            if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
+                const session = global.forwardSessions[quotedMsgId];
+                
+                // Use regex to isolate the destination number
+                const parsedNumber = trimmedMessage.replace(/[^0-9]/g, '');
+                if (parsedNumber.length < 7) {
+                    await sock.sendMessage(jid, { text: "❌ Invalid target phone number format. Please ensure country code is included." }, { quoted: msg });
+                    return;
+                }
+
+                const targetDestJid = `${parsedNumber}@s.whatsapp.net`;
+                
+                try {
+                    await sock.sendMessage(jid, { text: `Forwarding content to @${parsedNumber}... ⏳`, mentions: [targetDestJid] }, { quoted: msg });
+                    
+                    // Natively forward the exact media/text payload using Baileys envelope parameters
+                    await sock.sendMessage(targetDestJid, { 
+                        forward: { 
+                            key: { id: session.originalMsgKey, remoteJid: jid, participant: session.originalParticipant }, 
+                            message: session.msgToForward 
+                        } 
+                    });
+
+                    await sock.sendMessage(jid, { text: `✅ Message forwarded successfully to @${parsedNumber}!`, mentions: [targetDestJid] }, { quoted: msg });
+                    delete global.forwardSessions[quotedMsgId];
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: `❌ Forwarding session failed: ${e.message}` }, { quoted: msg });
+                }
+                return; // Stop event stream propagation
+            }
 
             if (isGroup && !msg.key.fromMe) {
                 if (!settings.msgCount) settings.msgCount = {};
@@ -600,7 +632,6 @@ async function startBot() {
                     args = '';
                 }
             } else {
-                // If no prefix commands matched, hand over to the chatbot routers (Lizzy or General Chatbot)
                 const isLizzyActive = Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid);
                 const isChatbotActive = Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid);
 
@@ -608,7 +639,6 @@ async function startBot() {
                 const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && msg.message.extendedTextMessage?.contextInfo?.stanzaId);
                 const isMentioningBot = mentionedJids.some(jid => jid === botJid || jid === botLid);
 
-                // Lizzy Chatbot Router: Triggers when Lizzy is active and user replies, mentions, or writes "lizzy"
                 if (isLizzyActive && !command) {
                     const containsLizzyName = lowerMessage.includes('lizzy');
                     if (isReplyingToBot || isMentioningBot || containsLizzyName) {
@@ -617,7 +647,6 @@ async function startBot() {
                     }
                 }
 
-                // General AI Chatbot Router: Triggers ONLY when active AND user either replies to bot or mentions bot
                 if (isChatbotActive && !command) {
                     if (isReplyingToBot || isMentioningBot) {
                         command = 'chatbot_chat';
