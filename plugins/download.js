@@ -308,27 +308,16 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching song index... 🔍" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/ytsearch?query=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
-                }
+                // Loaded dynamically to prevent boot crashes if package is resolving
+                const yts = require('yt-search');
+                const results = await yts(args);
+                const videos = results.videos || [];
 
-                const data = await response.json();
-                
-                let results = [];
-                if (data && Array.isArray(data.result)) {
-                    results = data.result;
-                } else if (data && data.result && Array.isArray(data.result.videos)) {
-                    results = data.result.videos;
-                } else if (Array.isArray(data)) {
-                    results = data;
-                }
-
-                if (results.length === 0) {
+                if (videos.length === 0) {
                     return await sock.sendMessage(jid, { text: "❌ No search results found for your song query." }, { quoted: msg });
                 }
 
-                const selectedResults = results.slice(0, 10);
+                const selectedResults = videos.slice(0, 10);
 
                 let listCaption = `🎵 *SONG SEARCH RESULTS* 🎵\n`;
                 listCaption += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
@@ -348,7 +337,7 @@ module.exports = [
                     query: args,
                     results: selectedResults.map(v => ({
                         title: v.title,
-                        url: v.url || `https://youtube.com/watch?v=${v.videoId}`
+                        url: v.url
                     }))
                 };
 
@@ -375,27 +364,17 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching video index... 🎥" }, { quoted: msg });
 
-                const searchResponse = await fetch(`https://apis.davidcyril.name.ng/ytsearch?query=${encodeURIComponent(args)}`);
-                if (!searchResponse.ok) {
-                    throw new Error(`API returned status code ${searchResponse.status}`);
-                }
+                // Loaded dynamically to prevent boot crashes if package is resolving
+                const yts = require('yt-search');
+                const results = await yts(args);
+                const videos = results.videos || [];
 
-                const searchData = await searchResponse.json();
-                let results = [];
-                if (searchData && Array.isArray(searchData.result)) {
-                    results = searchData.result;
-                } else if (searchData && searchData.result && Array.isArray(searchData.result.videos)) {
-                    results = searchData.result.videos;
-                } else if (Array.isArray(searchData)) {
-                    results = searchData;
-                }
-
-                if (results.length === 0) {
+                if (videos.length === 0) {
                     return await sock.sendMessage(jid, { text: "❌ No video results found for your query." }, { quoted: msg });
                 }
 
-                const firstVideo = results[0];
-                const videoUrl = firstVideo.url || `https://youtube.com/watch?v=${firstVideo.videoId}`;
+                const firstVideo = videos[0];
+                const videoUrl = firstVideo.url;
 
                 const downloadResponse = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(videoUrl)}`);
                 if (!downloadResponse.ok) {
@@ -1088,7 +1067,18 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching song index for document... 🔍" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(args)}`);
+                // Loaded dynamically inside the command execution to prevent startup boot crashes
+                const yts = require('yt-search');
+                const results = await yts(args);
+                const videos = results.videos || [];
+
+                if (videos.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ Song not found." }, { quoted: msg });
+                }
+
+                const firstSong = videos[0];
+
+                const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(firstSong.title)}`);
                 if (!response.ok) {
                     throw new Error(`API status code ${response.status}`);
                 }
@@ -1115,7 +1105,7 @@ module.exports = [
     }
 ];
 
-// Add structural aliases manually
+// Compile structural aliases safely without modifying the target array mid-iteration
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'fb') {
