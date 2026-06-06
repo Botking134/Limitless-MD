@@ -3,6 +3,25 @@ const settings = require('../settings');
 const { saveSettings } = require('../settingsSaver');
 const path = require('path');
 
+// Initialize presence memory config securely
+if (!settings.presence) {
+    settings.presence = {
+        autotyping: { all: false, chats: [] },
+        autorecording: { all: false, chats: [] },
+        alwaysonline: { all: false, chats: [] },
+        autoread: { all: false, chats: [] }
+    };
+}
+
+// Initialize antidelete memory config securely
+if (!settings.antidelete) {
+    settings.antidelete = {
+        status: 'off',
+        hereJid: '',
+        logDestination: 'bot' // default is 'bot'
+    };
+}
+
 // Global forward sessions state memory
 global.forwardSessions = global.forwardSessions || {};
 
@@ -25,7 +44,6 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
 
-            // Strict Security Guard: Only Owners and Developers
             if (!isOwner && !isDev) return;
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -34,7 +52,7 @@ module.exports = [
             }
 
             try {
-                const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Updating bot profile picture... 🖼️" }, { quoted: msg });
 
                 const stream = await downloadContentFromMessage(quoted.imageMessage, 'image');
@@ -199,7 +217,7 @@ module.exports = [
             const rawContent = getRawMessage(quoted);
 
             try {
-                const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
 
                 if (rawContent.imageMessage) {
                     await sock.sendMessage(jid, { text: "Saving image status... 📥" }, { quoted: msg });
@@ -261,7 +279,7 @@ module.exports = [
             const rawContent = getRawMessage(quoted);
 
             try {
-                const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Uploading to Satoru Gojo Status channel... 🚀" }, { quoted: msg });
 
                 if (rawContent.imageMessage) {
@@ -305,7 +323,7 @@ module.exports = [
         }
     },
 
-    // 7. MULTI-FORM MESSAGE FORWARDING (.fw / .forward) [Mission 9]
+    // 7. MULTI-FORM MESSAGE FORWARDING (.fw) [Mission 9]
     {
         name: 'fw',
         isPrefixless: false,
@@ -316,13 +334,11 @@ module.exports = [
 
             const quoted = msg.message.extendedTextMessage?.contextInfo;
 
-            // Form 1: Interactive Flow (Reply to message with .fw and no target arguments)
             if (quoted && quoted.stanzaId && !args) {
                 const prompt = await sock.sendMessage(jid, { 
                     text: "💬 *Interactive Forward session initiated:*\n\nPlease reply directly to this prompt message with the target phone number (include country code, e.g. `23480...`)." 
                 }, { quoted: msg });
 
-                // Register forward session dynamically in global state
                 global.forwardSessions[prompt.key.id] = {
                     msgToForward: quoted.quotedMessage,
                     originalMsgKey: quoted.stanzaId,
@@ -331,7 +347,6 @@ module.exports = [
                 return;
             }
 
-            // Form 2: Manual Flow (Type .fw <number> <text>)
             if (!quoted && args) {
                 const spaceIdx = args.indexOf(' ');
                 if (spaceIdx === -1) {
@@ -351,6 +366,244 @@ module.exports = [
             }
 
             await sock.sendMessage(jid, { text: "❌ Reply to a message with `.fw` to forward it, or use `.fw <number> <text>` to forward manual text." }, { quoted: msg });
+        }
+    },
+
+    // 8. PRESENCE DASHBOARD (.presence) [Mission 10]
+    {
+        name: 'presence',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const p = settings.presence;
+            const autotypingStatus = p.autotyping.all ? "All Chats 🟢" : (p.autotyping.chats.includes(jid) ? "Here 🟢" : "Off 💤");
+            const autorecordingStatus = p.autorecording.all ? "All Chats 🟢" : (p.autorecording.chats.includes(jid) ? "Here 🟢" : "Off 💤");
+            const alwaysonlineStatus = p.alwaysonline.all ? "All Chats 🟢" : (p.alwaysonline.chats.includes(jid) ? "Here 🟢" : "Off 💤");
+            const autoreadStatus = p.autoread.all ? "All Chats 🟢" : (p.autoread.chats.includes(jid) ? "Here 🟢" : "Off 💤");
+
+            const dashboard = 
+                `🕴 *PRESENCE AUTOMATION DASHBOARD* 🕴\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `⌨️ *Auto-Typing:* \`${autotypingStatus}\`\n` +
+                `🎙️ *Auto-Recording:* \`${autorecordingStatus}\`\n` +
+                `🌐 *Always-Online:* \`${alwaysonlineStatus}\`\n` +
+                `👁️ *Auto-Read Chat:* \`${autoreadStatus}\`\n\n` +
+                `💡 _Use: \`${settings.prefix}autotyping\`, \`${settings.prefix}autorecording\`, \`${settings.prefix}alwaysonline\`, or \`${settings.prefix}autoread\` followed by (on/off/all/off all) to configure individual triggers._`;
+
+            await sock.sendMessage(jid, { text: dashboard }, { quoted: msg });
+        }
+    },
+
+    // 9. INDIVIDUAL PRESENCE TRIGGER: AUTO-TYPING (.autotyping) [Mission 10]
+    {
+        name: 'autotyping',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                if (!settings.presence.autotyping.chats.includes(jid)) settings.presence.autotyping.chats.push(jid);
+                await sock.sendMessage(jid, { text: "✅ Auto-Typing activated for *this chat alone*." }, { quoted: msg });
+            } else if (target === 'off') {
+                settings.presence.autotyping.chats = settings.presence.autotyping.chats.filter(id => id !== jid);
+                await sock.sendMessage(jid, { text: "❌ Auto-Typing deactivated for *this chat*." }, { quoted: msg });
+            } else if (target === 'all') {
+                settings.presence.autotyping.all = true;
+                await sock.sendMessage(jid, { text: "✅ Auto-Typing activated globally for *all chats*." }, { quoted: msg });
+            } else if (target === 'off all' || target === 'offall') {
+                settings.presence.autotyping.all = false;
+                settings.presence.autotyping.chats = [];
+                await sock.sendMessage(jid, { text: "❌ Auto-Typing deactivated globally." }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: `❌ Use:\n• \`${settings.prefix}autotyping on\`\n• \`${settings.prefix}autotyping off\`\n• \`${settings.prefix}autotyping all\`\n• \`${settings.prefix}autotyping off all\`` }, { quoted: msg });
+            }
+            saveSettings();
+        }
+    },
+
+    // 10. INDIVIDUAL PRESENCE TRIGGER: AUTO-RECORDING (.autorecording) [Mission 10]
+    {
+        name: 'autorecording',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                if (!settings.presence.autorecording.chats.includes(jid)) settings.presence.autorecording.chats.push(jid);
+                await sock.sendMessage(jid, { text: "✅ Auto-Recording activated for *this chat alone*." }, { quoted: msg });
+            } else if (target === 'off') {
+                settings.presence.autorecording.chats = settings.presence.autorecording.chats.filter(id => id !== jid);
+                await sock.sendMessage(jid, { text: "❌ Auto-Recording deactivated for *this chat*." }, { quoted: msg });
+            } else if (target === 'all') {
+                settings.presence.autorecording.all = true;
+                await sock.sendMessage(jid, { text: "✅ Auto-Recording activated globally for *all chats*." }, { quoted: msg });
+            } else if (target === 'off all' || target === 'offall') {
+                settings.presence.autorecording.all = false;
+                settings.presence.autorecording.chats = [];
+                await sock.sendMessage(jid, { text: "❌ Auto-Recording deactivated globally." }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: `❌ Use:\n• \`${settings.prefix}autorecording on\`\n• \`${settings.prefix}autorecording off\`\n• \`${settings.prefix}autorecording all\`\n• \`${settings.prefix}autorecording off all\`` }, { quoted: msg });
+            }
+            saveSettings();
+        }
+    },
+
+    // 11. INDIVIDUAL PRESENCE TRIGGER: ALWAYS ONLINE (.alwaysonline) [Mission 10]
+    {
+        name: 'alwaysonline',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                if (!settings.presence.alwaysonline.chats.includes(jid)) settings.presence.alwaysonline.chats.push(jid);
+                await sock.sendMessage(jid, { text: "✅ Always-Online activated for *this chat alone*." }, { quoted: msg });
+            } else if (target === 'off') {
+                settings.presence.alwaysonline.chats = settings.presence.alwaysonline.chats.filter(id => id !== jid);
+                await sock.sendMessage(jid, { text: "❌ Always-Online deactivated for *this chat*." }, { quoted: msg });
+            } else if (target === 'all') {
+                settings.presence.alwaysonline.all = true;
+                await sock.sendMessage(jid, { text: "✅ Always-Online activated globally for *all chats*." }, { quoted: msg });
+            } else if (target === 'off all' || target === 'offall') {
+                settings.presence.alwaysonline.all = false;
+                settings.presence.alwaysonline.chats = [];
+                await sock.sendMessage(jid, { text: "❌ Always-Online deactivated globally." }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: `❌ Use:\n• \`${settings.prefix}alwaysonline on\`\n• \`${settings.prefix}alwaysonline off\`\n• \`${settings.prefix}alwaysonline all\`\n• \`${settings.prefix}alwaysonline off all\`` }, { quoted: msg });
+            }
+            saveSettings();
+        }
+    },
+
+    // 12. INDIVIDUAL PRESENCE TRIGGER: AUTO READ (.autoread) [Mission 10]
+    {
+        name: 'autoread',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                if (!settings.presence.autoread.chats.includes(jid)) settings.presence.autoread.chats.push(jid);
+                await sock.sendMessage(jid, { text: "✅ Auto-Read activated for *this chat alone*." }, { quoted: msg });
+            } else if (target === 'off') {
+                settings.presence.autoread.chats = settings.presence.autoread.chats.filter(id => id !== jid);
+                await sock.sendMessage(jid, { text: "❌ Auto-Read deactivated for *this chat*." }, { quoted: msg });
+            } else if (target === 'all') {
+                settings.presence.autoread.all = true;
+                await sock.sendMessage(jid, { text: "✅ Auto-Read activated globally for *all chats*." }, { quoted: msg });
+            } else if (target === 'off all' || target === 'offall') {
+                settings.presence.autoread.all = false;
+                settings.presence.autoread.chats = [];
+                await sock.sendMessage(jid, { text: "❌ Auto-Read deactivated globally." }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: `❌ Use:\n• \`${settings.prefix}autoread on\`\n• \`${settings.prefix}autoread off\`\n• \`${settings.prefix}autoread all\`\n• \`${settings.prefix}autoread off all\`` }, { quoted: msg });
+            }
+            saveSettings();
+        }
+    },
+
+    // 13. ADVANCED ANTIDELETE CONTROLLER (.antidelete) [Mission 11]
+    {
+        name: 'antidelete',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'on') {
+                settings.antidelete.status = 'on';
+                await sock.sendMessage(jid, { text: "🛡️ *Anti-Delete protection activated globally* for all conversations!" }, { quoted: msg });
+                saveSettings();
+            } else if (target === 'off') {
+                settings.antidelete.status = 'off';
+                await sock.sendMessage(jid, { text: "🛡️ *Anti-Delete protection deactivated completely.*" }, { quoted: msg });
+                saveSettings();
+            } else if (target === 'here') {
+                settings.antidelete.status = 'here';
+                settings.antidelete.hereJid = jid;
+                await sock.sendMessage(jid, { text: "🛡️ *Anti-Delete protection activated* for *this chat alone*." }, { quoted: msg });
+                saveSettings();
+            } else if (target === 'log') {
+                const currentDest = settings.antidelete.logDestination || 'bot';
+                const prompt = `📊 *Anti-Delete Log Configuration:*\n\n` +
+                               `• *Current Destination:* \`${currentDest === 'bot' ? "Bot DM 🤖" : "Your (User) DM 👤"}\`\n\n` +
+                               `Select your logging destination preference using the interactive buttons below:`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}antidelete_log user`, buttonText: { displayText: 'User DM' }, type: 1 },
+                        { buttonId: `${settings.prefix}antidelete_log bot`, buttonText: { displayText: 'Bot DM' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                try {
+                    await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+                }
+            } else {
+                const currentStatus = settings.antidelete.status;
+                const prompt = `🛡️ *Anti-Delete Configuration:*\n\n` +
+                               `• *Status:* \`${currentStatus.toUpperCase()}\`\n\n` +
+                               `Select an option below to configure protection parameters:`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}antidelete on`, buttonText: { displayText: 'Enable All' }, type: 1 },
+                        { buttonId: `${settings.prefix}antidelete here`, buttonText: { displayText: 'Enable Here' }, type: 1 },
+                        { buttonId: `${settings.prefix}antidelete off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                try {
+                    await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+                }
+            }
+        }
+    },
+
+    // 14. ANTIDELETE LOG CONFIG LOGGER SELECTION (.antidelete_log) [Mission 11 Helper]
+    {
+        name: 'antidelete_log',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const target = args ? args.toLowerCase().trim() : '';
+
+            if (target === 'user') {
+                settings.antidelete.logDestination = 'user';
+                await sock.sendMessage(jid, { text: "✅ Anti-Delete log successfully redirected to *your personal DM*." }, { quoted: msg });
+            } else if (target === 'bot') {
+                settings.antidelete.logDestination = 'bot';
+                await sock.sendMessage(jid, { text: "✅ Anti-Delete log successfully redirected to the *bot's DM*." }, { quoted: msg });
+            } else {
+                return;
+            }
+            saveSettings();
         }
     }
 ];
