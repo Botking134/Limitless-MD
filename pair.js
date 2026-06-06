@@ -19,6 +19,9 @@ global.messageStore = global.messageStore || {};
 // Global Cache for spam/antibug block tracking [Mission 13]
 global.spamTracker = global.spamTracker || {};
 
+// Global bank details wizard session tracker [Mission 17]
+global.azaSessions = global.azaSessions || {};
+
 // Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
     const seconds = Math.floor((Date.now() - ms) / 1000);
@@ -477,25 +480,7 @@ async function startBot() {
             const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
             const isAuthorized = isOwner || isSudo;
 
-            // 1. AUTOMATED STATUS BROADCAST OBSERVER [Mission 15 Engine]
-            if (jid === 'status@broadcast') {
-                // A. Auto-view status
-                if (settings.autoviewstatus === 'on') {
-                    try {
-                        await sock.readMessages([msg.key]);
-                    } catch (e) {}
-                }
-                // B. Auto-react to status
-                if (settings.autoreactstatus === 'on') {
-                    try {
-                        const emoji = settings.statusemoji || '❄';
-                        await sock.sendMessage('status@broadcast', { react: { text: emoji, key: msg.key } });
-                    } catch (e) {}
-                }
-                return; // Halt all command evaluations for status updates
-            }
-
-            // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR [Mission 13 Engine]
+            // 1. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR [Mission 13 Engine]
             if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe) {
                 const now = Date.now();
                 if (!global.spamTracker[senderNumber]) {
@@ -503,7 +488,6 @@ async function startBot() {
                 }
                 global.spamTracker[senderNumber].push(now);
 
-                // Filter out logs older than 3 seconds
                 global.spamTracker[senderNumber] = global.spamTracker[senderNumber].filter(t => now - t <= 3000);
 
                 if (global.spamTracker[senderNumber].length >= 5) {
@@ -528,7 +512,7 @@ async function startBot() {
                 }
             }
 
-            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
+            // 2. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
             const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
             if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
                 const session = global.forwardSessions[quotedMsgId];
@@ -559,7 +543,86 @@ async function startBot() {
                 return; 
             }
 
-            // 4. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR [Mission 12 Engine]
+            // 3. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions [Mission 17 Wizard Engine]
+            if (quotedMsgId && global.azaSessions && global.azaSessions[quotedMsgId] && isAuthorized) {
+                const session = global.azaSessions[quotedMsgId];
+                
+                // STEP 1: Process Account Number Response
+                if (session.step === 1) {
+                    const cleanNum = trimmedMessage.replace(/[^0-9]/g, '');
+                    if (cleanNum.length < 5) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Account Number!*\n\nThe account number must be at least 5 digits long. Please reply to the original Step 1 message again with a valid number." }, { quoted: msg });
+                        return;
+                    }
+
+                    // Prompt Step 2
+                    const prompt = await sock.sendMessage(jid, { 
+                        text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `• *Step 2:* Excellent. Now, please reply directly to *this message* with your *Bank Name* (e.g., Sterling Bank, Access Bank).` 
+                    }, { quoted: msg });
+
+                    global.azaSessions[prompt.key.id] = {
+                        step: 2,
+                        account: cleanNum
+                    };
+                    delete global.azaSessions[quotedMsgId];
+                    return;
+                }
+
+                // STEP 2: Process Bank Name Response
+                if (session.step === 2) {
+                    const bankName = trimmedMessage.trim();
+                    if (bankName.length < 2) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Bank Name!*\n\nPlease reply directly to the Step 2 message with a valid bank name." }, { quoted: msg });
+                        return;
+                    }
+
+                    // Prompt Step 3
+                    const prompt = await sock.sendMessage(jid, { 
+                        text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `• *Step 3:* Almost done. Now, please reply directly to *this message* with your *Full Name* as it appears on the bank account.` 
+                    }, { quoted: msg });
+
+                    global.azaSessions[prompt.key.id] = {
+                        step: 3,
+                        account: session.account,
+                        bank: bankName
+                    };
+                    delete global.azaSessions[quotedMsgId];
+                    return;
+                }
+
+                // STEP 3: Process Full Name Response & Save Configuration
+                if (session.step === 3) {
+                    const fullName = trimmedMessage.trim();
+                    if (fullName.length < 3) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Full Name!*\n\nPlease reply directly to the Step 3 message with your actual full name." }, { quoted: msg });
+                        return;
+                    }
+
+                    // Sync parameters to memory and write physically to settings.js
+                    settings.aza = {
+                        set: true,
+                        account: session.account,
+                        bank: session.bank,
+                        name: fullName
+                    };
+                    const { saveSettings } = require('./settingsSaver');
+                    saveSettings();
+
+                    await sock.sendMessage(jid, { 
+                        text: `✅ *Bank Details Setup Complete!* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `👤 *NAME:* \`${fullName}\`\n` +
+                              `🏦 *BANK:* \`${session.bank}\`\n` +
+                              `💳 *ACCOUNT NO:* \`${session.account}\`` 
+                    }, { quoted: msg });
+
+                    delete global.azaSessions[quotedMsgId];
+                    return;
+                }
+            }
+
+            // 5. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR [Mission 12 Engine]
             const isViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
             if (isViewOnce && settings.antiviewonce === 'on' && !msg.key.fromMe) {
                 try {
@@ -576,7 +639,7 @@ async function startBot() {
                             buffer = Buffer.concat([buffer, chunk]);
                         }
 
-                        const antideleteConfig = settings.antidelete || { logDestination: 'bot' };
+                        const antideleteConfig = settings.antidelete || { status: 'off', logDestination: 'bot' };
                         const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
                         let destJid = `${cleanOwnerNum}@s.whatsapp.net`;
                         if (antideleteConfig.logDestination === 'bot') {
@@ -601,6 +664,17 @@ async function startBot() {
                 } catch (e) {
                     console.error("View Once extraction error:", e.message);
                 }
+            }
+
+            // 6. ANTIPM PRIVATE MESSAGE AUTOBLOCKER [Mission 18 Engine]
+            if (!isGroup && !msg.key.fromMe && !isAuthorized && settings.antipm === 'on') {
+                try {
+                    await sock.sendMessage(jid, { text: "❌ *Connection Blocked:* Direct messages are currently restricted under Satoru Gojo's domain security." });
+                    await sock.updateBlockStatus(senderJid, 'block');
+                } catch (e) {
+                    console.error("Antipm blocking failed:", e.message);
+                }
+                return; 
             }
 
             if (isGroup && !msg.key.fromMe) {
@@ -643,7 +717,7 @@ async function startBot() {
                 ...settings.devs.map(num => `${num}@s.whatsapp.net`),
                 ...settings.devLids
             ];
-            const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid));
+            const isAnyDevMentioned = mentionedJids.some(jid => jid === botJid || jid === botLid);
             
             if (isGroup && isAnyDevMentioned) {
                 const devEmojis = ["⚡", "❄", "🥷", "🤞", "🧘"];
