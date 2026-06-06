@@ -41,6 +41,17 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     }
 }
 
+// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
 module.exports = [
     // 1. STANDARD CHAT AI (.ai)
     {
@@ -188,47 +199,35 @@ module.exports = [
         }
     },
 
-    // 5. IMAGE VISION ANALYZER (.read)
+    // 5. IMAGE VISION ANALYZER (.read) [Corrected & Robust]
     {
         name: 'read',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
+            
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const isImage = msg.message.imageMessage || quoted?.imageMessage;
+            const rawContent = quoted ? getRawMessage(quoted) : getRawMessage(msg.message);
+            const imageMessage = rawContent?.imageMessage;
 
-            if (!isImage) {
+            if (!imageMessage) {
                 return await sock.sendMessage(jid, { 
-                    text: `❌ Please reply to an image or upload an image with the command \`${settings.prefix}read <question>\`` 
+                    text: `❌ Please reply to an image (including View Once) or upload an image with the command \`${settings.prefix}read <question>\`` 
                 }, { quoted: msg });
             }
 
             try {
-                // Dynamically import Baileys helper for vision stream decoding
-                const { downloadMediaMessage } = await import('@itsliaaa/baileys');
+                // Dynamically import low-level stream downloader for optimal stability
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Processing visual data... 👁️" }, { quoted: msg });
 
-                let imageMessageSource = msg;
-                let mimeType = msg.message.imageMessage?.mimetype || "image/jpeg";
+                const mimeType = imageMessage.mimetype || "image/jpeg";
 
-                if (quoted?.imageMessage) {
-                    mimeType = quoted.imageMessage.mimetype || "image/jpeg";
-                    imageMessageSource = {
-                        key: {
-                            remoteJid: jid,
-                            id: msg.message.extendedTextMessage.contextInfo.stanzaId,
-                            participant: msg.message.extendedTextMessage.contextInfo.participant
-                        },
-                        message: quoted
-                    };
+                const stream = await downloadContentFromMessage(imageMessage, 'image');
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
                 }
-
-                const buffer = await downloadMediaMessage(
-                    imageMessageSource,
-                    'buffer',
-                    {},
-                    { logger: require('pino')({ level: 'silent' }), rekey: false }
-                );
 
                 const imageBase64 = buffer.toString("base64");
                 const promptQuery = args || "Analyze this image in detail and describe what you see.";
