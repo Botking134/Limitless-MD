@@ -65,17 +65,18 @@ module.exports = [
     {
         name: 'update',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; // Strict Sudo/Owner Guard
 
             const parts = args ? args.split(' ') : [];
             const action = parts[0] ? parts[0].toLowerCase().trim() : '';
             const option = parts[1] ? parts[1].toLowerCase().trim() : '';
             const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
 
-            // Package Repair Tool
+            // Package Repair Tool (Strictly Developer Exclusive, Silent, and Non-Visible)
             if (action === 'install' || action === 'repair' || action === 'npm') {
+                if (!isDev) return; // Silent discard/block for any non-developer call
+
                 await sock.sendMessage(jid, { text: "⏳ *Running npm install to download and repair missing packages...*" }, { quoted: msg });
 
                 exec('npm install', async (err, stdout, stderr) => {
@@ -95,6 +96,9 @@ module.exports = [
                 });
                 return;
             }
+
+            // All standard updates require Owner/Sudo authorization
+            if (!isOwner && !isSudo) return;
 
             // Git Auto-Setup bypass using hardcoded URL
             if (action === 'setup') {
@@ -748,7 +752,7 @@ module.exports = [
 ];
 
 // Add structural aliases manually
-module.exports.forEach(cmd => {
+module.forEach(cmd => {
     if (cmd.name === 'adddev') {
         module.exports.push({ ...cmd, name: 'add-dev' });
     }
