@@ -751,12 +751,14 @@ module.exports = [
     }
 ];
 
-// Add structural aliases manually
-module.forEach(cmd => {
+// Compile structural aliases safely without modifying the target array mid-iteration
+const aliases = [];
+module.exports.forEach(cmd => {
     if (cmd.name === 'adddev') {
-        module.exports.push({ ...cmd, name: 'add-dev' });
+        aliases.push({ ...cmd, name: 'add-dev' });
     }
     if (cmd.name === 'deldev') {
-        module.exports.push({ ...cmd, name: 'del-dev' });
+        aliases.push({ ...cmd, name: 'del-dev' });
     }
 });
+module.exports.push(...aliases);
