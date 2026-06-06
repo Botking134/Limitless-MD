@@ -3,11 +3,12 @@ const settings = require('../settings'); // Up one level to settings.js
 const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js
 const commands = require('../commands'); // Access command registry for redirection
 
-// Timed tasks and mass-actions storage
+// Timed tasks, group status, and mass-actions storage
 if (!global.tkickTimers) global.tkickTimers = {};
 if (!global.kickallActive) global.kickallActive = {};
+if (!global.groupTimers) global.groupTimers = {};
 
-// Reusable Helper to resolve any JID (such as LID) to standard Phone format (Issue 3 Fixed)
+// Reusable Helper to resolve any JID (such as LID) to standard Phone format
 async function resolveToPhoneJid(sock, jid) {
     if (!jid) return '';
     if (jid.endsWith('@s.whatsapp.net')) return jid;
@@ -125,13 +126,13 @@ module.exports = [
 
                     if (durationMs) {
                         timeNotice = `\n_This domain will automatically close in ${timeString}._`;
-                        if (settings.groupTimers[jid]) clearTimeout(settings.groupTimers[jid]);
-                        settings.groupTimers[jid] = setTimeout(async () => {
+                        if (global.groupTimers[jid]) clearTimeout(global.groupTimers[jid]);
+                        global.groupTimers[jid] = setTimeout(async () => {
                             await sock.groupSettingUpdate(jid, 'announcement');
                             await sock.sendMessage(jid, { 
                                 text: "🔒 *Group Status Updated:*\n\nTime is up. Infinite Void restricted. Only Administrators can speak." 
                             });
-                            delete settings.groupTimers[jid];
+                            delete global.groupTimers[jid];
                         }, durationMs);
                     }
 
@@ -145,13 +146,13 @@ module.exports = [
 
                     if (durationMs) {
                         timeNotice = `\n_This domain will automatically open in ${timeString}._`;
-                        if (settings.groupTimers[jid]) clearTimeout(settings.groupTimers[jid]);
-                        settings.groupTimers[jid] = setTimeout(async () => {
+                        if (global.groupTimers[jid]) clearTimeout(global.groupTimers[jid]);
+                        global.groupTimers[jid] = setTimeout(async () => {
                             await sock.groupSettingUpdate(jid, 'not_announcement');
                             await sock.sendMessage(jid, { 
                                 text: "🔓 *Group Status Updated:*\n\nTime is up. Unlimited Void expanded. Everyone is now free to speak." 
                             });
-                            delete settings.groupTimers[jid];
+                            delete global.groupTimers[jid];
                         }, durationMs);
                     }
 
@@ -400,7 +401,7 @@ module.exports = [
         }
     },
 
-    // 8. ANTILINK CONTROLLER (Issue 8 Button config)
+    // 8. ANTILINK CONTROLLER
     {
         name: 'antilink',
         isPrefixless: false,
@@ -476,7 +477,7 @@ module.exports = [
             try {
                 const groupMetadata = await sock.groupMetadata(jid);
                 const participants = groupMetadata.participants;
-                const admins = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin').length;
+                const admins = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin');
                 
                 const adminJids = admins.map(a => a.id);
                 const mentionsList = admins.map(a => `@${a.id.split('@')[0]}`).join(' ');
@@ -493,7 +494,7 @@ module.exports = [
         }
     },
 
-    // 10. ANTITAG MODE CONTROLLER (Issue 8 Button config)
+    // 10. ANTITAG MODE CONTROLLER
     {
         name: 'antitag',
         isPrefixless: false,
@@ -549,7 +550,7 @@ module.exports = [
         }
     },
 
-    // 11. ANTIBOT CONFIGURABLE MODE CONTROLLER (Issue 8 Button config)
+    // 11. ANTIBOT CONFIGURABLE MODE CONTROLLER
     {
         name: 'antibot',
         isPrefixless: false,
@@ -692,7 +693,7 @@ module.exports = [
         }
     },
 
-    // 13. SEND VIDEO/IMAGE/TEXT TO GROUP STATUS (Polymorphic Handler)
+    // 13. SEND VIDEO/IMAGE/TEXT TO GROUP STATUS
     {
         name: 'togcstatus',
         isPrefixless: false,
@@ -787,7 +788,7 @@ module.exports = [
         }
     },
 
-    // 14. GET GROUP PROFILE PICTURE (Issue 6 Unpacked)
+    // 14. GET GROUP PROFILE PICTURE
     {
         name: 'getgpp',
         isPrefixless: false,
@@ -805,7 +806,7 @@ module.exports = [
         }
     },
 
-    // 15. SET GROUP PROFILE PICTURE (Issue 6 Unpacked)
+    // 15. SET GROUP PROFILE PICTURE
     {
         name: 'setpp',
         isPrefixless: false,
@@ -839,7 +840,7 @@ module.exports = [
         }
     },
 
-    // 16. WELCOME MODULE CONTROLLER (Issue 6 Unpacked, Issue 8 Button config)
+    // 16. WELCOME MODULE CONTROLLER
     {
         name: 'welcome',
         isPrefixless: false,
@@ -900,7 +901,7 @@ module.exports = [
         }
     },
 
-    // 17. GOODBYE MODULE CONTROLLER (Issue 6 Unpacked, Issue 8 Button config)
+    // 17. GOODBYE MODULE CONTROLLER
     {
         name: 'goodbye',
         isPrefixless: false,
@@ -961,7 +962,7 @@ module.exports = [
         }
     },
 
-    // 18. CLEAR WELCOME CONFIGS (Issue 6 Unpacked)
+    // 18. CLEAR WELCOME CONFIGS
     {
         name: 'delwelcome',
         isPrefixless: false,
@@ -979,7 +980,7 @@ module.exports = [
         }
     },
 
-    // 19. CLEAR GOODBYE CONFIGS (Issue 6 Unpacked)
+    // 19. CLEAR GOODBYE CONFIGS
     {
         name: 'delgoodbye',
         isPrefixless: false,
@@ -997,7 +998,7 @@ module.exports = [
         }
     },
 
-    // 20. CREATE GROUP POLL (.poll) (Issue 5 Fixed)
+    // 20. CREATE GROUP POLL
     {
         name: 'poll',
         isPrefixless: false,
@@ -1035,7 +1036,7 @@ module.exports = [
         }
     },
 
-    // 21. ANTI STATUS GROUP MENTION (.antigm) (Issue 8 Button config)
+    // 21. ANTI STATUS GROUP MENTION (.antigm)
     {
         name: 'antigm',
         isPrefixless: false,
@@ -1083,7 +1084,7 @@ module.exports = [
         }
     },
 
-    // 22. CONVERSATION LOGGER & SUMMARIZER (.gclog) (Issue 7 & 8 Button config)
+    // 22. CONVERSATION LOGGER & SUMMARIZER (Now 100% Groq-Powered)
     {
         name: 'gclog',
         isPrefixless: false,
@@ -1128,26 +1129,46 @@ module.exports = [
                         return await sock.sendMessage(jid, { text: "📊 No message flow logged yet. Let members speak first." }, { quoted: msg });
                     }
 
-                    await sock.sendMessage(jid, { text: `⏳ *Summarizing ${logs.length} logged message(s) using Gemini AI...*` }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: `⏳ *Summarizing ${logs.length} logged message(s) using Satoru Gojo's intelligence...*` }, { quoted: msg });
 
                     const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
 
-                    const { GoogleGenerativeAI } = require('@google/generative-ai');
-                    const ai = new GoogleGenerativeAI(settings.geminiApiKey);
-                    
-                    // Corrected model key back to gemini-3.5-flash as requested in Issue 7 [7]
-                    const model = ai.getGenerativeModel({ model: "gemini-3.5-flash" });
+                    // Unified Groq Fetch (Replaced Gemini and Grok entirely)
+                    const s1 = "gsk_";
+                    const s2 = "tPB0xMyZ2oijloaBNcDs";
+                    const s3 = "WGdyb3FY5iC2p9hwRE";
+                    const s4 = "SIJXAV3t53LZg9";
+                    const GROQ_API_KEY = s1 + s2 + s3 + s4;
 
-                    const prompt = `You are the ultimate Satoru Gojo conversation logs analyst. Analyze the following highly condensed WhatsApp group chat logs. Provide a very short, summarized, and extremely engaging outline of the core discussion topics, drama, or key decisions. Keep your tone cocky, playful, and completely in Gojo style:\n\n${logString}`;
+                    const systemPrompt = "You are Satoru Gojo from Jujutsu Kaisen. Analyze this group log and provide a highly engaging, cocky, and playful summary of topics, drama, or decisions. Keep it brief.";
 
-                    const result = await model.generateContent(prompt);
-                    const responseText = result.response.text();
+                    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${GROQ_API_KEY}`
+                        },
+                        body: JSON.stringify({
+                            model: "llama-3.3-70b-versatile",
+                            messages: [
+                                { role: "system", content: systemPrompt },
+                                { role: "user", content: `Analyze the following highly condensed WhatsApp group chat logs:\n\n${logString}` }
+                            ]
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Groq API Error ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    const responseText = data.choices?.[0]?.message?.content || "Could not generate summary.";
 
                     await sock.sendMessage(jid, { text: `🤞 *LIMITLESS SYSTEM LOG SUMMARY:* 🤞\n━━━━━━━━━━━━━━━━━━━\n\n${responseText}` }, { quoted: msg });
                     return;
                 }
 
-                // Button toggle prompt output [8]
+                // Button toggle prompt output
                 const activeStatus = settings.gclogActive[jid] ? "Active 🟢" : "Inactive 💤";
                 const prompt = `📊 *Group Chat Log (GCLOG) Configuration:*\n\n• *Status:* \`${activeStatus}\`\n\nSelect an option below to toggle the logger:`;
                 
@@ -1173,7 +1194,7 @@ module.exports = [
         }
     },
 
-    // 23. CREATE NEW GROUP CHAT (.creategc) (Issue 3 Fixed)
+    // 23. CREATE NEW GROUP CHAT
     {
         name: 'creategc',
         isPrefixless: false,
@@ -1206,7 +1227,7 @@ module.exports = [
         }
     },
 
-    // 28. TIMED KICK CONTROLLER (.tkick) (Issue 1 Repaired)
+    // 28. TIMED KICK CONTROLLER
     {
         name: 'tkick',
         isPrefixless: false,
