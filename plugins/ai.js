@@ -199,7 +199,7 @@ module.exports = [
         }
     },
 
-    // 5. IMAGE VISION ANALYZER (.read) [Corrected & Robust]
+    // 5. IMAGE VISION ANALYZER (.read)
     {
         name: 'read',
         isPrefixless: false,
@@ -217,8 +217,7 @@ module.exports = [
             }
 
             try {
-                // Dynamically import low-level stream downloader for optimal stability
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const { downloadContentFromMessage } = require('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Processing visual data... 👁️" }, { quoted: msg });
 
                 const mimeType = imageMessage.mimetype || "image/jpeg";
@@ -232,7 +231,6 @@ module.exports = [
                 const imageBase64 = buffer.toString("base64");
                 const promptQuery = args || "Analyze this image in detail and describe what you see.";
 
-                // Format vision payload using standard OpenAI/Groq specifications
                 const messages = [
                     {
                         role: "user",
@@ -248,7 +246,9 @@ module.exports = [
 
             } catch (error) {
                 console.error("Vision Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to analyze image. Ensure the image is still active and retry." }, { quoted: msg });
+                await sock.sendMessage(jid, { 
+                    text: `❌ *Vision Command Error:*\n\n_${error.message}_\n\nEnsure your Groq API key is valid and the image is still accessible on the WhatsApp servers.` 
+                }, { quoted: msg });
             }
         }
     },
@@ -410,6 +410,111 @@ module.exports = [
             } catch (error) {
                 console.error("Lizzy Chat Error:", error);
                 await sock.sendMessage(jid, { text: "Ah... something interfered with my system, Senpai..." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 9. GENERAL AI CHATBOT TOGGLE (.chatbot)
+    {
+        name: 'chatbot',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            if (!Array.isArray(settings.chatbotChats)) {
+                settings.chatbotChats = [];
+            }
+
+            if (!args) {
+                const isActive = settings.chatbotChats.includes(jid);
+                const prompt = `🧠 *Limitless AI Chatbot Status:* \`${isActive ? 'Active 🟢' : 'Inactive 💤'}\`\n\n` +
+                              `Select an option below to toggle the chatbot:`;
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}chatbot on`, buttonText: { displayText: 'Enable' }, type: 1 },
+                        { buttonId: `${settings.prefix}chatbot off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+                try { 
+                    return await sock.sendMessage(jid, buttonMessage, { quoted: msg }); 
+                } catch (e) { 
+                    return await sock.sendMessage(jid, { text: prompt }, { quoted: msg }); 
+                }
+            }
+
+            const action = args.toLowerCase().trim();
+
+            if (action === 'on') {
+                if (!settings.chatbotChats.includes(jid)) {
+                    settings.chatbotChats.push(jid);
+                }
+                await sock.sendMessage(jid, { text: "🧠 *Limitless AI Chatbot activated in this chat!* \n_I will now respond whenever you reply to me or mention me!_" }, { quoted: msg });
+            } else if (action === 'off') {
+                settings.chatbotChats = settings.chatbotChats.filter(chat => chat !== jid);
+                await sock.sendMessage(jid, { text: "🧠 *Limitless AI Chatbot deactivated in this chat.*" }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: "❌ Use `on` or `off`." }, { quoted: msg });
+            }
+            saveSettings();
+        }
+    },
+
+    // 10. INTERCEPTED GENERAL CHATBOT EXECUTION (chatbot_chat)
+    {
+        name: 'chatbot_chat',
+        isPrefixless: true,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            try {
+                const systemPrompt = 
+                    `You are Limitless AI, a helpful, highly intelligent, and slightly playful AI assistant running on Satoru Gojo's WhatsApp bot framework (Limitless-MD).\n` +
+                    `Your creator is Infinity.\n\n` +
+                    `Here is your reference manual for the bot's commands and functions. If a user asks about what the bot can do or how to use a command, explain it to them clearly based on this list:\n\n` +
+                    `1. UTILITIES:\n` +
+                    `- .menu / .domain: Expands the full manual/command menu.\n` +
+                    `- .ping / .ping2: Checks bot latency & response speed.\n` +
+                    `- .alive: Checks if the bot is online (shows an image and uptime).\n` +
+                    `- .delete / .del: Deletes the replied message (requires admin rights if in a group).\n` +
+                    `- .sticker / .s: Converts a replied image/video/gif to a sticker.\n` +
+                    `- .crop: Crops a replied image/video/sticker to a square sticker.\n` +
+                    `- .take / .steal: Changes sticker metadata (pack name and author).\n` +
+                    `- .tourl / .url: Uploads a replied file/media to cloud storage and returns a link.\n` +
+                    `- .vv: Unlocks and resends a replied View Once image/video.\n` +
+                    `- .tovv: Converts a replied image/video to a View Once message.\n` +
+                    `- Speed (prefixless): Reacts with emojis and calculates internal lag.\n` +
+                    `- Kamui (prefixless): Decrypts a replied View Once message and sends it silently to DM.\n\n` +
+                    `2. AI CAPABILITIES (all powered by Groq llama-3.3-70b-versatile and llama-3.2-11b-vision-preview):\n` +
+                    `- .ai <prompt>: Solves queries and questions.\n` +
+                    `- .debug <code>: Analyzes code snippets and fixes bugs as a Senior Architect.\n` +
+                    `- .summon <char> <prompt>: Speaks as any fictional character.\n` +
+                    `- .read <prompt>: Analyzes the attached or replied image (Vision).\n` +
+                    `- .imagine <prompt>: Generates a high-quality image (via Pollinations AI).\n` +
+                    `- .lizzy <on/off>: Toggles the devoted Lizzy chatbot.\n` +
+                    `- Gojo <prompt> (prefixless): Speaks directly to Satoru Gojo.\n\n` +
+                    `3. GROUP MANAGEMENT:\n` +
+                    `- .gmode <open/close> <time>: Locks/unlocks group status for custom intervals (e.g., .gmode close 1h).\n` +
+                    `- .kick / .promote / .demote: Standard admin commands.\n` +
+                    `- .tagall / .tag: Mentions all members (visible or ghost tag).\n` +
+                    `- .admins: Summons all group administrators.\n` +
+                    `- .warn: Issues warning points (5 warns results in an auto-kick).\n` +
+                    `- .antilink / .antitag / .antibot: Configurable anti-spam modules with delete/warn/kick actions.\n` +
+                    `- .welcome / .goodbye: Configures automated entrance and exit greetings.\n` +
+                    `- .gclog <on/off/check>: Tracks conversation flow and generates real-time AI summaries.\n\n` +
+                    `Respond concisely, helpfully, and stay completely in character as the official system assistant.`;
+
+                const messages = [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: args }
+                ];
+
+                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+                await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+            } catch (error) {
+                console.error("Chatbot Chat Error:", error);
             }
         }
     }
