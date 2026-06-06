@@ -26,16 +26,6 @@ function saveNotes(notes) {
     }
 }
 
-// Helper function to format system uptime
-function formatUptime(seconds) {
-    const d = Math.floor(seconds / (3600 * 24));
-    const h = Math.floor((seconds % (3600 * 24)) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    
-    return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
-}
-
 // Recursive Helper to automatically unwrap ephemeral, view-once, and document-caption envelopes
 function getRawMessage(message) {
     if (!message) return null;
@@ -162,114 +152,6 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("All upload hosts failed.");
 }
 
-// Unified, Gojo-themed Menu Renderer with dynamic image selection and sequential audio drop
-async function renderMenu(sock, msg) {
-    const jid = msg.key.remoteJid;
-    const p = settings.prefix;
-    const uptime = formatUptime(process.uptime());
-
-    const menuImages = [
-        "https://iili.io/CFIJoDg.jpg",
-        "https://iili.io/CFIJfUB.jpg",
-        "https://iili.io/CFIJnOF.jpg",
-        "https://iili.io/CFIJBHP.jpg",
-        "https://iili.io/CFIJTiv.jpg",
-        "https://iili.io/CFIJRlp.jpg",
-        "https://iili.io/CFIJYJI.jpg",
-        "https://iili.io/CFIJlbn.jpg",
-        "https://iili.io/CFIJ1xs.jpg"
-    ];
-
-    const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
-
-    const menuText = 
-        `┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n` +
-        `┃    🔵 LIMITLESS MANUAL 🔴 ┃\n` +
-        `┃  "Throughout Heaven & Earth"  ┃\n` +
-        `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n` +
-        
-        `📁 *Utility Commands*\n` +
-        `• \`${p}menu\` / \`${p}domain\` — Expand this menu.\n` +
-        `• \`${p}ping\` — Check response speed (Cursed Energy).\n` +
-        `• \`${p}ping2\` — Check latency (Internal).\n` +
-        `• \`${p}alive\` — Verify status with image.\n` +
-        `• \`${p}del\` / \`${p}delete\` — Delete the replied message and command.\n` +
-        `• \`${p}notes\` — Display interactive Notes Panel.\n` +
-        `• \`${p}addnote <name>\` — Save a text note by replying to a message.\n` +
-        `• \`${p}delnote <name>\` — Delete a saved note.\n` +
-        `• \`${p}getnotes\` — Display listed names of all saved notes.\n` +
-        `• \`${p}getnote <name>\` — Display the text content of a saved note.\n` +
-        `• \`${p}vv\` — Unlock and resend replied View Once image/video.\n` +
-        `• \`${p}tovv\` — Convert replied image/video to View Once.\n` +
-        `• \`${p}tourl\` / \`${p}url\` — Convert replied media to direct web URL.\n` +
-        `• \`${p}sticker\` / \`${p}s\` — Convert replied image/video to sticker.\n` +
-        `• \`${p}crop\` — Convert replied image/gif/sticker to cropped square sticker.\n` +
-        `• \`${p}take\` / \`${p}steal\` — Steal sticker with custom metadata.\n` +
-        `• \`${p}smeme <top|bottom>\` — Convert replied image to meme sticker.\n` +
-        `• \`${p}setcmd <command>\` — Assign custom command to replied sticker.\n` +
-        `• \`${p}delcmd\` — Delete mapping of replied sticker command.\n` +
-        `• \`${p}autoreact <on/off/all/cmd>\` — Toggle automated reactions.\n` +
-        `• \`Speed\` _(Prefixless)_ — Check bot and network response delay.\n` +
-        `• \`Kamui\` _(Prefixless)_ — Decrypt View Once & send silently to DM.\n\n` +
-        
-        `📁 *AI Commands* (Grok-2 Latest)\n` +
-        `• \`${p}ai <prompt>\` — General knowledge query.\n` +
-        `• \`${p}debug <error/code>\` — Senior Dev bug analysis.\n` +
-        `• \`${p}summon <char> <query>\` — Roleplay with any fictional character.\n` +
-        `• \`${p}read <prompt>\` — Analyze replied/attached image.\n` +
-        `• \`${p}imagine <prompt>\` — Manifest high-res AI imagery.\n` +
-        `• \`${p}lizzy <on/off>\` — Toggle submissive Lizzy Chatbot.\n` +
-        `• \`Gojo <message>\` _(Prefixless)_ — Direct chat with Gojo.\n` +
-        `  _(For you, use \`${p}gojo <message>\` to bypass)_\n\n` +
-        
-        `📁 *Group Commands*\n` +
-        `• \`${p}gmode <open/close> <time>\` — Lock/Unlock group with timed duration.\n` +
-        `• \`${p}kick <reply/mention>\` — Exorcise a weakling from the group.\n` +
-        `• \`${p}promote <reply/mention>\` — Elevate regular member to Admin.\n` +
-        `• \`${p}demote <reply/mention>\` — Demote Admin back to regular member.\n` +
-        `• \`${p}tagall <message>\` — Visible tag summon for everyone.\n` +
-        `• \`${p}tag <message>\` — Ghost tag everyone on the replied message.\n` +
-        `• \`${p}admins\` — Tag group administrators.\n` +
-        `• \`${p}warn\` — Issue warning & delete target message.\n` +
-        `• \`${p}togcstatus <caption/reply>\` — Send replied text/image/video to group status.\n` +
-        `• \`${p}antilink <warn/delete/kick/off>\` — Toggle link protection settings.\n` +
-        `• \`${p}antitag <on/off>\` — Bar non-admins from tagging the bot.\n` +
-        `• \`${p}antibot <on/off>\` — Instantly exorcise other bots in the group.\n` +
-        `• \`${p}link\` — Fetch group invite link.\n\n` +
-        
-        `📁 *Owner Commands*\n` +
-        `• \`${p}mode <public/private>\` — Change bot privacy.\n` +
-        `• \`${p}addowner <reply/number>\` — Grant full owner access.\n` +
-        `• \`${p}delowner <reply/number>\` — Remove secondary owner access.\n` +
-        `• \`${p}setsudo <reply/number>\` — Grant sudo privileges.\n` +
-        `• \`${p}delsudo <reply/number>\` — Remove sudo privileges.\n` +
-        `• \`${p}ban <add/remove/list>\` — Globally blacklist users.\n` +
-        `• \`${p}afk\` — Toggle AFK responder.\n` +
-        `• \`${p}restart\` — Reboot bot systems.\n` +
-        `• \`${p}shutdown\` — Kill bot process.\n\n` +
-        
-        `━━━━━━━━━━━━━━━━━━━\n` +
-        `⏰ *Uptime:* ${uptime}\n` +
-        `👑 *Owner:* ${settings.ownerName}`;
-
-    try {
-        await sock.sendMessage(jid, {
-            image: { url: randomImage },
-            caption: menuText
-        }, { quoted: msg });
-
-        await sock.sendMessage(jid, {
-            audio: { url: "https://qu.ax/sHoAn" },
-            mimetype: "audio/mp4",
-            ptt: true 
-        });
-
-    } catch (error) {
-        console.error("Menu Image Render Error:", error);
-        await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
-    }
-}
-
 module.exports = [
     // 1. PING COMMAND
     {
@@ -333,25 +215,7 @@ module.exports = [
         }
     },
 
-    // 3. MENU COMMAND
-    {
-        name: 'menu',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            await renderMenu(sock, msg);
-        }
-    },
-
-    // 4. DOMAIN COMMAND
-    {
-        name: 'domain',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            await renderMenu(sock, msg);
-        }
-    },
-
-    // 5. MESSAGE DELETER (LID-Safe)
+    // 3. MESSAGE DELETER (LID-Safe)
     {
         name: 'delete',
         isPrefixless: false,
@@ -388,7 +252,7 @@ module.exports = [
         }
     },
 
-    // 6. AUTOREACT MODE TOGGLE
+    // 4. AUTOREACT MODE TOGGLE
     {
         name: 'autoreact',
         isPrefixless: false,
@@ -422,7 +286,7 @@ module.exports = [
         }
     },
 
-    // 7. PREFIXLESS SPEED COMMAND
+    // 5. PREFIXLESS SPEED COMMAND
     {
         name: 'speed',
         isPrefixless: true,
@@ -465,7 +329,7 @@ module.exports = [
         }
     },
 
-    // 8. VIEW ONCE UNLOCKER (.vv)
+    // 6. VIEW ONCE UNLOCKER (.vv)
     {
         name: 'vv',
         isPrefixless: false,
@@ -524,7 +388,7 @@ module.exports = [
         }
     },
 
-    // 9. STANDARD STICKER CONVERTER
+    // 7. STANDARD STICKER CONVERTER
     {
         name: 'sticker',
         isPrefixless: false,
@@ -582,7 +446,7 @@ module.exports = [
         }
     },
 
-    // 10. CROPPED SQUARE STICKER (.crop)
+    // 8. CROPPED SQUARE STICKER (.crop)
     {
         name: 'crop',
         isPrefixless: false,
@@ -630,7 +494,7 @@ module.exports = [
         }
     },
 
-    // 11. METADATA STEALER (.take / .steal)
+    // 9. METADATA STEALER (.take / .steal)
     {
         name: 'take',
         isPrefixless: false,
@@ -679,7 +543,7 @@ module.exports = [
         }
     },
 
-    // 12. STICKER COMMAND TRIGGERS (.setcmd)
+    // 10. STICKER COMMAND TRIGGERS (.setcmd)
     {
         name: 'setcmd',
         isPrefixless: false,
@@ -745,7 +609,7 @@ module.exports = [
         }
     },
 
-    // 13. DEDICATED STICKER TRIGGER DELETER
+    // 11. DEDICATED STICKER TRIGGER DELETER
     {
         name: 'delcmd',
         isPrefixless: false,
@@ -774,7 +638,7 @@ module.exports = [
         }
     },
 
-    // 14. REGULAR TO VIEW ONCE CONVERTER
+    // 12. REGULAR TO VIEW ONCE CONVERTER
     {
         name: 'tovv',
         isPrefixless: false,
@@ -819,7 +683,7 @@ module.exports = [
         }
     },
 
-    // 15. MEDIA TO DIRECT WEB URL CONVERTER
+    // 13. MEDIA TO DIRECT WEB URL CONVERTER
     {
         name: 'tourl',
         isPrefixless: false,
@@ -869,7 +733,7 @@ module.exports = [
         }
     },
 
-    // 16. PREFIXLESS SILENT KAMUI DM DECODER
+    // 14. PREFIXLESS SILENT KAMUI DM DECODER
     {
         name: 'kamui',
         isPrefixless: true,
@@ -910,7 +774,7 @@ module.exports = [
         }
     },
 
-    // 17. BOT LATENCY COMPARISON TEST
+    // 15. BOT LATENCY COMPARISON TEST
     {
         name: 'ping2',
         isPrefixless: false,
@@ -942,7 +806,7 @@ module.exports = [
         }
     },
 
-    // 18. NOTES DASHBOARD & VIEWER (.notes) [Mission 1]
+    // 16. NOTES DASHBOARD & VIEWER (.notes) [Mission 1]
     {
         name: 'notes',
         isPrefixless: false,
@@ -984,7 +848,7 @@ module.exports = [
         }
     },
 
-    // 19. ADD NOTE (.addnote <name>) [Mission 1]
+    // 17. ADD NOTE (.addnote <name>) [Mission 1]
     {
         name: 'addnote',
         isPrefixless: false,
@@ -1027,7 +891,7 @@ module.exports = [
         }
     },
 
-    // 20. DELETE NOTE (.delnote <name>) [Mission 1]
+    // 18. DELETE NOTE (.delnote <name>) [Mission 1]
     {
         name: 'delnote',
         isPrefixless: false,
@@ -1054,7 +918,7 @@ module.exports = [
         }
     },
 
-    // 21. GET NOTES LIST (.getnotes) [Mission 1]
+    // 19. GET NOTES LIST (.getnotes) [Mission 1]
     {
         name: 'getnotes',
         isPrefixless: false,
@@ -1081,7 +945,7 @@ module.exports = [
         }
     },
 
-    // 22. GET NOTE SUB-COMMAND (.getnote <name>) [Subcommand update]
+    // 20. GET NOTE SUB-COMMAND (.getnote <name>) [Subcommand update]
     {
         name: 'getnote',
         isPrefixless: false,
