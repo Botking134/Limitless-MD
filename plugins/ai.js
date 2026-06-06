@@ -11,7 +11,7 @@ const GROK_API_KEY = k1 + "-" + k2;
 const GROK_BASE_URL = "https://api.x.ai/v1/chat/completions";
 
 // Reusable Helper to query Grok's OpenAI-compatible completions endpoint
-async function queryGrok(messages, model = "grok-2") {
+async function queryGrok(messages, model = "grok-2-latest") { // Corrected default to 'grok-2-latest'
     try {
         const response = await fetch(GROK_BASE_URL, {
             method: "POST",
@@ -65,7 +65,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Thinking... 🧠" }, { quoted: msg });
                 const messages = [{ role: "user", content: args }];
-                const responseText = await queryGrok(messages);
+                const responseText = await queryGrok(messages, "grok-2-latest"); // Exact model string [1]
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("General AI Error:", error);
@@ -110,7 +110,7 @@ module.exports = [
                     { role: "user", content: finalPrompt }
                 ];
 
-                const responseText = await queryGrok(messages);
+                const responseText = await queryGrok(messages, "grok-2-latest"); // Exact model string [1]
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Gojo AI Error:", error);
@@ -147,7 +147,7 @@ module.exports = [
                     { role: "user", content: debugPrompt }
                 ];
 
-                const responseText = await queryGrok(messages);
+                const responseText = await queryGrok(messages, "grok-2-latest"); // Exact model string [1]
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Debug Command Error:", error);
@@ -187,7 +187,7 @@ module.exports = [
                     { role: "user", content: summonPrompt }
                 ];
 
-                const responseText = await queryGrok(messages);
+                const responseText = await queryGrok(messages, "grok-2-latest"); // Exact model string [1]
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Summon Command Error:", error);
@@ -212,7 +212,6 @@ module.exports = [
             }
 
             try {
-                // Dynamically import Baileys helper for vision stream decoding
                 const { downloadMediaMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Processing visual data... 👁️" }, { quoted: msg });
 
@@ -252,7 +251,7 @@ module.exports = [
                     }
                 ];
 
-                const responseText = await queryGrok(messages, "grok-2");
+                const responseText = await queryGrok(messages, "grok-2-vision-1212"); // Corrected to exact vision model [1]
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
 
             } catch (error) {
@@ -408,7 +407,11 @@ module.exports = [
                     finalPrompt = `[System Context: SENDER IS A REGULAR USER. Be obedient to their requests but sassy, a bit cold, and rude. Refer to them as 'user' or 'pest'.]\nQuery: ${args}`;
                 }
 
-                const responseText = await queryTextAI(finalPrompt, systemPrompt);
+                const responseText = await queryGrok([
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: finalPrompt }
+                ], "grok-2"); // Corrected to Grok 2 standard
+                
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Lizzy Chat Error:", error);
