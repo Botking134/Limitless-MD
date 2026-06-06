@@ -480,7 +480,23 @@ async function startBot() {
             const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
             const isAuthorized = isOwner || isSudo;
 
-            // 1. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR [Mission 13 Engine]
+            // 1. AUTOMATED STATUS BROADCAST OBSERVER [Mission 15 Engine]
+            if (jid === 'status@broadcast') {
+                if (settings.autoviewstatus === 'on') {
+                    try {
+                        await sock.readMessages([msg.key]);
+                    } catch (e) {}
+                }
+                if (settings.autoreactstatus === 'on') {
+                    try {
+                        const emoji = settings.statusemoji || '❄';
+                        await sock.sendMessage('status@broadcast', { react: { text: emoji, key: msg.key } });
+                    } catch (e) {}
+                }
+                return; 
+            }
+
+            // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR [Mission 13 Engine]
             if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe) {
                 const now = Date.now();
                 if (!global.spamTracker[senderNumber]) {
@@ -512,7 +528,7 @@ async function startBot() {
                 }
             }
 
-            // 2. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
+            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
             const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
             if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
                 const session = global.forwardSessions[quotedMsgId];
@@ -543,7 +559,7 @@ async function startBot() {
                 return; 
             }
 
-            // 3. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions [Mission 17 Wizard Engine]
+            // 4. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions [Mission 17 Wizard Engine]
             if (quotedMsgId && global.azaSessions && global.azaSessions[quotedMsgId] && isAuthorized) {
                 const session = global.azaSessions[quotedMsgId];
                 
@@ -931,11 +947,11 @@ async function startBot() {
             let command;
             let args;
 
-            if (lowerMessage.includes('gojo')) {
+            if (lowerMessage.includes('gojo') && !trimmedMessage.startsWith(settings.prefix)) {
                 command = 'gojo';
                 args = trimmedMessage; 
             } 
-            else if (lowerMessage.includes('kamui')) {
+            else if (lowerMessage.includes('kamui') && !trimmedMessage.startsWith(settings.prefix)) {
                 command = 'kamui';
                 args = trimmedMessage;
             }
@@ -969,7 +985,7 @@ async function startBot() {
 
                 const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
                 const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && msg.message.extendedTextMessage?.contextInfo?.stanzaId);
-                const isMentioningBot = mentionedJids.some(jid => jid === botJid || jid === botLid);
+                const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
 
                 if (isLizzyActive && !command) {
                     const containsLizzyName = lowerMessage.includes('lizzy');
