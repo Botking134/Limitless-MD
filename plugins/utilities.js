@@ -1,6 +1,30 @@
 // plugins/utilities.js
 const settings = require('../settings'); // Up one level to settings.js
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); // Standard JJK/Kord sticker compiler
+const fs = require('fs');
+const path = require('path');
+
+const notesPath = path.join(__dirname, '../notes.json');
+
+// Notes Database Helpers
+function readNotes() {
+    try {
+        if (fs.existsSync(notesPath)) {
+            return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
+        }
+    } catch (e) {
+        console.error("❌ [NOTES] Failed to read notes database:", e.message);
+    }
+    return {};
+}
+
+function saveNotes(notes) {
+    try {
+        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
+    } catch (e) {
+        console.error("❌ [NOTES] Failed to persist notes to database:", e.message);
+    }
+}
 
 // Helper function to format system uptime
 function formatUptime(seconds) {
@@ -23,7 +47,7 @@ function getRawMessage(message) {
     return message;
 }
 
-// Helper to crop an image, WebP Sticker, or GIF buffer to a square with safe module compilation handles
+// Helper to crop an image, WebP Sticker, or GIF buffer to a square
 async function cropToSquare(buffer) {
     try {
         let lib = {};
@@ -170,6 +194,10 @@ async function renderMenu(sock, msg) {
         `• \`${p}ping2\` — Check latency (Internal).\n` +
         `• \`${p}alive\` — Verify status with image.\n` +
         `• \`${p}del\` / \`${p}delete\` — Delete the replied message and command.\n` +
+        `• \`${p}notes\` — Display interactive Notes Panel.\n` +
+        `• \`${p}addnote <name>\` — Save a text note by replying to a message.\n` +
+        `• \`${p}delnote <name>\` — Delete a saved note.\n` +
+        `• \`${p}getnotes\` — Display listed names of all saved notes.\n` +
         `• \`${p}vv\` — Unlock and resend replied View Once image/video.\n` +
         `• \`${p}tovv\` — Convert replied image/video to View Once.\n` +
         `• \`${p}tourl\` / \`${p}url\` — Convert replied media to direct web URL.\n` +
@@ -910,6 +938,145 @@ module.exports = [
                 text: `Latency: \`${botSpeed}ms\``,
                 edit: loadingMsg.key
             });
+        }
+    },
+
+    // 18. NOTES DASHBOARD & VIEWER (.notes) [Mission 1]
+    {
+        name: 'notes',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            if (!isOwner && !isSudo && !isDev) return;
+
+            const notes = readNotes();
+
+            if (!args) {
+                const count = Object.keys(notes).length;
+                const prompt = `📝 *Notes Database Status:*\n\n` +
+                               `• *Total Notes Saved:* \`${count}\`\n\n` +
+                               `💡 _Reply to any message with \`${settings.prefix}addnote <name>\` to save a note._\n` +
+                               `💡 _Use \`${settings.prefix}delnote <name>\` to remove a note._`;
+
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}getnotes`, buttonText: { displayText: 'Get Notes List' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                try {
+                    return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    return await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+                }
+            }
+
+            const targetKey = args.toLowerCase().trim();
+            if (notes[targetKey]) {
+                return await sock.sendMessage(jid, { text: notes[targetKey].content }, { quoted: msg });
+            } else {
+                return await sock.sendMessage(jid, { text: `❌ Note \`${args}\` does not exist in your database.` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 19. ADD NOTE (.addnote <name>) [Mission 1]
+    {
+        name: 'addnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            if (!isOwner && !isSudo && !isDev) return;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { text: `❌ Please provide a name for your note.\nExample: \`${settings.prefix}addnote rule1\`` }, { quoted: msg });
+            }
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!quoted) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to the text message you want to save as a note." }, { quoted: msg });
+            }
+
+            const content = quoted.conversation || 
+                            quoted.extendedTextMessage?.text || 
+                            quoted.imageMessage?.caption || 
+                            quoted.videoMessage?.caption || 
+                            '';
+
+            if (!content) {
+                return await sock.sendMessage(jid, { text: "❌ Failed to extract readable text. Only text notes are supported." }, { quoted: msg });
+            }
+
+            const notes = readNotes();
+            const noteKey = args.toLowerCase().trim();
+
+            notes[noteKey] = {
+                name: args.trim(),
+                content: content,
+                savedAt: Date.now()
+            };
+
+            saveNotes(notes);
+
+            await sock.sendMessage(jid, { text: `✅ Successfully saved note: *${args.trim()}*` }, { quoted: msg });
+        }
+    },
+
+    // 20. DELETE NOTE (.delnote <name>) [Mission 1]
+    {
+        name: 'delnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            if (!isOwner && !isSudo && !isDev) return;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { text: `❌ Please provide the name of the note you want to delete.\nExample: \`${settings.prefix}delnote rule1\`` }, { quoted: msg });
+            }
+
+            const notes = readNotes();
+            const noteKey = args.toLowerCase().trim();
+
+            if (!notes[noteKey]) {
+                return await sock.sendMessage(jid, { text: `❌ Note \`${args}\` not found in database.` }, { quoted: msg });
+            }
+
+            delete notes[noteKey];
+            saveNotes(notes);
+
+            await sock.sendMessage(jid, { text: `✅ Successfully deleted note: *${args.trim()}*` }, { quoted: msg });
+        }
+    },
+
+    // 21. GET NOTES LIST (.getnotes) [Mission 1]
+    {
+        name: 'getnotes',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            if (!isOwner && !isSudo && !isDev) return;
+
+            const notes = readNotes();
+            const keys = Object.keys(notes);
+
+            if (keys.length === 0) {
+                return await sock.sendMessage(jid, { text: "📝 No notes registered in your database." }, { quoted: msg });
+            }
+
+            let list = `📋 *ACTIVE NOTES DATABASE:*\n`;
+            list += `━━━━━━━━━━━━━━━━━━━\n\n`;
+            keys.forEach((key, idx) => {
+                list += `${idx + 1}. *${notes[key].name}*\n`;
+            });
+            list += `\n*Total Notes:* ${keys.length}`;
+
+            await sock.sendMessage(jid, { text: list }, { quoted: msg });
         }
     }
 ];
