@@ -198,6 +198,7 @@ async function renderMenu(sock, msg) {
         `• \`${p}addnote <name>\` — Save a text note by replying to a message.\n` +
         `• \`${p}delnote <name>\` — Delete a saved note.\n` +
         `• \`${p}getnotes\` — Display listed names of all saved notes.\n` +
+        `• \`${p}getnote <name>\` — Display the text content of a saved note.\n` +
         `• \`${p}vv\` — Unlock and resend replied View Once image/video.\n` +
         `• \`${p}tovv\` — Convert replied image/video to View Once.\n` +
         `• \`${p}tourl\` / \`${p}url\` — Convert replied media to direct web URL.\n` +
@@ -1077,6 +1078,30 @@ module.exports = [
             list += `\n*Total Notes:* ${keys.length}`;
 
             await sock.sendMessage(jid, { text: list }, { quoted: msg });
+        }
+    },
+
+    // 22. GET NOTE SUB-COMMAND (.getnote <name>) [Subcommand update]
+    {
+        name: 'getnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            if (!isOwner && !isSudo && !isDev) return;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { text: `❌ Please provide the name of the note you want to retrieve.\nExample: \`${settings.prefix}getnote rule1\`` }, { quoted: msg });
+            }
+
+            const notes = readNotes();
+            const targetKey = args.toLowerCase().trim();
+
+            if (notes[targetKey]) {
+                return await sock.sendMessage(jid, { text: notes[targetKey].content }, { quoted: msg });
+            } else {
+                return await sock.sendMessage(jid, { text: `❌ Note \`${args}\` not found in your database.` }, { quoted: msg });
+            }
         }
     }
 ];
