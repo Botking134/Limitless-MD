@@ -19,7 +19,8 @@ function saveSettings() {
             owners: settings.owners || [],
             sudo: settings.sudo || [],
             banned: settings.banned || [],
-            lizzyChats: settings.lizzyChats || [], // 🔄 FIXED: Added lizzyChats to the saver [1.1]
+            lizzyChats: settings.lizzyChats || [],
+            chatbotChats: settings.chatbotChats || [], // Added persistent tracking array
             autoReact: settings.autoReact || "cmd",
             antilink: settings.antilink || {},
             antitag: settings.antitag || {},
