@@ -190,10 +190,10 @@ _║ ⊱ getnote_`;
             caption: menuText
         }, { quoted: msg });
 
-        // Configured as standard audio file rather than push-to-talk
+        // Fixed mimetype to standard MPEG MP3 (audio/mpeg)
         await sock.sendMessage(jid, {
             audio: { url: "https://qu.ax/sHoAn" },
-            mimetype: "audio/mp4",
+            mimetype: "audio/mpeg",
             ptt: false 
         });
 
