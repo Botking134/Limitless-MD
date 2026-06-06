@@ -51,7 +51,8 @@ function saveState() {
             warns: settings.warns,
             stickerCommands: settings.stickerCommands,
             afk: settings.afk || {},
-            lizzyChats: settings.lizzyChats || []
+            lizzyChats: settings.lizzyChats || [],
+            chatbotChats: settings.chatbotChats || [] // Added dynamic memory state
         };
         fs.writeFileSync(statePath, JSON.stringify(stateData, null, 2), 'utf-8');
     } catch (err) {
