@@ -22,6 +22,11 @@ global.spamTracker = global.spamTracker || {};
 // Global bank details wizard session tracker
 global.azaSessions = global.azaSessions || {};
 
+// Global song search and download sessions
+global.songSessions = global.songSessions || {};
+global.apkSessions = global.apkSessions || {};
+global.shazamSessions = global.shazamSessions || {};
+
 // Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
     const seconds = Math.floor((Date.now() - ms) / 1000);
@@ -31,7 +36,7 @@ function getAfkDuration(ms) {
     return `${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 }
 
-// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely
+// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely in background loops
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -662,6 +667,128 @@ async function startBot() {
                 }
             }
 
+            // 5. CHAT INTERCEPTOR: Resolve active song selection download sessions
+            if (quotedMsgId && global.songSessions && global.songSessions[quotedMsgId]) {
+                const session = global.songSessions[quotedMsgId];
+                const index = parseInt(trimmedMessage.trim());
+
+                if (!isNaN(index) && index >= 1 && index <= session.results.length) {
+                    const chosen = session.results[index - 1];
+                    delete global.songSessions[quotedMsgId]; // Clean up memory
+
+                    await sock.sendMessage(jid, { text: `📥 *Downloading selected song:* "${chosen.title}"...` }, { quoted: msg });
+
+                    try {
+                        // Dynamically query the working play endpoint using the exact chosen title
+                        const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(chosen.title)}`);
+                        if (!response.ok) throw new Error("API failed to respond.");
+
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            const downloadUrl = data.result.download_url;
+                            if (downloadUrl) {
+                                await sock.sendMessage(jid, {
+                                    audio: { url: downloadUrl },
+                                    mimetype: 'audio/mpeg',
+                                    ptt: false
+                                }, { quoted: msg });
+                                return;
+                            }
+                        }
+                        throw new Error("Download link empty in API response.");
+                    } catch (err) {
+                        console.error("Song Downloader Interceptor Error:", err);
+                        await sock.sendMessage(jid, { text: `❌ Failed to download song: ${err.message}` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { text: `❌ Invalid choice. Please reply with a number between 1 and ${session.results.length}.` }, { quoted: msg });
+                }
+                return; 
+            }
+
+            // 6. CHAT INTERCEPTOR: Resolve active APK selection download sessions
+            if (quotedMsgId && global.apkSessions && global.apkSessions[quotedMsgId]) {
+                const session = global.apkSessions[quotedMsgId];
+                const index = parseInt(trimmedMessage.trim());
+
+                if (!isNaN(index) && index >= 1 && index <= session.results.length) {
+                    const chosen = session.results[index - 1];
+                    delete global.apkSessions[quotedMsgId]; // Clean up memory
+
+                    await sock.sendMessage(jid, { text: `📥 *Downloading selected APK:* "${chosen.name}"...` }, { quoted: msg });
+
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/apkdl?id=${encodeURIComponent(chosen.id)}`);
+                        if (!response.ok) throw new Error("API failed to respond.");
+
+                        const data = await response.json();
+                        
+                        const result = data.result || data;
+                        const downloadUrl = result.download_url || result.downloadUrl || result.link || result.url;
+                        const appName = result.name || result.app_name || chosen.name;
+                        const version = result.version || "N/A";
+                        const size = result.size || "Unknown";
+
+                        if (downloadUrl) {
+                            const cap = `📦 *APK COMPLETED* 📦\n━━━━━━━━━━━━━━━━━━━\n\n` +
+                                        `📌 *Name:* ${appName}\n` +
+                                        `⚙️ *Version:* ${version}\n` +
+                                        `⚖️ *Size:* ${size}\n\n` +
+                                        `_Downloaded via Satoru Gojo_ 🤞`;
+
+                            await sock.sendMessage(jid, {
+                                document: { url: downloadUrl },
+                                mimetype: "application/vnd.android.package-archive",
+                                fileName: `${appName}.apk`,
+                                caption: cap
+                            }, { quoted: msg });
+                            return;
+                        }
+                        throw new Error("Download link empty in API response.");
+                    } catch (err) {
+                        console.error("APK Downloader Interceptor Error:", err);
+                        await sock.sendMessage(jid, { text: `❌ Failed to download APK: ${err.message}` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { text: `❌ Invalid choice. Please reply with a number between 1 and ${session.results.length}.` }, { quoted: msg });
+                }
+                return;
+            }
+
+            // 7. CHAT INTERCEPTOR: Resolve active Shazam song downloads
+            if (quotedMsgId && global.shazamSessions && global.shazamSessions[quotedMsgId]) {
+                const session = global.shazamSessions[quotedMsgId];
+                const text = trimmedMessage.toLowerCase().trim();
+
+                if (text === '1' || text === 'download') {
+                    delete global.shazamSessions[quotedMsgId]; // Clean up memory
+                    await sock.sendMessage(jid, { text: `📥 *Downloading recognized song:* "${session.title} - ${session.artist}"...` }, { quoted: msg });
+
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(session.title + ' ' + session.artist)}`);
+                        if (!response.ok) throw new Error("API failed to respond.");
+
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            const downloadUrl = data.result.download_url;
+                            if (downloadUrl) {
+                                await sock.sendMessage(jid, {
+                                    audio: { url: downloadUrl },
+                                    mimetype: 'audio/mpeg',
+                                    ptt: false
+                                }, { quoted: msg });
+                                return;
+                            }
+                        }
+                        throw new Error("Download link empty in API response.");
+                    } catch (err) {
+                        console.error("Shazam download interceptor failed:", err);
+                        await sock.sendMessage(jid, { text: `❌ Download failed: ${err.message}` }, { quoted: msg });
+                    }
+                }
+                return;
+            }
+
             // 5. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR
             const isViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
             if (isViewOnce && settings.antiviewonce === 'on' && !msg.key.fromMe) {
@@ -757,7 +884,7 @@ async function startBot() {
                 ...settings.devs.map(num => `${num}@s.whatsapp.net`),
                 ...settings.devLids
             ];
-            const isAnyDevMentioned = mentionedJids.some(jid => jid === botJid || jid === botLid);
+            const isAnyDevMentioned = mentionedJids.some(jid => jid === jid || jid === botLid);
             
             if (isGroup && isAnyDevMentioned) {
                 const devEmojis = ["⚡", "❄", "🥷", "🤞", "🧘"];
