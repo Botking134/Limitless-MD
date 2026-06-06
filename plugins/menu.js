@@ -81,6 +81,38 @@ _║ ⊱ gclog_
 _║ ⊱ creategc_
 _║ ⊱ tkick_
 
+_❖ ── [ TOOLS ] ── ❖_
+_║ ⊱ setpp_
+_║ ⊱ track_
+_║ ⊱ getpp_
+_║ ⊱ setname_
+_║ ⊱ save_
+_║ ⊱ tostatus_
+_║ ⊱ fw_
+_║ ⊱ presence_
+_║ ⊱ autotyping_
+_║ ⊱ autorecording_
+_║ ⊱ alwaysonline_
+_║ ⊱ autoread_
+_║ ⊱ antidelete_
+_║ ⊱ antidelete_log_
+_║ ⊱ antiviewonce_
+_║ ⊱ antibug_
+_║ ⊱ clear_
+_║ ⊱ archive_
+_║ ⊱ unarchive_
+_║ ⊱ autoviewstatus_
+_║ ⊱ statusemoji_
+_║ ⊱ autoreactstatus_
+_║ ⊱ block_
+_║ ⊱ unblock_
+_║ ⊱ aza_
+_║ ⊱ time_
+_║ ⊱ weather_
+_║ ⊱ device_
+_║ ⊱ livescore_
+_║ ⊱ football_
+
 _❖ ── [ OWNER & DEV ] ── ❖_
 _║ ⊱ diagnose_
 _║ ⊱ update_
