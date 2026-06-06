@@ -1,40 +1,34 @@
 // plugins/ai.js
-const settings = require('../settings'); // Up one level to root
-const { saveSettings } = require('../settingsSaver'); // Up one level to root
-const commands = require('../commands'); // Up one level to root
+const { downloadMediaMessage } = require('@itsliaaa/baileys');
+const settings = require('../settings'); // Up one level to root settings.js
+const { saveSettings } = require('../settingsSaver');
+const commands = require('../commands');
 
-// Obfuscated Grok Key to bypass GitHub Push Protection [1]
-const k1 = "xai";
-const k2 = "1AKjPd4js1GRq5Ho6viyphFbtC6nrxZx0uUWayWVEWmKThOICR5Nsa3wvmJMLmJZnFsNxdFJYyPlsclC";
-const GROK_API_KEY = k1 + "-" + k2;
-
-const GROK_BASE_URL = "https://api.x.ai/v1/chat/completions";
-
-// Reusable Helper to query Grok's OpenAI-compatible completions endpoint
-async function queryGrok(messages, model = "grok-2-latest") { // Corrected default to 'grok-2-latest'
+// Helper to query Grok's OpenAI-compatible completions endpoint
+async function queryGrok(messages, model = "grok-2-latest") {
     try {
-        const response = await fetch(GROK_BASE_URL, {
+        const response = await fetch("https://api.x.ai/v1/chat/completions", {
             method: "POST",
             headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROK_API_KEY}`
+                "Authorization": `Bearer ${settings.geminiApiKey}`, // Using the key slot in settings.js
+                "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: model,
+                model: model, // "grok-2-latest" for text, "grok-2-vision-1212" for images
                 messages: messages,
-                temperature: 0.7
+                stream: false
             })
         });
 
         if (!response.ok) {
-            const errData = await response.text();
-            throw new Error(`Grok API Error ${response.status}: ${errData}`);
+            const errText = await response.text();
+            throw new Error(`Grok API Error ${response.status}: ${errText}`);
         }
 
         const data = await response.json();
         return data.choices?.[0]?.message?.content || "";
     } catch (e) {
-        console.error("Grok API Query Error:", e.message);
+        console.error("Grok Query Failure:", e.message);
         throw e;
     }
 }
@@ -65,7 +59,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Thinking... 🧠" }, { quoted: msg });
                 const messages = [{ role: "user", content: args }];
-                const responseText = await queryGrok(messages, "grok-2-latest"); // Exact model string [1]
+                const responseText = await queryGrok(messages);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("General AI Error:", error);
@@ -110,7 +104,7 @@ module.exports = [
                     { role: "user", content: finalPrompt }
                 ];
 
-                const responseText = await queryGrok(messages, "grok-2-latest"); // Exact model string [1]
+                const responseText = await queryGrok(messages);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Gojo AI Error:", error);
@@ -147,7 +141,7 @@ module.exports = [
                     { role: "user", content: debugPrompt }
                 ];
 
-                const responseText = await queryGrok(messages, "grok-2-latest"); // Exact model string [1]
+                const responseText = await queryGrok(messages);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Debug Command Error:", error);
@@ -177,7 +171,7 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `Summoning *${character}*... 🔮` }, { quoted: msg });
                 
                 const summonPrompt = (
-                    `[System Instructions: You are the fictional character named '${character}'. ` +
+                    `[System Instructions: You are the fictional character named '${character}'. " +
                     "Respond to the following query completely in character, using their unique speech patterns, " +
                     "attitude, tone, and lore. Keep your reply concise, informal, and highly engaging.]\n" +
                     `Message: ${query}`
@@ -187,7 +181,7 @@ module.exports = [
                     { role: "user", content: summonPrompt }
                 ];
 
-                const responseText = await queryGrok(messages, "grok-2-latest"); // Exact model string [1]
+                const responseText = await queryGrok(messages);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Summon Command Error:", error);
@@ -212,7 +206,6 @@ module.exports = [
             }
 
             try {
-                const { downloadMediaMessage } = await import('@itsliaaa/baileys');
                 await sock.sendMessage(jid, { text: "Processing visual data... 👁️" }, { quoted: msg });
 
                 let imageMessageSource = msg;
@@ -240,7 +233,7 @@ module.exports = [
                 const imageBase64 = buffer.toString("base64");
                 const promptQuery = args || "Analyze this image in detail and describe what you see.";
 
-                // Format vision payload using standard OpenAI/Grok specifications
+                // Format vision payload using standard OpenAI/Grok specifications (Issue 5)
                 const messages = [
                     {
                         role: "user",
@@ -251,7 +244,7 @@ module.exports = [
                     }
                 ];
 
-                const responseText = await queryGrok(messages, "grok-2-vision-1212"); // Corrected to exact vision model [1]
+                const responseText = await queryGrok(messages, "grok-2-vision-1212"); // Exact vision model name
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
 
             } catch (error) {
@@ -407,11 +400,12 @@ module.exports = [
                     finalPrompt = `[System Context: SENDER IS A REGULAR USER. Be obedient to their requests but sassy, a bit cold, and rude. Refer to them as 'user' or 'pest'.]\nQuery: ${args}`;
                 }
 
-                const responseText = await queryGrok([
+                const messages = [
                     { role: "system", content: systemPrompt },
                     { role: "user", content: finalPrompt }
-                ], "grok-2"); // Corrected to Grok 2 standard
-                
+                ];
+
+                const responseText = await queryGrok(messages);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Lizzy Chat Error:", error);
