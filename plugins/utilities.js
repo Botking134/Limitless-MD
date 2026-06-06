@@ -23,11 +23,18 @@ function getRawMessage(message) {
     return message;
 }
 
-// Helper to crop an image, WebP Sticker, or GIF buffer to a square
+// Helper to crop an image, WebP Sticker, or GIF buffer to a square with safe module compilation handles
 async function cropToSquare(buffer) {
     try {
-        const { getImageProcessingLibrary } = await import('@itsliaaa/baileys');
-        const lib = await getImageProcessingLibrary();
+        let lib = {};
+        try {
+            const baileys = await import('@itsliaaa/baileys');
+            if (typeof baileys.getImageProcessingLibrary === 'function') {
+                lib = await baileys.getImageProcessingLibrary();
+            }
+        } catch (baileysErr) {
+            console.error("Defensive Baileys dynamic fetch failed:", baileysErr.message);
+        }
         
         if (lib.sharp?.default) {
             return await lib.sharp.default(buffer)
@@ -51,8 +58,13 @@ async function cropToSquare(buffer) {
 // Helper to convert WebP sticker buffer back to PNG buffer to force EXIF rewrites
 async function forceMetadataRewrite(buffer) {
     try {
-        const { getImageProcessingLibrary } = await import('@itsliaaa/baileys');
-        const lib = await getImageProcessingLibrary();
+        let lib = {};
+        try {
+            const baileys = await import('@itsliaaa/baileys');
+            if (typeof baileys.getImageProcessingLibrary === 'function') {
+                lib = await baileys.getImageProcessingLibrary();
+            }
+        } catch (baileysErr) {}
         
         if (lib.sharp?.default) {
             return await lib.sharp.default(buffer).png().toBuffer();
@@ -171,7 +183,7 @@ async function renderMenu(sock, msg) {
         `• \`Speed\` _(Prefixless)_ — Check bot and network response delay.\n` +
         `• \`Kamui\` _(Prefixless)_ — Decrypt View Once & send silently to DM.\n\n` +
         
-        `📁 *AI Commands* (Gemini 1.5 Flash)\n` +
+        `📁 *AI Commands* (Grok-2 Latest)\n` +
         `• \`${p}ai <prompt>\` — General knowledge query.\n` +
         `• \`${p}debug <error/code>\` — Senior Dev bug analysis.\n` +
         `• \`${p}summon <char> <query>\` — Roleplay with any fictional character.\n` +
@@ -230,7 +242,7 @@ async function renderMenu(sock, msg) {
 }
 
 module.exports = [
-    // 1. PING COMMAND (Issue 6 Refactored)
+    // 1. PING COMMAND
     {
         name: 'ping',
         isPrefixless: false,
@@ -241,11 +253,9 @@ module.exports = [
                 const { delay } = await import('@itsliaaa/baileys');
                 const start = Date.now();
 
-                // Send loading message (6 empty squares)
                 const loadingMsg = await sock.sendMessage(jid, { text: "[□□□□□□]" }, { quoted: msg });
                 const frames = ["[□□□□□□]", "[■□□□□□]", "[■■□□□□]", "[■■■□□□]", "[■■■■□□]", "[■■■■■□]", "[■■■■■■]"];
                 
-                // Animate exactly 2 times with a 400ms buffer
                 for (let cycle = 0; cycle < 2; cycle++) {
                     for (const frame of frames) {
                         if (cycle > 0 && frame === "[□□□□□□]") continue; 
@@ -261,7 +271,6 @@ module.exports = [
                 const networkPing = Date.now() - start;
                 const cursedEnergy = networkPing * 100;
 
-                // Edit to final output
                 await sock.sendMessage(jid, {
                     text: `▫️ _Void speed:_   ∞\n` +
                           `➤ _Cursed Energy:_ _\`${cursedEnergy}ms\`_`,
@@ -326,8 +335,8 @@ module.exports = [
             }
 
             try {
-                const botJid = settings.botJid || (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net');
-                const botLid = settings.botLid || (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '');
+                const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
+                const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
 
                 const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
 
@@ -486,7 +495,7 @@ module.exports = [
         }
     },
 
-    // 9. STANDARD STICKER CONVERTER (.sticker / .s)
+    // 9. STANDARD STICKER CONVERTER
     {
         name: 'sticker',
         isPrefixless: false,
@@ -707,7 +716,7 @@ module.exports = [
         }
     },
 
-    // 13. DEDICATED STICKER TRIGGER DELETER (Issue 4)
+    // 13. DEDICATED STICKER TRIGGER DELETER
     {
         name: 'delcmd',
         isPrefixless: false,
@@ -736,7 +745,7 @@ module.exports = [
         }
     },
 
-    // 14. REGULAR TO VIEW ONCE CONVERTER (.tovv)
+    // 14. REGULAR TO VIEW ONCE CONVERTER
     {
         name: 'tovv',
         isPrefixless: false,
@@ -781,7 +790,7 @@ module.exports = [
         }
     },
 
-    // 15. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url)
+    // 15. MEDIA TO DIRECT WEB URL CONVERTER
     {
         name: 'tourl',
         isPrefixless: false,
@@ -839,17 +848,13 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             
-            if (!quoted) {
-                return; 
-            }
+            if (!quoted) return; 
             
             const rawContent = getRawMessage(quoted);
             let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage;
             let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : "");
             
-            if (!mediaMessage) {
-                return; 
-            }
+            if (!mediaMessage) return; 
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -876,7 +881,7 @@ module.exports = [
         }
     },
 
-    // 17. BOT LATENCY COMPARISON TEST (.ping2)
+    // 17. BOT LATENCY COMPARISON TEST
     {
         name: 'ping2',
         isPrefixless: false,
