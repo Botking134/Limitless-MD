@@ -16,6 +16,9 @@ const devStatePath = path.join(__dirname, 'dev_state.json');
 // Global Cache for deleted message tracking
 global.messageStore = global.messageStore || {};
 
+// Global Cache for spam/antibug block tracking [Mission 13]
+global.spamTracker = global.spamTracker || {};
+
 // Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
     const seconds = Math.floor((Date.now() - ms) / 1000);
@@ -23,6 +26,17 @@ function getAfkDuration(ms) {
     const m = Math.floor((seconds % 3600) / 60);
     const s = seconds % 60;
     return `${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
+}
+
+// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely in background loops
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
 }
 
 async function startBot() {
@@ -299,22 +313,75 @@ async function startBot() {
                         // Protect loopbacks (Don't trigger on bot self-deletions)
                         if (shouldLog && !originalMsg.key.fromMe) {
                             const sender = originalMsg.key.participant || originalMsg.key.remoteJid;
-                            const textContent = originalMsg.message?.conversation || originalMsg.message?.extendedTextMessage?.text || "";
+                            
+                            // Unpack the deleted payload dynamically (Supports nested Ephemerals and View Once)
+                            const rawContent = getRawMessage(originalMsg.message);
+                            if (!rawContent) continue;
 
-                            // Determine targeted forwarding DM
-                            let destJid = `${settings.ownerNumber}@s.whatsapp.net`;
+                            const textContent = rawContent.conversation || 
+                                                rawContent.extendedTextMessage?.text || 
+                                                rawContent.imageMessage?.caption || 
+                                                rawContent.videoMessage?.caption || 
+                                                '';
+
+                            // Clean JID Formatting to strip '+' and spaces from your ownerNumber
+                            const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
+                            let destJid = `${cleanOwnerNum}@s.whatsapp.net`;
                             if (antideleteConfig.logDestination === 'bot') {
                                 destJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
                             }
 
-                            if (textContent) {
+                            const logHeader = `🚨 *ANTIDELETE LOG INTEL:* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                              `👥 *Group/Chat:* @${jid.split('@')[0]}\n` +
+                                              `👤 *Deleted by:* @${sender.split('@')[0]}\n`;
+
+                            // Dynamic Media Download and Forwarding
+                            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+
+                            if (rawContent.imageMessage) {
+                                const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
+                                let buffer = Buffer.from([]);
+                                for await (const chunk of stream) {
+                                    buffer = Buffer.concat([buffer, chunk]);
+                                }
                                 await sock.sendMessage(destJid, { 
-                                    text: `🚨 *ANTIDELETE LOG INTEL:* 🚨\n━━━━━━━━━━━━━━━━━━━\n\n` +
-                                          `👥 *Chat:* @${jid.split('@')[0]}\n` +
-                                          `👤 *Sender:* @${sender.split('@')[0]}\n` +
-                                          `📝 *Deleted Content:* \n\n"${textContent}"`,
+                                    image: buffer, 
+                                    caption: `${logHeader}📷 *Type:* Image Status/Media\n📝 *Caption:* "${textContent}"`,
                                     mentions: [jid, sender]
                                 });
+                            } 
+                            else if (rawContent.videoMessage) {
+                                const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
+                                let buffer = Buffer.from([]);
+                                for await (const chunk of stream) {
+                                    buffer = Buffer.concat([buffer, chunk]);
+                                }
+                                const mime = rawContent.videoMessage.mimetype || "video/mp4";
+                                await sock.sendMessage(destJid, { 
+                                    video: buffer, 
+                                    mimetype: mime,
+                                    caption: `${logHeader}🎥 *Type:* Video Status/Media\n📝 *Caption:* "${textContent}"`,
+                                    mentions: [jid, sender]
+                                });
+                            } 
+                            else if (rawContent.audioMessage) {
+                                const stream = await downloadContentFromMessage(rawContent.audioMessage, 'audio');
+                                let buffer = Buffer.from([]);
+                                for await (const chunk of stream) {
+                                    buffer = Buffer.concat([buffer, chunk]);
+                                }
+                                const mime = rawContent.audioMessage.mimetype || "audio/ogg; codecs=opus";
+                                await sock.sendMessage(destJid, { text: `${logHeader}🎵 *Type:* Deleted Voice Note/Audio`, mentions: [jid, sender] });
+                                await sock.sendMessage(destJid, { audio: buffer, mimetype: mime, ptt: rawContent.audioMessage.ptt || false });
+                            }
+                            else {
+                                // Default Text Forwarding
+                                if (textContent) {
+                                    await sock.sendMessage(destJid, { 
+                                        text: `${logHeader}💬 *Type:* Deleted Text message\n📝 *Content:* \n\n"${textContent}"`,
+                                        mentions: [jid, sender]
+                                    });
+                                }
                             }
                         }
                     }
@@ -402,7 +469,66 @@ async function startBot() {
                 delete global.messageStore[storeKeys[0]]; // Purge old caching slots
             }
 
-            // 1. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
+            if (!Array.isArray(settings.owners)) {
+                settings.owners = [settings.ownerNumber];
+            }
+
+            const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
+            const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
+            const isAuthorized = isOwner || isSudo;
+
+            // 1. AUTOMATED STATUS BROADCAST OBSERVER [Mission 15 Engine]
+            if (jid === 'status@broadcast') {
+                // A. Auto-view status
+                if (settings.autoviewstatus === 'on') {
+                    try {
+                        await sock.readMessages([msg.key]);
+                    } catch (e) {}
+                }
+                // B. Auto-react to status
+                if (settings.autoreactstatus === 'on') {
+                    try {
+                        const emoji = settings.statusemoji || '❄';
+                        await sock.sendMessage('status@broadcast', { react: { text: emoji, key: msg.key } });
+                    } catch (e) {}
+                }
+                return; // Halt all command evaluations for status updates
+            }
+
+            // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR [Mission 13 Engine]
+            if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe) {
+                const now = Date.now();
+                if (!global.spamTracker[senderNumber]) {
+                    global.spamTracker[senderNumber] = [];
+                }
+                global.spamTracker[senderNumber].push(now);
+
+                // Filter out logs older than 3 seconds
+                global.spamTracker[senderNumber] = global.spamTracker[senderNumber].filter(t => now - t <= 3000);
+
+                if (global.spamTracker[senderNumber].length >= 5) {
+                    try {
+                        // Warn them before blocking
+                        await sock.sendMessage(jid, { 
+                            text: `can't bypass my infinity huh? @${senderNumber}`, 
+                            mentions: [senderJid] 
+                        }, { quoted: msg });
+
+                        // Block contact natively on WhatsApp
+                        await sock.updateBlockStatus(senderJid, 'block');
+
+                        // Clear chat flow entirely
+                        await sock.chatModify({ delete: true, lastMessages: [msg] }, jid);
+
+                        delete global.spamTracker[senderNumber];
+                    } catch (blockErr) {
+                        console.error("Antibug blocking failed:", blockErr.message);
+                    }
+                    return; // Terminate execution immediately
+                }
+            }
+
+            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions (Mission 9)
             const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
             if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
                 const session = global.forwardSessions[quotedMsgId];
@@ -431,6 +557,50 @@ async function startBot() {
                     await sock.sendMessage(jid, { text: `❌ Forwarding session failed: ${e.message}` }, { quoted: msg });
                 }
                 return; 
+            }
+
+            // 4. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR [Mission 12 Engine]
+            const isViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
+            if (isViewOnce && settings.antiviewonce === 'on' && !msg.key.fromMe) {
+                try {
+                    const rawContent = getRawMessage(msg.message);
+                    const mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage;
+                    const mediaType = rawContent?.imageMessage ? "image" : "video";
+
+                    if (mediaMessage) {
+                        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                        
+                        const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) {
+                            buffer = Buffer.concat([buffer, chunk]);
+                        }
+
+                        const antideleteConfig = settings.antidelete || { logDestination: 'bot' };
+                        const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
+                        let destJid = `${cleanOwnerNum}@s.whatsapp.net`;
+                        if (antideleteConfig.logDestination === 'bot') {
+                            destJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        }
+
+                        const captionText = mediaMessage.caption || "";
+                        const logHeader = `👁️ *ANTIVIEWONCE AUTO-DECRYPT LOG:* 👁️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                          `👥 *Chat Origin:* @${jid.split('@')[0]}\n` +
+                                          `👤 *Sender:* @${senderNumber}\n` +
+                                          `📝 *Caption:* "${captionText}"\n`;
+
+                        const payload = {
+                            caption: logHeader,
+                            mentions: [jid, senderJid]
+                        };
+                        payload[mediaType] = buffer;
+                        if (mediaType === "video") payload.mimetype = mediaMessage.mimetype || "video/mp4";
+
+                        await sock.sendMessage(destJid, payload);
+                    }
+                } catch (e) {
+                    console.error("View Once extraction error:", e.message);
+                }
             }
 
             if (isGroup && !msg.key.fromMe) {
@@ -486,14 +656,6 @@ async function startBot() {
                     }
                 }
             }
-
-            if (!Array.isArray(settings.owners)) {
-                settings.owners = [settings.ownerNumber];
-            }
-
-            const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
-            const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
-            const isAuthorized = isOwner || isSudo;
 
             if (settings.afk?.[senderNumber] && !trimmedMessage.startsWith(`${settings.prefix}afk`)) {
                 const afkState = settings.afk[senderNumber];
@@ -772,5 +934,4 @@ async function startBot() {
     });
 }
 
-// Attach Event Observers directly onto exported runner to ensure hot-reload stability
 module.exports = { startBot };
