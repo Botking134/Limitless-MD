@@ -87,7 +87,7 @@ module.exports = [
                         "👤 *Owner Name:* [Insert Character Name]\n" +
                         "🎖️ *Position:* [Insert position, e.g. Captain of Division 10, Vizored, etc.]\n" +
                         "💮 *Bankai Name:* [Insert Bankai Name]\n\n" +
-                        "🔮 *Bankai Abilities:* \n[Provide a short detailed summary on its specific special abilities, offensive traits, and deployment factors.]\n\n" +
+                        "🔮 *Bankai Abilities:* \n[Provide a short detailed summary on its special abilities, offensive traits, and deployment factors.]\n\n" +
                         "Strict rule: No chat filler. If rule 1 or rule 2 is triggered, output only that exact string statement.";
                     
                     userPrompt = `Analyze character query: "${targetInput}"`;
@@ -601,7 +601,7 @@ module.exports = [
             // Render interactive dialogue layout formatted in pure Sans-Serif mathematics blocks
             const interactiveText = 
                 `𝖦𝗎𝖾𝗌𝗌 𝖨 𝗁𝖺𝖿𝖾 𝗍𝗈 𝖽𝗈 𝗂𝗍 𝗇𝗈𝗐...\n\n` +
-                `👉 *𝖢handlers 𝖮𝗎𝗍𝗉𝗎𝗍 𝖫𝖾𝗏𝖾𝗅:* \n` +
+                `👉 *𝖢handlers 𝖮𝗎𝗍𝗉𝗎𝗍 𝖫𝖾𝗏𝖾lh:* \n` +
                 `• Reply *100%* \n` +
                 `• Reply *200%*`;
 
@@ -644,7 +644,7 @@ module.exports = [
 
                         // Phase 2 Edit Shift
                         await sock.sendMessage(jid, {
-                            text: `𝖳𝗁𝖾𝗇 𝗌𝗆𝖺𝗌𝗁 𝗍𝗈𝗀𝖾𝗍𝗁𝖾𝗋 𝗍𝗁𝗈𝗌𝖾 𝗍𝗐𝗈 𝖽𝗂𝖿𝖿𝖾𝗋𝖾𝗇𝗍 𝖾𝗑𝗉𝗋𝖾𝗌𝗌𝗂𝗈𝗇𝗌 𝗈𝖿 𝗂𝗇𝖿𝗂𝗇𝗂𝗍𝗒 𝗍𝗈 𝖼𝗋𝖾𝖺𝗍𝖾 𝖺𝗇𝖽 𝗉𝗎𝗌𝗁 𝗈𝗎𝗍 𝗂𝗆𝖺𝗀𝗂𝗇𝖺𝗋𝗒 𝗆𝖺𝗌𝗌`,
+                            text: `𝖳𝗁𝖾𝗇 𝗌𝗆𝖺𝗌𝗁 𝗍𝗈𝗀𝖾𝗍𝗁𝖾𝗋 𝗍𝗁𝗈𝗌𝖾 𝗍𝗐𝗈 𝖽𝗂𝖿𝖿𝖾𝗋𝖾𝗇𝗍 𝖾𝗑𝗉𝗋𝖾𝗌𝗌𝗂𝗈𝗇𝗌 𝗈𝖿 𝗂𝗇𝖿𝗂𝗇𝗂𝗍𝗒 𝗍𝗈 𝖼𝗋𝖾𝖺𝗍𝖾 𝖺𝗇𝖽 𝗉𝗎𝗌𝗁 𝗈𝗎tat 𝗂𝗆𝖺𝗀𝗂𝗇𝖺𝗋𝗒 𝗆𝖺𝗌𝗌`,
                             edit: currentMsg.key
                         });
                         await sleep(3000);
@@ -700,7 +700,7 @@ module.exports = [
 
                         // Phase 5 Edit Shift
                         await sock.sendMessage(jid, {
-                            text: `𝖡𝖾𝗍𝗐𝖾𝖾𝗇 𝖿𝗋𝗈𝗇𝗍 𝖺𝗇𝖽 𝖻𝖺𝖼𝗄!!!!\n             🫸🔴🔵🫷`,
+                            text: `𝖡𝖾𝗍𝗐𝖾𝖾𝗇 𝖿𝗋𝗈𝗇𝗍 𝖺𝗇𝖽 𝖻𝖺𝖼keep!!!!\n             🫸🔴🔵🫷`,
                             edit: currentMsg.key
                         });
                         await sleep(3000);
