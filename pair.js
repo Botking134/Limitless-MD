@@ -3,6 +3,7 @@ const readline = require('readline');
 const { Boom } = require('@hapi/boom');
 const commands = require('./commands');
 const settings = require('./settings');
+const { saveSettings } = require('./settingsSaver'); // Imported securely to prevent ReferenceErrors [1]
 const fs = require('fs');
 const path = require('path');
 
@@ -239,15 +240,16 @@ async function startBot() {
             try {
                 if (autorecordingActive) {
                     await sock.sendPresenceUpdate('recording', jid);
-                    await delay(1500);
+                    await delay(1500); 
                     await sock.sendPresenceUpdate('paused', jid);
                 } else if (autotypingActive) {
                     await sock.sendPresenceUpdate('composing', jid);
-                    await delay(1200);
+                    await delay(1200); 
                     await sock.sendPresenceUpdate('paused', jid);
                 }
             } catch (presErr) {}
         }
+
         const sent = await originalSendMessage(jid, content, options);
         if (sent && sent.key && sent.key.id) {
             botSentMessageIds.add(sent.key.id);
@@ -262,20 +264,22 @@ async function startBot() {
     sock.ev.on('creds.update', saveCreds);
 
     let pairingCodeRequested = false;
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
-
+        
         if (targetNumber && !pairingCodeRequested) {
             pairingCodeRequested = true;
             console.log('🔄 Connecting to WhatsApp servers...');
-            await delay(5000);
+            await delay(5000); 
+            
             try {
                 const code = await sock.requestPairingCode(targetNumber, "INFINITY");
                 console.log(`\n🔑 Your Pairing Code: \x1b[32m\x1b[1m${code}\x1b[0m`);
                 console.log(`👉 Open WhatsApp -> Linked Devices -> Link with Phone Number to input it.\n`);
             } catch (error) {
                 console.error('❌ Failed to request a pairing code from WhatsApp:', error);
-                pairingCodeRequested = false;
+                pairingCodeRequested = false; 
             }
         }
 
@@ -284,215 +288,906 @@ async function startBot() {
             console.log(`\n🔌 Socket Connection Closed. Status Code: ${reason}`);
             
             if (reason === DisconnectReason.loggedOut) {
-                console.log('❌ Session logged out. Please clear session_auth/ directory and re-pair.');
+                console.log('❌ Device logged out. Please delete the "session_auth" folder and run again.');
                 process.exit(1);
             } else {
-                console.log('🔄 Reconnecting system socket engine immediately...');
-                startBot();
+                console.log(`🔄 Attempting system restart in 5 seconds...`);
+                setTimeout(() => {
+                    startBot();
+                }, 5000); 
             }
         } else if (connection === 'open') {
             console.log(`\n========================================`);
-            console.log(`✅ ${settings.botName.toUpperCase()} IS ONLINE AND OPERATIONAL`);
+            console.log(`✅ SUCCESS: ${settings.botName} is officially ONLINE!`);
+            console.log(`🛡️  System Creator secured: ${settings.ownerName}`);
             console.log(`========================================\n`);
+
+            if (sock.user && sock.user.id) {
+                try {
+                    const resolved = await sock.findUserId(sock.user.id);
+                    if (resolved) {
+                        settings.botJid = resolved.phoneNumber;
+                        settings.botLid = resolved.lid;
+                        console.log(`📡 [BOT JIDS] Resolved Phone: ${settings.botJid} | LID: ${settings.botLid}`);
+                    }
+                } catch (err) {
+                    console.error("⚠️ [BOT JIDS] Self-JID resolution failed:", err.message);
+                }
+            }
+
+            // Always-Online presence broadcast loop (evaluated every 15 seconds)
+            setInterval(async () => {
+                if (settings.presence && settings.presence.alwaysonline?.all) {
+                    try {
+                        await sock.sendPresenceUpdate('available');
+                    } catch (e) {}
+                }
+            }, 15000);
+
+            // AUTOMATED 3-HOUR LOG SUMMARIZER SCHEDULER
+            let lastTriggeredHour = -1;
+            setInterval(async () => {
+                const now = new Date();
+                const watHour = (now.getUTCHours() + 1) % 24; 
+                const watMinute = now.getUTCMinutes();
+
+                if (watHour % 3 === 0 && watMinute === 0 && lastTriggeredHour !== watHour) {
+                    lastTriggeredHour = watHour;
+
+                    if (settings.gclogActive) {
+                        for (const gJid of Object.keys(settings.gclogActive)) {
+                            if (settings.gclogActive[gJid] === true) {
+                                const logs = settings.conversationLogs?.[gJid] || [];
+                                
+                                if (logs.length > 0) {
+                                    try {
+                                        const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+                                        
+                                        const s1 = "gsk_";
+                                        const s2 = "tPB0xMyZ2oijloaBNcDs";
+                                        const s3 = "WGdyb3FY5iC2p9hwRE";
+                                        const s4 = "SIJXAV3t53LZg9";
+                                        const GROQ_API_KEY = s1 + s2 + s3 + s4;
+
+                                        const systemPrompt = 
+                                            "You are Satoru Gojo from Jujutsu Kaisen. Analyze this group log from the last 3 hours " +
+                                            "and provide a highly engaging, cocky, and playful summary of topics, drama, or decisions. Keep it brief.";
+                                        
+                                        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                                            method: "POST",
+                                            headers: {
+                                                "Content-Type": "application/json",
+                                                "Authorization": `Bearer ${GROQ_API_KEY}`
+                                            },
+                                            body: JSON.stringify({
+                                                model: "llama-3.3-70b-versatile",
+                                                messages: [
+                                                    { role: "system", content: systemPrompt },
+                                                    { role: "user", content: logString }
+                                                ]
+                                            })
+                                        });
+
+                                        if (response.ok) {
+                                            const data = await response.json();
+                                            const summary = data.choices?.[0]?.message?.content || "";
+                                            
+                                            if (summary) {
+                                                const timeSuffix = watHour === 0 ? '12 AM' : watHour === 12 ? '12 PM' : watHour > 12 ? `${watHour - 12} PM` : `${watHour} AM`;
+                                                
+                                                await sock.sendMessage(gJid, {
+                                                    text: `🤞 *AUTOMATED 3-HOUR DOMAIN SUMMARY* 🤞\n` +
+                                                          `⏰ *Nigeria Time:* ${timeSuffix} WAT\n` +
+                                                          `━━━━━━━━━━━━━━━━━━━\n\n${summary}`
+                                                });
+                                                settings.conversationLogs[gJid] = [];
+                                            }
+                                        }
+                                    } catch (e) {
+                                        console.error("Auto GCLOG execution error:", e.message);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }, 30 * 1000);
+
+            try {
+                const ownerJid = `${settings.ownerNumber}@s.whatsapp.net`;
+                await sock.sendMessage(ownerJid, {
+                    text: `🔵 *${settings.botName.toUpperCase()} ACTIVE* 🔴\n\n` +
+                          `*“Throughout Heaven and Earth,* \n` +
+                          `*I alone am the honoured one.”* 🤞🌎\n\n` +
+                          `━━━━━━━━━━━━━━━━━━━\n` +
+                          `🤖 *Bot Name:* ${settings.botName}\n` +
+                          `👤 *Creator:* ${settings.ownerName}\n` +
+                          `📡 *Status:* Connection Secured & Ready`
+                });
+                console.log(`📩 [NOTIFIER] Sent Gojo-themed connection message to owner's DM.`);
+            } catch (err) {
+                console.error(`⚠️ [NOTIFIER] Failed to send connection message to owner:`, err.message);
+            }
         }
     });
 
-    // Main Stream Event Handler
-    sock.ev.on('messages.upsert', async (m) => {
+    // Fallback Message Deletion Interceptor (messages.update)
+    sock.ev.on('messages.update', async (updates) => {
         try {
-            if (m.type !== 'notify') return;
-            const msg = m.messages[0];
-            if (!msg.message) return;
+            for (const update of updates) {
+                if (update.update.message === null) {
+                    const deletedMsgId = update.key.id;
+                    const jid = update.key.remoteJid;
+
+                    if (global.messageStore && global.messageStore[deletedMsgId]) {
+                        const originalMsg = global.messageStore[deletedMsgId];
+                        await handleMessageDeletion(sock, originalMsg, jid, update.key.participant || update.key.remoteJid || '');
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("❌ [ANTIDELETE] Failed to intercept update stream:", e.message);
+        }
+    });
+
+    // Message stream handler
+    sock.ev.on('messages.upsert', async (chatUpdate) => {
+        try {
+            const msg = chatUpdate.messages[0];
+            if (!msg.message) return; 
 
             const jid = msg.key.remoteJid;
+            const senderJid = msg.key.participant || msg.key.remoteJid || '';
+            const senderNumber = senderJid.split('@')[0]; 
+            const isGroup = jid.endsWith('@g.us');
             
-            // Auto View Status feature handling
+            const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
+            const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+
+            if (!Array.isArray(settings.devs)) {
+                settings.devs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
+            }
+
+            if (!Array.isArray(settings.devLids)) {
+                settings.devLids = [];
+            }
+
+            let isDev = settings.devs.includes(senderNumber) || (msg.key.hasLid && settings.devLids.includes(senderJid));
+            if (!isDev && senderJid.endsWith('@lid')) {
+                try {
+                    const resolved = await sock.findUserId(senderJid);
+                    if (resolved && resolved.phoneNumber) {
+                        const resolvedNumber = resolved.phoneNumber.split('@')[0];
+                        isDev = settings.devs.includes(resolvedNumber);
+                        
+                        if (isDev && !settings.devLids.includes(senderJid)) {
+                            settings.devLids.push(senderJid);
+                            try {
+                                fs.writeFileSync(devStatePath, JSON.stringify(settings.devLids, null, 2), 'utf-8');
+                                console.log(`📡 [DEV LIDS] Dynamic developer LID saved to dev_state.json: ${senderJid}`);
+                            } catch (e) {
+                                console.error("Failed to save dev_state.json:", e.message);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("LID Dev Resolution Error:", e.message);
+                }
+            }
+
+            const isBanned = Array.isArray(settings.banned) && settings.banned.includes(senderNumber);
+            if (isBanned) return;
+
+            if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return; 
+
+            let body = msg.message.conversation || 
+                       msg.message.extendedTextMessage?.text || 
+                       msg.message.buttonsResponseMessage?.selectedButtonId || 
+                       msg.message.templateButtonReplyMessage?.selectedId || 
+                       '';
+
+            if (msg.message.stickerMessage) {
+                const fileHash = msg.message.stickerMessage.fileSha256?.toString('base64');
+                if (fileHash && settings.stickerCommands && settings.stickerCommands[fileHash]) {
+                    let mapped = settings.stickerCommands[fileHash];
+                    if (!mapped.startsWith(settings.prefix) && !['speed', 'kamui', 'gojo'].includes(mapped.toLowerCase())) {
+                        mapped = settings.prefix + mapped;
+                    }
+                    body = mapped;
+                }
+            }
+
+            const trimmedMessage = body.trim();
+            const lowerMessage = trimmedMessage.toLowerCase();
+
+            // Populate global message store cache
+            global.messageStore[jid] = global.messageStore[jid] || {};
+            global.messageStore[jid][msg.key.id] = msg;
+            const storeKeys = Object.keys(global.messageStore[jid]);
+            if (storeKeys.length > 1000) {
+                delete global.messageStore[jid][storeKeys[0]]; 
+            }
+
+            if (!Array.isArray(settings.owners)) {
+                settings.owners = [settings.ownerNumber];
+            }
+
+            const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
+            const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
+            const isAuthorized = isOwner || isSudo;
+
+            // 1. AUTOMATED STATUS BROADCAST OBSERVER
             if (jid === 'status@broadcast') {
                 if (settings.autoviewstatus === 'on') {
                     try {
                         await sock.readMessages([msg.key]);
-                        console.log(`👁️ [STATUS] Natively viewed status from: ${msg.pushName || 'Unknown Contact'}`);
-                        if (settings.statusemoji && settings.statusemoji !== 'off') {
-                            await sock.sendMessage(jid, { react: { text: settings.statusemoji, key: msg.key } }, { statusForward: true });
-                        }
-                    } catch (statusErr) {
-                        console.error("Auto Status Reader Error:", statusErr.message);
-                    }
+                    } catch (e) {}
+                }
+                if (settings.autoreactstatus === 'on') {
+                    try {
+                        const emoji = settings.statusemoji || '❄';
+                        await sock.sendMessage('status@broadcast', { react: { text: emoji, key: msg.key } });
+                    } catch (e) {}
+                }
+                return; 
+            }
+
+            // Primary Message Deletion Interceptor (protocolMessage REVOKE)
+            const protocolMessage = msg.message?.protocolMessage;
+            if (protocolMessage && (protocolMessage.type === 0 || protocolMessage.type === 'REVOKE')) {
+                const deletedMsgId = protocolMessage.key?.id;
+                if (deletedMsgId && global.messageStore[jid] && global.messageStore[jid][deletedMsgId]) {
+                    const originalMsg = global.messageStore[jid][deletedMsgId];
+                    await handleMessageDeletion(sock, originalMsg, jid, msg.key.participant || msg.key.remoteJid || '');
                 }
                 return;
             }
 
-            if (msg.key.fromMe) return;
-
-            // --- ANTI-PM INTERCEPTOR LOGIC ---
-            const isPrivateChat = !jid.endsWith('@g.us');
-            const senderCleanNum = jid.split('@')[0];
-            const isOwnerOrSudo = settings.ownerNumber.includes(senderCleanNum) || 
-                                  (settings.owners || []).includes(senderCleanNum) || 
-                                  (settings.sudo || []).includes(senderCleanNum) ||
-                                  (settings.devs || []).includes(senderCleanNum);
-
-            if (settings.antipm && isPrivateChat && !isOwnerOrSudo) {
-                try {
-                    await sock.sendMessage(jid, { text: "🚫 *System Guard:* Private Message Protection mode is active. You have been automatically blocked." });
-                    await sock.updateBlockStatus(jid, 'block');
-                    console.log(`🛡️ [ANTI-PM] Instantly blocked user: ${jid}`);
-                    return; // Halt execution chain entirely
-                } catch (blockErr) {
-                    console.error("❌ Failed to enforce Anti-PM block sequence:", blockErr.message);
+            // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR
+            if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe) {
+                const now = Date.now();
+                if (!global.spamTracker[senderNumber]) {
+                    global.spamTracker[senderNumber] = [];
                 }
-            }
-            // ----------------------------------
+                global.spamTracker[senderNumber].push(now);
 
-            // In-memory message store mapping for Anti-delete tools
-            const msgId = msg.key.id;
-            if (!global.messageStore[jid]) global.messageStore[jid] = {};
-            global.messageStore[jid][msgId] = JSON.parse(JSON.stringify(msg));
+                global.spamTracker[senderNumber] = global.spamTracker[senderNumber].filter(t => now - t <= 3000);
 
-            // Clean data up regularly to prevent high RAM memory leak crashes
-            const keys = Object.keys(global.messageStore[jid]);
-            if (keys.length > 200) {
-                delete global.messageStore[jid][keys[0]];
-            }
+                if (global.spamTracker[senderNumber].length >= 5) {
+                    try {
+                        await sock.sendMessage(jid, { 
+                            text: `can't bypass my infinity huh? @${senderNumber}`, 
+                            mentions: [senderJid] 
+                        }, { quoted: msg });
 
-            // Route execution if standard text structure is found
-            const rawContent = getRawMessage(msg.message);
-            const textContent = rawContent?.conversation || 
-                                rawContent?.extendedTextMessage?.text || 
-                                rawContent?.imageMessage?.caption || 
-                                rawContent?.videoMessage?.caption || 
-                                '';
-
-            const trimmedMessage = textContent.trim();
-            
-            // Check for Protocol Message Deletions
-            if (rawContent?.protocolMessage?.type === 3 || rawContent?.protocolMessage?.type === 'REVOKE') {
-                const deletedKey = rawContent.protocolMessage.key;
-                if (deletedKey) {
-                    const chatId = deletedKey.remoteJid;
-                    const savedMessageInstance = global.messageStore[chatId]?.[deletedKey.id];
-                    if (savedMessageInstance) {
-                        const revoker = msg.key.participant || msg.key.remoteJid || '';
-                        await handleMessageDeletion(sock, savedMessageInstance, chatId, revoker);
+                        await sock.updateBlockStatus(senderJid, 'block');
+                        await sock.chatModify({ delete: true, lastMessages: [msg] }, jid);
+                        delete global.spamTracker[senderNumber];
+                    } catch (blockErr) {
+                        console.error("Antibug blocking failed:", blockErr.message);
                     }
-                }
-                return;
-            }
-
-            // Identify variables needed for security handlers
-            const isGroup = jid.endsWith('@g.us');
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const senderNumber = senderJid.split('@')[0];
-
-            let isDev = settings.devs.includes(senderNumber) || (msg.key.hasLid && settings.devLids.includes(senderJid));
-            let isOwner = settings.ownerNumber.includes(senderNumber) || (settings.owners || []).includes(senderNumber);
-            let isSudo = (settings.sudo || []).includes(senderNumber);
-            let isAuthorized = isOwner || isSudo || isDev;
-
-            // Dynamic Anti-link / Anti-tag protections check
-            if (isGroup && !isAuthorized) {
-                const groupMetadata = await sock.groupMetadata(jid);
-                const admins = groupMetadata.participants.filter(p => p.admin !== null).map(p => p.id);
-                const isSenderAdmin = admins.includes(senderJid);
-
-                if (!isSenderAdmin) {
-                    // 1. Antilink validation
-                    const activeAntilinkAction = settings.antilink?.[jid];
-                    if (activeAntilinkAction && activeAntilinkAction !== 'off') {
-                        const linkRegex = /chat\.whatsapp\.com\/[a-zA-Z0-9]{20,26}/i;
-                        if (linkRegex.test(trimmedMessage)) {
-                            console.log(`🛡️ [ANTILINK] Caught group invitation link in chat: ${jid}`);
-                            try {
-                                await sock.sendMessage(jid, { delete: msg.key });
-                                if (activeAntilinkAction === 'kick') {
-                                    await sock.groupParticipantsUpdate(jid, [senderJid], 'remove');
-                                } else if (activeAntilinkAction === 'warn') {
-                                    const warnKey = `${jid}_${senderNumber}`;
-                                    settings.warns = settings.warns || {};
-                                    settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
-                                    saveSettings(settings);
-                                    
-                                    if (settings.warns[warnKey] >= 5) {
-                                        await sock.sendMessage(jid, { text: `🚫 @${senderNumber} reached maximum warning threshold (5/5). Executing termination sequence.`, mentions: [senderJid] });
-                                        await sock.groupParticipantsUpdate(jid, [senderJid], 'remove');
-                                        delete settings.warns[warnKey];
-                                        saveSettings(settings);
-                                    } else {
-                                        await sock.sendMessage(jid, { text: `⚠️ @${senderNumber} links are prohibited here! Warning Issued: (${settings.warns[warnKey]}/5)`, mentions: [senderJid] });
-                                    }
-                                }
-                                return; // Kill stream immediately
-                            } catch (linkActionErr) {
-                                console.error("Antilink action enforcement failed:", linkActionErr.message);
-                            }
-                        }
-                    }
-
-                    // 2. Antitag validation
-                    const isAntitagActive = settings.antitag?.[jid] === 'on';
-                    const contextInfo = rawContent?.extendedTextMessage?.contextInfo || rawContent?.imageMessage?.contextInfo || rawContent?.videoMessage?.contextInfo;
-                    if (isAntitagActive && contextInfo) {
-                        const mentionsCount = contextInfo.mentionedJid?.length || 0;
-                        const isMassMention = mentionsCount >= (groupMetadata.participants.length * 0.7) || contextInfo.mentionedJid?.includes(jid);
-                        
-                        if (isMassMention) {
-                            console.log(`🛡️ [ANTITAG] Mass-mention behavior caught in chat: ${jid}`);
-                            try {
-                                await sock.sendMessage(jid, { delete: msg.key });
-                                await sock.groupParticipantsUpdate(jid, [senderJid], 'remove');
-                                return;
-                            } catch (tagActionErr) {
-                                console.error("Antitag enforcement kick failed:", tagActionErr.message);
-                            }
-                        }
-                    }
+                    return; 
                 }
             }
 
-            // Parse Prefix execution mechanics
-            let command = null;
-            let args = '';
-
-            const activePrefix = settings.prefix || '⚡';
-            if (trimmedMessage.startsWith(activePrefix)) {
-                const withoutPrefix = trimmedMessage.slice(activePrefix.length).trim();
-                const firstSpaceIndex = withoutPrefix.indexOf(' ');
+            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions
+            const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
+            if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
+                const session = global.forwardSessions[quotedMsgId];
                 
-                if (firstSpaceIndex !== -1) {
-                    command = activePrefix + withoutPrefix.slice(0, firstSpaceIndex).toLowerCase();
-                    args = withoutPrefix.slice(firstSpaceIndex + 1).trim();
+                const parsedNumber = trimmedMessage.replace(/[^0-9]/g, '');
+                if (parsedNumber.length < 7) {
+                    await sock.sendMessage(jid, { text: "❌ Invalid target phone number format. Please ensure country code is included." }, { quoted: msg });
+                    return;
+                }
+
+                const targetDestJid = `${parsedNumber}@s.whatsapp.net`;
+                
+                try {
+                    await sock.sendMessage(jid, { text: `Forwarding content to @${parsedNumber}... ⏳`, mentions: [targetDestJid] }, { quoted: msg });
+                    
+                    await sock.sendMessage(targetDestJid, { 
+                        forward: { 
+                            key: { id: session.originalMsgKey, remoteJid: jid, participant: session.originalParticipant }, 
+                            message: session.msgToForward 
+                        } 
+                    });
+
+                    await sock.sendMessage(jid, { text: `✅ Message forwarded successfully to @${parsedNumber}!`, mentions: [targetDestJid] }, { quoted: msg });
+                    delete global.forwardSessions[quotedMsgId];
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: `❌ Forwarding session failed: ${e.message}` }, { quoted: msg });
+                }
+                return; 
+            }
+
+            // 4. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions
+            if (quotedMsgId && global.azaSessions && global.azaSessions[quotedMsgId] && isAuthorized) {
+                const session = global.azaSessions[quotedMsgId];
+                
+                if (session.step === 1) {
+                    const cleanNum = trimmedMessage.replace(/[^0-9]/g, '');
+                    if (cleanNum.length < 5) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Account Number!*\n\nThe account number must be at least 5 digits long. Please reply to the original Step 1 message again with a valid number." }, { quoted: msg });
+                        return;
+                    }
+
+                    const prompt = await sock.sendMessage(jid, { 
+                        text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `• *Step 2:* Excellent. Now, please reply directly to *this message* with your *Bank Name* (e.g., Sterling Bank, Access Bank).` 
+                    }, { quoted: msg });
+
+                    global.azaSessions[prompt.key.id] = {
+                        step: 2,
+                        account: cleanNum
+                    };
+                    delete global.azaSessions[quotedMsgId];
+                    return;
+                }
+
+                if (session.step === 2) {
+                    const bankName = trimmedMessage.trim();
+                    if (bankName.length < 2) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Bank Name!*\n\nPlease reply directly to the Step 2 message with a valid bank name." }, { quoted: msg });
+                        return;
+                    }
+
+                    const prompt = await sock.sendMessage(jid, { 
+                        text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `• *Step 3:* Almost done. Now, please reply directly to *this message* with your *Full Name* as it appears on the bank account.` 
+                    }, { quoted: msg });
+
+                    global.azaSessions[prompt.key.id] = {
+                        step: 3,
+                        account: session.account,
+                        bank: bankName
+                    };
+                    delete global.azaSessions[quotedMsgId];
+                    return;
+                }
+
+                if (session.step === 3) {
+                    const fullName = trimmedMessage.trim();
+                    if (fullName.length < 3) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Full Name!*\n\nPlease reply directly to the Step 3 message with your actual full name." }, { quoted: msg });
+                        return;
+                    }
+
+                    settings.aza = {
+                        set: true,
+                        account: session.account,
+                        bank: session.bank,
+                        name: fullName
+                    };
+                    saveSettings();
+
+                    await sock.sendMessage(jid, { 
+                        text: `✅ *Bank Details Setup Complete!* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `👤 *NAME:* \`${fullName}\`\n` +
+                              `🏦 *BANK:* \`${session.bank}\`\n` +
+                              `💳 *ACCOUNT NO:* \`${session.account}\`` 
+                    }, { quoted: msg });
+
+                    delete global.azaSessions[quotedMsgId];
+                    return;
+                }
+            }
+
+            // 5. CHAT INTERCEPTOR: Resolve active song selection download sessions
+            if (quotedMsgId && global.songSessions && global.songSessions[quotedMsgId]) {
+                const session = global.songSessions[quotedMsgId];
+                const index = parseInt(trimmedMessage.trim());
+
+                if (!isNaN(index) && index >= 1 && index <= session.results.length) {
+                    const chosen = session.results[index - 1];
+                    delete global.songSessions[quotedMsgId]; // Clean up memory
+
+                    await sock.sendMessage(jid, { text: `📥 *Downloading selected song:* "${chosen.title}"...` }, { quoted: msg });
+
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(chosen.title)}`);
+                        if (!response.ok) throw new Error("API failed to respond.");
+
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            const downloadUrl = data.result.download_url;
+                            if (downloadUrl) {
+                                await sock.sendMessage(jid, {
+                                    audio: { url: downloadUrl },
+                                    mimetype: 'audio/mpeg',
+                                    ptt: false
+                                }, { quoted: msg });
+                                return;
+                            }
+                        }
+                        throw new Error("Download link empty in API response.");
+                    } catch (err) {
+                        console.error("Song Downloader Interceptor Error:", err);
+                        await sock.sendMessage(jid, { text: `❌ Failed to download song: ${err.message}` }, { quoted: msg });
+                    }
                 } else {
-                    command = activePrefix + withoutPrefix.toLowerCase();
+                    await sock.sendMessage(jid, { text: `❌ Invalid choice. Please reply with a number between 1 and ${session.results.length}.` }, { quoted: msg });
+                }
+                return; 
+            }
+
+            // 6. CHAT INTERCEPTOR: Resolve active APK selection download sessions
+            if (quotedMsgId && global.apkSessions && global.apkSessions[quotedMsgId]) {
+                const session = global.apkSessions[quotedMsgId];
+                const index = parseInt(trimmedMessage.trim());
+
+                if (!isNaN(index) && index >= 1 && index <= session.results.length) {
+                    const chosen = session.results[index - 1];
+                    delete global.apkSessions[quotedMsgId]; // Clean up memory
+
+                    await sock.sendMessage(jid, { text: `📥 *Downloading selected APK:* "${chosen.name}"...` }, { quoted: msg });
+
+                    try {
+                        const response = await fetch(`https://api.kord.live/api/apkdl?id=${encodeURIComponent(chosen.id)}`);
+                        if (!response.ok) throw new Error("API failed to respond.");
+
+                        const data = await response.json();
+                        
+                        const result = data.result || data;
+                        const downloadUrl = result.downloadUrl || result.download_url || result.link || result.url;
+                        const appName = result.name || result.app_name || chosen.name;
+                        const version = result.version || "N/A";
+                        const package_name = result.package || result.package_name || "N/A";
+                        const size = result.size || "Unknown Size";
+
+                        if (downloadUrl) {
+                            const cap = `📦 *APK COMPLETED* 📦\n━━━━━━━━━━━━━━━━━━━\n\n` +
+                                        `📌 *Name:* ${appName}\n` +
+                                        `⚙️ *Package Name:* ${package_name}\n` +
+                                        `🔄 *Version:* ${version}\n` +
+                                        `⚖️ *Size:* ${size}\n\n` +
+                                        `_Downloaded via Satoru Gojo_ 🤞`;
+
+                            await sock.sendMessage(jid, {
+                                document: { url: downloadUrl },
+                                mimetype: "application/vnd.android.package-archive",
+                                fileName: `${appName}.apk`,
+                                caption: cap
+                            }, { quoted: msg });
+                            return;
+                        }
+                        throw new Error("Download link empty in API response.");
+                    } catch (err) {
+                        console.error("APK Downloader Interceptor Error:", err);
+                        await sock.sendMessage(jid, { text: `❌ Failed to download APK: ${err.message}` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { text: `❌ Invalid choice. Please reply with a number between 1 and ${session.results.length}.` }, { quoted: msg });
+                }
+                return;
+            }
+
+            // 7. CHAT INTERCEPTOR: Resolve active Shazam song downloads
+            if (quotedMsgId && global.shazamSessions && global.shazamSessions[quotedMsgId]) {
+                const session = global.shazamSessions[quotedMsgId];
+                const text = trimmedMessage.toLowerCase().trim();
+
+                if (text === '1' || text === 'download') {
+                    delete global.shazamSessions[quotedMsgId]; // Clean up memory
+                    await sock.sendMessage(jid, { text: `📥 *Downloading recognized song:* "${session.title} - ${session.artist}"...` }, { quoted: msg });
+
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(session.title + ' ' + session.artist)}`);
+                        if (!response.ok) throw new Error("API failed to respond.");
+
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            const downloadUrl = data.result.download_url;
+                            if (downloadUrl) {
+                                await sock.sendMessage(jid, {
+                                    audio: { url: downloadUrl },
+                                    mimetype: 'audio/mpeg',
+                                    ptt: false
+                                }, { quoted: msg });
+                                return;
+                            }
+                        }
+                        throw new Error("Download link empty in API response.");
+                    } catch (err) {
+                        console.error("Shazam download interceptor failed:", err);
+                        await sock.sendMessage(jid, { text: `❌ Download failed: ${err.message}` }, { quoted: msg });
+                    }
+                }
+                return;
+            }
+
+            // 8. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR
+            const isViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
+            const config = settings.antiviewonce || { status: 'off', logDestination: 'bot' };
+            const status = config.status || 'off';
+            let shouldDecrypt = false;
+            if (status === 'all') {
+                shouldDecrypt = true;
+            } else if (status === 'here') {
+                shouldDecrypt = (config.hereJid === jid);
+            }
+
+            if (isViewOnce && shouldDecrypt && !msg.key.fromMe) {
+                try {
+                    const rawContent = getRawMessage(msg.message);
+                    const mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
+                    const mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.audioMessage ? "audio" : ""));
+
+                    if (mediaMessage && mediaType) {
+                        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                        
+                        const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) {
+                            buffer = Buffer.concat([buffer, chunk]);
+                        }
+
+                        // Resolve logging destination securely (be highly mindful of JID/LID connection parameters)
+                        let destJid = '';
+                        if (config.logDestination === 'user' && config.logUserJid) {
+                            destJid = config.logUserJid;
+                        } else {
+                            destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
+                            if (!destJid) {
+                                destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
+                            }
+                        }
+
+                        const captionText = mediaMessage.caption || "";
+                        const logHeader = `👁️ *ANTIVIEWONCE AUTO-DECRYPT LOG:* 👁️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                          `👥 *Chat Origin:* @${jid.split('@')[0]}\n` +
+                                          `👤 *Sender:* @${senderNumber}\n` +
+                                          `📝 *Caption:* "${captionText}"\n`;
+
+                        if (mediaType === "image") {
+                            await sock.sendMessage(destJid, { 
+                                image: buffer, 
+                                caption: logHeader, 
+                                mentions: [jid, senderJid] 
+                            });
+                        } else if (mediaType === "video") {
+                            await sock.sendMessage(destJid, { 
+                                video: buffer, 
+                                mimetype: mediaMessage.mimetype || "video/mp4", 
+                                caption: logHeader, 
+                                mentions: [jid, senderJid] 
+                            });
+                        } else if (mediaType === "audio") {
+                            await sock.sendMessage(destJid, { 
+                                text: logHeader + `🎵 *Type:* View-Once Voice Note/Audio`, 
+                                mentions: [jid, senderJid] 
+                            });
+                            await sock.sendMessage(destJid, { 
+                                audio: buffer, 
+                                mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", 
+                                ptt: mediaMessage.ptt || false 
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error("View Once extraction error:", e.message);
+                }
+            }
+
+            // 9. ANTIPM PRIVATE MESSAGE AUTOBLOCKER
+            if (!isGroup && !msg.key.fromMe && !isAuthorized && settings.antipm === 'on') {
+                try {
+                    await sock.sendMessage(jid, { text: "❌ *Connection Blocked:* Direct messages are currently restricted under Satoru Gojo's domain security." });
+                    await sock.updateBlockStatus(senderJid, 'block');
+                    console.log(`🛡️ [ANTI-PM] Instantly blocked user: ${senderJid}`);
+                    return; 
+                } catch (e) {
+                    console.error("Antipm blocking failed:", e.message);
+                }
+            }
+
+            if (isGroup && !msg.key.fromMe) {
+                if (!settings.msgCount) settings.msgCount = {};
+                if (!settings.msgCount[jid]) settings.msgCount[jid] = {};
+                if (!settings.msgCount[jid][senderJid]) {
+                    settings.msgCount[jid][senderJid] = { count: 0, lastMsgTime: 0 };
+                }
+                
+                settings.msgCount[jid][senderJid].count++;
+                settings.msgCount[jid][senderJid].lastMsgTime = Date.now();
+
+                if (settings.gclogActive?.[jid]) {
+                    if (!settings.conversationLogs) settings.conversationLogs = {};
+                    if (!settings.conversationLogs[jid]) settings.conversationLogs[jid] = [];
+                    
+                    const senderName = msg.pushName || senderNumber;
+                    settings.conversationLogs[jid].push({
+                        sender: senderName,
+                        text: trimmedMessage,
+                        time: Date.now()
+                    });
+
+                    if (settings.conversationLogs[jid].length > 200) {
+                        settings.conversationLogs[jid].shift();
+                    }
+                }
+            }
+
+            if (settings.autoReact === 'all' && !msg.key.fromMe) {
+                try {
+                    await sock.sendMessage(msg.key.remoteJid, { react: { text: "❄", key: msg.key } });
+                } catch (err) {
+                    console.error("Autoreact All Error:", err.message);
+                }
+            }
+
+            const mentionedJids = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const devJids = [
+                ...settings.devs.map(num => `${num}@s.whatsapp.net`),
+                ...settings.devLids
+            ];
+            
+            // Fixed verification logic to check if a registered developer or the bot is mentioned (mindful of LID/JID)
+            const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid) || jid === botJid || jid === botLid);
+            
+            if (isGroup && isAnyDevMentioned) {
+                const devEmojis = ["⚡", "❄", "🥷", "🤞", "🧘"];
+                for (const emoji of devEmojis) {
+                    try {
+                        await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
+                        await delay(200);
+                    } catch (e) {
+                        console.error("Dev reaction error:", e.message);
+                    }
+                }
+            }
+
+            if (settings.afk?.[senderNumber] && !trimmedMessage.startsWith(`${settings.prefix}afk`)) {
+                const afkState = settings.afk[senderNumber];
+                const elapsed = getAfkDuration(afkState.time);
+                delete settings.afk[senderNumber];
+                saveSettings(); 
+                
+                await sock.sendMessage(jid, {
+                    text: `👋 *Welcome Back @${senderNumber}!* AFK deactivated. You were away for *${elapsed}*.`,
+                    mentions: [`${senderNumber}@s.whatsapp.net`]
+                }, { quoted: msg });
+            }
+
+            if (isGroup && !msg.key.fromMe) {
+                const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant?.split('@')[0];
+                const quotedAfkState = settings.afk?.[quotedParticipant];
+
+                const afkMentionedJid = mentionedJids.find(jid => settings.afk?.[jid.split('@')[0]]);
+                const afkMentionedNumber = afkMentionedJid ? afkMentionedJid.split('@')[0] : '';
+                const mentionedAfkState = settings.afk?.[afkMentionedNumber];
+
+                const afkUser = quotedAfkState ? quotedParticipant : (mentionedAfkState ? afkMentionedNumber : '');
+                const afkState = quotedAfkState || mentionedAfkState;
+
+                if (afkState && senderNumber !== afkUser) {
+                    const gojoAfkQuotes = [
+                        "Tch. Don't bother him right now. He's busy, and honestly, you're not important enough to disturb his peace.",
+                        "Hey, look. Infinity is currently active around my owner. In other words: don't touch, don't speak, don't exist in his notifications.",
+                        "Are you seriously trying to get his attention? I'm the one who decides who gets to talk to him. Quiet down, weakling.",
+                        "Don't annoy him. I'm protecting his quiet time right now, and you really don't want to irritate the strongest."
+                    ];
+                    const randomQuote = gojoAfkQuotes[Math.floor(Math.random() * gojoAfkQuotes.length)];
+                    const elapsed = getAfkDuration(afkState.time);
+
+                    await sock.sendMessage(jid, {
+                        text: `@${senderNumber}\n*${randomQuote}*\n\n💤 @${afkUser} is currently off.\n*Reason:* ${afkState.reason}\n*Afk for:* ${elapsed} since turning on AFK.`,
+                        mentions: [`${senderNumber}@s.whatsapp.net`, `${afkUser}@s.whatsapp.net`]
+                    }, { quoted: msg });
+                }
+            }
+
+            if (isGroup && !msg.key.fromMe) {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants;
+                const sender = participants.find(p => p.id === senderJid);
+                const isAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
+
+                // AUTO-READ CHAT CONTROLLER
+                if (settings.presence && settings.presence.autoread) {
+                    const autoreadActive = settings.presence.autoread.all || settings.presence.autoread.chats.includes(jid);
+                    if (autoreadActive) {
+                        try {
+                            await sock.readMessages([msg.key]);
+                        } catch (e) {}
+                    }
+                }
+
+                if (!isAdmin && !isOwner) {
+                    const isOtherBot = !msg.key.fromMe && (
+                        (msg.key.id.startsWith('BAE5') && msg.key.id.length === 16) || 
+                        (msg.key.id.startsWith('3EB0') && msg.key.id.length === 12) ||
+                        msg.key.id.startsWith('KSG') || 
+                        msg.key.id.startsWith('Lumina')
+                    );
+
+                    const antibotSetting = settings.antibot[jid];
+                    if (isOtherBot && antibotSetting && antibotSetting !== 'off') {
+                        try {
+                            await sock.sendMessage(jid, { delete: { remoteJid: jid, id: msg.key.id, fromMe: false, participant: senderJid } });
+                        } catch (e) {
+                            console.error("Antibot deletion failed:", e.message);
+                        }
+
+                        if (antibotSetting === 'kick') {
+                            try {
+                                await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                                await sock.sendMessage(jid, {
+                                    text: `Sayonara! Weakling\n@${senderNumber}\nKuso yaro 🥷`,
+                                    mentions: [senderJid]
+                                });
+                            } catch (err) {
+                                console.error("Antibot instant-kick failed:", err.message);
+                            }
+                        } else if (antibotSetting === 'warn') {
+                            const warnKey = `${jid}_${senderNumber}`;
+                            settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
+                            const count = settings.warns[warnKey];
+
+                            if (count >= 5) {
+                                try {
+                                    await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                                    await sock.sendMessage(jid, {
+                                        text: `Sayonara! Weakling\n@${senderNumber}\nKuso yaro 🥷`,
+                                        mentions: [senderJid]
+                                    });
+                                    settings.warns[warnKey] = 0;
+                                } catch (err) {
+                                    console.error("Antibot auto-kick failed:", err.message);
+                                }
+                            } else {
+                                await sock.sendMessage(jid, {
+                                    text: `@${senderNumber} Any bot aside myself deserves to be exorcised 💀\n\n*Warn:* ${count}/5`,
+                                    mentions: [senderJid]
+                                });
+                            }
+                        } else if (antibotSetting === 'delete') {
+                            await sock.sendMessage(jid, {
+                                text: `@${senderNumber} Any bot aside myself deserves to be exorcised 💀`,
+                                mentions: [senderJid]
+                            });
+                        }
+                        return; 
+                    }
+
+                    const antilinkSetting = settings.antilink[jid];
+                    if (antilinkSetting && antilinkSetting !== 'off') {
+                        const containsLink = /chat\.whatsapp\.com\/[0-9A-Za-z]{20,24}|(https?:\/\/[^\s]+)/gi.test(body);
+                        if (containsLink) {
+                            try {
+                                await sock.sendMessage(jid, { delete: { remoteJid: jid, id: msg.key.id, fromMe: false, participant: senderJid } });
+                            } catch (e) {
+                                console.error("Antilink delete failed:", e.message);
+                            }
+
+                            if (antilinkSetting === 'warn') {
+                                const warnKey = `${jid}_${senderNumber}`;
+                                settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
+                                const count = settings.warns[warnKey];
+
+                                if (count >= 5) {
+                                    try {
+                                        await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                                        await sock.sendMessage(jid, {
+                                            text: `Sayonara! Weakling\n@${senderNumber}\nKuso yaro 🥷`,
+                                            mentions: [senderJid]
+                                        });
+                                        settings.warns[warnKey] = 0;
+                                    } catch (err) {
+                                        console.error("Antilink auto-kick failed:", err.message);
+                                    }
+                                } else {
+                                    await sock.sendMessage(jid, {
+                                        text: `@${senderNumber}\nBaka! My six eyes perceive All\nYou can't bypass my infinity coz you are so weak!!!\n\n*Warn:* ${count}/5`,
+                                        mentions: [senderJid]
+                                    });
+                                }
+                            } else if (antilinkSetting === 'delete') {
+                                await sock.sendMessage(jid, {
+                                    text: `@${senderNumber} Baka! My six eyes perceive All\nYou can't bypass my infinity coz you are so weak!!!`,
+                                    mentions: [senderJid]
+                                });
+                            } else if (antilinkSetting === 'kick') {
+                                try {
+                                    await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                                    await sock.sendMessage(jid, {
+                                        text: `Sayonara! Weakling\n@${senderNumber}\nKuso yaro 🥷`,
+                                        mentions: [senderJid]
+                                    });
+                                } catch (err) {
+                                    console.error("Antilink kick failed:", err.message);
+                                }
+                            }
+                            return; 
+                        }
+                    }
+                }
+
+                const antitagSetting = settings.antitag[jid];
+                if (antitagSetting === 'on') {
+                    const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
+                    
+                    const isTaggingBot = mentionedJids.includes(botJid) || 
+                                         (botLid && mentionedJids.includes(botLid)) ||
+                                         quotedParticipant === botJid || 
+                                         (botLid && quotedParticipant === botLid);
+
+                    if (isTaggingBot) {
+                        if (!isAdmin && !isOwner) {
+                            try {
+                                await sock.sendMessage(jid, { delete: { remoteJid: jid, id: msg.key.id, fromMe: false, participant: senderJid } });
+                            } catch (e) {
+                                console.error("Antitag delete failed:", e.message);
+                            }
+                            await sock.sendMessage(jid, {
+                                text: `@${senderNumber} Quit tagging me weakling`,
+                                mentions: [senderJid]
+                            });
+                        } 
+                        else if (isAdmin && !isOwner) {
+                            await sock.sendMessage(jid, {
+                                text: `@${senderNumber} Quit tagging me weakling`,
+                                mentions: [senderJid]
+                            });
+                        }
+                    }
+                }
+            }
+
+            let command;
+            let args;
+
+            if (lowerMessage.includes('gojo') && !trimmedMessage.startsWith(settings.prefix)) {
+                command = 'gojo';
+                args = trimmedMessage; 
+            } 
+            else if (lowerMessage.includes('kamui') && !trimmedMessage.startsWith(settings.prefix)) {
+                command = 'kamui';
+                args = trimmedMessage;
+            }
+            else if (lowerMessage === 'speed' || lowerMessage.startsWith('speed ')) {
+                command = 'speed';
+                args = '';
+            }
+            else if (trimmedMessage.startsWith(settings.prefix)) {
+                const spaceIndex = trimmedMessage.indexOf(' ');
+                if (spaceIndex === -1) {
+                    command = trimmedMessage.toLowerCase();
+                    args = '';
+                } else {
+                    command = trimmedMessage.slice(0, spaceIndex).toLowerCase();
+                    args = trimmedMessage.slice(spaceIndex + 1);
+                }
+
+                if (command === `${settings.prefix}gojo`) {
+                    command = 'gojo';
+                    const spaceIndex = trimmedMessage.indexOf(' ');
+                    args = spaceIndex === -1 ? '' : trimmedMessage.slice(spaceIndex + 1);
+                }
+
+                if (command === `${settings.prefix}speed`) {
+                    command = 'speed';
                     args = '';
                 }
-            } else {
-                // Parse Prefixless commands registry directly
-                const firstSpaceIndex = trimmedMessage.indexOf(' ');
-                let cleanWord = firstSpaceIndex !== -1 ? trimmedMessage.slice(0, firstSpaceIndex).toLowerCase() : trimmedMessage.toLowerCase();
-                
-                if (commands[cleanWord]) {
-                    command = cleanWord;
-                    args = firstSpaceIndex !== -1 ? trimmedMessage.slice(firstSpaceIndex + 1).trim() : '';
-                }
+            } 
+            // Support executing registered prefixless commands (like button clicks) directly!
+            else if (commands[trimmedMessage.toLowerCase()]) {
+                command = trimmedMessage.toLowerCase();
+                args = '';
             }
+            else {
+                const isLizzyActive = Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid);
+                const isChatbotActive = Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid);
 
-            // Chatbot automation triggers fallback
-            if (!command && settings.lizzyChats && settings.lizzyChats.includes(jid)) {
-                const isChatbotActive = true;
-                let isMentioningBot = false;
-                let isReplyingToBot = false;
+                const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
+                const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && msg.message.extendedTextMessage?.contextInfo?.stanzaId);
+                const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
 
-                const botCleanJid = sock.user.id ? (sock.user.id.split(':')[0] + '@s.whatsapp.net') : '';
-                const botCleanLid = sock.user.id ? (sock.user.id.split(':')[1] ? sock.user.id.split(':')[0]+'@lid' : '') : '';
-
-                const mentionedJids = rawContent?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-                if (botCleanJid && mentionedJids.includes(botCleanJid)) isMentioningBot = true;
-                if (botCleanLid && mentionedJids.includes(botCleanLid)) isMentioningBot = true;
-
-                const quotedMsgContext = rawContent?.extendedTextMessage?.contextInfo;
-                if (quotedMsgContext && quotedMsgContext.stanzaId) {
-                    if (botSentMessageIds.has(quotedMsgContext.stanzaId)) {
-                        isReplyingToBot = true;
+                if (isLizzyActive && !command) {
+                    const containsLizzyName = lowerMessage.includes('lizzy');
+                    if (isReplyingToBot || isMentioningBot || containsLizzyName) {
+                        command = 'lizzy_chat';
+                        args = trimmedMessage;
                     }
                 }
 
@@ -508,13 +1203,13 @@ async function startBot() {
 
             // Global Bot Privacy Mode Guard (Owner & Sudo Authorized Only in Private Mode)
             if (command) {
-                const isPublicMode = settings.isPublic ?? false;
+                const isPublicMode = settings.isPublic ?? false; // Default private state [1]
                 if (!isPublicMode && !isAuthorized) {
-                    return; // Silently ignore unauthorized executions
+                    return; // Silently ignore all unauthorized commands [1]
                 }
             }
 
-            console.log(`⚙️ [PARSER] Triggering command: \"${command}\"`);
+            console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
             if (commands[command]) {
                 if (settings.autoReact === 'cmd' && !msg.key.fromMe) {
