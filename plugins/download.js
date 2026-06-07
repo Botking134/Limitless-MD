@@ -471,6 +471,7 @@ module.exports = [
     },
 
     
+
 // 8. TIKTOK VIDEO DOWNLOADER (.tt / .tiktok)
     {
         name: 'tt',
@@ -497,19 +498,29 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading TikTok video... 📥" }, { quoted: msg });
 
+                // 1. Resolve short links (vm.tiktok.com) to the full expanded URL on the server first
+                let longUrl = url;
+                try {
+                    const headRes = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+                    if (headRes.url) {
+                        longUrl = headRes.url;
+                    }
+                } catch (redirectErr) {
+                    console.warn("Failed to resolve TikTok redirect, using original URL:", redirectErr.message);
+                }
+
                 let downloadUrl = "";
                 let title = "TikTok Video";
 
                 // Attempt 1: Upgraded TikSave v2 API (Unified Endpoint)
                 try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/tiktok2?url=${encodeURIComponent(url)}`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/tiktok2?url=${encodeURIComponent(longUrl)}`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.video) {
                             title = data.video.title || "TikTok Video";
                             const downloads = data.video.downloads || [];
                             
-                            // Defensively check for high-quality or standard-quality streams
                             const hd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'hd');
                             const sd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'sd');
                             downloadUrl = hd?.downloadUrl || sd?.downloadUrl || downloads[0]?.downloadUrl;
@@ -522,23 +533,42 @@ module.exports = [
                 // Attempt 2: Legacy TikTok API (Fallback)
                 if (!downloadUrl) {
                     try {
-                        const response = await fetch(`https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(url)}`);
+                        const response = await fetch(`https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(longUrl)}`);
                         if (response.ok) {
                             const data = await response.json();
-                            if (data.status && data.result) {
-                                title = data.result.title || "TikTok Video";
-                                downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
+                            const result = data.result || data;
+                            if (result) {
+                                title = result.title || "TikTok Video";
+                                downloadUrl = result.video || result.video_url || result.mp4 || result.download_url || result.url;
                             }
                         }
                     } catch (err) {
-                        console.warn("Legacy TikTok API failed, trying third-party route...", err.message);
+                        console.warn("Legacy TikTok API failed, trying Kord/TikSave route...", err.message);
                     }
                 }
 
-                // Attempt 3: Multi-Platform Scraper (Third-Party Fallback)
+                // Attempt 3: Kord / TikSave Native API structure check
                 if (!downloadUrl) {
                     try {
-                        const response = await fetch(`https://api.sandipbbaruwal.onrender.com/tiktok?url=${encodeURIComponent(url)}`);
+                        const response = await fetch(`https://api.kord.live/api/tiktok?url=${encodeURIComponent(longUrl)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data && data.success && data.data) {
+                                title = data.data.title || "TikTok Video";
+                                if (Array.isArray(data.data.downloadLinks) && data.data.downloadLinks.length > 0) {
+                                    downloadUrl = data.data.downloadLinks[0].link;
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.warn("Kord API route failed, trying multi-platform scraper...", err.message);
+                    }
+                }
+
+                // Attempt 4: Multi-Platform Scraper (Third-Party Fallback)
+                if (!downloadUrl) {
+                    try {
+                        const response = await fetch(`https://api.sandipbbaruwal.onrender.com/tiktok?url=${encodeURIComponent(longUrl)}`);
                         if (response.ok) {
                             const data = await response.json();
                             downloadUrl = data.video || data.url || data.download_url;
