@@ -437,17 +437,24 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Facebook video... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/facebook?url=${encodeURIComponent(url)}`);
+                // Queries the active /facebook2 endpoint used on his direct downloader website
+                const response = await fetch(`https://apis.davidcyril.name.ng/facebook2?url=${encodeURIComponent(url)}`);
                 if (!response.ok) {
                     throw new Error(`API returned status code ${response.status}`);
                 }
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
+                if (!data.status || !data.video) {
                     return await sock.sendMessage(jid, { text: "❌ Facebook video parse failed or link is currently unsupported." }, { quoted: msg });
                 }
 
-                const downloadUrl = data.result.hd || data.result.sd || data.result.video_url || data.result.download_url;
+                const title = data.video.title || "Facebook Video";
+                const downloads = data.video.downloads || [];
+
+                // Defensively checks for HD and SD quality download URLs in the payload array
+                const hd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'hd');
+                const sd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'sd');
+                const downloadUrl = hd?.downloadUrl || sd?.downloadUrl || downloads[0]?.downloadUrl;
 
                 if (!downloadUrl) {
                     throw new Error("No download URL found in API response.");
@@ -455,7 +462,7 @@ module.exports = [
 
                 await sock.sendMessage(jid, {
                     video: { url: downloadUrl },
-                    caption: `🎬 *Facebook Downloader Completed*\n\n_Downloaded successfully._ 🤞`,
+                    caption: `🎬 *Title:* ${title}\n\n_Downloaded successfully via Facebook2 API._ 🤞`,
                     mimetype: 'video/mp4'
                 }, { quoted: msg });
 
