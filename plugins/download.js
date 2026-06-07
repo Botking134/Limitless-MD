@@ -102,8 +102,7 @@ module.exports = [
                                         `📌 *Title:* ${title}\n` +
                                         `⏳ *Duration:* ${duration}\n` +
                                         `👁️ *Views:* ${views ? views.toLocaleString() : 'N/A'}\n` +
-                                        `📅 *Published:* ${published || 'N/A'}\n\n` +
-                                        `_Channelling audio from upstream... Please wait._ 🤞`;
+                                        `📅 *Published:* ${published || 'N/A'}`;
 
                 await sock.sendMessage(jid, { 
                     image: { url: thumbnail }, 
@@ -224,7 +223,7 @@ module.exports = [
 
                 await sock.sendMessage(jid, {
                     video: { url: downloadUrl },
-                    caption: `🎥 *Title:* ${title}\n\n_Enjoy your video!_`,
+                    caption: `🎥 *Title:* ${title}`,
                     mimetype: 'video/mp4'
                 }, { quoted: msg });
 
@@ -364,8 +363,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching video index... 🎥" }, { quoted: msg });
 
-                // Loaded dynamically inside the command execution to prevent startup boot crashes
-                const yts = require('yt-search');
+                // Natively traces top matching YouTube URLs
                 const results = await yts(args);
                 const videos = results.videos || [];
 
@@ -395,8 +393,7 @@ module.exports = [
                 const caption = `🎥 *VIDEO FOUND* 🎥\n━━━━━━━━━━━━━━━━━━━\n\n` +
                                 `📌 *Title:* ${firstVideo.title}\n` +
                                 `⏳ *Duration:* ${duration}\n` +
-                                `👁️ *Views:* ${firstVideo.views ? firstVideo.views.toLocaleString() : 'N/A'}\n\n` +
-                                `_Channelling video from upstream... Please wait._ 🤞`;
+                                `👁️ *Views:* ${firstVideo.views ? firstVideo.views.toLocaleString() : 'N/A'}`;
 
                 await sock.sendMessage(jid, {
                     video: { url: downloadUrl },
@@ -462,7 +459,7 @@ module.exports = [
 
                 await sock.sendMessage(jid, {
                     video: { url: downloadUrl },
-                    caption: `🎬 *Title:* ${title}\n\n_Downloaded successfully via Facebook2 API._ 🤞`,
+                    caption: `🎬 *Title:* ${title}`,
                     mimetype: 'video/mp4'
                 }, { quoted: msg });
 
@@ -518,7 +515,7 @@ module.exports = [
 
                 await sock.sendMessage(jid, {
                     video: { url: downloadUrl },
-                    caption: `🎵 *Title:* ${title}\n\n_TikTok downloaded without watermark!_ 🤞`,
+                    caption: `🎵 *Title:* ${title}`,
                     mimetype: 'video/mp4'
                 }, { quoted: msg });
 
@@ -576,7 +573,7 @@ module.exports = [
                 await sock.sendMessage(jid, {
                     document: { url: downloadUrl },
                     fileName: filename,
-                    caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}\n\n_Downloaded via Satoru Gojo_ 🤞`
+                    caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}`
                 }, { quoted: msg });
 
             } catch (error) {
@@ -768,8 +765,7 @@ module.exports = [
                                    `🎵 *Song:* ${title}\n` +
                                    `👤 *Artist:* ${artist}\n\n` +
                                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                   `${lyrics}\n\n` +
-                                   `_Lyrics downloaded successfully._ 🤞`;
+                                   `${lyrics}`;
 
                 await sock.sendMessage(jid, { text: lyricsText }, { quoted: msg });
 
@@ -827,7 +823,7 @@ module.exports = [
                 await sock.sendMessage(jid, {
                     document: { url: downloadUrl },
                     fileName: filename,
-                    caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}\n\n_Google Drive completed successfully._ 🤞`
+                    caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}`
                 }, { quoted: msg });
 
             } catch (error) {
@@ -877,7 +873,7 @@ module.exports = [
                     document: { url: downloadUrl },
                     mimetype: "application/zip",
                     fileName: `${repo}-master.zip`,
-                    caption: `📦 *GitHub Repository:* \`${user}/${repo}\`\n\n_Zip package completed successfully._ 🤞`
+                    caption: `📦 *GitHub Repository:* \`${user}/${repo}\``
                 }, { quoted: msg });
 
             } catch (error) {
@@ -933,13 +929,13 @@ module.exports = [
                 if (isVideo) {
                     await sock.sendMessage(jid, {
                         video: { url: downloadUrl },
-                        caption: `🎬 *Pinterest Downloader Completed*\n\n_Downloaded successfully._ 🤞`,
+                        caption: `🎬 *Title:* Pinterest Video`,
                         mimetype: 'video/mp4'
                     }, { quoted: msg });
                 } else {
                     await sock.sendMessage(jid, {
                         image: { url: downloadUrl },
-                        caption: `📸 *Pinterest Downloader Completed*\n\n_Downloaded successfully._ 🤞`
+                        caption: `📸 *Title:* Pinterest Image`
                     }, { quoted: msg });
                 }
 
@@ -986,8 +982,7 @@ module.exports = [
                 const movieTitle = data.result.title || args;
                 const caption = `🎬 *Subtitle Downloader Completed*\n\n` +
                                 `📌 *Title:* ${movieTitle}\n` +
-                                `🌐 *Language:* English\n\n` +
-                                `_Subtitles loaded successfully._ 🤞`;
+                                `🌐 *Language:* English`;
 
                 await sock.sendMessage(jid, {
                     document: { url: englishSub.url },
@@ -1048,7 +1043,7 @@ module.exports = [
                     document: { url: downloadUrl },
                     mimetype: 'audio/mpeg',
                     fileName: `${title}.mp3`,
-                    caption: `🎵 *Title:* ${title}\n\n_Downloaded as document successfully._ 🤞`
+                    caption: `🎵 *Title:* ${title}`
                 }, { quoted: msg });
 
             } catch (error) {
@@ -1101,7 +1096,7 @@ module.exports = [
                     document: { url: download_url },
                     mimetype: 'audio/mpeg',
                     fileName: `${title}.mp3`,
-                    caption: `🎵 *Title:* ${title}\n\n_Downloaded as document successfully._ 🤞`
+                    caption: `🎵 *Title:* ${title}`
                 }, { quoted: msg });
 
             } catch (error) {
@@ -1115,14 +1110,11 @@ module.exports = [
 // Compile structural aliases safely without modifying the target array mid-iteration
 const aliases = [];
 module.exports.forEach(cmd => {
-    if (cmd.name === 'fw') {
-        aliases.push({ ...cmd, name: 'forward' });
+    if (cmd.name === 'fb') {
+        aliases.push({ ...cmd, name: 'facebook' });
     }
-    if (cmd.name === 'device') {
-        aliases.push({ ...cmd, name: 'getdevice' });
-    }
-    if (cmd.name === 'antiviewonce') {
-        aliases.push({ ...cmd, name: 'antivv' });
+    if (cmd.name === 'tt') {
+        aliases.push({ ...cmd, name: 'tiktok' });
     }
 });
 module.exports.push(...aliases);
