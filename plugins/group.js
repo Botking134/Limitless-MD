@@ -462,7 +462,7 @@ module.exports = [
         }
     },
 
-    // 9. EXTRA SUMMON FOR ADMINS
+    // 9. ADMINS-ONLY TAG
     {
         name: 'admins',
         isPrefixless: false,
@@ -1217,7 +1217,7 @@ module.exports = [
                 const group = await sock.groupCreate(args, [phoneJid]);
                 
                 await sock.sendMessage(jid, { 
-                    text: `✅ *Group Domain Manifested successfully!*\n\n` +
+                    text: `` +
                           `• *Name:* \`${args}\`\n` +
                           `• *ID:* \`${group.id}\`\n\n` +
                           `_Link to join:_ https://chat.whatsapp.com/${await sock.groupInviteCode(group.id)}`
@@ -1225,6 +1225,89 @@ module.exports = [
             } catch (e) {
                 console.error("CreateGC Error:", e);
                 await sock.sendMessage(jid, { text: `❌ Failed to create group: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 24. EXORCISE ALL TARGETS (Owner / Sudo Only)
+    {
+        name: 'kickall',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ This command can only be used inside groups." }, { quoted: msg });
+            if (!isOwner && !isSudo) return await sock.sendMessage(jid, { text: "❌ Owner or Sudo privileges required." }, { quoted: msg });
+
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants;
+
+                const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                const botLid = sock.user.id.split(':')[0] + '@lid';
+
+                // Verifies if the bot itself possesses administrative status safely
+                const botParticipant = participants.find(p => p.id === botJid || p.id === botLid);
+                const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
+
+                if (!isBotAdmin) {
+                    return await sock.sendMessage(jid, { text: "❌ Satoru Gojo must be an Administrator in this group to run this." }, { quoted: msg });
+                }
+
+                await sock.sendMessage(jid, { text: "🌪️ *Channelling Limitless Void... Exorcising all members from this domain.*" }, { quoted: msg });
+
+                // Safely filter out owners, creators, developers, and administrators
+                const targets = participants.filter(p => 
+                    p.id !== botJid && 
+                    p.id !== botLid && 
+                    p.id.split('@')[0] !== settings.ownerNumber && 
+                    !settings.devs.includes(p.id.split('@')[0]) &&
+                    p.admin !== 'superadmin' &&
+                    p.admin !== 'admin'
+                ).map(p => p.id);
+
+                if (targets.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ No non-admin targets found to exorcise." }, { quoted: msg });
+                }
+
+                global.kickallActive[jid] = true;
+
+                for (const target of targets) {
+                    if (!global.kickallActive[jid]) {
+                        await sock.sendMessage(jid, { text: "🛑 *Exorcism sequence aborted by administrator.*" });
+                        break;
+                    }
+                    try {
+                        await sock.groupParticipantsUpdate(jid, [target], "remove");
+                        await new Promise(r => setTimeout(r, 1000)); // Throttled 1s delay to protect connection
+                    } catch (err) {
+                        console.error(`Failed to kick ${target}:`, err.message);
+                    }
+                }
+
+                delete global.kickallActive[jid];
+                await sock.sendMessage(jid, { text: "✅ *Exorcism complete.* All targets removed from this domain." });
+
+            } catch (error) {
+                console.error("Kickall Error:", error);
+            }
+        }
+    },
+
+    // 25. ABORT EXORCISM SEQUENCE (.stopkickall)
+    {
+        name: 'stopkickall',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            if (global.kickallActive[jid]) {
+                global.kickallActive[jid] = false;
+                await sock.sendMessage(jid, { text: "🛑 *Stopping exorcism... Please wait.*" }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: "❌ No active kickall operation running in this group." }, { quoted: msg });
             }
         }
     },
