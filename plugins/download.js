@@ -148,21 +148,38 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Fetching YouTube audio... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
+                let downloadUrl = "";
+                let title = "YouTube Audio";
+
+                // Attempt 1: Query primary /youtube/mp33 endpoint
+                try {
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp33?url=${encodeURIComponent(url)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            title = data.result.title || "YouTube Audio";
+                            downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Primary ytmp33 failed, trying fallback...", e.message);
                 }
 
-                const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Failed to parse media details from this link." }, { quoted: msg });
+                // Attempt 2: Auto redirect/fallback to /download/ytmp3 endpoint
+                if (!downloadUrl) {
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp3?url=${encodeURIComponent(url)}`);
+                    if (!response.ok) {
+                        throw new Error(`Fallback API status code ${response.status}`);
+                    }
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        title = data.result.title || "YouTube Audio";
+                        downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
+                    }
                 }
-
-                const title = data.result.title || "YouTube Audio";
-                const downloadUrl = data.result.mp3 || data.result.download_url;
 
                 if (!downloadUrl) {
-                    throw new Error("Download link empty in API response");
+                    throw new Error("Unable to fetch audio download stream from both endpoints.");
                 }
 
                 await sock.sendMessage(jid, {
@@ -204,21 +221,38 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Fetching YouTube video... 🎬" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
+                let downloadUrl = "";
+                let title = "YouTube Video";
+
+                // Attempt 1: Query primary /youtube/mp444 endpoint
+                try {
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(url)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            title = data.result.title || "YouTube Video";
+                            downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Primary ytmp444 failed, trying fallback...", e.message);
                 }
 
-                const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Failed to parse media details from this link." }, { quoted: msg });
+                // Attempt 2: Auto redirect/fallback to /download/ytmp4 endpoint
+                if (!downloadUrl) {
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(url)}`);
+                    if (!response.ok) {
+                        throw new Error(`Fallback API status code ${response.status}`);
+                    }
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        title = data.result.title || "YouTube Video";
+                        downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                    }
                 }
-
-                const title = data.result.title || "YouTube Video";
-                const downloadUrl = data.result.mp4 || data.result.download_url;
 
                 if (!downloadUrl) {
-                    throw new Error("Video download link empty in API response");
+                    throw new Error("Unable to fetch video download stream from both endpoints.");
                 }
 
                 await sock.sendMessage(jid, {
@@ -307,7 +341,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching song index... 🔍" }, { quoted: msg });
 
-                // Loaded dynamically inside the command execution to prevent startup boot crashes
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
@@ -363,7 +396,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching video index... 🎥" }, { quoted: msg });
 
-                // Natively traces top matching YouTube URLs
+                const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
 
@@ -434,7 +467,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Facebook video... 📥" }, { quoted: msg });
 
-                // Queries the active /facebook2 endpoint used on his direct downloader website
                 const response = await fetch(`https://apis.davidcyril.name.ng/facebook2?url=${encodeURIComponent(url)}`);
                 if (!response.ok) {
                     throw new Error(`API returned status code ${response.status}`);
@@ -448,7 +480,6 @@ module.exports = [
                 const title = data.video.title || "Facebook Video";
                 const downloads = data.video.downloads || [];
 
-                // Defensively checks for HD and SD quality download URLs in the payload array
                 const hd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'hd');
                 const sd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'sd');
                 const downloadUrl = hd?.downloadUrl || sd?.downloadUrl || downloads[0]?.downloadUrl;
@@ -470,9 +501,7 @@ module.exports = [
         }
     },
 
-    
-
-// 8. TIKTOK VIDEO DOWNLOADER (.tt / .tiktok)
+    // 8. TIKTOK VIDEO DOWNLOADER (.tt / .tiktok)
     {
         name: 'tt',
         isPrefixless: false,
@@ -652,7 +681,7 @@ module.exports = [
         }
     },
 
-    // 10. APK APPLICATION DOWNLOADER (.apk)
+    // 10. DIRECT APK DOWNLOADER (.apk)
     {
         name: 'apk',
         isPrefixless: false,
@@ -666,6 +695,54 @@ module.exports = [
             }
 
             try {
+                await sock.sendMessage(jid, { text: `Searching and downloading APK for "${args}"... 🔍` }, { quoted: msg });
+
+                const response = await fetch(`https://apis.davidcyril.name.ng/download/apk?query=${encodeURIComponent(args)}`);
+                if (!response.ok) {
+                    throw new Error(`API returned status code ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (!data.status || !data.result || !data.result.download_url) {
+                    return await sock.sendMessage(jid, { text: "❌ Application not found on the APK catalog." }, { quoted: msg });
+                }
+
+                const { name, package: pkgName, size, version, download_url } = data.result;
+
+                const cap = `📦 *APK COMPLETED* 📦\n━━━━━━━━━━━━━━━━━━━\n\n` +
+                            `📌 *Name:* ${name}\n` +
+                            `⚙️ *Package Name:* ${pkgName || "N/A"}\n` +
+                            `🔄 *Version:* ${version || "N/A"}\n` +
+                            `⚖️ *Size:* ${size || "Unknown Size"}`;
+
+                await sock.sendMessage(jid, {
+                    document: { url: download_url },
+                    mimetype: "application/vnd.android.package-archive",
+                    fileName: `${name}.apk`,
+                    caption: cap
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("APK Command Error:", error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download APK: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 11. INTERACTIVE APK SEARCHER (.apksearch)
+    {
+        name: 'apksearch',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please provide an application search query.\nExample: \`${settings.prefix}apksearch WhatsApp\`` 
+                }, { quoted: msg });
+            }
+
+            try {
                 await sock.sendMessage(jid, { text: "Searching app catalog... 🔍" }, { quoted: msg });
 
                 const response = await fetch(`https://apis.davidcyril.name.ng/apksearch?query=${encodeURIComponent(args)}`);
@@ -674,26 +751,18 @@ module.exports = [
                 }
 
                 const data = await response.json();
-                
-                let results = [];
-                if (Array.isArray(data)) {
-                    results = data;
-                } else if (data && Array.isArray(data.result)) {
-                    results = data.result;
-                }
-
-                if (results.length === 0) {
+                if (!Array.isArray(data) || data.length === 0) {
                     return await sock.sendMessage(jid, { text: "❌ No matching applications found." }, { quoted: msg });
                 }
 
-                const selectedResults = results.slice(0, 10);
+                const selectedResults = data.slice(0, 10);
 
                 let listCaption = `📦 *APK SEARCH RESULTS* 📦\n`;
                 listCaption += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
                 listCaption += `🔍 *Query:* "${args}"\n\n`;
 
                 selectedResults.forEach((app, index) => {
-                    listCaption += `${index + 1}. *${app.name || app.title}* (${app.id || app.package || 'N/A'})\n`;
+                    listCaption += `${index + 1}. *${app.name}* (${app.id || 'N/A'})\n`;
                 });
 
                 listCaption += `\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -704,19 +773,19 @@ module.exports = [
                 global.apkSessions[prompt.key.id] = {
                     query: args,
                     results: selectedResults.map(app => ({
-                        name: app.name || app.title,
-                        id: app.id || app.package
+                        name: app.name,
+                        id: app.id
                     }))
                 };
 
             } catch (error) {
-                console.error("APK Command Error:", error);
+                console.error("APKSearch Command Error:", error);
                 await sock.sendMessage(jid, { text: "❌ Failed to search application index. Try again later." }, { quoted: msg });
             }
         }
     },
 
-    // 11. AUDIO RECOGNIZER & SUMMONER (.shazam)
+    // 12. AUDIO RECOGNIZER & SUMMONER (.shazam)
     {
         name: 'shazam',
         isPrefixless: false,
@@ -795,7 +864,7 @@ module.exports = [
         }
     },
 
-    // 12. SONG LYRICS FINDER (.lyrics)
+    // 13. SONG LYRICS FINDER (.lyrics)
     {
         name: 'lyrics',
         isPrefixless: false,
@@ -845,7 +914,7 @@ module.exports = [
         }
     },
 
-    // 13. GOOGLE DRIVE DOWNLOADER (.gdrive)
+    // 14. GOOGLE DRIVE DOWNLOADER (.gdrive)
     {
         name: 'gdrive',
         isPrefixless: false,
@@ -902,7 +971,7 @@ module.exports = [
         }
     },
 
-    // 14. GITHUB REPOSITORY CLONER (.gitclone)
+    // 15. GITHUB REPOSITORY CLONER (.gitclone)
     {
         name: 'gitclone',
         isPrefixless: false,
@@ -952,7 +1021,7 @@ module.exports = [
         }
     },
 
-    // 15. PINTEREST DOWNPARSER (.pinterest)
+    // 16. PINTEREST DOWNPARSER (.pinterest / .pint)
     {
         name: 'pinterest',
         isPrefixless: false,
@@ -978,7 +1047,8 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Pinterest media... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/pinterest?url=${encodeURIComponent(url)}`);
+                // Upgraded to use the official David Cyril Pinterest endpoint
+                const response = await fetch(`https://apis.davidcyril.name.ng/download/pinterest?url=${encodeURIComponent(url)}`);
                 if (!response.ok) {
                     throw new Error(`API returned status code ${response.status}`);
                 }
@@ -993,7 +1063,7 @@ module.exports = [
                     throw new Error("No download media found inside parameters.");
                 }
 
-                const isVideo = downloadUrl.toLowerCase().includes(".mp4");
+                const isVideo = downloadUrl.toLowerCase().includes(".mp4") || data.result.video;
 
                 if (isVideo) {
                     await sock.sendMessage(jid, {
@@ -1015,7 +1085,7 @@ module.exports = [
         }
     },
 
-    // 16. SUBTITLE FILE DOWNLOADER (.subtitle)
+    // 17. SUBTITLE FILE DOWNLOADER (.subtitle)
     {
         name: 'subtitle',
         isPrefixless: false,
@@ -1067,7 +1137,7 @@ module.exports = [
         }
     },
 
-    // 17. DOCUMENT-FORMAT YOUTUBE LINK AUDIO/VIDEO DOWNLOADER (.ytmp3doc / .ytmp4doc)
+    // 18. DOCUMENT-FORMAT YOUTUBE LINK AUDIO/VIDEO DOWNLOADER (.ytmp3doc / .ytmp4doc)
     {
         name: 'ytmp3doc',
         isPrefixless: false,
@@ -1122,7 +1192,7 @@ module.exports = [
         }
     },
 
-    // 18. DOCUMENT-FORMAT YOUTUBE SEARCH AUDIO/VIDEO DOWNLOADER (.playdoc / .videodoc)
+    // 19. DOCUMENT-FORMAT YOUTUBE SEARCH AUDIO/VIDEO DOWNLOADER (.playdoc / .videodoc)
     {
         name: 'playdoc',
         isPrefixless: false,
@@ -1138,7 +1208,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching song index for document... 🔍" }, { quoted: msg });
 
-                // Loaded dynamically inside the command execution to prevent startup boot crashes
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
@@ -1173,10 +1242,426 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "❌ Failed to process audio document download. Try again later." }, { quoted: msg });
             }
         }
+    },
+
+    // 20. INSTAGRAM DOWNLOADER (.ig / .instagram)
+    {
+        name: 'ig',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let targetUrl = args ? args.trim() : '';
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!targetUrl && quoted) {
+                const rawContent = getRawMessage(quoted);
+                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+            }
+
+            const igregex = /^(https?:\/\/)?(www\.)?(ig\.com|instagram\.?com)\/.+/i;
+            const url = extractLink(targetUrl, igregex);
+
+            if (!url) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please provide a valid Instagram link.\nExample: \`${settings.prefix}ig https://www.instagram.com/p/...\`` 
+                }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Downloading Instagram media... 📥" }, { quoted: msg });
+
+                // Query David Cyril's official /instagram endpoint directly
+                const response = await fetch(`https://apis.davidcyril.name.ng/instagram?url=${encodeURIComponent(url)}`);
+                if (!response.ok) {
+                    throw new Error(`API returned status code ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (!data.status || !data.result) {
+                    return await sock.sendMessage(jid, { text: "❌ Instagram download failed or link is currently unsupported." }, { quoted: msg });
+                }
+
+                const downloadUrl = data.result.url || data.result.video || data.result.image || data.result.download_url;
+                if (!downloadUrl) {
+                    throw new Error("No download stream URL found in API response.");
+                }
+
+                const isVideo = downloadUrl.toLowerCase().includes(".mp4") || downloadUrl.includes("video");
+
+                if (isVideo) {
+                    await sock.sendMessage(jid, {
+                        video: { url: downloadUrl },
+                        caption: `🎬 *Title:* Instagram Video`,
+                        mimetype: 'video/mp4'
+                    }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, {
+                        image: { url: downloadUrl },
+                        caption: `📸 *Title:* Instagram Image`
+                    }, { quoted: msg });
+                }
+
+            } catch (error) {
+                console.error("Instagram Downloader Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to download Instagram media. Ensure the account is public and try again." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 21. SPOTIFY AUDIO DOWNLOADER (.spotify)
+    {
+        name: 'spotify',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please provide a Spotify link or song query.\nExample: \`${settings.prefix}spotify Alan Walker Faded\`` 
+                }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Searching and fetching Spotify track... 📥" }, { quoted: msg });
+
+                // Query David Cyril's Spotify v1 endpoint
+                const response = await fetch(`https://apis.davidcyril.name.ng/spotifydl?query=${encodeURIComponent(args)}`);
+                if (!response.ok) {
+                    throw new Error(`API status code ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (!data.status || !data.result) {
+                    throw new Error("No track details found inside parameters.");
+                }
+
+                const title = data.result.title || "Spotify Track";
+                const artist = data.result.artist || "Unknown Artist";
+                const downloadUrl = data.result.download_url || data.result.link;
+
+                if (!downloadUrl) {
+                    throw new Error("Download link empty in API response.");
+                }
+
+                await sock.sendMessage(jid, {
+                    audio: { url: downloadUrl },
+                    mimetype: 'audio/mpeg',
+                    ptt: false
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Spotify Downloader Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track. Try again later." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 22. SPOTIFY AUDIO DOWNLOADER V2 (.spotify2)
+    {
+        name: 'spotify2',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please provide a Spotify link or song query.\nExample: \`${settings.prefix}spotify2 Alan Walker Faded\`` 
+                }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Searching and fetching Spotify track v2... 📥" }, { quoted: msg });
+
+                // Query David Cyril's Spotify v2 endpoint
+                const response = await fetch(`https://apis.davidcyril.name.ng/spotifydl2?query=${encodeURIComponent(args)}`);
+                if (!response.ok) {
+                    throw new Error(`API status code ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (!data.status || !data.result) {
+                    throw new Error("No track details found inside parameters.");
+                }
+
+                const title = data.result.title || "Spotify Track";
+                const artist = data.result.artist || "Unknown Artist";
+                const downloadUrl = data.result.download_url || data.result.link;
+
+                if (!downloadUrl) {
+                    throw new Error("Download link empty in API response.");
+                }
+
+                await sock.sendMessage(jid, {
+                    audio: { url: downloadUrl },
+                    mimetype: 'audio/mpeg',
+                    ptt: false
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Spotify2 Downloader Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track. Try again later." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 23. WEBSITE DOWNLOADER & PACKER (.web)
+    {
+        name: 'web',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please provide a website URL.\nExample: \`${settings.prefix}web https://google.com\`` 
+                }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Downloading and packing website assets... 🌐⏳" }, { quoted: msg });
+
+                // Query David Cyril's web downloader endpoint directly
+                const response = await fetch(`https://apis.davidcyril.name.ng/tools/downloadweb?url=${encodeURIComponent(args)}`);
+                if (!response.ok) {
+                    throw new Error(`API status code ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (!data.status || !data.result) {
+                    throw new Error("Website packaging failed.");
+                }
+
+                const filename = data.result.filename || "website_source.zip";
+                const downloadUrl = data.result.download_url || data.result.link;
+
+                if (!downloadUrl) {
+                    throw new Error("No download link returned by server.");
+                }
+
+                await sock.sendMessage(jid, {
+                    document: { url: downloadUrl },
+                    mimetype: "application/zip",
+                    fileName: filename,
+                    caption: `📁 *Source Website:* \`${args}\``
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Web Downloader Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to package website. Ensure the URL is valid and reachable." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 24. TWITTER VIDEO & IMAGE DOWNLOADER V2 (.x2 / .xdl2)
+    {
+        name: 'x2',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let targetUrl = args ? args.trim() : '';
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!targetUrl && quoted) {
+                const rawContent = getRawMessage(quoted);
+                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+            }
+
+            const xregex = /^(https?:\/\/)?(www\.)?(x\.com|twitter\.?com)\/.+/i;
+            const url = extractLink(targetUrl, xregex);
+
+            if (!url) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please provide a valid Twitter/X video link.\nExample: \`${settings.prefix}x2 https://x.com/...\`` 
+                }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Downloading Twitter/X media... 📥" }, { quoted: msg });
+
+                let downloadUrl = "";
+
+                // Attempt 1: Upgraded Twitter v2 API
+                try {
+                    const response = await fetch(`https://apis.davidcyril.name.ng/twitterV2?url=${encodeURIComponent(url)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            downloadUrl = data.result.video || data.result.image || data.result.download_url || data.result.link;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("TwitterV2 failed, trying fallback xdownloader...", e.message);
+                }
+
+                // Attempt 2: Auto redirect/fallback to alternate xdownloader endpoint
+                if (!downloadUrl) {
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/xdownloader?url=${encodeURIComponent(url)}`);
+                    if (!response.ok) {
+                        throw new Error(`Fallback API status code ${response.status}`);
+                    }
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        downloadUrl = data.result.video || data.result.image || data.result.download_url || data.result.link;
+                    }
+                }
+
+                if (!downloadUrl) {
+                    throw new Error("Unable to parse Twitter media from both endpoints.");
+                }
+
+                const isVideo = downloadUrl.toLowerCase().includes(".mp4") || downloadUrl.includes("video");
+
+                if (isVideo) {
+                    await sock.sendMessage(jid, {
+                        video: { url: downloadUrl },
+                        caption: `🎬 *Title:* Twitter Video`,
+                        mimetype: 'video/mp4'
+                    }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, {
+                        image: { url: downloadUrl },
+                        caption: `📸 *Title:* Twitter Image`
+                    }, { quoted: msg });
+                }
+
+            } catch (error) {
+                console.error("Twitter Downloader Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to download Twitter/X media. Try again later." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 25. YOUTUBE MULTI-FORMAT DOWNLOADER V3 (.yt)
+    {
+        name: 'yt',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let url = args ? args.trim() : '';
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!url && quoted) {
+                const rawContent = getRawMessage(quoted);
+                url = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+            }
+
+            const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
+            if (!url || !ytRegex.test(url)) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please provide a valid YouTube link.\nExample: \`${settings.prefix}yt https://youtube.com/watch?v=...\`` 
+                }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Fetching YouTube media v3... 📥" }, { quoted: msg });
+
+                // Query David Cyril's official /download/ytv3 endpoint directly
+                const response = await fetch(`https://apis.davidcyril.name.ng/download/ytv3?url=${encodeURIComponent(url)}`);
+                if (!response.ok) {
+                    throw new Error(`API status code ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (!data.status || !data.result) {
+                    throw new Error("YouTube v3 parse failed.");
+                }
+
+                const title = data.result.title || "YouTube Media";
+                const downloadUrl = data.result.mp4 || data.result.video || data.result.mp3 || data.result.download_url;
+
+                if (!downloadUrl) {
+                    throw new Error("No media download stream found.");
+                }
+
+                const isVideo = downloadUrl.toLowerCase().includes(".mp4") || data.result.mp4;
+
+                if (isVideo) {
+                    await sock.sendMessage(jid, {
+                        video: { url: downloadUrl },
+                        caption: `🎥 *Title:* ${title}`,
+                        mimetype: 'video/mp4'
+                    }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, {
+                        audio: { url: downloadUrl },
+                        mimetype: 'audio/mpeg',
+                        ptt: false
+                    }, { quoted: msg });
+                }
+
+            } catch (error) {
+                console.error("YT Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to fetch YouTube media. Ensure the link is valid and try again." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 26. TIKTOK VIDEO DOWNLOADER V2 (.tt2)
+    {
+        name: 'tt2',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let targetUrl = args ? args.trim() : '';
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!targetUrl && quoted) {
+                const rawContent = getRawMessage(quoted);
+                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+            }
+
+            const ttregex = /https:\/\/(?:www\.|vm\.|m\.|vt\.)?tiktok\.com\/.+/i;
+            const url = extractLink(targetUrl, ttregex);
+
+            if (!url) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please provide a valid TikTok link.\nExample: \`${settings.prefix}tt2 https://vm.tiktok.com/...\`` 
+                }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Downloading TikTok v2 video... 📥" }, { quoted: msg });
+
+                // 1. Resolve short links (vm.tiktok.com) to full expanded URL first
+                let longUrl = url;
+                try {
+                    const headRes = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+                    if (headRes.url) {
+                        longUrl = headRes.url;
+                    }
+                } catch (redirectErr) {
+                    console.warn("Failed to resolve TikTok redirect:", redirectErr.message);
+                }
+
+                // Query David Cyril's official /download/tiktokv2 endpoint directly
+                const response = await fetch(`https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(longUrl)}`);
+                if (!response.ok) {
+                    throw new Error(`API status code ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (!data.status || !data.result) {
+                    throw new Error("No download media found inside parameters.");
+                }
+
+                const title = data.result.title || "TikTok Video";
+                const downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
+
+                await sock.sendMessage(jid, {
+                    video: { url: downloadUrl },
+                    caption: `🎵 *Title:* ${title}`,
+                    mimetype: 'video/mp4'
+                }, { quoted: msg });
+
+            } catch (error) {
+                console.error("TikTok v2 Downloader Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to complete TikTok v2 download. Try again later." }, { quoted: msg });
+            }
+        }
     }
 ];
 
-// Compile structural aliases safely without modifying the target array mid-iteration
+// Add structural aliases safely via external array collector
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'fb') {
@@ -1184,6 +1669,18 @@ module.exports.forEach(cmd => {
     }
     if (cmd.name === 'tt') {
         aliases.push({ ...cmd, name: 'tiktok' });
+    }
+    if (cmd.name === 'ig') {
+        aliases.push({ ...cmd, name: 'instagram' });
+    }
+    if (cmd.name === 'gitclone') {
+        aliases.push({ ...cmd, name: 'gitdl' });
+    }
+    if (cmd.name === 'pinterest') {
+        aliases.push({ ...cmd, name: 'pint' });
+    }
+    if (cmd.name === 'x2') {
+        aliases.push({ ...cmd, name: 'xdl2' });
     }
 });
 module.exports.push(...aliases);
