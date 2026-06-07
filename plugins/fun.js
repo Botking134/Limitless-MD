@@ -601,7 +601,7 @@ module.exports = [
             // Render interactive dialogue layout formatted in pure Sans-Serif mathematics blocks
             const interactiveText = 
                 `𝖦𝗎𝖾𝗌𝗌 𝖨 𝗁𝖺𝖿𝖾 𝗍𝗈 𝖽𝗈 𝗂𝗍 𝗇𝗈𝗐...\n\n` +
-                `👉 *𝖢𝗁𝗈𝗈𝗌𝖾 𝖮𝗎𝗍𝗉𝗎𝗍 𝖫𝖾𝗏𝖾𝗅:* \n` +
+                `👉 *𝖢handlers 𝖮𝗎𝗍𝗉𝗎𝗍 𝖫𝖾𝗏𝖾𝗅:* \n` +
                 `• Reply *100%* \n` +
                 `• Reply *200%*`;
 
@@ -621,6 +621,11 @@ module.exports = [
         name: 'handle_fun_replies',
         isPrefixless: true,
         execute: async (sock, msg, args) => {
+            // CRITICAL ANTI-LOOP GUARD: Gracefully kill parser execution if args are completely missing, blank, or literal system null strings
+            if (!args || typeof args !== 'string' || args.trim() === '' || args.trim().toLowerCase() === 'null') {
+                return;
+            }
+
             const jid = msg.key.remoteJid;
             const textLower = args.toLowerCase().trim();
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
@@ -634,12 +639,12 @@ module.exports = [
                         delete global.purpleSessions[jid]; // Safe structural state clearance
 
                         // Phase 1 Launch
-                        let currentMsg = await sock.sendMessage(jid, { text: `𝖳𝖺𝗄𝖾 𝗍𝗁𝖾 𝖺𝗆𝗉𝗅𝗂𝖿𝗂𝖾𝖽 𝗂𝗇𝖿𝗂𝗇𝗂𝗍创新 𝖺𝗇𝖽 𝗍𝗁𝖾 𝗍𝗎𝗋𝗇𝖾𝖽-𝗈𝗎𝗍 𝗂𝗇𝖿执行𝗂𝗍𝗒` }, { quoted: msg });
+                        let currentMsg = await sock.sendMessage(jid, { text: `𝖳𝖺𝗄𝖾 𝗍𝗁𝖾 𝖺𝗆𝗉𝗅𝗂𝖿𝗂𝖾𝖽 𝗂𝗇𝖿𝗂𝗇𝗂𝗍𝗒 𝖺𝗇𝖽 𝗍𝗁𝖾 𝗍𝗎𝗋𝗇𝖾𝖽-𝗈𝗎𝗍 𝗂𝗇𝖿𝗂𝗇𝗂𝗍𝗒` }, { quoted: msg });
                         await sleep(3000);
 
                         // Phase 2 Edit Shift
                         await sock.sendMessage(jid, {
-                            text: `𝖳𝗁𝖾𝗇 𝗌𝗆𝖺𝗌𝗁 𝗍𝗈𝗀𝖾𝗍𝗁𝖾𝗋 𝗍𝗁𝗈𝗌𝖾 𝗍𝗐𝗈 𝖽𝗂𝖿𝖿𝖾𝗋𝖾𝗇𝗍 𝖾𝗑𝗉𝗋𝖾𝗌𝗌𝗂𝗈𝗇𝗌 𝗈𝖿 𝗂𝗇𝖿𝗂𝗇𝗂𝗍𝗒 𝗍𝗈 𝖼𝗋𝖾𝖺𝗍𝖾 𝖺𝗇𝖽 𝖿𝗎𝗌𝗁 𝗈𝗎𝗍 𝗂𝗆𝖺𝗀𝗂𝗇𝖺𝗋𝗒 𝗆𝖺𝗌𝗌`,
+                            text: `𝖳𝗁𝖾𝗇 𝗌𝗆𝖺𝗌𝗁 𝗍𝗈𝗀𝖾𝗍𝗁𝖾𝗋 𝗍𝗁𝗈𝗌𝖾 𝗍𝗐𝗈 𝖽𝗂𝖿𝖿𝖾𝗋𝖾𝗇𝗍 𝖾𝗑𝗉𝗋𝖾𝗌𝗌𝗂𝗈𝗇𝗌 𝗈𝖿 𝗂𝗇𝖿𝗂𝗇𝗂𝗍𝗒 𝗍𝗈 𝖼𝗋𝖾𝖺𝗍𝖾 𝖺𝗇𝖽 𝗉𝗎𝗌𝗁 𝗈𝗎𝗍 𝗂𝗆𝖺𝗀𝗂𝗇𝖺𝗋𝗒 𝗆𝖺𝗌𝗌`,
                             edit: currentMsg.key
                         });
                         await sleep(3000);
