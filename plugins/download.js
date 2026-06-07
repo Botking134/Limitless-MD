@@ -470,7 +470,8 @@ module.exports = [
         }
     },
 
-    // 8. TIKTOK VIDEO DOWNLOADER (.tt / .tiktok)
+    
+// 8. TIKTOK VIDEO DOWNLOADER (.tt / .tiktok)
     {
         name: 'tt',
         isPrefixless: false,
@@ -496,21 +497,59 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading TikTok video... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
+                let downloadUrl = "";
+                let title = "TikTok Video";
+
+                // Attempt 1: Upgraded TikSave v2 API (Unified Endpoint)
+                try {
+                    const response = await fetch(`https://apis.davidcyril.name.ng/tiktok2?url=${encodeURIComponent(url)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.video) {
+                            title = data.video.title || "TikTok Video";
+                            const downloads = data.video.downloads || [];
+                            
+                            // Defensively check for high-quality or standard-quality streams
+                            const hd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'hd');
+                            const sd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'sd');
+                            downloadUrl = hd?.downloadUrl || sd?.downloadUrl || downloads[0]?.downloadUrl;
+                        }
+                    }
+                } catch (err) {
+                    console.warn("TikSave v2 API failed, trying legacy route...", err.message);
                 }
 
-                const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Failed to parse TikTok media links." }, { quoted: msg });
+                // Attempt 2: Legacy TikTok API (Fallback)
+                if (!downloadUrl) {
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(url)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.status && data.result) {
+                                title = data.result.title || "TikTok Video";
+                                downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
+                            }
+                        }
+                    } catch (err) {
+                        console.warn("Legacy TikTok API failed, trying third-party route...", err.message);
+                    }
                 }
 
-                const title = data.result.title || "TikTok Video";
-                const downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
+                // Attempt 3: Multi-Platform Scraper (Third-Party Fallback)
+                if (!downloadUrl) {
+                    try {
+                        const response = await fetch(`https://api.sandipbbaruwal.onrender.com/tiktok?url=${encodeURIComponent(url)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            downloadUrl = data.video || data.url || data.download_url;
+                        }
+                    } catch (err) {
+                        console.error("All TikTok API endpoints failed:", err.message);
+                    }
+                }
 
                 if (!downloadUrl) {
-                    throw new Error("No clean MP4 link available inside API response.");
+                    return await sock.sendMessage(jid, { text: "❌ Failed to parse TikTok download links from all available APIs." }, { quoted: msg });
                 }
 
                 await sock.sendMessage(jid, {
