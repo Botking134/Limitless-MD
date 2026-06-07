@@ -72,7 +72,6 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                                 rawContent.videoMessage?.caption || 
                                 '';
 
-            const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
             let destJid = '';
             if (antideleteConfig.logDestination === 'user' && antideleteConfig.logUserJid) {
                 destJid = antideleteConfig.logUserJid;
@@ -80,7 +79,7 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                 // Default to Bot's own account (highly mindful of LID/JID)
                 destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
                 if (!destJid) {
-                    destJid = settings.botJid || (cleanOwnerNum + '@s.whatsapp.net');
+                    destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
                 }
             }
 
@@ -365,7 +364,8 @@ async function startBot() {
                                                     { role: "system", content: systemPrompt },
                                                     { role: "user", content: logString }
                                                 ]
-                                            });
+                                            })
+                                        });
 
                                         if (response.ok) {
                                             const data = await response.json();
@@ -795,13 +795,22 @@ async function startBot() {
 
             // 5. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR
             const isViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
-            if (isViewOnce && settings.antiviewonce === 'on' && !msg.key.fromMe) {
+            const config = settings.antiviewonce || { status: 'off', logDestination: 'bot' };
+            const status = config.status || 'off';
+            let shouldDecrypt = false;
+            if (status === 'all') {
+                shouldDecrypt = true;
+            } else if (status === 'here') {
+                shouldDecrypt = (config.hereJid === jid);
+            }
+
+            if (isViewOnce && shouldDecrypt && !msg.key.fromMe) {
                 try {
                     const rawContent = getRawMessage(msg.message);
-                    const mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage;
-                    const mediaType = rawContent?.imageMessage ? "image" : "video";
+                    const mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
+                    const mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.audioMessage ? "audio" : ""));
 
-                    if (mediaMessage) {
+                    if (mediaMessage && mediaType) {
                         const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                         
                         const stream = await downloadContentFromMessage(mediaMessage, mediaType);
@@ -810,11 +819,15 @@ async function startBot() {
                             buffer = Buffer.concat([buffer, chunk]);
                         }
 
-                        const antideleteConfig = settings.antidelete || { status: 'off', logDestination: 'bot' };
-                        const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
-                        let destJid = `${cleanOwnerNum}@s.whatsapp.net`;
-                        if (antideleteConfig.logDestination === 'bot') {
-                            destJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        // Resolve logging destination securely (be highly mindful of JID/LID connection parameters)
+                        let destJid = '';
+                        if (config.logDestination === 'user' && config.logUserJid) {
+                            destJid = config.logUserJid;
+                        } else {
+                            destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
+                            if (!destJid) {
+                                destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
+                            }
                         }
 
                         const captionText = mediaMessage.caption || "";
@@ -823,14 +836,30 @@ async function startBot() {
                                           `👤 *Sender:* @${senderNumber}\n` +
                                           `📝 *Caption:* "${captionText}"\n`;
 
-                        const payload = {
-                            caption: logHeader,
-                            mentions: [jid, senderJid]
-                        };
-                        payload[mediaType] = buffer;
-                        if (mediaType === "video") payload.mimetype = mediaMessage.mimetype || "video/mp4";
-
-                        await sock.sendMessage(destJid, payload);
+                        if (mediaType === "image") {
+                            await sock.sendMessage(destJid, { 
+                                image: buffer, 
+                                caption: logHeader, 
+                                mentions: [jid, senderJid] 
+                            });
+                        } else if (mediaType === "video") {
+                            await sock.sendMessage(destJid, { 
+                                video: buffer, 
+                                mimetype: mediaMessage.mimetype || "video/mp4", 
+                                caption: logHeader, 
+                                mentions: [jid, senderJid] 
+                            });
+                        } else if (mediaType === "audio") {
+                            await sock.sendMessage(destJid, { 
+                                text: logHeader + `🎵 *Type:* View-Once Voice Note/Audio`, 
+                                mentions: [jid, senderJid] 
+                            });
+                            await sock.sendMessage(destJid, { 
+                                audio: buffer, 
+                                mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", 
+                                ptt: mediaMessage.ptt || false 
+                            });
+                        }
                     }
                 } catch (e) {
                     console.error("View Once extraction error:", e.message);
@@ -1051,7 +1080,7 @@ async function startBot() {
                                 }
                             } else if (antilinkSetting === 'delete') {
                                 await sock.sendMessage(jid, {
-                                    text: `@${senderNumber}\nBaka! My six eyes perceive All\nYou can't bypass my infinity coz you are so weak!!!`,
+                                    text: `@${senderNumber} Baka! My six eyes perceive All\nYou can't bypass my infinity coz you are so weak!!!`,
                                     mentions: [senderJid]
                                 });
                             } else if (antilinkSetting === 'kick') {
