@@ -308,7 +308,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching song index... 🔍" }, { quoted: msg });
 
-                // Loaded dynamically to prevent boot crashes if package is resolving
+                // Loaded dynamically inside the command execution to prevent startup boot crashes
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
@@ -364,7 +364,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching video index... 🎥" }, { quoted: msg });
 
-                // Loaded dynamically to prevent boot crashes if package is resolving
+                // Loaded dynamically inside the command execution to prevent startup boot crashes
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
@@ -844,7 +844,7 @@ module.exports = [
                 targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const gcregex = /^(https?:\/\/)?(www\.)?(github\.com)\/.+$/i;
+            const gcregex = /^(https?:\/\/)?(www\.)?(github\.com)\/.$/i;
             const url = extractLink(targetUrl, gcregex);
 
             if (!url) {
@@ -1108,11 +1108,14 @@ module.exports = [
 // Compile structural aliases safely without modifying the target array mid-iteration
 const aliases = [];
 module.exports.forEach(cmd => {
-    if (cmd.name === 'fb') {
-        aliases.push({ ...cmd, name: 'facebook' });
+    if (cmd.name === 'fw') {
+        aliases.push({ ...cmd, name: 'forward' });
     }
-    if (cmd.name === 'tt') {
-        aliases.push({ ...cmd, name: 'tiktok' });
+    if (cmd.name === 'device') {
+        aliases.push({ ...cmd, name: 'getdevice' });
+    }
+    if (cmd.name === 'antiviewonce') {
+        aliases.push({ ...cmd, name: 'antivv' });
     }
 });
 module.exports.push(...aliases);
