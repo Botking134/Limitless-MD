@@ -72,6 +72,7 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                                 rawContent.videoMessage?.caption || 
                                 '';
 
+            const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
             let destJid = '';
             if (antideleteConfig.logDestination === 'user' && antideleteConfig.logUserJid) {
                 destJid = antideleteConfig.logUserJid;
@@ -79,7 +80,7 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                 // Default to Bot's own account (highly mindful of LID/JID)
                 destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
                 if (!destJid) {
-                    destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
+                    destJid = settings.botJid || (cleanOwnerNum + '@s.whatsapp.net');
                 }
             }
 
@@ -722,21 +723,23 @@ async function startBot() {
                     await sock.sendMessage(jid, { text: `📥 *Downloading selected APK:* "${chosen.name}"...` }, { quoted: msg });
 
                     try {
-                        const response = await fetch(`https://apis.davidcyril.name.ng/apkdl?id=${encodeURIComponent(chosen.id)}`);
+                        const response = await fetch(`https://api.kord.live/api/apkdl?id=${encodeURIComponent(chosen.id)}`);
                         if (!response.ok) throw new Error("API failed to respond.");
 
                         const data = await response.json();
                         
                         const result = data.result || data;
-                        const downloadUrl = result.download_url || result.downloadUrl || result.link || result.url;
+                        const downloadUrl = result.downloadUrl || result.download_url || result.link || result.url;
                         const appName = result.name || result.app_name || chosen.name;
                         const version = result.version || "N/A";
-                        const size = result.size || "Unknown";
+                        const package_name = result.package || result.package_name || "N/A";
+                        const size = result.size || "Unknown Size";
 
                         if (downloadUrl) {
                             const cap = `📦 *APK COMPLETED* 📦\n━━━━━━━━━━━━━━━━━━━\n\n` +
                                         `📌 *Name:* ${appName}\n` +
-                                        `⚙️ *Version:* ${version}\n` +
+                                        `⚙️ *Package Name:* ${package_name}\n` +
+                                        `🔄 *Version:* ${version}\n` +
                                         `⚖️ *Size:* ${size}\n\n` +
                                         `_Downloaded via Satoru Gojo_ 🤞`;
 
@@ -836,30 +839,14 @@ async function startBot() {
                                           `👤 *Sender:* @${senderNumber}\n` +
                                           `📝 *Caption:* "${captionText}"\n`;
 
-                        if (mediaType === "image") {
-                            await sock.sendMessage(destJid, { 
-                                image: buffer, 
-                                caption: logHeader, 
-                                mentions: [jid, senderJid] 
-                            });
-                        } else if (mediaType === "video") {
-                            await sock.sendMessage(destJid, { 
-                                video: buffer, 
-                                mimetype: mediaMessage.mimetype || "video/mp4", 
-                                caption: logHeader, 
-                                mentions: [jid, senderJid] 
-                            });
-                        } else if (mediaType === "audio") {
-                            await sock.sendMessage(destJid, { 
-                                text: logHeader + `🎵 *Type:* View-Once Voice Note/Audio`, 
-                                mentions: [jid, senderJid] 
-                            });
-                            await sock.sendMessage(destJid, { 
-                                audio: buffer, 
-                                mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", 
-                                ptt: mediaMessage.ptt || false 
-                            });
-                        }
+                        const payload = {
+                            caption: logHeader,
+                            mentions: [jid, senderJid]
+                        };
+                        payload[mediaType] = buffer;
+                        if (mediaType === "video") payload.mimetype = mediaMessage.mimetype || "video/mp4";
+
+                        await sock.sendMessage(destJid, payload);
                     }
                 } catch (e) {
                     console.error("View Once extraction error:", e.message);
@@ -1165,7 +1152,13 @@ async function startBot() {
                     command = 'speed';
                     args = '';
                 }
-            } else {
+            } 
+            // Support executing registered prefixless commands (like button clicks) directly!
+            else if (commands[trimmedMessage.toLowerCase()]) {
+                command = trimmedMessage.toLowerCase();
+                args = '';
+            }
+            else {
                 const isLizzyActive = Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid);
                 const isChatbotActive = Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid);
 
