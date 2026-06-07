@@ -1,4 +1,4 @@
-// plugins/downloaded.js
+// plugins/download.js
 const settings = require('../settings');
 
 // Initialize sessions securely in global memory
@@ -341,6 +341,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching song index... 🔍" }, { quoted: msg });
 
+                // Loaded dynamically inside the command execution to prevent startup boot crashes
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
@@ -396,6 +397,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching video index... 🎥" }, { quoted: msg });
 
+                // Natively traces top matching YouTube URLs using yt-search
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
@@ -407,24 +409,43 @@ module.exports = [
                 const firstVideo = videos[0];
                 const videoUrl = firstVideo.url;
 
-                const downloadResponse = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(videoUrl)}`);
-                if (!downloadResponse.ok) {
-                    throw new Error(`Downloader API returned status code ${downloadResponse.status}`);
+                let downloadUrl = "";
+                let title = firstVideo.title || "YouTube Video";
+
+                // Attempt 1: Query primary /youtube/mp444 endpoint (matching ytmp4 fix)
+                try {
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(videoUrl)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            title = data.result.title || title;
+                            downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Primary ytv444 failed, trying fallback...", e.message);
                 }
 
-                const dlData = await downloadResponse.json();
-                if (!dlData.status || !dlData.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Failed to process video download parameters." }, { quoted: msg });
-                }
-
-                const downloadUrl = dlData.result.mp4 || dlData.result.download_url;
+                // Attempt 2: Auto redirect/fallback to /download/ytmp4 endpoint
                 if (!downloadUrl) {
-                    throw new Error("No direct MP4 download link found.");
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(videoUrl)}`);
+                    if (!response.ok) {
+                        throw new Error(`Fallback API status code ${response.status}`);
+                    }
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        title = data.result.title || title;
+                        downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                    }
+                }
+
+                if (!downloadUrl) {
+                    throw new Error("Unable to fetch video download stream from both endpoints.");
                 }
 
                 const duration = firstVideo.duration || firstVideo.timestamp || "N/A";
                 const caption = `🎥 *VIDEO FOUND* 🎥\n━━━━━━━━━━━━━━━━━━━\n\n` +
-                                `📌 *Title:* ${firstVideo.title}\n` +
+                                `📌 *Title:* ${title}\n` +
                                 `⏳ *Duration:* ${duration}\n` +
                                 `👁️ *Views:* ${firstVideo.views ? firstVideo.views.toLocaleString() : 'N/A'}`;
 
@@ -467,6 +488,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Facebook video... 📥" }, { quoted: msg });
 
+                // Queries the active /facebook2 endpoint used on his direct downloader website
                 const response = await fetch(`https://apis.davidcyril.name.ng/facebook2?url=${encodeURIComponent(url)}`);
                 if (!response.ok) {
                     throw new Error(`API returned status code ${response.status}`);
@@ -697,6 +719,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: `Searching and downloading APK for "${args}"... 🔍` }, { quoted: msg });
 
+                // Query David Cyril's official /download/apk endpoint directly
                 const response = await fetch(`https://apis.davidcyril.name.ng/download/apk?query=${encodeURIComponent(args)}`);
                 if (!response.ok) {
                     throw new Error(`API returned status code ${response.status}`);
@@ -745,6 +768,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching app catalog... 🔍" }, { quoted: msg });
 
+                // Query the APK search endpoint securely
                 const response = await fetch(`https://apis.davidcyril.name.ng/apksearch?query=${encodeURIComponent(args)}`);
                 if (!response.ok) {
                     throw new Error(`API returned status code ${response.status}`);
@@ -1208,6 +1232,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching song index for document... 🔍" }, { quoted: msg });
 
+                // Loaded dynamically inside the command execution to prevent startup boot crashes
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
