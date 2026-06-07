@@ -72,7 +72,6 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                                 rawContent.videoMessage?.caption || 
                                 '';
 
-            const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '');
             let destJid = '';
             if (antideleteConfig.logDestination === 'user' && antideleteConfig.logUserJid) {
                 destJid = antideleteConfig.logUserJid;
@@ -80,7 +79,7 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                 // Default to Bot's own account (highly mindful of LID/JID)
                 destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
                 if (!destJid) {
-                    destJid = settings.botJid || (cleanOwnerNum + '@s.whatsapp.net');
+                    destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
                 }
             }
 
@@ -839,14 +838,30 @@ async function startBot() {
                                           `👤 *Sender:* @${senderNumber}\n` +
                                           `📝 *Caption:* "${captionText}"\n`;
 
-                        const payload = {
-                            caption: logHeader,
-                            mentions: [jid, senderJid]
-                        };
-                        payload[mediaType] = buffer;
-                        if (mediaType === "video") payload.mimetype = mediaMessage.mimetype || "video/mp4";
-
-                        await sock.sendMessage(destJid, payload);
+                        if (mediaType === "image") {
+                            await sock.sendMessage(destJid, { 
+                                image: buffer, 
+                                caption: logHeader, 
+                                mentions: [jid, senderJid] 
+                            });
+                        } else if (mediaType === "video") {
+                            await sock.sendMessage(destJid, { 
+                                video: buffer, 
+                                mimetype: mediaMessage.mimetype || "video/mp4", 
+                                caption: logHeader, 
+                                mentions: [jid, senderJid] 
+                            });
+                        } else if (mediaType === "audio") {
+                            await sock.sendMessage(destJid, { 
+                                text: logHeader + `🎵 *Type:* View-Once Voice Note/Audio`, 
+                                mentions: [jid, senderJid] 
+                            });
+                            await sock.sendMessage(destJid, { 
+                                audio: buffer, 
+                                mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", 
+                                ptt: mediaMessage.ptt || false 
+                            });
+                        }
                     }
                 } catch (e) {
                     console.error("View Once extraction error:", e.message);
@@ -1182,6 +1197,14 @@ async function startBot() {
                 }
                 
                 if (!command) return; 
+            }
+
+            // Global Bot Privacy Mode Guard (Owner & Sudo Authorized Only in Private Mode)
+            if (command) {
+                const isPublicMode = settings.isPublic ?? false; // Default private state
+                if (!isPublicMode && !isAuthorized) {
+                    return; // Silently ignore all commands and chatbot triggers for unauthorized users in private mode
+                }
             }
 
             console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
