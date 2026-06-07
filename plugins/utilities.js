@@ -6,6 +6,16 @@ const path = require('path');
 
 const notesPath = path.join(__dirname, '../notes.json');
 
+// Helper function to format system uptime securely
+function formatUptime(seconds) {
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    
+    return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
+}
+
 // Notes Database Helpers
 function readNotes() {
     try {
@@ -193,7 +203,7 @@ module.exports = [
         }
     },
 
-    // 2. ALIVE COMMAND
+    // 2. ALIVE COMMAND (Upgraded & Compacted Status Bubble)
     {
         name: 'alive',
         isPrefixless: false,
@@ -201,15 +211,47 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const uptimeString = formatUptime(process.uptime());
 
+            // 1. Resolve Nigerian Time (WAT) dynamically
+            const timeOptions = {
+                timeZone: 'Africa/Lagos',
+                hour: '2-digit', minute: '2-digit',
+                hour12: true,
+                weekday: 'short', day: 'numeric', month: 'short'
+            };
+            const timeFormatter = new Intl.DateTimeFormat('en-US', timeOptions);
+            const nigerianTime = timeFormatter.format(new Date());
+
+            // 2. Fetch compact one-line weather metrics safely
+            let weather = "Unavailable 🌀";
+            try {
+                const weatherRes = await fetch("https://wttr.in/Lagos?format=%c+%t");
+                if (weatherRes.ok) {
+                    const weatherText = await weatherRes.text();
+                    weather = weatherText.trim();
+                }
+            } catch (e) {
+                console.error("Alive weather fetch error:", e.message);
+            }
+
+            // 3. Compile sleek, non-bloated status caption
+            const compactCaption = 
+                `🤞 *LIMITLESS DOMAIN ONLINE* 🤞\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `⚡ *Uptime:* \`${uptimeString}\`\n` +
+                `🕒 *WAT Time:* \`${nigerianTime}\`\n` +
+                `🌤️ *Weather:* \`${weather}\`\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `_“Throughout Heaven and Earth, I alone am the honoured one.”_ 🌏`;
+
             try {
                 await sock.sendMessage(jid, {
                     image: { url: "https://iili.io/C3yej7s.jpg" },
-                    caption: `I'm still Alive and kicking\n> ${uptimeString}`
+                    caption: compactCaption
                 }, { quoted: msg });
             } catch (error) {
                 console.error("Alive Command Error:", error);
                 await sock.sendMessage(jid, { 
-                    text: `I'm still Alive and kicking\n> ${uptimeString}\n\n_(Failed to load visual engine)_` 
+                    text: `${compactCaption}\n\n_(Visual engine offline)_` 
                 }, { quoted: msg });
             }
         }
@@ -806,7 +848,7 @@ module.exports = [
         }
     },
 
-    // 16. NOTES DASHBOARD & VIEWER (.notes) [Mission 1]
+    // 16. NOTES DASHBOARD & VIEWER (.notes)
     {
         name: 'notes',
         isPrefixless: false,
@@ -848,7 +890,7 @@ module.exports = [
         }
     },
 
-    // 17. ADD NOTE (.addnote <name>) [Mission 1]
+    // 17. ADD NOTE (.addnote <name>)
     {
         name: 'addnote',
         isPrefixless: false,
@@ -891,7 +933,7 @@ module.exports = [
         }
     },
 
-    // 18. DELETE NOTE (.delnote <name>) [Mission 1]
+    // 18. DELETE NOTE (.delnote <name>)
     {
         name: 'delnote',
         isPrefixless: false,
@@ -918,7 +960,7 @@ module.exports = [
         }
     },
 
-    // 19. GET NOTES LIST (.getnotes) [Mission 1]
+    // 19. GET NOTES LIST (.getnotes)
     {
         name: 'getnotes',
         isPrefixless: false,
@@ -945,7 +987,7 @@ module.exports = [
         }
     },
 
-    // 20. GET NOTE SUB-COMMAND (.getnote <name>) [Subcommand update]
+    // 20. GET NOTE SUB-COMMAND (.getnote <name>)
     {
         name: 'getnote',
         isPrefixless: false,
@@ -970,7 +1012,7 @@ module.exports = [
     }
 ];
 
-// Safely generate aliases
+// Safely generate aliases using external collector
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'sticker') {
