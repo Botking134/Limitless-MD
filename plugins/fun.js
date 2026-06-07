@@ -10,9 +10,13 @@ const GROQ_API_KEY = s1 + s2 + s3 + s4;
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-// Global wizard state managers for matching button-interactive events safely
+// Global wizard state managers for matching button/text interactive events safely
 global.proposalSessions = global.proposalSessions || {};
 global.askoutSessions = global.askoutSessions || {};
+global.purpleSessions = global.purpleSessions || {};
+
+// Non-blocking sleep helper for sequential choreography
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Reusable Helper to query Groq's OpenAI-compatible completions endpoint
 async function queryGroq(messages, model = "llama-3.3-70b-versatile", temperature = 0.7) {
@@ -408,19 +412,15 @@ module.exports = [
                 let bride = '';
 
                 if (mentionedList.length >= 2) {
-                    // Context 3: .wed @user1 @user2
                     groom = mentionedList[0];
                     bride = mentionedList[1];
                 } else if (mentionedList.length === 1) {
-                    // Context 1: .wed @user
                     groom = senderJid;
                     bride = mentionedList[0];
                 } else if (quotedParticipant) {
-                    // Context 4: .wed on Reply
                     groom = senderJid;
                     bride = quotedParticipant;
                 } else {
-                    // Context 2: Just .wed (Pick two random people)
                     const pool = participants.filter(p => p !== botJid);
                     if (pool.length < 2) {
                         return await sock.sendMessage(jid, { text: "❌ Insufficient congregation size to bind souls together." }, { quoted: msg });
@@ -511,7 +511,6 @@ module.exports = [
                     mentions: [senderJid, targetJid] 
                 }, { quoted: msg });
 
-                // Map state metadata directly to global memory maps for validation tracking
                 global.proposalSessions[jid] = {
                     proposer: senderJid,
                     target: targetJid,
@@ -585,22 +584,138 @@ module.exports = [
         }
     },
 
-    // 11. IN-LINE RESPONSE PARSING GATEWAY (Catches text matching 'yes' / 'no' for proposals/askouts)
+    // 11. THE HOLLOW PURPLE ULTIMATE INCANTATION ENGINE (.hollow-purple / .purple-tech)
     {
-        name: 'handle_romance_replies',
+        name: 'hollow-purple',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            
+            // Anti-Spam Mitigation: Force absolute access restrictions to prevent chat breakdown
+            if (!isOwner && !isSudo) {
+                return await sock.sendMessage(jid, { text: "🔒 *Limitless Secure System:* This technique expends immense cursed energy. Reserved for Owners/Sudo units only." }, { quoted: msg });
+            }
+
+            const senderJid = msg.key.participant || msg.key.remoteJid || '';
+
+            // Render interactive dialogue layout formatted in pure Sans-Serif mathematics blocks
+            const interactiveText = 
+                `𝖦𝗎𝖾𝗌𝗌 𝖨 𝗁𝖺𝖿𝖾 𝗍𝗈 𝖽𝗈 𝗂𝗍 𝗇𝗈𝗐...\n\n` +
+                `👉 *𝖢𝗁𝗈𝗈𝗌𝖾 𝖮𝗎𝗍𝗉𝗎𝗍 𝖫𝖾𝗏𝖾𝗅:* \n` +
+                `• Reply *100%* \n` +
+                `• Reply *200%*`;
+
+            const sent = await sock.sendMessage(jid, { text: interactiveText }, { quoted: msg });
+
+            // Lock structural execution variables straight into global active registers
+            global.purpleSessions[jid] = {
+                operator: senderJid,
+                messageId: sent.key.id,
+                timestamp: Date.now()
+            };
+        }
+    },
+
+    // 12. IN-LINE INTERACTIVE ROUTING SYSTEM (Catches romantic confirmations and Hollow Purple selections)
+    {
+        name: 'handle_fun_replies',
         isPrefixless: true,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const textLower = args.toLowerCase().trim();
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
 
+            // Section A: Hollow Purple Incantation Routing Engine
+            if (global.purpleSessions[jid]) {
+                const session = global.purpleSessions[jid];
+                
+                if (senderJid === session.operator) {
+                    if (textLower === '100%') {
+                        delete global.purpleSessions[jid]; // Safe structural state clearance
+
+                        // Phase 1 Launch
+                        let currentMsg = await sock.sendMessage(jid, { text: `𝖳𝖺𝗄𝖾 𝗍𝗁𝖾 𝖺𝗆𝗉𝗅𝗂𝖿𝗂𝖾𝖽 𝗂𝗇𝖿𝗂𝗇𝗂𝗍创新 𝖺𝗇𝖽 𝗍𝗁𝖾 𝗍𝗎𝗋𝗇𝖾𝖽-𝗈𝗎𝗍 𝗂𝗇𝖿执行𝗂𝗍𝗒` }, { quoted: msg });
+                        await sleep(3000);
+
+                        // Phase 2 Edit Shift
+                        await sock.sendMessage(jid, {
+                            text: `𝖳𝗁𝖾𝗇 𝗌𝗆𝖺𝗌𝗁 𝗍𝗈𝗀𝖾𝗍𝗁𝖾𝗋 𝗍𝗁𝗈𝗌𝖾 𝗍𝗐𝗈 𝖽𝗂𝖿𝖿𝖾𝗋𝖾𝗇𝗍 𝖾𝗑𝗉𝗋𝖾𝗌𝗌𝗂𝗈𝗇𝗌 𝗈𝖿 𝗂𝗇𝖿𝗂𝗇𝗂𝗍𝗒 𝗍𝗈 𝖼𝗋𝖾𝖺𝗍𝖾 𝖺𝗇𝖽 𝖿𝗎𝗌𝗁 𝗈𝗎𝗍 𝗂𝗆𝖺𝗀𝗂𝗇𝖺𝗋𝗒 𝗆𝖺𝗌𝗌`,
+                            edit: currentMsg.key
+                        });
+                        await sleep(3000);
+
+                        // Phase 3 Edit Shift
+                        await sock.sendMessage(jid, {
+                            text: `𝖢𝗎𝗋𝗌𝖾𝖽 𝖳𝖾𝖼𝗁𝗇𝗂𝗊𝗎𝖾 𝖫𝖺𝗉𝗌𝖾: 𝖡𝗅𝗎𝖾\n                    🫸🔵🫷`,
+                            edit: currentMsg.key
+                        });
+                        await sleep(3000);
+
+                        // Phase 4 Edit Shift
+                        await sock.sendMessage(jid, {
+                            text: `𝖢𝗎𝗋𝗌𝖾𝖽 𝖳𝖾𝖼𝗁𝗇𝗂𝗊𝗎𝖾 𝖱𝖾𝗏𝖾𝗋𝗌𝖺𝗅: 𝖱𝖾𝖽\n                  🫸🔴🔵🫷`,
+                            edit: currentMsg.key
+                        });
+                        await sleep(3000);
+
+                        // Ultimate Output Release Finalization
+                        await sock.sendMessage(jid, {
+                            text: `𝖧𝗈𝗅𝗅𝗈𝗐 𝖳𝖾𝖼𝗁𝗇𝗂𝗊𝗎𝖾: 𝖯𝗎𝗋𝗉𝗅𝖾\n          🤌.......🫴⏤͟͟͞🟣`,
+                            edit: currentMsg.key
+                        });
+                        return;
+
+                    } else if (textLower === '200%') {
+                        delete global.purpleSessions[jid];
+
+                        // Phase 1 Launch
+                        let currentMsg = await sock.sendMessage(jid, { text: `𝖬𝖺𝗑𝗂𝗆𝗎𝗆 𝗈𝗎𝗍𝗉𝗎𝗍!!!\n          𝖡𝗅𝗎𝖾!!!🔵` }, { quoted: msg });
+                        await sleep(3000);
+
+                        // Phase 2 Edit Shift
+                        await sock.sendMessage(jid, {
+                            text: `𝖯𝗁𝖺𝗌𝖾!!! 𝖯𝖺𝗋𝖺𝗆𝗂𝗍𝖺\n    𝖯𝗂𝗅𝗅𝖺𝗋 𝗈𝖿 𝗅𝗂𝗀𝗁𝗍`,
+                            edit: currentMsg.key
+                        });
+                        await sleep(3000);
+
+                        // Phase 3 Edit Shift
+                        await sock.sendMessage(jid, {
+                            text: `𝖯𝗁𝖺𝗌𝖾!!!! 𝖳𝗐𝗂𝗅𝗂𝗀𝗁𝗍\n𝖤𝗒𝖾𝗌 𝗈𝖿 𝗐𝗂𝗌𝖽𝗈𝗆`,
+                            edit: currentMsg.key
+                        });
+                        await sleep(3000);
+
+                        // Phase 4 Edit Shift
+                        await sock.sendMessage(jid, {
+                            text: `𝖭𝗂𝗇𝖾 𝗋𝗈𝗉𝖾𝗌! 𝖯𝗈𝗅𝖺𝗋𝗂𝗓𝖾𝖽 𝗅𝗂𝗀𝗁𝗍\n𝖢𝗋𝗈𝗐 𝖺𝗇𝖽 𝖽𝖾𝖼𝗅𝖺𝗋𝖺𝗍𝗂𝗈𝗇!`,
+                            edit: currentMsg.key
+                        });
+                        await sleep(3000);
+
+                        // Phase 5 Edit Shift
+                        await sock.sendMessage(jid, {
+                            text: `𝖡𝖾𝗍𝗐𝖾𝖾𝗇 𝖿𝗋𝗈𝗇𝗍 𝖺𝗇𝖽 𝖻𝖺𝖼𝗄!!!!\n             🫸🔴🔵🫷`,
+                            edit: currentMsg.key
+                        });
+                        await sleep(3000);
+
+                        // Ultimate Output Release Finalization
+                        await sock.sendMessage(jid, {
+                            text: `𝖧𝗈𝗅𝗅𝗈𝗐 𝖯𝗎𝗋𝗉𝗅𝖾!!\n🤌.......🫴⏤͟͟͞🟣`,
+                            edit: currentMsg.key
+                        });
+                        return;
+                    }
+                }
+            }
+
             if (textLower !== 'yes' && textLower !== 'no') return;
 
-            // Check Proposal Maps
+            // Section B: Proposal Session Triggers
             if (global.proposalSessions[jid]) {
                 const session = global.proposalSessions[jid];
                 
-                // Enforce tracking restrictions so only the specified target can complete the event
                 if (senderJid === session.target) {
                     if (textLower === 'yes') {
                         const successText = 
@@ -611,7 +726,6 @@ module.exports = [
                         
                         await sock.sendMessage(jid, { text: successText, mentions: [session.target, session.proposer] }, { quoted: msg });
                     } else {
-                        // Scenario: Refusal text matching
                         try {
                             const prompt = "Write a short paragraph about a rejected marriage proposal that sounds extremely disappointed, heartbroken, and deeply sad. No introduction.";
                             const burn = await queryGroq([{ role: "user", content: prompt }], "llama-3.3-70b-versatile", 0.85);
@@ -622,12 +736,12 @@ module.exports = [
                             await sock.sendMessage(jid, { text: "💔 The ring was silently turned down... The atmosphere feels heavy and incredibly sad." }, { quoted: msg });
                         }
                     }
-                    delete global.proposalSessions[jid]; // Clear structural memory slots safely
+                    delete global.proposalSessions[jid];
                     return;
                 }
             }
 
-            // Check Askout Maps
+            // Section C: Askout Session Triggers
             if (global.askoutSessions[jid]) {
                 const session = global.askoutSessions[jid];
 
@@ -664,6 +778,9 @@ const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'domain-expansion') {
         aliases.push({ ...cmd, name: 'dom-exp' });
+    }
+    if (cmd.name === 'hollow-purple') {
+        aliases.push({ ...cmd, name: 'purple-tech' });
     }
 });
 module.exports.push(...aliases);
