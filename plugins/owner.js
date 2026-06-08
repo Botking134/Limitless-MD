@@ -10,7 +10,7 @@ const remindersPath = path.join(__dirname, '../reminders.json');
 
 // Initialize reminders dynamic memory
 if (!global.reminders) global.reminders = [];
-if (!global.reminderSessions) global.reminderSessions = [];
+if (!global.reminderSessions) global.reminderSessions = {}; // Corrected to object format
 if (!global.cancelSessions) global.cancelSessions = {};
 
 // Helpers to read/write persistent reminders to JSON
@@ -961,7 +961,7 @@ module.exports = [
 ];
 
 const aliases = [];
-module.forEach(cmd => {
+module.exports.forEach(cmd => { // Corrected from module.forEach to module.exports.forEach
     if (cmd.name === 'adddev') {
         aliases.push({ ...cmd, name: 'add-dev' });
     }
