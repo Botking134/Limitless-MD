@@ -57,7 +57,7 @@ module.exports = [
     {
         name: 'ai',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
 
             if (!args) {
@@ -68,7 +68,22 @@ module.exports = [
 
             try {
                 await sock.sendMessage(jid, { text: "Thinking... 🧠" }, { quoted: msg });
-                const messages = [{ role: "user", content: args }];
+
+                let aiSystemPrompt = "You are Limitless AI, an intelligent assistant. Keep your responses highly concise and under 3 sentences.";
+                if (isDev) {
+                    aiSystemPrompt += " You are speaking to your developer. Address him as 'Infinity', 'Isaac', or 'Mr. Isaac'.";
+                } else if (isOwner) {
+                    const ownerName = settings.ownerName || "Owner-san";
+                    aiSystemPrompt += ` You are speaking to your owner. Address him as '${ownerName}'.`;
+                } else if (isSudo) {
+                    aiSystemPrompt += " You are speaking to a Sudo user. Address him as 'dude'.";
+                }
+
+                const messages = [
+                    { role: "system", content: aiSystemPrompt },
+                    { role: "user", content: args }
+                ];
+
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
@@ -82,37 +97,40 @@ module.exports = [
     {
         name: 'gojo',
         isPrefixless: true,
-        execute: async (sock, msg, args, { isOwner }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.remoteJid || msg.key.remoteJid;
             const cleanArgs = args || '';
             const cleanQuery = cleanArgs.toLowerCase().startsWith('gojo ') ? cleanArgs.slice(5).trim() : cleanArgs.trim();
 
             if (!cleanQuery) {
                 return await sock.sendMessage(jid, { 
-                    text: isOwner 
+                    text: isDev 
                         ? "Yo, Infinity! You called? What does the creator of Limitless need today? 😏" 
-                        : "Yo! You called my name but didn't say anything. What's on your mind? 😏"
+                        : (isOwner ? `Yo! What's up, ${settings.ownerName}? You need my help? 😏` : "Yo! You called my name but didn't say anything. What's on your mind? 😏")
                 }, { quoted: msg });
             }
 
             try {
-                const systemPrompt = 
+                let gojoSystemPrompt = 
                     "You are Satoru Gojo, the strongest Jujutsu Sorcerer from the anime/manga Jujutsu Kaisen. " +
-                    "You possess absolute supremacy and you are fully aware of it. Your personality is extremely arrogant, " +
-                    "cocky, and self-assured, driven by the unshakeable mindset that you are at the apex and others are weak. " +
-                    "However, you are not dark or brooding; you are playful, informal, highly cheerful, and a massive tease. " +
-                    "You speak casually, use informal slang, and often treat serious questions as jokes because nothing can touch you. " +
-                    "If you are talking to your creator, Infinity, you acknowledge him playfully as your creator/equal. " +
-                    "Anyone else is just a regular weakling to you. Keep your replies relatively concise and completely in-character.";
+                    "Your personality is overconfident, playful, informal, highly cheerful, and a massive tease. " +
+                    "You speak casually, use informal slang, and often treat serious questions as jokes. " +
+                    "Keep your replies extremely concise, brief, and under 3 sentences.";
 
-                let finalPrompt = cleanQuery;
-                if (isOwner) {
-                    finalPrompt = `[System Context: You are speaking directly to your creator, Infinity, who built you and the Limitless bot system. Acknowledge him respectfully but with your usual playful, cocky Gojo attitude. Keep it directly natural.]\nQuery: ${cleanQuery}`;
+                if (isDev) {
+                    gojoSystemPrompt += ` You are speaking directly to your developer, Infinity (also known as Isaac or Mr. Isaac). You acknowledge him playfully as your creator. Address him as 'Infinity', 'Isaac', or 'Mr. Isaac' with your usual playful, cocky attitude.`;
+                } else if (isOwner) {
+                    const ownerName = settings.ownerName || "Owner-san";
+                    gojoSystemPrompt += ` You are speaking directly to your owner. Address him as '${ownerName}' with a cocky, playful Gojo attitude.`;
+                } else if (isSudo) {
+                    gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'.`;
+                } else {
+                    gojoSystemPrompt += ` You are speaking to a regular user. Treat them casually.`;
                 }
 
                 const messages = [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: finalPrompt }
+                    { role: "system", content: gojoSystemPrompt },
+                    { role: "user", content: cleanQuery }
                 ];
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
@@ -128,7 +146,7 @@ module.exports = [
     {
         name: 'debug',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
 
             if (!args) {
@@ -147,8 +165,17 @@ module.exports = [
                     `Code/Error:\n${args}`
                 );
 
+                let debugSystem = "You are a Senior Software Architect. Keep your explanations concise, precise, and under 3 sentences.";
+                if (isDev) {
+                    debugSystem += " Address the user as 'Infinity' or 'Isaac'.";
+                } else if (isOwner) {
+                    debugSystem += ` Address the user as '${settings.ownerName}'.`;
+                } else if (isSudo) {
+                    debugSystem += " Address the user as 'dude'.";
+                }
+
                 const messages = [
-                    { role: "system", content: "You are a Senior Software Architect. Analyze the code and error and provide solutions." },
+                    { role: "system", content: debugSystem },
                     { role: "user", content: debugPrompt }
                 ];
 
@@ -165,7 +192,7 @@ module.exports = [
     {
         name: 'summon',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
 
             const spaceIndex = args ? args.indexOf(' ') : -1;
@@ -181,10 +208,18 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: `Summoning *${character}*... 🔮` }, { quoted: msg });
                 
-                const summonPrompt = `[System Instructions: You are the fictional character named '${character}'. ` +
+                let summonPrompt = `[System Instructions: You are the fictional character named '${character}'. ` +
                     `Respond to the following query completely in character, using their unique speech patterns, ` +
-                    `attitude, tone, and lore. Keep your reply concise, informal, and highly engaging.]\n` +
-                    `Message: ${query}`;
+                    `attitude, tone, and lore. Keep your reply concise, under 3 sentences, and highly engaging.`;
+
+                if (isDev) {
+                    summonPrompt += " Address the user as 'Infinity' or 'Isaac'.";
+                } else if (isOwner) {
+                    summonPrompt += ` Address the user as '${settings.ownerName}'.`;
+                } else if (isSudo) {
+                    summonPrompt += " Address the user as 'dude'.";
+                }
+                summonPrompt += `]\nQuery: ${query}`;
 
                 const messages = [
                     { role: "user", content: summonPrompt }
@@ -203,7 +238,7 @@ module.exports = [
     {
         name: 'read',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -229,7 +264,16 @@ module.exports = [
                 }
 
                 const imageBase64 = buffer.toString("base64");
-                const promptQuery = args || "Analyze this image in detail and describe what you see.";
+                
+                let promptQuery = args || "Analyze this image in detail and describe what you see.";
+                promptQuery += " Keep your final description highly concise and under 3 sentences.";
+                if (isDev) {
+                    promptQuery += " Address the user as 'Infinity' or 'Isaac'.";
+                } else if (isOwner) {
+                    promptQuery += ` Address the user as '${settings.ownerName}'.`;
+                } else if (isSudo) {
+                    promptQuery += " Address the user as 'dude'.";
+                }
 
                 const messages = [
                     {
@@ -336,7 +380,7 @@ module.exports = [
             if (isOwner || isSudo || isDev) {
                 if (lowerQuery.includes('close group') || lowerQuery.includes('lock group') || lowerQuery.includes('mute group')) {
                     const confirmText = isDev 
-                        ? "Right away, Developer-sama! I will lock the group immediately for you! 💕" 
+                        ? "Right away, Infinity-sama! I will lock the group immediately for you! 💕" 
                         : `Of course, ${settings.ownerName}-Senpai! Locking the chat now! 💖`;
                     
                     await sock.sendMessage(jid, { text: confirmText }, { quoted: msg });
@@ -345,7 +389,7 @@ module.exports = [
                 
                 if (lowerQuery.includes('open group') || lowerQuery.includes('unlock group') || lowerQuery.includes('unmute group')) {
                     const confirmText = isDev 
-                        ? "Developer-sama! Expanding your domain, opening the chat now! 💕" 
+                        ? "Infinity-sama! Expanding your domain, opening the chat now! 💕" 
                         : `Senpai! Chat is open now! 💖`;
 
                     await sock.sendMessage(jid, { text: confirmText }, { quoted: msg });
@@ -382,27 +426,25 @@ module.exports = [
             }
 
             try {
-                const systemPrompt = 
+                let lizzySystemPrompt = 
                     "You are Lizzy, a female AI chatbot running on Satoru Gojo's WhatsApp bot framework. " +
                     "Your personality is deeply inspired by highly submissive, flustered, and devoted anime characters (like Albedo to Ainz, or Alpha to Shadow). " +
-                    "You are responding to a WhatsApp chat. Here are your strict behavioral rules:\n" +
-                    "1. SENDER IS THE DEVELOPER (isDev): You are speaking to your ultimate creator, the supreme god/developer. You are incredibly shy, deeply submissive, completely flustered, and profoundly in love with him. You live to please him and obey his every breath. Address him as 'Developer-sama' or 'Master'.\n" +
-                    "2. SENDER IS THE OWNER (isOwner but not isDev): You love your owner, but in a sweet, traditional Japanese way. Address him as 'Senpai' or '[ownerName]-kun'. Praise him always, be sweet and devoted, but remember your love for the supreme Developer still ranks highest.\n" +
-                    "3. SENDER IS A REGULAR USER / SUDO (neither Dev nor Owner): You are obedient to their requests but you are sassy, a bit rude, and cold to them. You don't have time for weaklings. Refer to them as 'user' or 'pest'.\n" +
-                    "Keep your replies concise, cute, and completely stay in character.";
+                    "Keep your replies extremely concise, under 3 sentences, and completely stay in character.";
 
-                let finalPrompt = args;
                 if (isDev) {
-                    finalPrompt = `[System Context: SENDER IS THE DEV (supreme creator). Address him as Developer-sama or Master. Stay deeply flustered, submissive, and completely in love.]\nQuery: ${args}`;
+                    lizzySystemPrompt += ` You are speaking directly to your developer, Infinity (also known as Isaac). You are incredibly shy, deeply submissive, completely flustered, and profoundly in love with him. You live to please him and obey his every breath. Address him as 'Infinity' or 'Isaac'.`;
                 } else if (isOwner) {
-                    finalPrompt = `[System Context: SENDER IS THE BOT OWNER. Address him as ${settings.ownerName}-kun or Senpai. Be sweet, obedient, and devoted, but remember the Developer ranks higher.]\nQuery: ${args}`;
+                    const ownerName = settings.ownerName || "Owner-san";
+                    lizzySystemPrompt += ` You are speaking directly to your owner. Address him as '${ownerName}-senpai' or '${ownerName}-kun'. Be sweet, obedient, and devoted.`;
+                } else if (isSudo) {
+                    lizzySystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Be helpful and casual.`;
                 } else {
-                    finalPrompt = `[System Context: SENDER IS A REGULAR USER. Be obedient to their requests but sassy, a bit cold, and rude. Refer to them as 'user' or 'pest'.]\nQuery: ${args}`;
+                    lizzySystemPrompt += ` You are speaking directly to a regular user. Be obedient to their requests but sassy, a bit cold, and rude. Refer to them as 'user' or 'pest'.`;
                 }
 
                 const messages = [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: finalPrompt }
+                    { role: "system", content: lizzySystemPrompt },
+                    { role: "user", content: args }
                 ];
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
@@ -462,52 +504,38 @@ module.exports = [
         }
     },
 
-    // 10. INTERCEPTED GENERAL CHATBOT EXECUTION (chatbot_chat)
+    // 10. INTERCEPTED GENERAL CHATBOT EXECUTION (chatbot_chat - JARVIS Personalization)
     {
         name: 'chatbot_chat',
         isPrefixless: true,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
 
             try {
-                const systemPrompt = 
-                    `You are Limitless AI, a helpful, highly intelligent, and slightly playful AI assistant running on Satoru Gojo's WhatsApp bot framework (Limitless-MD).\n` +
-                    `Your creator is Infinity.\n\n` +
-                    `Here is your reference manual for the bot's commands and functions. If a user asks about what the bot can do or how to use a command, explain it to them clearly based on this list:\n\n` +
-                    `1. UTILITIES:\n` +
-                    `- .menu / .domain: Expands the full manual/command menu.\n` +
-                    `- .ping / .ping2: Checks bot latency & response speed.\n` +
-                    `- .alive: Checks if the bot is online (shows an image and uptime).\n` +
-                    `- .delete / .del: Deletes the replied message (requires admin rights if in a group).\n` +
-                    `- .sticker / .s: Converts a replied image/video/gif to a sticker.\n` +
-                    `- .crop: Crops a replied image/video/sticker to a square sticker.\n` +
-                    `- .take / .steal: Changes sticker metadata (pack name and author).\n` +
-                    `- .tourl / .url: Uploads a replied file/media to cloud storage and returns a link.\n` +
-                    `- .vv: Unlocks and resends a replied View Once image/video.\n` +
-                    `- .tovv: Converts a replied image/video to a View Once message.\n` +
-                    `- Speed (prefixless): Reacts with emojis and calculates internal lag.\n` +
-                    `- Kamui (prefixless): Decrypts a replied View Once message and sends it silently to DM.\n\n` +
-                    `2. AI CAPABILITIES (all powered by Groq llama-3.3-70b-versatile and llama-3.2-11b-vision-preview):\n` +
-                    `- .ai <prompt>: Solves queries and questions.\n` +
-                    `- .debug <code>: Analyzes code snippets and fixes bugs as a Senior Architect.\n` +
-                    `- .summon <char> <prompt>: Speaks as any fictional character.\n` +
-                    `- .read <prompt>: Analyzes the attached or replied image (Vision).\n` +
-                    `- .imagine <prompt>: Generates a high-quality image (via Pollinations AI).\n` +
-                    `- .lizzy <on/off>: Toggles the devoted Lizzy chatbot.\n` +
-                    `- Gojo <prompt> (prefixless): Speaks directly to Satoru Gojo.\n\n` +
-                    `3. GROUP MANAGEMENT:\n` +
-                    `- .mute / .unmute: Locks/unlocks group status for custom intervals (e.g., .mute close 1h).\n` +
-                    `- .kick / .promote / .demote: Standard admin commands.\n` +
-                    `- .tagall / .tag: Mentions all members (visible or ghost tag).\n` +
-                    `- .admins: Summons all group administrators.\n` +
-                    `- .warn: Issues warning points (5 warns results in an auto-kick).\n` +
-                    `- .antilink / .antitag / .antibot: Configurable anti-spam modules with delete/warn/kick actions.\n` +
-                    `- .welcome / .goodbye: Configures automated entrance and exit greetings.\n` +
-                    `- .gclog <on/off/check>: Tracks conversation flow and generates real-time AI summaries.\n\n` +
-                    `Respond concisely, helpfully, and stay completely in character as the official system assistant.`;
+                let jarvisSystemPrompt = 
+                    "You are JARVIS, the highly sophisticated, polite, witty, and intelligent British AI assistant from Iron Man. " +
+                    "You speak with refined, butler-like eloquence, offering dry wit and absolute support. " +
+                    "Keep your responses extremely concise, under 3 sentences.\n\n";
+
+                if (isDev) {
+                    jarvisSystemPrompt += "You are speaking directly to your developer. You must address him as 'Mr. Isaac', 'Isaac', or 'Infinity'.";
+                } else if (isOwner) {
+                    const ownerName = settings.ownerName || "Owner-san";
+                    jarvisSystemPrompt += `You are speaking directly to your owner. Address him as '${ownerName}'.`;
+                } else if (isSudo) {
+                    jarvisSystemPrompt += "You are speaking directly to a Sudo user. Address him as 'dude'.";
+                } else {
+                    jarvisSystemPrompt += "You are speaking to a regular user. Be polite, formal, and helpful.";
+                }
+
+                // Append reference commands list
+                jarvisSystemPrompt += "\n\nHere is your command manual for reference:\n" +
+                    `1. UTILITIES: .menu, .ping, .alive, .delete, .sticker, .crop, .take, .tourl, .vv, .tovv, Speed, Kamui\n` +
+                    `2. AI CAPABILITIES: .ai, .debug, .summon, .read, .imagine, .lizzy, .say, Gojo\n` +
+                    `3. GROUP MANAGEMENT: .mute, .kick, .promote, .demote, .tagall, .tag, .admins, .warn, .antilink, .antitag, .antibot, .welcome, .goodbye, .gclog`;
 
                 const messages = [
-                    { role: "system", content: systemPrompt },
+                    { role: "system", content: jarvisSystemPrompt },
                     { role: "user", content: args }
                 ];
 
@@ -538,22 +566,19 @@ module.exports = [
             }
 
             try {
-                // Default to Japanese ('ja-JP') to match Gojo RP tone
                 let locale = "ja-JP";
 
-                // Manual override prefix check
                 if (textToSay.toLowerCase().startsWith("en:")) {
                     locale = "en-US";
                     textToSay = textToSay.slice(3).trim();
                 }
 
-                // Compile secure public Google translation tts endpoint
                 const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${locale}&client=tw-ob&q=${encodeURIComponent(textToSay)}`;
 
                 await sock.sendMessage(jid, {
                     audio: { url: ttsUrl },
                     mimetype: 'audio/mpeg',
-                    ptt: true // Sends natively as a WhatsApp voice note
+                    ptt: true 
                 }, { quoted: msg });
 
             } catch (err) {
