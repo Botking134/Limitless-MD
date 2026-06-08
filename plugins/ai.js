@@ -107,7 +107,7 @@ module.exports = [
 
                 let finalPrompt = cleanQuery;
                 if (isOwner) {
-                    finalPrompt = `[System Context: You are speaking directly to your creator, Infinity, who built you and the Limitless bot system. Acknowledge him respectfully but with your usual playful, cocky Gojo attitude. Keep it natural.]\nQuery: ${cleanQuery}`;
+                    finalPrompt = `[System Context: You are speaking directly to your creator, Infinity, who built you and the Limitless bot system. Acknowledge him respectfully but with your usual playful, cocky Gojo attitude. Keep it directly natural.]\nQuery: ${cleanQuery}`;
                 }
 
                 const messages = [
@@ -340,7 +340,7 @@ module.exports = [
                         : `Of course, ${settings.ownerName}-Senpai! Locking the chat now! 💖`;
                     
                     await sock.sendMessage(jid, { text: confirmText }, { quoted: msg });
-                    return await commands[`${prefix}gmode`](sock, msg, 'close', { isOwner, isSudo, isDev, senderNumber });
+                    return await commands[`${prefix}mute`](sock, msg, 'close', { isOwner, isSudo, isDev, senderNumber });
                 }
                 
                 if (lowerQuery.includes('open group') || lowerQuery.includes('unlock group') || lowerQuery.includes('unmute group')) {
@@ -349,7 +349,7 @@ module.exports = [
                         : `Senpai! Chat is open now! 💖`;
 
                     await sock.sendMessage(jid, { text: confirmText }, { quoted: msg });
-                    return await commands[`${prefix}gmode`](sock, msg, 'open', { isOwner, isSudo, isDev, senderNumber });
+                    return await commands[`${prefix}mute`](sock, msg, 'open', { isOwner, isSudo, isDev, senderNumber });
                 }
 
                 if (lowerQuery.includes('tag everyone') || lowerQuery.includes('tag all') || lowerQuery.includes('summon everyone')) {
@@ -496,7 +496,7 @@ module.exports = [
                     `- .lizzy <on/off>: Toggles the devoted Lizzy chatbot.\n` +
                     `- Gojo <prompt> (prefixless): Speaks directly to Satoru Gojo.\n\n` +
                     `3. GROUP MANAGEMENT:\n` +
-                    `- .gmode <open/close> <time>: Locks/unlocks group status for custom intervals (e.g., .gmode close 1h).\n` +
+                    `- .mute / .unmute: Locks/unlocks group status for custom intervals (e.g., .mute close 1h).\n` +
                     `- .kick / .promote / .demote: Standard admin commands.\n` +
                     `- .tagall / .tag: Mentions all members (visible or ghost tag).\n` +
                     `- .admins: Summons all group administrators.\n` +
@@ -515,6 +515,50 @@ module.exports = [
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error("Chatbot Chat Error:", error);
+            }
+        }
+    },
+
+    // 11. TEXT-TO-SPEECH TRANSMITTER (.say)
+    {
+        name: 'say',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let textToSay = args ? args.trim() : '';
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!textToSay && quoted) {
+                const rawContent = getRawMessage(quoted);
+                textToSay = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || '';
+            }
+
+            if (!textToSay) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide text or reply to a message to synthesize." }, { quoted: msg });
+            }
+
+            try {
+                // Default to Japanese ('ja-JP') to match Gojo RP tone
+                let locale = "ja-JP";
+
+                // Manual override prefix check
+                if (textToSay.toLowerCase().startsWith("en:")) {
+                    locale = "en-US";
+                    textToSay = textToSay.slice(3).trim();
+                }
+
+                // Compile secure public Google translation tts endpoint
+                const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${locale}&client=tw-ob&q=${encodeURIComponent(textToSay)}`;
+
+                await sock.sendMessage(jid, {
+                    audio: { url: ttsUrl },
+                    mimetype: 'audio/mpeg',
+                    ptt: true // Sends natively as a WhatsApp voice note
+                }, { quoted: msg });
+
+            } catch (err) {
+                console.error("Say command error:", err.message);
+                await sock.sendMessage(jid, { text: "❌ Failed to synthesize audio speech." }, { quoted: msg });
             }
         }
     }
