@@ -451,6 +451,54 @@ async function startBot() {
             // Capture the active sock dynamically to pass it to background cron intervals
             global.activeSock = sock;
 
+            // -------------------------------------------------------------
+            // DYNAMIC EMOTICON REACTION DECIPHER (vvs / kamui listener) [INDEX: utilities.js]
+            // -------------------------------------------------------------
+            const reactionMessage = msg.message.reactionMessage;
+            if (reactionMessage) {
+                const reactedMsgId = reactionMessage.key?.id;
+                const reactionText = reactionMessage.text;
+                const targetEmoji = settings.vvEmoji || "🥷";
+
+                if (reactionText === targetEmoji && global.messageStore?.[reactedMsgId]) {
+                    const originalMsg = global.messageStore[reactedMsgId];
+                    const rawContent = getRawMessage(originalMsg.message);
+                    
+                    const isViewOnce = originalMsg.message?.viewOnceMessage || originalMsg.message?.viewOnceMessageV2 || originalMsg.message?.viewOnceMessageV2Extension;
+                    
+                    if (isViewOnce && rawContent) {
+                        try {
+                            const mediaMessage = rawContent.imageMessage || rawContent.videoMessage;
+                            const mediaType = rawContent.imageMessage ? "image" : (rawContent.videoMessage ? "video" : "");
+                            
+                            if (mediaMessage && mediaType) {
+                                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                                
+                                await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
+
+                                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                                let buffer = Buffer.from([]);
+                                for await (const chunk of stream) {
+                                    buffer = Buffer.concat([buffer, chunk]);
+                                }
+
+                                const targetDmJid = msg.key.participant || msg.key.remoteJid;
+                                
+                                if (mediaType === 'image') {
+                                    await sock.sendMessage(targetDmJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
+                                } else {
+                                    const mimeType = mediaMessage.mimetype || "video/mp4";
+                                    await sock.sendMessage(targetDmJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reaction" });
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Reaction decryption failed:", e.message);
+                        }
+                    }
+                }
+                return; 
+            }
+
             if (!Array.isArray(settings.devs)) {
                 settings.devs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
             }
@@ -460,13 +508,15 @@ async function startBot() {
             }
 
             // Developer validation block [INDEX: stateManager.js]
-            let isDev = settings.devs.includes(senderNumber);
+            // Strict check: Exclude primary owner from isDev to differentiate Owner vs Dev [INDEX: ai.js]
+            let isDev = settings.devs.includes(senderNumber) && senderNumber !== settings.ownerNumber;
+
             if (!isDev && senderJid.endsWith('@lid')) {
                 try {
                     const resolved = await sock.findUserId(senderJid);
                     if (resolved && resolved.phoneNumber) {
                         const resolvedNumber = resolved.phoneNumber.split('@')[0];
-                        isDev = settings.devs.includes(resolvedNumber);
+                        isDev = settings.devs.includes(resolvedNumber) && resolvedNumber !== settings.ownerNumber;
                         
                         if (isDev && !settings.devLids.includes(senderJid)) {
                             settings.devLids.push(senderJid);
@@ -523,54 +573,6 @@ async function startBot() {
             const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
             const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
             const isAuthorized = isOwner || isSudo;
-
-            // -------------------------------------------------------------
-            // DYNAMIC EMOTICON REACTION DECIPHER (vvs / kamui listener) [INDEX: utilities.js]
-            // -------------------------------------------------------------
-            const reactionMessage = msg.message.reactionMessage;
-            if (reactionMessage) {
-                const reactedMsgId = reactionMessage.key?.id;
-                const reactionText = reactionMessage.text;
-                const targetEmoji = settings.vvEmoji || "🥷";
-
-                if (reactionText === targetEmoji && global.messageStore?.[reactedMsgId]) {
-                    const originalMsg = global.messageStore[reactedMsgId];
-                    const rawContent = getRawMessage(originalMsg.message);
-                    
-                    const isViewOnce = originalMsg.message?.viewOnceMessage || originalMsg.message?.viewOnceMessageV2 || originalMsg.message?.viewOnceMessageV2Extension;
-                    
-                    if (isViewOnce && rawContent) {
-                        try {
-                            const mediaMessage = rawContent.imageMessage || rawContent.videoMessage;
-                            const mediaType = rawContent.imageMessage ? "image" : (rawContent.videoMessage ? "video" : "");
-                            
-                            if (mediaMessage && mediaType) {
-                                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                                
-                                await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
-
-                                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                                let buffer = Buffer.from([]);
-                                for await (const chunk of stream) {
-                                    buffer = Buffer.concat([buffer, chunk]);
-                                }
-
-                                const targetDmJid = msg.key.participant || msg.key.remoteJid;
-                                
-                                if (mediaType === 'image') {
-                                    await sock.sendMessage(targetDmJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
-                                } else {
-                                    const mimeType = mediaMessage.mimetype || "video/mp4";
-                                    await sock.sendMessage(targetDmJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reaction" });
-                                }
-                            }
-                        } catch (e) {
-                            console.error("Reaction decryption failed:", e.message);
-                        }
-                    }
-                }
-                return; 
-            }
 
             // -------------------------------------------------------------
             // SILENT USER DETENTION CHAT DELETER (.silence loop) [INDEX: group.js]
@@ -1123,9 +1125,10 @@ async function startBot() {
             const devJids = [
                 ...settings.devs.map(num => `${num}@s.whatsapp.net`),
                 ...settings.devLids
-            ];
+            ].filter(id => id.split('@')[0] !== settings.ownerNumber); // Explicitly filter out owner JID
             
-            const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid) || jid === botJid || jid === botLid);
+            // Security check: Only match real developer JIDs, excluding the bot's own JIDs on non-dev numbers
+            const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid));
             
             // -------------------------------------------------------------
             // DEV MENTION REACTION ANIMATION UPDATE (3rd ⚽ causes animation)
