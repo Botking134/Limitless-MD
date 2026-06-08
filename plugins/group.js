@@ -1555,7 +1555,7 @@ module.exports = [
 
             const durationMs = parseDuration(timerStr) || 3600000; // fallback to 1h
 
-            // If no mode is specified, drop interactive selection buttons
+            // If no mode is specified, drop interactive selection buttons with 1 hour default [INDEX: group.js]
             if (!mode) {
                 const prompt = `⛓️ *Silence Detention Panel:* @${targetNum}\n\nSelect the type of communication to auto-delete for *${timerStr}*:`;
                 const buttonMessage = {
@@ -1576,7 +1576,7 @@ module.exports = [
                 }
             }
 
-            // Direct CLI execution path
+            // Direct CLI execution path (handles custom duration e.g., -m 30m or -s 2h)
             let mappedType = 'all';
             if (mode === '-s') mappedType = 'sticker';
             if (mode === '-m') mappedType = 'message';
@@ -1625,6 +1625,42 @@ module.exports = [
                 text: `⛓️ *Target @${targetNum} silenced:* \`${type.toUpperCase()}\` constraints active for *${timerStr}*.`,
                 mentions: [targetJid]
             }, { quoted: msg });
+        }
+    },
+
+    // 32. .unsilence COMMAND (OPPOSE SILENCE MODERATIONS)
+    {
+        name: 'unsilence',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            try {
+                const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+                if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin privileges required." }, { quoted: msg });
+
+                const repliedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
+                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
+
+                if (!targetJid) {
+                    return await sock.sendMessage(jid, { text: "❌ Please reply to a user's message or mention (@user) to unsilence them." }, { quoted: msg });
+                }
+
+                const targetNum = targetJid.split('@')[0];
+
+                if (global.silencedUsers[jid] && global.silencedUsers[jid][targetJid]) {
+                    delete global.silencedUsers[jid][targetJid];
+                    await sock.sendMessage(jid, { text: `⛓️ *Target @${targetNum} unsilenced.* All chat constraints removed.`, mentions: [targetJid] }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { text: `❌ Target @${targetNum} is not currently silenced in this chat.`, mentions: [targetJid] }, { quoted: msg });
+                }
+
+            } catch (err) {
+                console.error("Unsilence error:", err.message);
+            }
         }
     }
 ];
