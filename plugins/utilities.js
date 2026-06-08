@@ -16,6 +16,18 @@ function formatUptime(seconds) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
 }
 
+// Duration string parser helper
+function parseDuration(str) {
+    const match = str.match(/^(\d+)([smh])$/i);
+    if (!match) return null;
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    if (unit === 's') return value * 1000;
+    if (unit === 'm') return value * 60 * 1000;
+    if (unit === 'h') return value * 60 * 60 * 1000;
+    return null;
+}
+
 // Notes Database Helpers
 function readNotes() {
     try {
@@ -28,6 +40,7 @@ function readNotes() {
     return {};
 }
 
+// Persist notes database
 function saveNotes(notes) {
     try {
         fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
@@ -36,7 +49,7 @@ function saveNotes(notes) {
     }
 }
 
-// Recursive Helper to automatically unwrap ephemeral, view-once, and document-caption envelopes
+// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -107,7 +120,7 @@ async function forceMetadataRewrite(buffer) {
     return buffer; 
 }
 
-// Helper to upload media buffer natively to a multi-host pipeline
+// Helper to upload media buffer natively to a multi-host pipeline [INDEX: download.js]
 async function uploadToCloud(buffer, mimeType) {
     const ext = mimeType.split('/')[1] || 'bin';
     const filename = `file_${Date.now()}.${ext}`;
@@ -211,7 +224,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const uptimeString = formatUptime(process.uptime());
 
-            // 1. Resolve Nigerian Time (WAT) dynamically
             const timeOptions = {
                 timeZone: 'Africa/Lagos',
                 hour: '2-digit', minute: '2-digit',
@@ -221,7 +233,6 @@ module.exports = [
             const timeFormatter = new Intl.DateTimeFormat('en-US', timeOptions);
             const nigerianTime = timeFormatter.format(new Date());
 
-            // 2. Fetch compact one-line weather metrics safely
             let weather = "Unavailable 🌀";
             try {
                 const weatherRes = await fetch("https://wttr.in/Lagos?format=%c+%t");
@@ -233,14 +244,13 @@ module.exports = [
                 console.error("Alive weather fetch error:", e.message);
             }
 
-            // 3. Compile sleek, non-bloated status caption
             const compactCaption = 
                 `🤞 *LIMITLESS DOMAIN ONLINE* 🤞\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                 `⚡ *Uptime:* \`${uptimeString}\`\n` +
                 `🕒 *WAT Time:* \`${nigerianTime}\`\n` +
                 `🌤️ *Weather:* \`${weather}\`\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                 `_“Throughout Heaven and Earth, I alone am the honoured one.”_ 🌏`;
 
             try {
@@ -294,7 +304,66 @@ module.exports = [
         }
     },
 
-    // 4. AUTOREACT MODE TOGGLE
+    // 4. TIMED DELETER COMMAND (.tdelete / .tdel / .tdlt)
+    {
+        name: 'tdelete',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const quoted = msg.message.extendedTextMessage?.contextInfo;
+
+            if (!quoted || !quoted.stanzaId) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to the message you want to delete with a duration." }, { quoted: msg });
+            }
+
+            if (!args) {
+                return await sock.sendMessage(jid, { text: "❌ Please specify a duration (e.g., `10s`, `1m`)." }, { quoted: msg });
+            }
+
+            const durationMs = parseDuration(args.trim());
+            if (!durationMs) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid duration. Use formats like `10s`, `2m`, `1h`." }, { quoted: msg });
+            }
+
+            try {
+                // Instantly confirm timed delete registration
+                const countdownMsg = await sock.sendMessage(jid, { 
+                    text: `⏳ Message will be deleted in *${args.trim()}*...` 
+                }, { quoted: msg });
+
+                setTimeout(async () => {
+                    try {
+                        const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
+                        const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+
+                        const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
+
+                        const quotedKey = {
+                            remoteJid: jid,
+                            id: quoted.stanzaId,
+                            fromMe: isFromMe,
+                            participant: quoted.participant
+                        };
+
+                        await sock.sendMessage(jid, { delete: quotedKey });
+                        
+                        try {
+                            await sock.sendMessage(jid, { delete: countdownMsg.key });
+                        } catch (e) {}
+
+                    } catch (err) {
+                        console.error("Timed delete execution failed:", err.message);
+                    }
+                }, durationMs);
+
+            } catch (error) {
+                console.error("Timed delete setup failed:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to register delete timer." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 5. AUTOREACT MODE TOGGLE
     {
         name: 'autoreact',
         isPrefixless: false,
@@ -328,7 +397,7 @@ module.exports = [
         }
     },
 
-    // 5. PREFIXLESS SPEED COMMAND
+    // 6. PREFIXLESS SPEED COMMAND
     {
         name: 'speed',
         isPrefixless: true,
@@ -371,7 +440,7 @@ module.exports = [
         }
     },
 
-    // 6. VIEW ONCE UNLOCKER (.vv)
+    // 7. VIEW ONCE UNLOCKER (.vv)
     {
         name: 'vv',
         isPrefixless: false,
@@ -430,7 +499,7 @@ module.exports = [
         }
     },
 
-    // 7. STANDARD STICKER CONVERTER
+    // 8. STANDARD STICKER CONVERTER
     {
         name: 'sticker',
         isPrefixless: false,
@@ -488,7 +557,7 @@ module.exports = [
         }
     },
 
-    // 8. CROPPED SQUARE STICKER (.crop)
+    // 9. CROPPED SQUARE STICKER (.crop)
     {
         name: 'crop',
         isPrefixless: false,
@@ -536,7 +605,7 @@ module.exports = [
         }
     },
 
-    // 9. METADATA STEALER (.take / .steal)
+    // 10. METADATA STEALER (.take / .steal)
     {
         name: 'take',
         isPrefixless: false,
@@ -585,7 +654,7 @@ module.exports = [
         }
     },
 
-    // 10. STICKER COMMAND TRIGGERS (.setcmd)
+    // 11. STICKER COMMAND TRIGGERS (.setcmd)
     {
         name: 'setcmd',
         isPrefixless: false,
@@ -651,7 +720,7 @@ module.exports = [
         }
     },
 
-    // 11. DEDICATED STICKER TRIGGER DELETER
+    // 12. DEDICATED STICKER TRIGGER DELETER
     {
         name: 'delcmd',
         isPrefixless: false,
@@ -680,7 +749,7 @@ module.exports = [
         }
     },
 
-    // 12. REGULAR TO VIEW ONCE CONVERTER
+    // 13. REGULAR TO VIEW ONCE CONVERTER
     {
         name: 'tovv',
         isPrefixless: false,
@@ -725,7 +794,7 @@ module.exports = [
         }
     },
 
-    // 13. MEDIA TO DIRECT WEB URL CONVERTER
+    // 14. MEDIA TO DIRECT WEB URL CONVERTER
     {
         name: 'tourl',
         isPrefixless: false,
@@ -775,7 +844,7 @@ module.exports = [
         }
     },
 
-    // 14. PREFIXLESS SILENT KAMUI DM DECODER
+    // 15. PREFIXLESS SILENT KAMUI DM DECODER
     {
         name: 'kamui',
         isPrefixless: true,
@@ -816,7 +885,7 @@ module.exports = [
         }
     },
 
-    // 15. BOT LATENCY COMPARISON TEST
+    // 16. BOT LATENCY COMPARISON TEST
     {
         name: 'ping2',
         isPrefixless: false,
@@ -848,7 +917,7 @@ module.exports = [
         }
     },
 
-    // 16. NOTES DASHBOARD & VIEWER (.notes)
+    // 17. NOTES DASHBOARD & VIEWER (.notes)
     {
         name: 'notes',
         isPrefixless: false,
@@ -890,7 +959,7 @@ module.exports = [
         }
     },
 
-    // 17. ADD NOTE (.addnote <name>)
+    // 18. ADD NOTE (.addnote <name>)
     {
         name: 'addnote',
         isPrefixless: false,
@@ -933,7 +1002,7 @@ module.exports = [
         }
     },
 
-    // 18. DELETE NOTE (.delnote <name>)
+    // 19. DELETE NOTE (.delnote <name>)
     {
         name: 'delnote',
         isPrefixless: false,
@@ -960,7 +1029,7 @@ module.exports = [
         }
     },
 
-    // 19. GET NOTES LIST (.getnotes)
+    // 20. GET NOTES LIST (.getnotes)
     {
         name: 'getnotes',
         isPrefixless: false,
@@ -987,7 +1056,7 @@ module.exports = [
         }
     },
 
-    // 20. GET NOTE SUB-COMMAND (.getnote <name>)
+    // 21. GET NOTE SUB-COMMAND (.getnote <name>)
     {
         name: 'getnote',
         isPrefixless: false,
@@ -1009,10 +1078,34 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `❌ Note \`${args}\` not found in your database.` }, { quoted: msg });
             }
         }
+    },
+
+    // 22. CONFIGURE VIEW ONCE DECRYPT REACTION EMOJI (.vvs)
+    {
+        name: 'vvs',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            
+            if (!isOwner && !isSudo) return;
+
+            if (!args) {
+                const current = settings.vvEmoji || '🥷';
+                return await sock.sendMessage(jid, { text: `❌ Please provide an emoji.\nExample: \`${settings.prefix}vvs 🥷\` (Current: ${current})` }, { quoted: msg });
+            }
+
+            const emoji = args.trim();
+            settings.vvEmoji = emoji;
+            
+            const { saveSettings } = require('../settingsSaver');
+            saveSettings();
+
+            await sock.sendMessage(jid, { text: `✅ View Once Decryption reaction emoji successfully configured to: ${emoji}` }, { quoted: msg });
+        }
     }
 ];
 
-// Safely generate aliases using external collector
+// Add structural aliases
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'sticker') {
@@ -1026,6 +1119,11 @@ module.exports.forEach(cmd => {
     }
     if (cmd.name === 'delete') {
         aliases.push({ ...cmd, name: 'del' });
+        aliases.push({ ...cmd, name: 'dlt' }); 
+    }
+    if (cmd.name === 'tdelete') {
+        aliases.push({ ...cmd, name: 'tdel' });
+        aliases.push({ ...cmd, name: 'tdlt' });
     }
 });
 module.exports.push(...aliases);
