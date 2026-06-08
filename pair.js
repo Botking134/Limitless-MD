@@ -18,6 +18,7 @@ global.messageStore = global.messageStore || {};
 
 // Global Cache for spam/antibug block tracking
 global.spamTracker = global.spamTracker || {};
+global.spamDeletedCount = global.spamDeletedCount || {}; // Tracking deleted spam counts per user
 
 // Global bank details wizard session tracker
 global.azaSessions = global.azaSessions || {};
@@ -26,6 +27,10 @@ global.azaSessions = global.azaSessions || {};
 global.songSessions = global.songSessions || {};
 global.apkSessions = global.apkSessions || {};
 global.shazamSessions = global.shazamSessions || {};
+
+// Global reminder configuration sessions
+global.reminderSessions = global.reminderSessions || {};
+global.cancelSessions = global.cancelSessions || {};
 
 // Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
@@ -47,7 +52,7 @@ function getRawMessage(message) {
     return message;
 }
 
-// Unified Message Deletion Logger Helper
+// Unified Message Deletion Logger Helper [INDEX: tools.js]
 async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
     try {
         const antideleteConfig = settings.antidelete || { status: 'off', logDestination: 'bot' };
@@ -443,6 +448,57 @@ async function startBot() {
             const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
             const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
 
+            // Capture the active sock dynamically to pass it to background cron intervals
+            global.activeSock = sock;
+
+            // -------------------------------------------------------------
+            // DYNAMIC EMOTICON REACTION DECIPHER (vvs / kamui listener)
+            // -------------------------------------------------------------
+            const reactionMessage = msg.message.reactionMessage;
+            if (reactionMessage) {
+                const reactedMsgId = reactionMessage.key?.id;
+                const reactionText = reactionMessage.text;
+                const targetEmoji = settings.vvEmoji || "🥷";
+
+                if (reactionText === targetEmoji && global.messageStore?.[reactedMsgId]) {
+                    const originalMsg = global.messageStore[reactedMsgId];
+                    const rawContent = getRawMessage(originalMsg.message);
+                    
+                    const isViewOnce = originalMsg.message?.viewOnceMessage || originalMsg.message?.viewOnceMessageV2 || originalMsg.message?.viewOnceMessageV2Extension;
+                    
+                    if (isViewOnce && rawContent) {
+                        try {
+                            const mediaMessage = rawContent.imageMessage || rawContent.videoMessage;
+                            const mediaType = rawContent.imageMessage ? "image" : (rawContent.videoMessage ? "video" : "");
+                            
+                            if (mediaMessage && mediaType) {
+                                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                                
+                                await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
+
+                                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                                let buffer = Buffer.from([]);
+                                for await (const chunk of stream) {
+                                    buffer = Buffer.concat([buffer, chunk]);
+                                }
+
+                                const targetDmJid = msg.key.participant || msg.key.remoteJid;
+                                
+                                if (mediaType === 'image') {
+                                    await sock.sendMessage(targetDmJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
+                                } else {
+                                    const mimeType = mediaMessage.mimetype || "video/mp4";
+                                    await sock.sendMessage(targetDmJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reaction" });
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Reaction decryption failed:", e.message);
+                        }
+                    }
+                }
+                return; 
+            }
+
             if (!Array.isArray(settings.devs)) {
                 settings.devs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
             }
@@ -514,6 +570,35 @@ async function startBot() {
             const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
             const isAuthorized = isOwner || isSudo;
 
+            // -------------------------------------------------------------
+            // SILENT USER DETENTION CHAT DELETER (.silence logic) [INDEX: group.js]
+            // -------------------------------------------------------------
+            if (isGroup && global.silencedUsers?.[jid]?.[senderJid]) {
+                const silence = global.silencedUsers[jid][senderJid];
+                if (Date.now() < silence.endTime) {
+                    let shouldMute = false;
+                    if (silence.type === 'all') {
+                        shouldMute = true;
+                    } else if (silence.type === 'sticker' && msg.message.stickerMessage) {
+                        shouldMute = true;
+                    } else if (silence.type === 'message') {
+                        const hasMedia = msg.message.imageMessage || msg.message.videoMessage || msg.message.audioMessage || msg.message.documentMessage;
+                        if (trimmedMessage || hasMedia) {
+                            shouldMute = true;
+                        }
+                    }
+
+                    if (shouldMute) {
+                        try {
+                            await sock.sendMessage(jid, { delete: msg.key });
+                        } catch (e) {}
+                        return; // Halt and intercept loop completely
+                    }
+                } else {
+                    delete global.silencedUsers[jid][senderJid]; // Expiry cleanup
+                }
+            }
+
             // 1. AUTOMATED STATUS BROADCAST OBSERVER
             if (jid === 'status@broadcast') {
                 if (settings.autoviewstatus === 'on') {
@@ -541,7 +626,7 @@ async function startBot() {
                 return;
             }
 
-            // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR
+            // 2. ANTIBUG RATE-LIMIT FLOOD INTERCEPTOR [INDEX: tools.js]
             if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe) {
                 const now = Date.now();
                 if (!global.spamTracker[senderNumber]) {
@@ -568,7 +653,59 @@ async function startBot() {
                 }
             }
 
-            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions
+            // -------------------------------------------------------------
+            // ACTIVE GROUP SPAM PROTECTOR (.antispam loops) [INDEX: group.js]
+            // -------------------------------------------------------------
+            const antispamConfig = settings.antispam?.[jid];
+            if (isGroup && antispamConfig && antispamConfig.status === 'on' && !isAuthorized && !msg.key.fromMe) {
+                const rate = antispamConfig.rate || { count: 1, seconds: 2 };
+                const now = Date.now();
+
+                global.spamTracker[senderNumber] = global.spamTracker[senderNumber] || [];
+                global.spamTracker[senderNumber].push(now);
+
+                global.spamTracker[senderNumber] = global.spamTracker[senderNumber].filter(t => now - t <= (rate.seconds * 1000));
+
+                if (global.spamTracker[senderNumber].length > rate.count) {
+                    try {
+                        await sock.sendMessage(jid, { delete: msg.key });
+
+                        const spamDeleteKey = `${jid}_${senderNumber}`;
+                        global.spamDeletedCount[spamDeleteKey] = (global.spamDeletedCount[spamDeleteKey] || 0) + 1;
+
+                        if (global.spamDeletedCount[spamDeleteKey] >= 10) {
+                            global.spamDeletedCount[spamDeleteKey] = 0; // Reset
+                            
+                            const alertText = 
+                                `🚨 *SPAM ATTACK DETECTED* 🚨\n` +
+                                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                `⚠️ @${senderNumber} has violated the group's antispam rate-limits! 10 spam messages have been automatically intercepted and cleared.\n\n` +
+                                `⚡ *Would you like to kick this spammer?*`;
+
+                            const buttonMessage = {
+                                text: alertText,
+                                buttons: [
+                                    { buttonId: `${settings.prefix}kick @${senderNumber}`, buttonText: { displayText: 'Kick Spammer 🥷' }, type: 1 }
+                                ],
+                                headerType: 1,
+                                mentions: [senderJid]
+                            };
+
+                            try {
+                                await sock.sendMessage(jid, buttonMessage);
+                            } catch (e) {
+                                await sock.sendMessage(jid, { text: alertText + `\n\n💡 _Use \`${settings.prefix}kick @${senderNumber}\` to remove them manually._`, mentions: [senderJid] });
+                            }
+                        }
+
+                    } catch (e) {
+                        console.error("Antispam deletion failed:", e.message);
+                    }
+                    return; // Block execution
+                }
+            }
+
+            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions [INDEX: tools.js]
             const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
             if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
                 const session = global.forwardSessions[quotedMsgId];
@@ -599,7 +736,7 @@ async function startBot() {
                 return; 
             }
 
-            // 4. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions
+            // 4. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions [INDEX: tools.js]
             if (quotedMsgId && global.azaSessions && global.azaSessions[quotedMsgId] && isAuthorized) {
                 const session = global.azaSessions[quotedMsgId];
                 
@@ -672,14 +809,14 @@ async function startBot() {
                 }
             }
 
-            // 5. CHAT INTERCEPTOR: Resolve active song selection download sessions
+            // 5. CHAT INTERCEPTOR: Resolve active song selection download sessions [INDEX: download.js]
             if (quotedMsgId && global.songSessions && global.songSessions[quotedMsgId]) {
                 const session = global.songSessions[quotedMsgId];
                 const index = parseInt(trimmedMessage.trim());
 
                 if (!isNaN(index) && index >= 1 && index <= session.results.length) {
                     const chosen = session.results[index - 1];
-                    delete global.songSessions[quotedMsgId]; // Clean up memory
+                    delete global.songSessions[quotedMsgId]; 
 
                     await sock.sendMessage(jid, { text: `📥 *Downloading selected song:* "${chosen.title}"...` }, { quoted: msg });
 
@@ -710,14 +847,14 @@ async function startBot() {
                 return; 
             }
 
-            // 6. CHAT INTERCEPTOR: Resolve active APK selection download sessions
+            // 6. CHAT INTERCEPTOR: Resolve active APK selection download sessions [INDEX: download.js]
             if (quotedMsgId && global.apkSessions && global.apkSessions[quotedMsgId]) {
                 const session = global.apkSessions[quotedMsgId];
                 const index = parseInt(trimmedMessage.trim());
 
                 if (!isNaN(index) && index >= 1 && index <= session.results.length) {
                     const chosen = session.results[index - 1];
-                    delete global.apkSessions[quotedMsgId]; // Clean up memory
+                    delete global.apkSessions[quotedMsgId]; 
 
                     await sock.sendMessage(jid, { text: `📥 *Downloading selected APK:* "${chosen.name}"...` }, { quoted: msg });
 
@@ -761,13 +898,13 @@ async function startBot() {
                 return;
             }
 
-            // 7. CHAT INTERCEPTOR: Resolve active Shazam song downloads
+            // 7. CHAT INTERCEPTOR: Resolve active Shazam song downloads [INDEX: download.js]
             if (quotedMsgId && global.shazamSessions && global.shazamSessions[quotedMsgId]) {
                 const session = global.shazamSessions[quotedMsgId];
                 const text = trimmedMessage.toLowerCase().trim();
 
                 if (text === '1' || text === 'download') {
-                    delete global.shazamSessions[quotedMsgId]; // Clean up memory
+                    delete global.shazamSessions[quotedMsgId]; 
                     await sock.sendMessage(jid, { text: `📥 *Downloading recognized song:* "${session.title} - ${session.artist}"...` }, { quoted: msg });
 
                     try {
@@ -795,77 +932,69 @@ async function startBot() {
                 return;
             }
 
-            // 5. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR
-            const isViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
-            const config = settings.antiviewonce || { status: 'off', logDestination: 'bot' };
-            const status = config.status || 'off';
-            let shouldDecrypt = false;
-            if (status === 'all') {
-                shouldDecrypt = true;
-            } else if (status === 'here') {
-                shouldDecrypt = (config.hereJid === jid);
+            // 8. CHAT INTERCEPTOR: Resolve active reminder configuration sessions [INDEX: owner.js]
+            if (quotedMsgId && global.reminderSessions && global.reminderSessions[quotedMsgId]) {
+                const session = global.reminderSessions[quotedMsgId];
+                const rTitle = trimmedMessage || "Unnamed Reminder";
+
+                let reminders = [];
+                const remindersPath = path.join(__dirname, 'reminders.json');
+                try {
+                    if (fs.existsSync(remindersPath)) {
+                        reminders = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
+                    }
+                } catch (e) {}
+
+                reminders.push({
+                    title: rTitle,
+                    text: session.text,
+                    jid: session.jid,
+                    sender: session.sender,
+                    timeSet: session.timeSet,
+                    triggerTime: session.timeSet + session.durationMs,
+                    durationStr: session.durationStr
+                });
+
+                try {
+                    fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8');
+                } catch (e) {
+                    console.error("Failed to write reminders database:", e.message);
+                }
+
+                delete global.reminderSessions[quotedMsgId];
+
+                await sock.sendMessage(jid, { 
+                    text: `✅ *Reminder finalized persistently!* \n\n• *Title:* *${rTitle}*\n• *Note:* _"${session.text}"_\n• *Duration:* \`${session.durationStr}\`` 
+                }, { quoted: msg });
+                return;
             }
 
-            if (isViewOnce && shouldDecrypt && !msg.key.fromMe) {
+            // 9. CHAT INTERCEPTOR: Resolve active reminder cancellation reply sessions [INDEX: owner.js]
+            if (quotedMsgId && global.cancelSessions && global.cancelSessions[quotedMsgId]) {
+                delete global.cancelSessions[quotedMsgId];
+                const idx = parseInt(trimmedMessage.trim());
+
+                let reminders = [];
+                const remindersPath = path.join(__dirname, 'reminders.json');
                 try {
-                    const rawContent = getRawMessage(msg.message);
-                    const mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
-                    const mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.audioMessage ? "audio" : ""));
-
-                    if (mediaMessage && mediaType) {
-                        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                        
-                        const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                        let buffer = Buffer.from([]);
-                        for await (const chunk of stream) {
-                            buffer = Buffer.concat([buffer, chunk]);
-                        }
-
-                        // Resolve logging destination securely (be highly mindful of JID/LID connection parameters)
-                        let destJid = '';
-                        if (config.logDestination === 'user' && config.logUserJid) {
-                            destJid = config.logUserJid;
-                        } else {
-                            destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
-                            if (!destJid) {
-                                destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
-                            }
-                        }
-
-                        const captionText = mediaMessage.caption || "";
-                        const logHeader = `👁️ *ANTIVIEWONCE AUTO-DECRYPT LOG:* 👁️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                          `👥 *Chat Origin:* @${jid.split('@')[0]}\n` +
-                                          `👤 *Sender:* @${senderNumber}\n` +
-                                          `📝 *Caption:* "${captionText}"\n`;
-
-                        if (mediaType === "image") {
-                            await sock.sendMessage(destJid, { 
-                                image: buffer, 
-                                caption: logHeader, 
-                                mentions: [jid, senderJid] 
-                            });
-                        } else if (mediaType === "video") {
-                            await sock.sendMessage(destJid, { 
-                                video: buffer, 
-                                mimetype: mediaMessage.mimetype || "video/mp4", 
-                                caption: logHeader, 
-                                mentions: [jid, senderJid] 
-                            });
-                        } else if (mediaType === "audio") {
-                            await sock.sendMessage(destJid, { 
-                                text: logHeader + `🎵 *Type:* View-Once Voice Note/Audio`, 
-                                mentions: [jid, senderJid] 
-                            });
-                            await sock.sendMessage(destJid, { 
-                                audio: buffer, 
-                                mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", 
-                                ptt: mediaMessage.ptt || false 
-                            });
-                        }
+                    if (fs.existsSync(remindersPath)) {
+                        reminders = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
                     }
-                } catch (e) {
-                    console.error("View Once extraction error:", e.message);
+                } catch (e) {}
+
+                if (isNaN(idx) || idx < 1 || idx > reminders.length) {
+                    return await sock.sendMessage(jid, { text: "❌ Invalid selection index. Cancellation cancelled." }, { quoted: msg });
                 }
+
+                const removed = reminders[idx - 1];
+                reminders.splice(idx - 1, 1);
+                
+                try {
+                    fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8');
+                } catch (e) {}
+
+                await sock.sendMessage(jid, { text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*\n• *Remaining:* Aborted.` }, { quoted: msg });
+                return;
             }
 
             // 6. ANTIPM PRIVATE MESSAGE AUTOBLOCKER
@@ -920,11 +1049,13 @@ async function startBot() {
                 ...settings.devLids
             ];
             
-            // Fixed verification logic to check if a registered developer or the bot is mentioned
             const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid) || jid === botJid || jid === botLid);
             
+            // -------------------------------------------------------------
+            // DEV MENTION REACTION ANIMATION UPDATE (3rd ⚽ causes animation)
+            // -------------------------------------------------------------
             if (isGroup && isAnyDevMentioned) {
-                const devEmojis = ["⚡", "❄", "🥷", "🤞", "🧘"];
+                const devEmojis = ["⚡", "❄", "⚽", "🥷", "🤞", "🧘"];
                 for (const emoji of devEmojis) {
                     try {
                         await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
@@ -981,7 +1112,6 @@ async function startBot() {
                 const sender = participants.find(p => p.id === senderJid);
                 const isAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
 
-                // AUTO-READ CHAT CONTROLLER
                 if (settings.presence && settings.presence.autoread) {
                     const autoreadActive = settings.presence.autoread.all || settings.presence.autoread.chats.includes(jid);
                     if (autoreadActive) {
@@ -1150,10 +1280,10 @@ async function startBot() {
             else if (trimmedMessage.startsWith(settings.prefix)) {
                 const spaceIndex = trimmedMessage.indexOf(' ');
                 if (spaceIndex === -1) {
-                    command = trimmedMessage.toLowerCase();
+                    command = trimmedMessage.slice(settings.prefix.length).toLowerCase();
                     args = '';
                 } else {
-                    command = trimmedMessage.slice(0, spaceIndex).toLowerCase();
+                    command = trimmedMessage.slice(settings.prefix.length, spaceIndex).toLowerCase();
                     args = trimmedMessage.slice(spaceIndex + 1);
                 }
 
@@ -1168,7 +1298,6 @@ async function startBot() {
                     args = '';
                 }
             } 
-            // Support executing registered prefixless commands (like button clicks) directly!
             else if (commands[trimmedMessage.toLowerCase()]) {
                 command = trimmedMessage.toLowerCase();
                 args = '';
@@ -1199,17 +1328,17 @@ async function startBot() {
                 if (!command) return; 
             }
 
-            // Global Bot Privacy Mode Guard (Owner & Sudo Authorized Only in Private Mode)
             if (command) {
-                const isPublicMode = settings.isPublic ?? false; // Default private state
+                const isPublicMode = settings.isPublic ?? false;
                 if (!isPublicMode && !isAuthorized) {
-                    return; // Silently ignore all commands and chatbot triggers for unauthorized users in private mode
+                    return; 
                 }
             }
 
             console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
-            if (commands[command]) {
+            const cmdKey = command.startsWith(settings.prefix) ? command : `${settings.prefix}${command}`;
+            if (commands[cmdKey]) {
                 if (settings.autoReact === 'cmd' && !msg.key.fromMe) {
                     try {
                         await sock.sendMessage(msg.key.remoteJid, { react: { text: "❄", key: msg.key } });
@@ -1217,7 +1346,15 @@ async function startBot() {
                         console.error("Autoreact Command Error:", err.message);
                     }
                 }
-
+                await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, senderNumber });
+            } else if (commands[command]) {
+                if (settings.autoReact === 'cmd' && !msg.key.fromMe) {
+                    try {
+                        await sock.sendMessage(msg.key.remoteJid, { react: { text: "❄", key: msg.key } });
+                    } catch (err) {
+                        console.error("Autoreact Command Error:", err.message);
+                    }
+                }
                 await commands[command](sock, msg, args, { isOwner, isSudo, isDev, senderNumber });
             }
         } catch (err) {
