@@ -29,7 +29,6 @@ const menuImages = [
 async function createCard(sock, title, description, imageUrl, commandId, buttonText) {
     const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
     
-    // Prepare the media attachment natively for the card header
     const media = await prepareWAMessageMedia(
         { image: { url: imageUrl } }, 
         { upload: sock.waUploadToServer }
@@ -87,6 +86,20 @@ _║ ⊱ imagine_
 _║ ⊱ lizzy_
 _║ ⊱ chatbot_
 _║ ⊱ say_
+
+_❖ ── [ INTERACTIVE GAMES ] ── ❖_
+_║ ⊱ ttt_
+_║ ⊱ rps_
+_║ ⊱ guess_
+_║ ⊱ vault8_
+_║ ⊱ trivia_
+_║ ⊱ charade_
+_║ ⊱ anagram_
+_║ ⊱ wcg_
+_║ ⊱ millionaire_
+_║ ⊱ torf_
+_║ ⊱ pvp_
+_║ ⊱ escape_
 
 _❖ ── [ GROUP MANAGEMENT ] ── ❖_
 _║ ⊱ mute_
@@ -184,7 +197,7 @@ _║ ⊱ spotify2_
 _║ ⊱ web_
 _║ ⊱ x2_
 
-_❖ ── [ FUN & GAMES ] ── ❖_
+_❖ ── [ FUN & ROLEPLAY ] ── ❖_
 _║ ⊱ bankai_
 _║ ⊱ dom-exp_
 _║ ⊱ wyr_
@@ -265,7 +278,6 @@ _║ ⊱ getnote_`;
         const audioUrl = "https://github.com/Botking134/Limitless-MD/raw/refs/heads/master/plugins/AUD-20260604-WA0001.mp3";
 
         try {
-            // Buffer the audio on the server first to ensure correct mimetype formatting
             const audioResponse = await fetch(audioUrl);
             if (audioResponse.ok) {
                 const arrayBuffer = await audioResponse.arrayBuffer();
@@ -278,7 +290,6 @@ _║ ⊱ getnote_`;
                 throw new Error();
             }
         } catch (audioErr) {
-            // Fallback to direct URL if the server download fails
             await sock.sendMessage(jid, {
                 audio: { url: audioUrl },
                 mimetype: "audio/mpeg",
@@ -297,7 +308,6 @@ async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
 
-    // Generate Satoru Gojo Header Panel
     const headerText = 
 `┌──────────────────┐
 │   *Limitless-MD*   │
@@ -316,16 +326,15 @@ _Throughout Heaven And Earth 🌏_
         const { generateWAMessageFromContent } = await import('@itsliaaa/baileys');
         await sock.sendMessage(jid, { text: "Channelling Infinity Domain... 🌀" }, { quoted: msg });
 
-        // Shuffle images array to dynamically allocate unique images across slides
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
-        // Define Category slides configurations
         const categories = [
             { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
+            { name: "INTERACTIVE GAMES 🎮", desc: "Lobbies, turn-based puzzles, quizzes, and duels.", cmd: "menu_games" },
             { name: "GROUP MANAGEMENT 👥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
             { name: "TOOLS ⚙️", desc: "Advanced Presence parameters & tracking tools.", cmd: "menu_tools" },
             { name: "DOWNLOADER 📥", desc: "High-speed multi-platform downloaders.", cmd: "menu_download" },
-            { name: "FUN & GAMES 🎮", desc: "Matrimony ceremonies, anime actions, and interactive polls.", cmd: "menu_fun" },
+            { name: "FUN & ROLEPLAY 🎭", desc: "Monologues, animations, and interactive cards.", cmd: "menu_fun" },
             { name: "OWNER & DEV 👑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
             { name: "UTILITIES 🛠️", desc: "Converter tools & network latencies.", cmd: "menu_utilities" }
         ];
@@ -344,7 +353,6 @@ _Throughout Heaven And Earth 🌏_
             cards.push(card);
         }
 
-        // Compile standard interactive Carousel Message structure
         const messageContent = {
             interactiveMessage: {
                 body: { text: headerText },
@@ -365,7 +373,6 @@ _Throughout Heaven And Earth 🌏_
 
     } catch (error) {
         console.error("Carousel Menu Render Error:", error);
-        // Fallback to standard text menu if device/connection rejects Interactive Relaying
         await renderMenu(sock, msg);
     }
 }
@@ -422,6 +429,30 @@ module.exports = [
 • *${settings.prefix}lizzy <on/off>* — Devoted anime chatbot toggle.
 • *${settings.prefix}chatbot <on/off>* — General chat assistance toggle.
 • *${settings.prefix}say <text>* — Convert text to custom audio voice note.`;
+            await sock.sendMessage(jid, { text: subText }, { quoted: msg });
+        }
+    },
+    {
+        name: 'menu_games',
+        isPrefixless: true,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const subText = 
+`🎮 *DOMAIN INTERACTIVE GAMES* 🎮
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• *${settings.prefix}ttt* — Play Tic-Tac-Toe (AI/Multiplayer).
+• *${settings.prefix}rps* — Play Rock-Paper-Scissors against Gojo.
+• *${settings.prefix}guess* — Guess Gojo's Cursed Energy amount.
+• *${settings.prefix}vault8* — Creepy text-RPG terminal simulator.
+• *${settings.prefix}trivia* — General knowledge Trivia (Single/Multiplayer).
+• *${settings.prefix}charade* — Semantic Guess the Emoji Phrase.
+• *${settings.prefix}anagram* — Scrambled Anagram solver (Single/Multiplayer).
+• *${settings.prefix}wcg* — Turn-based Word Chain game lobby.
+• *${settings.prefix}millionaire* — Interactive 15-question Millionaire.
+• *${settings.prefix}torf* — Dynamic True/False category quiz.
+• *${settings.prefix}pvp* — 1v1 turn-based battle with parry countdowns.
+• *${settings.prefix}escape* — Procedural Escape Room text adventure.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -534,7 +565,7 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const subText = 
-`🎮 *UNLIMITED VOID: FUN & GAMES* 🎮
+`🎭 *UNLIMITED VOID: FUN & ROLEPLAY* 🎭
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 • *${settings.prefix}bankai <name>* — Search character Bankai details.
