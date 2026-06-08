@@ -28,6 +28,24 @@ global.songSessions = global.songSessions || {};
 global.apkSessions = global.apkSessions || {};
 global.shazamSessions = global.shazamSessions || {};
 
+// Reusable Helper to resolve any JID (such as LID) to standard Phone format
+async function resolveToPhoneJid(sock, jid) {
+    if (!jid) return '';
+    if (jid.endsWith('@s.whatsapp.net')) return jid;
+    if (jid.endsWith('@lid')) {
+        try {
+            const res = await sock.findUserId(jid);
+            if (res && res.phoneNumber) {
+                return res.phoneNumber;
+            }
+        } catch (e) {
+            console.error("Failed to resolve LID JID to Phone:", e.message);
+        }
+    }
+    const num = jid.split('@')[0].split(':')[0];
+    return `${num}@s.whatsapp.net`;
+}
+
 // Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
     const seconds = Math.floor((Date.now() - ms) / 1000);
@@ -419,8 +437,8 @@ async function startBot() {
                     const deletedMsgId = update.key.id;
                     const jid = update.key.remoteJid;
 
-                    if (global.messageStore && global.messageStore[deletedMsgId]) {
-                        const originalMsg = global.messageStore[deletedMsgId];
+                    if (global.messageStore[jid] && global.messageStore[jid][deletedMsgId]) {
+                        const originalMsg = global.messageStore[jid][deletedMsgId];
                         await handleMessageDeletion(sock, originalMsg, jid, update.key.participant || update.key.remoteJid || '');
                     }
                 }
@@ -440,6 +458,7 @@ async function startBot() {
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
             const senderNumber = senderJid.split('@')[0]; 
             const isGroup = jid.endsWith('@g.us');
+            const isLid = senderJid.endsWith('@lid');
             
             const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
             const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
@@ -452,26 +471,22 @@ async function startBot() {
                 settings.devLids = [];
             }
 
-            let isDev = settings.devs.includes(senderNumber) || (msg.key.hasLid && settings.devLids.includes(senderJid));
-            if (!isDev && senderJid.endsWith('@lid')) {
+            let isDev = settings.devs.includes(senderNumber) || settings.devLids.includes(senderJid);
+            let isOwner = settings.ownerNumber.includes(senderNumber) || (settings.owners || []).includes(senderNumber);
+            let isSudo = (settings.sudo || []).includes(senderNumber);
+
+            // Dynamic LID to standard Phone JID mapping fallback [1]
+            if (isLid && !isDev && !isOwner && !isSudo) {
                 try {
-                    const resolved = await sock.findUserId(senderJid);
-                    if (resolved && resolved.phoneNumber) {
-                        const resolvedNumber = resolved.phoneNumber.split('@')[0];
-                        isDev = settings.devs.includes(resolvedNumber);
-                        
-                        if (isDev && !settings.devLids.includes(senderJid)) {
-                            settings.devLids.push(senderJid);
-                            try {
-                                fs.writeFileSync(devStatePath, JSON.stringify(settings.devLids, null, 2), 'utf-8');
-                                console.log(`📡 [DEV LIDS] Dynamic developer LID saved to dev_state.json: ${senderJid}`);
-                            } catch (e) {
-                                console.error("Failed to save dev_state.json:", e.message);
-                            }
-                        }
+                    const resolvedPhone = await resolveToPhoneJid(sock, senderJid);
+                    if (resolvedPhone) {
+                        const resolvedNum = resolvedPhone.split('@')[0];
+                        if (settings.devs.includes(resolvedNum)) isDev = true;
+                        if (settings.ownerNumber.includes(resolvedNum) || (settings.owners || []).includes(resolvedNum)) isOwner = true;
+                        if ((settings.sudo || []).includes(resolvedNum)) isSudo = true;
                     }
-                } catch (e) {
-                    console.error("LID Dev Resolution Error:", e.message);
+                } catch (lidMappingErr) {
+                    console.error("LID dynamic authority mapping failed:", lidMappingErr.message);
                 }
             }
 
@@ -512,9 +527,7 @@ async function startBot() {
                 settings.owners = [settings.ownerNumber];
             }
 
-            const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
-            const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
-            const isAuthorized = isOwner || isSudo;
+            const isAuthorized = isOwner || isSudo || isDev;
 
             // 1. AUTOMATED STATUS BROADCAST OBSERVER
             if (jid === 'status@broadcast') {
@@ -869,12 +882,12 @@ async function startBot() {
                 }
             }
 
-            // 9. ANTIPM PRIVATE MESSAGE AUTOBLOCKER
+            // 9. ANTIPM PRIVATE MESSAGE AUTOBLOCKER [1]
             if (!isGroup && !msg.key.fromMe && !isAuthorized && settings.antipm === 'on') {
                 try {
                     await sock.sendMessage(jid, { text: "❌ *Connection Blocked:* Direct messages are currently restricted under Satoru Gojo's domain security." });
-                    await sock.updateBlockStatus(senderJid, 'block');
-                    console.log(`🛡️ [ANTI-PM] Instantly blocked user: ${senderJid}`);
+                    await sock.updateBlockStatus(jid, 'block');
+                    console.log(`🛡️ [ANTI-PM] Instantly blocked user: ${jid}`);
                     return; 
                 } catch (e) {
                     console.error("Antipm blocking failed:", e.message);
@@ -922,7 +935,7 @@ async function startBot() {
                 ...settings.devLids
             ];
             
-            // Fixed verification logic to check if a registered developer or the bot is mentioned (mindful of LID/JID)
+            // Fixed verification logic to check if a registered developer or the bot is mentioned (mindful of LID/JID) [5]
             const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid) || jid === botJid || jid === botLid);
             
             if (isGroup && isAnyDevMentioned) {
@@ -1176,32 +1189,41 @@ async function startBot() {
                 args = '';
             }
             else {
-                const isLizzyActive = Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid);
-                const isChatbotActive = Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid);
+                // Interactive Dialogues and Game reply processing routers
+                const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
+                
+                // Route for interactive proposals and askouts
+                if (quotedMsgId && (global.proposalSessions[jid] || global.askoutSessions[jid] || global.purpleSessions[jid])) {
+                    command = 'handle_fun_replies';
+                    args = trimmedMessage;
+                } else {
+                    const isLizzyActive = Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid);
+                    const isChatbotActive = Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid);
 
-                const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
-                const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && msg.message.extendedTextMessage?.contextInfo?.stanzaId);
-                const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
+                    const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
+                    const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && msg.message.extendedTextMessage?.contextInfo?.stanzaId);
+                    const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
 
-                if (isLizzyActive && !command) {
-                    const containsLizzyName = lowerMessage.includes('lizzy');
-                    if (isReplyingToBot || isMentioningBot || containsLizzyName) {
-                        command = 'lizzy_chat';
-                        args = trimmedMessage;
+                    if (isLizzyActive && !command) {
+                        const containsLizzyName = lowerMessage.includes('lizzy');
+                        if (isReplyingToBot || isMentioningBot || containsLizzyName) {
+                            command = 'lizzy_chat';
+                            args = trimmedMessage;
+                        }
                     }
-                }
 
-                if (isChatbotActive && !command) {
-                    if (isReplyingToBot || isMentioningBot) {
-                        command = 'chatbot_chat';
-                        args = trimmedMessage;
+                    if (isChatbotActive && !command) {
+                        if (isReplyingToBot || isMentioningBot) {
+                            command = 'chatbot_chat';
+                            args = trimmedMessage;
+                        }
                     }
                 }
                 
                 if (!command) return; 
             }
 
-            // Global Bot Privacy Mode Guard (Owner & Sudo Authorized Only in Private Mode)
+            // Global Bot Privacy Mode Guard (Owner & Sudo Authorized Only in Private Mode) [1]
             if (command) {
                 const isPublicMode = settings.isPublic ?? false; // Default private state [1]
                 if (!isPublicMode && !isAuthorized) {
