@@ -13,7 +13,7 @@ if (!settings.presence) {
     };
 }
 
-// Initialize antidelete memory config securely as an object (mindful of status & logs)
+// Initialize antidelete memory config securely as an object
 if (!settings.antidelete || typeof settings.antidelete !== 'object') {
     settings.antidelete = {
         status: 'off',
@@ -23,12 +23,12 @@ if (!settings.antidelete || typeof settings.antidelete !== 'object') {
     };
 }
 
-// Initialize antiviewonce config securely as an object (mindful of status & logs)
+// Initialize antiviewonce config securely as an object
 if (!settings.antiviewonce || typeof settings.antiviewonce !== 'object') {
     settings.antiviewonce = {
-        status: 'off', // 'all', 'here', 'off'
+        status: 'off',
         hereJid: '',
-        logDestination: 'bot', // 'user', 'bot'
+        logDestination: 'bot',
         logUserJid: ''
     };
 }
@@ -74,7 +74,7 @@ global.forwardSessions = global.forwardSessions || {};
 // Global bank details wizard session tracker
 global.azaSessions = global.azaSessions || {};
 
-// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely
+// Recursive Helper to safely unwrap messages
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -85,7 +85,7 @@ function getRawMessage(message) {
     return message;
 }
 
-// Helper to determine the client operating system from the message ID structure
+// Helper to determine the client operating system from the message ID structure [INDEX: pair.js]
 function getDeviceTypeFromId(id) {
     if (!id) return "UNKNOWN";
     const len = id.length;
@@ -184,7 +184,6 @@ module.exports = [
             let city = "Unknown City Coordinates";
             let coordinates = "Unavailable Spatial coordinates";
 
-            // NIGERIAN PREFIX TRIANGULATION
             if (phone.startsWith('234')) {
                 country = "Nigeria 🇳🇬";
                 const prefix = phone.slice(3, 6);
@@ -211,7 +210,6 @@ module.exports = [
                     coordinates = "Lat: 9.0820, Lon: 8.6753";
                 }
             }
-            // SOUTH AFRICAN PREFIX TRIANGULATION
             else if (phone.startsWith('27')) {
                 country = "South Africa 🇿🇦";
                 const prefix = phone.slice(2, 4);
@@ -238,7 +236,6 @@ module.exports = [
                     coordinates = "Lat: -30.5595, Lon: 22.9375";
                 }
             }
-            // MALAYSIAN PREFIX TRIANGULATION
             else if (phone.startsWith('60')) {
                 country = "Malaysia 🇲🇾";
                 const prefix = phone.slice(2, 4);
@@ -265,7 +262,6 @@ module.exports = [
                     coordinates = "Lat: 4.2105, Lon: 101.9758";
                 }
             }
-            // FALLBACK REGIONAL BASES
             else if (phone.startsWith('1')) { country = "United States / Canada 🇺🇸🇨🇦"; coordinates = "Lat: 37.0902, Lon: -95.7129"; carrier = "Verizon / Rogers"; city = "North America Range"; }
             else if (phone.startsWith('44')) { country = "United Kingdom 🇬🇧"; coordinates = "Lat: 55.3781, Lon: -3.4360"; carrier = "EE Mobile Ltd"; city = "London Sector"; }
             else if (phone.startsWith('91')) { country = "India 🇮🇳"; coordinates = "Lat: 20.5937, Lon: 78.9629"; carrier = "Reliance Jio / Airtel"; city = "New Delhi Core"; }
@@ -314,7 +310,6 @@ module.exports = [
             let targetJid = "";
             const quoted = msg.message.extendedTextMessage?.contextInfo;
 
-            // Resolve Target JID
             if (quoted && quoted.participant) {
                 targetJid = quoted.participant;
             } else if (quoted?.mentionedJid?.length > 0) {
@@ -455,7 +450,6 @@ module.exports = [
                 const cleanOwnerNum = settings.ownerNumber.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                 const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
                 
-                // Exclude selfJid from target configuration list to prevent protocol rejection
                 const statusTargets = [cleanOwnerNum, ...activeChats]
                     .filter((v, i, self) => self.indexOf(v) === i && v !== selfJid && v.endsWith('@s.whatsapp.net'));
 
@@ -710,7 +704,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            // Defensive object check (mindful of status & logs)
             if (!settings.antidelete || typeof settings.antidelete !== 'object') {
                 settings.antidelete = {
                     status: 'off',
@@ -788,7 +781,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            // Defensive object check (mindful of status & logs)
             if (!settings.antidelete || typeof settings.antidelete !== 'object') {
                 settings.antidelete = {
                     status: 'off',
@@ -802,7 +794,6 @@ module.exports = [
 
             if (target === 'user') {
                 settings.antidelete.logDestination = 'user';
-                // Saves the active configuring user's JID or LID securely
                 settings.antidelete.logUserJid = msg.key.participant || msg.key.remoteJid || '';
                 saveSettings();
                 await sock.sendMessage(jid, { text: "✅ Anti-Delete log successfully redirected to *your personal DM*." }, { quoted: msg });
@@ -823,7 +814,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            // Defensive object check (highly mindful of previous config string values)
             if (typeof settings.antiviewonce !== 'object') {
                 settings.antiviewonce = {
                     status: 'off',
@@ -837,11 +827,9 @@ module.exports = [
             const action = parts[0] || '';
             const subAction = parts[1] || '';
 
-            // Handle logging destination parameters
             if (action === 'log') {
                 if (subAction === 'user') {
                     settings.antiviewonce.logDestination = 'user';
-                    // Saves the active configuring user's JID or LID securely
                     settings.antiviewonce.logUserJid = msg.key.participant || msg.key.remoteJid || '';
                     saveSettings();
                     return await sock.sendMessage(jid, { text: "✅ Anti-ViewOnce logs successfully redirected to *your personal DM*." }, { quoted: msg });
@@ -874,7 +862,6 @@ module.exports = [
                 }
             }
 
-            // Handle active toggle configurations
             if (action === 'all' || action === 'on') {
                 settings.antiviewonce.status = 'all';
                 settings.antiviewonce.hereJid = '';
@@ -1486,20 +1473,108 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Failed to fetch football wire news: ${error.message}` }, { quoted: msg });
             }
         }
+    },
+
+    // 31. SCREENSHOT WEBSITE TOOL (.ss)
+    {
+        name: 'ss',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let targetUrl = args ? args.trim() : '';
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!targetUrl && quoted) {
+                const rawContent = getRawMessage(quoted);
+                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+            }
+
+            if (!targetUrl) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide or reply to a valid URL." }, { quoted: msg });
+            }
+
+            if (!/^https?:\/\//i.test(targetUrl)) {
+                targetUrl = 'https://' + targetUrl;
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: `Taking website screenshot... 📸` }, { quoted: msg });
+
+                // Direct screenshot compilation URL
+                const screenshotUrl = `https://image.thum.io/get/width/1280/crop/800/${targetUrl}`;
+
+                await sock.sendMessage(jid, { 
+                    image: { url: screenshotUrl }, 
+                    caption: `📸 *Screenshot of:* \`${targetUrl}\`\n\n_Rendered via Limitless system engines_` 
+                }, { quoted: msg });
+
+            } catch (err) {
+                console.error("Screenshot error:", err.message);
+                await sock.sendMessage(jid, { text: "❌ Failed to render screenshot." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 32. SAFE EVALUATION CALCULATOR (.calculator / .calc)
+    {
+        name: 'calculator',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a mathematical expression.\nExample: `⚡calc 5 + (3 * 2)`" }, { quoted: msg });
+            }
+
+            // Strictly filter expression characters to prevent remote execution
+            const cleanExpr = args.replace(/[^0-9+\-*/().\s]/g, '').trim();
+
+            if (!cleanExpr) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid mathematical characters detected." }, { quoted: msg });
+            }
+
+            try {
+                const result = Function('"use strict";return (' + cleanExpr + ')')();
+
+                await sock.sendMessage(jid, { 
+                    text: `📊 *MATHEMATICAL EVALUATION* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                          `• *Expression:* \`${cleanExpr}\`\n` +
+                          `• *Result:* \`${result}\`\n\n` +
+                          `_Calculated securely under the Limitless sandbox_ 🤞`
+                }, { quoted: msg });
+
+            } catch (err) {
+                console.error("Calculator error:", err.message);
+                await sock.sendMessage(jid, { text: "❌ Invalid mathematical expression. Ensure syntax is correct." }, { quoted: msg });
+            }
+        }
     }
 ];
 
-// Add structural aliases safely via external array collector
 const aliases = [];
 module.exports.forEach(cmd => {
-    if (cmd.name === 'fw') {
-        aliases.push({ ...cmd, name: 'forward' });
+    if (cmd.name === 'sticker') {
+        aliases.push({ ...cmd, name: 's' });
     }
-    if (cmd.name === 'device') {
-        aliases.push({ ...cmd, name: 'getdevice' });
+    if (cmd.name === 'take') {
+        aliases.push({ ...cmd, name: 'steal' });
     }
-    if (cmd.name === 'antiviewonce') {
-        aliases.push({ ...cmd, name: 'antivv' });
+    if (cmd.name === 'tourl') {
+        aliases.push({ ...cmd, name: 'url' });
+    }
+    if (cmd.name === 'delete') {
+        aliases.push({ ...cmd, name: 'del' });
+        aliases.push({ ...cmd, name: 'dlt' }); 
+    }
+    if (cmd.name === 'tdelete') {
+        aliases.push({ ...cmd, name: 'tdel' });
+        aliases.push({ ...cmd, name: 'tdlt' });
+    }
+    if (cmd.name === 'ss') {
+        aliases.push({ ...cmd, name: 'screenshot' });
+    }
+    if (cmd.name === 'calculator') {
+        aliases.push({ ...cmd, name: 'calc' });
     }
 });
 module.exports.push(...aliases);
