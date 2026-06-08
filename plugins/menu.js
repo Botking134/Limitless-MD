@@ -86,9 +86,15 @@ _║ ⊱ read_
 _║ ⊱ imagine_
 _║ ⊱ lizzy_
 _║ ⊱ chatbot_
+_║ ⊱ say_
 
 _❖ ── [ GROUP MANAGEMENT ] ── ❖_
-_║ ⊱ gmode_
+_║ ⊱ mute_
+_║ ⊱ unmute_
+_║ ⊱ open_
+_║ ⊱ close_
+_║ ⊱ lock_
+_║ ⊱ unlock_
 _║ ⊱ kick_
 _║ ⊱ promote_
 _║ ⊱ demote_
@@ -114,9 +120,11 @@ _║ ⊱ creategc_
 _║ ⊱ kickall_
 _║ ⊱ stopkickall_
 _║ ⊱ tkick_
+_║ ⊱ gcjid_
+_║ ⊱ antispam_
+_║ ⊱ silence_
 
 _❖ ── [ TOOLS ] ── ❖_
-_║ ⊱ setpp_
 _║ ⊱ track_
 _║ ⊱ getpp_
 _║ ⊱ setname_
@@ -146,6 +154,8 @@ _║ ⊱ weather_
 _║ ⊱ device_
 _║ ⊱ livescore_
 _║ ⊱ football_
+_║ ⊱ ss_
+_║ ⊱ calc_
 
 _❖ ── [ DOWNLOADER ] ── ❖_
 _║ ⊱ play_
@@ -174,6 +184,34 @@ _║ ⊱ spotify2_
 _║ ⊱ web_
 _║ ⊱ x2_
 
+_❖ ── [ FUN & GAMES ] ── ❖_
+_║ ⊱ bankai_
+_║ ⊱ dom-exp_
+_║ ⊱ wyr_
+_║ ⊱ joke_
+_║ ⊱ insult_
+_║ ⊱ roast_
+_║ ⊱ ship_
+_║ ⊱ wed_
+_║ ⊱ propose_
+_║ ⊱ askout_
+_║ ⊱ hollow-purple_
+_║ ⊱ hack_
+_║ ⊱ arrest_
+_║ ⊱ liedetector_
+_║ ⊱ rizz_
+_║ ⊱ speech_
+_║ ⊱ emix_
+_║ ⊱ slap_
+_║ ⊱ kill_
+_║ ⊱ kiss_
+_║ ⊱ hug_
+_║ ⊱ kik_
+_║ ⊱ punch_
+_║ ⊱ hifive_
+_║ ⊱ bite_
+_║ ⊱ poke_
+
 _❖ ── [ OWNER & DEV ] ── ❖_
 _║ ⊱ diagnose_
 _║ ⊱ update_
@@ -191,12 +229,16 @@ _║ ⊱ deldev_
 _║ ⊱ afk_
 _║ ⊱ setvar_
 _║ ⊱ settings_
+_║ ⊱ antipm_
+_║ ⊱ reminder_
+_║ ⊱ remind_
 
 _❖ ── [ UTILITIES ] ── ❖_
 _║ ⊱ ping_
 _║ ⊱ ping2_
 _║ ⊱ alive_
 _║ ⊱ delete_
+_║ ⊱ tdelete_
 _║ ⊱ autoreact_
 _║ ⊱ speed_
 _║ ⊱ vv_
@@ -208,6 +250,7 @@ _║ ⊱ delcmd_
 _║ ⊱ tovv_
 _║ ⊱ tourl_
 _║ ⊱ kamui_
+_║ ⊱ vvs_
 _║ ⊱ addnote_
 _║ ⊱ delnote_
 _║ ⊱ getnotes_
@@ -222,7 +265,6 @@ _║ ⊱ getnote_`;
         const audioUrl = "https://github.com/Botking134/Limitless-MD/raw/refs/heads/master/plugins/AUD-20260604-WA0001.mp3";
 
         try {
-            // Buffer the audio on the server first to ensure correct mimetype formatting
             const audioResponse = await fetch(audioUrl);
             if (audioResponse.ok) {
                 const arrayBuffer = await audioResponse.arrayBuffer();
@@ -235,7 +277,6 @@ _║ ⊱ getnote_`;
                 throw new Error();
             }
         } catch (audioErr) {
-            // Fallback to direct URL if the server download fails
             await sock.sendMessage(jid, {
                 audio: { url: audioUrl },
                 mimetype: "audio/mpeg",
@@ -254,7 +295,6 @@ async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
 
-    // Generate Satoru Gojo Header Panel
     const headerText = 
 `┌──────────────────┐
 │   *Limitless-MD*   │
@@ -273,15 +313,14 @@ _Throughout Heaven And Earth 🌏_
         const { generateWAMessageFromContent } = await import('@itsliaaa/baileys');
         await sock.sendMessage(jid, { text: "Channelling Infinity Domain... 🌀" }, { quoted: msg });
 
-        // Shuffle images array to dynamically allocate unique images across slides
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
-        // Define Category slides configurations
         const categories = [
             { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
             { name: "GROUP MANAGEMENT 👥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
             { name: "TOOLS ⚙️", desc: "Advanced Presence parameters & tracking tools.", cmd: "menu_tools" },
             { name: "DOWNLOADER 📥", desc: "High-speed multi-platform downloaders.", cmd: "menu_download" },
+            { name: "FUN & GAMES 🎮", desc: "Matrimony ceremonies, anime actions, and interactive polls.", cmd: "menu_fun" },
             { name: "OWNER & DEV 👑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
             { name: "UTILITIES 🛠️", desc: "Converter tools & network latencies.", cmd: "menu_utilities" }
         ];
@@ -300,7 +339,6 @@ _Throughout Heaven And Earth 🌏_
             cards.push(card);
         }
 
-        // Compile standard interactive Carousel Message structure
         const messageContent = {
             interactiveMessage: {
                 body: { text: headerText },
@@ -321,7 +359,6 @@ _Throughout Heaven And Earth 🌏_
 
     } catch (error) {
         console.error("Carousel Menu Render Error:", error);
-        // Fallback to standard text menu if device/connection rejects Interactive Relaying
         await renderMenu(sock, msg);
     }
 }
@@ -376,7 +413,8 @@ module.exports = [
 • *${settings.prefix}read <prompt>* — High-speed Vision image analyzer.
 • *${settings.prefix}imagine <prompt>* — Generates premium AI illustrations.
 • *${settings.prefix}lizzy <on/off>* — Devoted anime chatbot toggle.
-• *${settings.prefix}chatbot <on/off>* — General chat assistance toggle.`;
+• *${settings.prefix}chatbot <on/off>* — General chat assistance toggle.
+• *${settings.prefix}say <text>* — Convert text to custom audio voice note.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -389,7 +427,7 @@ module.exports = [
 `👥 *DOMAIN EXPANSION: GROUP MODS* 👥
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-• *${settings.prefix}gmode <open/close>* — Locks/unlocks group conversation flows.
+• *${settings.prefix}mute <duration>* — Locks/unlocks group conversation flows (mute/unmute, open/close, lock/unlock).
 • *${settings.prefix}kick / .promote / .demote* — User state management.
 • *${settings.prefix}tagall / .tag* — Dynamic tags or ghost tags all members.
 • *${settings.prefix}link* — Fetches active invitation link.
@@ -403,7 +441,10 @@ module.exports = [
 • *${settings.prefix}creategc <name>* — Automatically instantiates a new group.
 • *${settings.prefix}kickall* — Exorcises all non-admin targets (Owner Only).
 • *${settings.prefix}stopkickall* — Aborts the active exorcism sequence.
-• *${settings.prefix}tkick <duration>* — Timed participant ejections.`;
+• *${settings.prefix}tkick <duration>* — Timed participant ejections.
+• *${settings.prefix}gcjid* — Extract group cryptographic JID.
+• *${settings.prefix}antispam <on/off/trig>* — Rate-limiting spam shield.
+• *${settings.prefix}silence <-s/-m/all>* — Auto-delete chat constraints.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -416,7 +457,6 @@ module.exports = [
 `⚙️ *LIMITLESS SPATIAL TOOLS* ⚙️
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-• *${settings.prefix}setpp* — Updates profile picture (JID/LID mindful).
 • *${settings.prefix}track* — Spatial geographical prefix locator.
 • *${settings.prefix}getpp* — Extracts target user profile picture.
 • *${settings.prefix}setname* — Modifies bot display username.
@@ -440,7 +480,9 @@ module.exports = [
 • *${settings.prefix}weather* — Tropospheric coordinates weather forecast.
 • *${settings.prefix}device* — Client hardware OS signature scanner.
 • *${settings.prefix}livescore* — Real-time ESPN sports scoreboard.
-• *${settings.prefix}football* — ESPN global soccer news wire.`;
+• *${settings.prefix}football* — ESPN global soccer news wire.
+• *${settings.prefix}ss <url>* — Render high-speed website screenshot.
+• *${settings.prefix}calc <expr>* — Secure mathematical expression evaluator.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -456,7 +498,7 @@ module.exports = [
 • *${settings.prefix}play <query>* — Song downloader with clean metadata artwork.
 • *${settings.prefix}ytmp3 / .ytmp4* — Dual-fallback YouTube link downloaders.
 • *${settings.prefix}yt <url>* — YouTube v3 multi-format media downloader.
-• *${settings.prefix}tt2 <url>* — TikTok v2 watermark-free link downloader.
+• *${settings.prefix}tt2 <url>* — Sample watermark-free link downloader.
 • *${settings.prefix}img <query> <count>* — Google bulk image downloader.
 • *${settings.prefix}song <query>* — Numbered song index selector & downloader.
 • *${settings.prefix}video <query>* — YouTube video search downloader.
@@ -480,6 +522,37 @@ module.exports = [
         }
     },
     {
+        name: 'menu_fun',
+        isPrefixless: true,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const subText = 
+`🎮 *UNLIMITED VOID: FUN & GAMES* 🎮
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• *${settings.prefix}bankai <name>* — Search character Bankai details.
+• *${settings.prefix}dom-exp <name>* — Search JJK Cursed Domain expansion.
+• *${settings.prefix}wyr* — Spawn interactive Would You Rather poll.
+• *${settings.prefix}joke* — Drop witty dad-jokes or funny giggles.
+• *${settings.prefix}insult / .roast* — Expose subject with witty roasts.
+• *${settings.prefix}ship <@user>* — Match two members with love compatibility.
+• *${settings.prefix}wed <@user>* — Host a priest-styled holy matrimony ceremony.
+• *${settings.prefix}propose <@user>* — Drop custom proposal cards with Yes/No locks.
+• *${settings.prefix}askout <@user>* — Ask someone out with secure feedback gates.
+• *${settings.prefix}hollow-purple* — Channel Satoru Gojo's ultimate technique.
+• *${settings.prefix}hack <bank/soft>* — Run interactive terminal hex animations.
+• *${settings.prefix}arrest <@user>* — Issue a custom arrest warrant & jail them.
+• *${settings.prefix}liedetector <@user>* — Biometric truth/lie scanner.
+• *${settings.prefix}rizz* — Drops smooth, infinite pick-up lines.
+• *${settings.prefix}speech <char>* — Deliver iconic anime monologues.
+• *${settings.prefix}emix <emoji1> <emoji2>* — Combine two emojis into a 3D sticker.
+
+*🎭 Anime Interactive Actions:*
+• *${settings.prefix}slap, .kill, .kiss, .hug, .kik, .punch, .hifive, .bite, .poke*`;
+            await sock.sendMessage(jid, { text: subText }, { quoted: msg });
+        }
+    },
+    {
         name: 'menu_owner',
         isPrefixless: true,
         execute: async (sock, msg, args) => {
@@ -490,7 +563,6 @@ module.exports = [
 
 • *${settings.prefix}diagnose* — Active system compile diagnostic check.
 • *${settings.prefix}update <setup/yes/force>* — System updates & force-overwriting.
-• *${settings.prefix}update repair* — Silent package registry re-builder (Dev-Only).
 • *${settings.prefix}mode <public/private>* — Bot privacy state.
 • *${settings.prefix}setsudo / .delsudo* — Sudo users registers.
 • *${settings.prefix}addowner / .delowner* — Secondary owners registers.
@@ -500,7 +572,9 @@ module.exports = [
 • *${settings.prefix}afk* — Meditation AFK automated auto-responder.
 • *${settings.prefix}setvar* — Dynamic variable configurations editor.
 • *${settings.prefix}settings* — Displays active global settings card.
-• *${settings.prefix}upgrade* — GitHub repository file overwriter (Dev-Only).`;
+• *${settings.prefix}antipm <on/off>* — Automated PM DM blocker.
+• *${settings.prefix}reminder <timer> <note>* — Persistently register custom cron reminders.
+• *${settings.prefix}remind* — Access active scheduled reminders board.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -515,7 +589,8 @@ module.exports = [
 
 • *${settings.prefix}ping / .ping2* — Network latency & speed tracking.
 • *${settings.prefix}alive* — System uptime & WAT climate dashboard.
-• *${settings.prefix}delete / .del* — Message deletion tool (LID-Safe).
+• *${settings.prefix}delete / .dlt* — Message deletion tool (LID-Safe).
+• *${settings.prefix}tdelete <timer>* — Scheduled delayed deletion.
 • *${settings.prefix}autoreact* — Automated message reactions.
 • *${settings.prefix}speed* — Interactive execution speed meter.
 • *${settings.prefix}vv* — Manual view-once media extractor.
@@ -525,9 +600,19 @@ module.exports = [
 • *${settings.prefix}setcmd / .delcmd* — Maps commands directly to stickers.
 • *${settings.prefix}tourl / .url* — Media file cloud uploaders (Pixeldrain/Quax).
 • *${settings.prefix}kamui* — Silent decryption & DM-forwarding View Once.
+• *${settings.prefix}vvs <emoji>* — Trigger decryption kamui via specific emojis.
 • *${settings.prefix}addnote / .delnote* — Sticky note managers.
 • *${settings.prefix}getnotes / .getnote* — Notes index lookup.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     }
 ];
+
+// Add structural aliases
+const aliases = [];
+module.exports.forEach(cmd => {
+    if (cmd.name === 'menu') {
+        aliases.push({ ...cmd, name: 'domain' });
+    }
+});
+module.exports.push(...aliases);
