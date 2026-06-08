@@ -87,169 +87,142 @@ function extractEmojis(text) {
 }
 
 // -------------------------------------------------------------
-// METADATA DATASETS
+// BLEACH (BANKAI) DATABASE & CONFIGS (Shortened)
 // -------------------------------------------------------------
 const bankaiData = [
     {
         name: "Ichigo Kurosaki",
-        aliases: ["ichigo", "kurosaki", "kurosaki ichigo", "tensa zangetsu"],
+        aliases: ["ichigo", "kurosaki", "tensa zangetsu"],
         position: "Substitute Shinigami",
-        bankaiName: "Tensa Zangetsu (Heaven Chain Slaying Moon)",
-        abilities: "Compresses immense spiritual pressure into a sleek, pitch-black blade, granting physical speed, enhanced reflexes, and the ability to fire highly concentrated black Getsuga Tensho and Getsuga Jujisho blasts."
+        bankaiName: "Tensa Zangetsu",
+        abilities: "Grants extreme speed, physical reflexes, and highly concentrated black Getsuga Tensho blasts."
     },
     {
         name: "Rukia Kuchiki",
-        aliases: ["rukia", "kuchiki rukia", "hakka no togame"],
+        aliases: ["rukia", "hakka no togame"],
         position: "Captain of Division 13",
-        bankaiName: "Hakka no Togame (White Haze Punishment)",
-        abilities: "Reaches absolute zero temperature instantly, creating a towering pillar of freezing mist. Anything within its influence is frozen solid and crumbles into dust. Rukia must melt herself back slowly to avoid breaking her own frozen body."
+        bankaiName: "Hakka no Togame",
+        abilities: "Reaches absolute zero temperature instantly, freezing and crumbling all matter within range."
     },
     {
         name: "Byakuya Kuchiki",
-        aliases: ["byakuya", "kuchiki byakuya", "senbonzakura", "senbonzakura kageyoshi"],
+        aliases: ["byakuya", "senbonzakura"],
         position: "Captain of Division 6",
-        bankaiName: "Senbonzakura Kageyoshi (Vibrant Display of a Thousand Cherry Blossoms)",
-        abilities: "Scatters millions of tiny blade petals that shred targets with absolute offensive and defensive control. Byakuya can guide them with his hands to double their speed, or consolidate them into swords for direct combat (Senkei)."
+        bankaiName: "Senbonzakura Kageyoshi",
+        abilities: "Scatters millions of tiny blade petals that shred targets with absolute spatial control."
     },
     {
         name: "Kisuke Urahara",
-        aliases: ["kisuke", "urahara", "kisuke urahara", "kannonbiraki"],
-        position: "Former Captain of Division 12 / Store Owner",
-        bankaiName: "Kannonbiraki Benihime Aratame (Inquisition of the Crimson Princess of the Opened Gate)",
-        abilities: "Restructures and reconstructs anything it physically touches or operates within its area of influence. Can be used to heal wounds by stitching tissue, open paths through solid barriers, or dissect opponents."
+        aliases: ["kisuke", "urahara", "kannonbiraki"],
+        position: "Store Owner / Former Captain",
+        bankaiName: "Kannonbiraki Benihime Aratame",
+        abilities: "Restructures and reconstructs anything it physically touches or operates within."
     },
     {
         name: "Shunsui Kyoraku",
-        aliases: ["shunsui", "kyoraku", "shunsui kyoraku", "katen kyokotsu"],
-        position: "Captain-Commander of the Gotei 13 / Captain of Division 1",
-        bankaiName: "Katen Kyokotsu: Karamatsu Shinju (Heavenly Blossom Madness: Withered Pine Love Suicide)",
-        abilities: "Forces shared despair through a tragic 4-act play: sharing wounds, giving the enemy an incurable disease, drowning both in an inescapable abyss of water, and finally slicing the opponent's throat with a thread of spiritual energy."
+        aliases: ["shunsui", "kyoraku", "katen kyokotsu"],
+        position: "Captain-Commander / Division 1",
+        bankaiName: "Katen Kyokotsu: Karamatsu Shinju",
+        abilities: "Forces shared despair through a tragic 4-act play that drains, drowns, and cuts the opponent's throat."
     },
     {
         name: "Genryusai Shigekuni Yamamoto",
-        aliases: ["yamamoto", "genryusai", "shigekuni yamamoto", "zanka no tachi"],
-        position: "Former Captain-Commander of the Gotei 13 / Captain of Division 1",
-        bankaiName: "Zanka no Tachi (Longsword of the Remnant Flame)",
-        abilities: "Concentrates all flames into the edge of the blade, reaching temperatures of 15 million degrees. It burns anything on contact to ash, wraps him in heat shielding, raises the skeletons of those killed by his flames, and erases anything touched from existence."
+        aliases: ["yamamoto", "genryusai", "zanka no tachi"],
+        position: "Former Captain-Commander",
+        bankaiName: "Zanka no Tachi",
+        abilities: "Concentrates 15 million degrees of flame into the blade edge, vaporizing any contact."
     },
     {
         name: "Toshiro Hitsugaya",
-        aliases: ["toshiro", "hitsugaya", "toshiro hitsugaya", "daiguren hyorinmaru"],
+        aliases: ["toshiro", "hitsugaya", "daiguren hyorinmaru"],
         position: "Captain of Division 10",
-        bankaiName: "Grand Crimson Ice Ring Cold Moon (Daiguren Hyorinmaru)",
-        abilities: "Manifests ice wings, tail, and armor to freeze everything. When the flower petals behind him fully dissolve, his body ages to a mature adult, allowing him to flash-freeze all matter, concepts, and abilities instantly."
+        bankaiName: "Grand Crimson Ice Ring (Daiguren Hyorinmaru)",
+        abilities: "Completed form allows him to flash-freeze all matter, concepts, and abilities instantly."
     },
     {
         name: "Kenpachi Zaraki",
-        aliases: ["kenpachi", "zaraki", "zaraki kenpachi"],
+        aliases: ["kenpachi", "zaraki"],
         position: "Captain of Division 11",
-        bankaiName: "Unnamed Bankai (Turns him into a red demon)",
-        abilities: "Unleashes overwhelming, mindless berserker physical strength. His skin turns crimson, and his blade can cleave through giant opponents or cut through clean space with brute force, although his own body struggles to contain the physical stress."
-    },
-    {
-        name: "Renji Abarai",
-        aliases: ["renji", "abarai", "renji abarai", "soo zabimaru"],
-        position: "Lieutenant of Division 6",
-        bankaiName: "Soo Zabimaru (Twin Kings Snake Tail)",
-        abilities: "Equips Renji with a skeletal serpent armor gauntlet and a heavy blade. He can fire a massive heat blast from the serpent's skull mouth or use close combat crushing force."
-    },
-    {
-        name: "Mayuri Kurotsuchi",
-        aliases: ["mayuri", "kurotsuchi", "mayuri kurotsuchi", "ashisogi jizo"],
-        position: "Captain of Division 12 / President of R&D",
-        bankaiName: "Konjiki Ashisogi Jizo (Golden Demon-Slaying Soil Jizo)",
-        abilities: "Summons a giant baby-like caterpillar monster that breathes deadly, mutating nerve toxins. It can also sprout blades from its chest, and Mayuri can modify its genetic code mid-battle to specifically counter and neutralize enemy elements."
+        bankaiName: "Unnamed Bankai",
+        abilities: "Turns him into a crimson demon with mindless berserker strength to cleave through clean space."
     }
 ];
 
 const nonBankaiCharacters = {
-    "aizen": "Sosuke Aizen possesses the Kyoka Suigetsu (Shikai), but has never revealed or used a Bankai in canon.",
-    "sosuke aizen": "Sosuke Aizen possesses the Kyoka Suigetsu (Shikai), but has never revealed or used a Bankai in canon.",
-    "ishida": "Uryu Ishida is a Quincy and doesn't possess a Shinigami Zanpakuto or Bankai.",
-    "uryu ishida": "Uryu Ishida is a Quincy and doesn't possess a Shinigami Zanpakuto or Bankai.",
-    "chad": "Yasutora Sado (Chad) is a Human/Fullbringer and does not possess a Zanpakuto or Bankai.",
-    "sado": "Yasutora Sado (Chad) is a Human/Fullbringer and does not possess a Zanpakuto or Bankai.",
-    "orihime": "Orihime Inoue is a Human with Shun Shun Rikka and does not possess a Zanpakuto or Bankai.",
-    "orihime inoue": "Orihime Inoue is a Human with Shun Shun Rikka and does not possess a Zanpakuto or Bankai.",
-    "grimmjow": "Grimmjow Jaegerjaquez is an Arrancar/Espada and does not possess a Bankai; he uses Resurrección (Pantera).",
-    "ulquiorra": "Ulquiorra Cifer is an Arrancar/Espada and does not possess a Bankai; he uses Resurrección and Segunda Etapa.",
-    "yoruichi": "Yoruichi Shihoin is the Former Captain of Division 2. While she possesses a Zanpakuto and likely has a Bankai, she never uses it in combat, preferring hand-to-hand combat and Shunko."
+    "aizen": "Sosuke Aizen possesses Kyoka Suigetsu (Shikai), but never revealed a Bankai in canon.",
+    "sosuke aizen": "Sosuke Aizen possesses Kyoka Suigetsu (Shikai), but never revealed a Bankai in canon.",
+    "ishida": "Uryu Ishida is a Quincy and does not possess a Zanpakuto or Bankai.",
+    "uryu ishida": "Uryu Ishida is a Quincy and does not possess a Zanpakuto or Bankai.",
+    "chad": "Yasutora Sado (Chad) is a Human/Fullbringer and does not possess a Bankai.",
+    "orihime": "Orihime Inoue is a Human with Shun Shun Rikka and does not possess a Bankai.",
+    "grimmjow": "Grimmjow is an Arrancar and does not possess a Bankai; he uses Resurrección.",
+    "ulquiorra": "Ulquiorra is an Arrancar and does not possess a Bankai; he uses Segunda Etapa.",
+    "yoruichi": "Yoruichi possesses a Zanpakuto and likely has Bankai, but never uses it in combat."
 };
 
 const nonBleachAnime = ["luffy", "zoro", "naruto", "sasuke", "goku", "vegeta", "deku", "tanjiro", "gojo", "sukuna", "itadori", "megumi"];
 
 // -------------------------------------------------------------
-// JUJUTSU KAISEN (DOMAIN EXPANSION) DATABASE & CONFIGS
+// JUJUTSU KAISEN (DOMAIN EXPANSION) DATABASE & CONFIGS (Shortened)
 // -------------------------------------------------------------
 const domainData = [
     {
         name: "Satoru Gojo",
-        aliases: ["gojo", "satoru", "satoru gojo", "unlimited void", "muryokusho"],
-        position: "Special Grade Jujutsu Sorcerer",
+        aliases: ["gojo", "satoru", "unlimited void", "muryokusho"],
+        position: "Special Grade Sorcerer",
         domainName: "Unlimited Void (Muryōkūsho)",
-        abilities: "Floods the target's brain with an infinite stream of raw information, forcing them to perceive and analyze everything in existence infinitely. This instantly paralyzes the target, rendering them completely brain-dead and unable to move or think."
+        abilities: "Paralyzes targets instantly by flooding their brains with infinite raw information."
     },
     {
         name: "Ryomen Sukuna",
-        aliases: ["sukuna", "ryomen", "ryomen sukuna", "malevolent shrine", "fukuma mizushi"],
-        position: "King of Curses / Special Grade Vengeful Spirit",
+        aliases: ["sukuna", "ryomen", "malevolent shrine", "fukuma mizushi"],
+        position: "King of Curses",
         domainName: "Malevolent Shrine (Fukuma Mizushi)",
-        abilities: "An open-barrier domain that paints its technique onto the real world instead of creating an enclosed space. It continuously rains down devastating cutting slashes (Cleave for things with cursed energy, Dismantle for inanimate objects) up to a 200m radius."
+        abilities: "An open-barrier domain that continuously rains down cutting slashes (Cleave/Dismantle) up to 200m."
     },
     {
         name: "Megumi Fushiguro",
-        aliases: ["megumi", "fushiguro", "megumi fushiguro", "chimera shadow garden"],
-        position: "Grade 2 Sorcerer / Zen'in Clan Head",
+        aliases: ["megumi", "fushiguro", "chimera shadow garden"],
+        position: "Grade 2 Sorcerer",
         domainName: "Chimera Shadow Garden (Kanga Koshōien)",
-        abilities: "Floods the battlefield with highly fluid shadows. Megumi can summon multiple shadow shikigami simultaneously, hide inside shadows to escape attacks, and create shadow clones of himself. (Incomplete Domain)"
+        abilities: "Floods the area with shadow fluid, allowing infinite Shikigami summons and shadow clones."
     },
     {
         name: "Yuta Okkotsu",
-        aliases: ["yuta", "okkotsu", "yuta okkotsu", "authentic mutual love"],
-        position: "Special Grade Jujutsu Sorcerer",
+        aliases: ["yuta", "okkotsu", "authentic mutual love"],
+        position: "Special Grade Sorcerer",
         domainName: "Authentic Mutual Love (Shingan Sōai)",
-        abilities: "Creates a graveyard filled with countless copied swords. Within the domain, Yuta can bypass the cooldown of his Copied techniques and imbue his sure-hit effect with any technique he has duplicated, allowing infinite use of highly diverse skills."
+        abilities: "Creates a sword graveyard allowing infinite and diverse usage of copied cursed techniques."
     },
     {
         name: "Mahito",
         aliases: ["mahito", "self-embodiment of perfection"],
-        position: "Special Grade Cursed Spirit",
+        position: "Special Grade Curse",
         domainName: "Self-Embodiment of Perfection (Heika Jisei)",
-        abilities: "Automatically creates a barrier where Mahito is physically connected to the soul of anyone trapped inside. This grants him the ability to use 'Idle Transfiguration' to warp, morph, or instantly obliterate the target's soul without needing physical touch."
+        abilities: "Automatically connects to target souls, letting him reshape or destroy them without touch."
     },
     {
         name: "Jogo",
         aliases: ["jogo", "coffin of the iron mountain"],
-        position: "Special Grade Cursed Spirit",
+        position: "Special Grade Curse",
         domainName: "Coffin of the Iron Mountain (Gaichūzō)",
-        abilities: "Envelops targets inside an incredibly active volcano. The ambient heat is so intense that standard sorcerers instantly combust on entry. Jogo gains absolute control over volcanic fire and magma, striking with absolute accuracy."
+        abilities: "Envelops targets inside an active volcano; standard sorcerers combust instantly upon entry."
     },
     {
         name: "Hakari Kinji",
-        aliases: ["hakari", "kinji", "kinji hakari", "idle death gamble"],
-        position: "Suspended Jujutsu High Student",
+        aliases: ["hakari", "kinji", "idle death gamble"],
+        position: "Jujutsu High Student",
         domainName: "Idle Death Gamble (Zatsubo Shingetsu)",
-        abilities: "A Pachinko-themed game domain. If Hakari spins and hits a jackpot, he gains infinite cursed energy and automatic Reverse Cursed Technique, making him completely immortal and un-killable for 4 minutes and 11 seconds."
-    },
-    {
-        name: "Hiromi Higuruma",
-        aliases: ["higuruma", "hiromi", "deadly sentencing"],
-        position: "Cursed Sorcerer / Defense Attorney",
-        domainName: "Deadly Sentencing (Shushikyū)",
-        abilities: "Enforces a strict courtroom where violence of any kind is physically prohibited. Judgeman prosecutes the target for a crime they committed in real life. If found guilty, they suffer 'Confiscation' (loss of cursed technique) or receive the Death Penalty."
+        abilities: "Pachinko-themed game domain. Hitting a jackpot grants infinite energy and immortality for 4m 11s."
     }
 ];
 
 const nonDomainCharacters = {
     "nanami": "Kento Nanami is a Grade 1 Sorcerer who possessed precision with his Ratio Technique, but never achieved a Domain Expansion.",
-    "kento nanami": "Kento Nanami is a Grade 1 Sorcerer who possessed precision with his Ratio Technique, but never achieved a Domain Expansion.",
     "toji": "Toji Fushiguro has zero cursed energy due to Heavenly Restriction, meaning he physically cannot create a Domain Expansion.",
-    "toji fushiguro": "Toji Fushiguro has zero cursed energy due to Heavenly Restriction, meaning he physically cannot create a Domain Expansion.",
     "maki": "Maki Zen'in has zero cursed energy due to Heavenly Restriction, making it physically impossible for her to expand a Domain.",
-    "maki zen'in": "Maki Zen'in has zero cursed energy due to Heavenly Restriction, making it physically impossible for her to expand a Domain.",
-    "nobara": "Nobara Kugisaki possesses the Straw Doll Technique but never unlocked Domain Expansion before her battle in Shibuya.",
-    "nobara kugisaki": "Nobara Kugisaki possesses the Straw Doll Technique but never unlocked Domain Expansion before her battle in Shibuya.",
-    "miwa": "Kasumi Miwa uses Simple Domain (New Shadow Style) for defense, but cannot expand a full innate domain.",
+    "nobara": "Nobara Kugisaki possesses the Straw Doll Technique but never unlocked Domain Expansion.",
+    "miwa": "Kasumi Miwa uses Simple Domain for defense, but cannot expand an innate domain.",
     "toge": "Toge Inumaki uses Cursed Speech, but does not possess a Domain Expansion."
 };
 
@@ -264,13 +237,7 @@ const wyrQuestions = [
     { o1: "Only be able to whisper everything you say", o2: "Only be able to scream everything you say" },
     { o1: "Fight 1 horse-sized duck", o2: "Fight 100 duck-sized horses" },
     { o1: "Have cheese for hair", o2: "Sweat warm maple syrup" },
-    { o1: "Have to announce every time you fart", o2: "Have everyone else announce when you fart" },
-    { o1: "Only eat raw onions for a week", o2: "Only drink warm hot sauce for a week" },
-    { o1: "Always be 10 minutes late", o2: "Always be 45 minutes early" },
-    { o1: "Have your body permanently covered in glitter", o2: "Permanently smell like a wet dog" },
-    { o1: "Be able to talk to animals but they all roast you", o2: "Speak all human languages but everyone ignores you" },
-    { o1: "Free pizza for life but it's always cold", o2: "Free tacos for life but they are always soggy" },
-    { o1: "Never be able to use a touch screen again", o2: "Never be able to use a vacuum cleaner again" }
+    { o1: "Have to announce every time you fart", o2: "Have everyone else announce when you fart" }
 ];
 
 // -------------------------------------------------------------
@@ -281,104 +248,39 @@ const jokeData = [
     "I only know 25 letters of the alphabet. I don't know y.",
     "What do you call a fake noodle? An impasta.",
     "Why did the scarecrow win an award? Because he was outstanding in his field.",
-    "I'm reading a book on anti-gravity. I just can't put it down!",
-    "My wife told me to stop impersonating a flamingo. I had to put my foot down.",
-    "I told my doctor that I broke my arm in two places. He told me to stop going to those places.",
-    "Parallel lines have so much in common. It’s a shame they’ll never meet.",
-    "My boss told me to have a good day... so I went home.",
-    "I used to play piano by ear, but now I use my hands.",
-    "What did the zero say to the eight? Nice belt!",
-    "What do you call a sleeping bull? A bulldozer.",
-    "Why do we tell actors to 'break a leg'? Because every play has a cast.",
-    "Why don't scientists trust atoms? Because they make up everything!"
+    "I'm reading a book on anti-gravity. I just can't put it down!"
 ];
 
 const insultData = [
     "You're the reason the shampoo bottle has instructions.",
     "If I had a face like yours, I'd sue my parents.",
     "You are like a cloud. When you disappear, it's a beautiful day.",
-    "I've seen puddles deeper than your personality.",
-    "Your brain is like the Bermuda Triangle: information goes in, but it's never heard from again.",
-    "You bring everyone so much joy... when you leave the room.",
-    "I’d agree with you but then we’d both be wrong.",
-    "Some cause happiness wherever they go; others, whenever they go.",
-    "You are proof that evolution can go in reverse.",
-    "If laughter is the best medicine, your face is curing the world."
+    "I've seen puddles deeper than your personality."
 ];
 
 const roastData = [
     "If absolute zero is -273.15 degrees, your charisma is at least -300.",
     "You have the perfect face for radio.",
     "You're not standard material, you're the draft copy that got rejected.",
-    "I would roast you, but my mom told me not to burn trash.",
-    "You look like a cartoon character that got drawn with a non-dominant hand.",
-    "You're so slow, a snail could pass you while walking backward.",
-    "Your secrets are always safe with me. I never listen anyway.",
-    "If I wanted to commit suicide, I’d climb your ego and jump to your IQ.",
-    "You have entire paths of logic that go undiscovered.",
-    "My Six Eyes can analyze infinitely, yet I still can't find the point of your argument."
+    "I would roast you, but my mom told me not to burn trash."
 ];
 
 const proposalMessages = [
-    "From the moment I met you, my world changed. I want to build a domain with you where my infinity only surrounds you.",
-    "You are my reverse cursed technique; you heal me when I'm broken. I can't imagine a future without you by my side.",
-    "They say nothing is infinite, but my love for you defies that law. Will you make me the happiest person in this chat?"
+    "From the moment I met you, my world changed. I want to build a domain with you.",
+    "You are my reverse cursed technique; you heal me when I'm broken.",
+    "They say nothing is infinite, but my love for you defies that law."
 ];
 
 const askoutMessages = [
-    "I've been thinking about you a lot lately... and I was wondering if we could be more than just group members?",
-    "You have a certain spark that lights up my whole chat. Would you make me the happiest person and go out with me?",
-    "No games, no curses, just pure feelings. I really like you. Will you be mine?"
+    "I've been thinking about you a lot... can we be more than just group members?",
+    "You have a certain spark that lights up my whole chat. Will you go out with me?",
+    "No games, no curses, just pure feelings. Will you be mine?"
 ];
 
 const sadnessQuotes = [
-    "Ouch... the conceptual void collapsed. My heart is officially shattered. Alexa, play Sadness and Sorrow. 💔😭",
-    "Rejected... Even absolute zero feels warmer than this cold refusal. Satoru Gojo is sending his condolences. 🥀",
-    "My disappointment is immeasurable, and my day is ruined. F in the chat for our fallen soldier. 💔"
-];
-
-// -------------------------------------------------------------
-// RIZZ (PICKUP LINES) & SPEECH DATASETS
-// -------------------------------------------------------------
-const rizzLines = [
-    "Are you a cursed spirit? Because you've been haunting my mind all day long.",
-    "Are you the King of Curses? Because you have absolute control over my heart.",
-    "Is your name Satoru? Because you are simply the strongest thing in my world.",
-    "Do you have a map? I keep getting lost in your eyes.",
-    "Are you made of copper and tellurium? Because you're CuTe.",
-    "If beauty were a crime, you'd be serving a life sentence without bail.",
-    "Are you a keyboard? Because you're just my type.",
-    "Is there an airport nearby, or was that just my heart taking off when I saw you?",
-    "Are you a camera? Because every time I look at you, I smile.",
-    "Do you believe in love at first sight, or should I walk by again in slow motion?"
-];
-
-const famousSpeeches = [
-    {
-        character: "Erwin Smith",
-        anime: "Attack on Titan",
-        speech: "My soldiers, rage! My soldiers, scream! My soldiers, fight!"
-    },
-    {
-        character: "Pain (Nagato)",
-        anime: "Naruto Shippuden",
-        speech: "Feel pain, contemplate pain, accept pain, know pain. Those who do not know pain can never understand true peace. I will never forget the pain that Yahiko suffered. And now... this world shall know pain!"
-    },
-    {
-        character: "Madara Uchiha",
-        anime: "Naruto Shippuden",
-        speech: "Wake up to reality! Nothing ever goes as planned in this accursed world. The longer you live, the more you realize that in this reality only pain, suffering, and futility exist."
-    },
-    {
-        character: "Satoru Gojo",
-        anime: "Jujutsu Kaisen",
-        speech: "Throughout Heaven and Earth, I alone am the honored one."
-    },
-    {
-        character: "Lelouch vi Britannia",
-        anime: "Code Geass",
-        speech: "If the king does not lead, how can he expect his subordinates to follow? The only ones who should kill are those who are prepared to be killed!"
-    }
+    "Ouch... the conceptual void collapsed. My heart is officially shattered. 💔😭",
+    "Rejected... Even absolute zero feels warmer than this cold refusal. 🥀",
+    "My disappointment is immeasurable, and my day is ruined. 💔"
 ];
 
 // -------------------------------------------------------------
@@ -439,7 +341,7 @@ async function executeAction(sock, msg, action, verb) {
 }
 
 module.exports = [
-    // 1. .bankai COMMAND
+    // 1. .bankai COMMAND (Shortened Layout)
     {
         name: 'bankai',
         isPrefixless: false,
@@ -448,13 +350,11 @@ module.exports = [
 
             if (!args) {
                 const randomBankai = bankaiData[Math.floor(Math.random() * bankaiData.length)];
-                const text = `🗡️ *RANDOM BANKAI MANIFESTATION* 🗡️\n` +
-                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                             `👤 *Owner Name:* ${randomBankai.name}\n` +
+                const text = `🗡️ *BANKAI MANIFESTATION* 🗡️\n` +
+                             `👤 *Owner:* ${randomBankai.name}\n` +
                              `🎖️ *Position:* ${randomBankai.position}\n` +
-                             `🔥 *Bankai:* ${randomBankai.bankaiName}\n\n` +
-                             `🔮 *Abilities:* ${randomBankai.abilities}\n\n` +
-                             `_“Ban-kai!”_ 卍`;
+                             `🔥 *Bankai:* ${randomBankai.bankaiName}\n` +
+                             `🔮 *Abilities:* ${randomBankai.abilities}`;
                 return await sock.sendMessage(jid, { text }, { quoted: msg });
             }
 
@@ -462,13 +362,11 @@ module.exports = [
 
             const matched = bankaiData.find(b => b.aliases.includes(cleanQuery) || b.name.toLowerCase().includes(cleanQuery));
             if (matched) {
-                const text = `🗡️ *BANKAI ARCHIVE INDEX* 🗡️\n` +
-                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                             `👤 *Owner Name:* ${matched.name}\n` +
+                const text = `🗡️ *BANKAI INDEX* 🗡️\n` +
+                             `👤 *Owner:* ${matched.name}\n` +
                              `🎖️ *Position:* ${matched.position}\n` +
-                             `🔥 *Bankai:* ${matched.bankaiName}\n\n` +
-                             `🔮 *Abilities:* ${matched.abilities}\n\n` +
-                             `_“Ban-kai!”_ 卍`;
+                             `🔥 *Bankai:* ${matched.bankaiName}\n` +
+                             `🔮 *Abilities:* ${matched.abilities}`;
                 return await sock.sendMessage(jid, { text }, { quoted: msg });
             }
 
@@ -484,19 +382,16 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "Searching Soul Society archives... 🪽" }, { quoted: msg });
 
                 const systemPrompt = 
-                    "You are an expert on the Bleach anime and manga universe.\n" +
-                    "Analyze the user's query, which represents a character name or a Bankai.\n\n" +
-                    "1. If this character/object is NOT from the Bleach anime/manga universe, reply ONLY with the exact word 'NOT_FROM_BLEACH'.\n" +
-                    "2. If they are from Bleach but DO NOT have or have never shown a Bankai in canon, reply ONLY with the exact word 'NO_BANKAI'.\n" +
-                    "3. If they are from Bleach and possess a Bankai, respond ONLY in this exact layout:\n\n" +
-                    "🗡️ *BANKAI ARCHIVE INDEX* 🗡️\n" +
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
-                    "👤 *Owner Name:* [Insert Character Name]\n" +
-                    "🎖️ *Position:* [Insert position/identity]\n" +
-                    "🔥 *Bankai:* [Insert Bankai Name]\n\n" +
-                    "🔮 *Abilities:* [Short but detailed description of the Bankai's abilities]\n\n" +
-                    "_“Ban-kai!”_ 卍\n\n" +
-                    "Keep formatting consistent and do not write any introductory or concluding pleasantries.";
+                    "You are an expert on the Bleach anime universe.\n" +
+                    "Analyze the user's query.\n\n" +
+                    "1. If NOT from Bleach, reply ONLY: 'NOT_FROM_BLEACH'.\n" +
+                    "2. If from Bleach but has NO Bankai, reply ONLY: 'NO_BANKAI'.\n" +
+                    "3. If they possess a Bankai, respond ONLY in this layout:\n\n" +
+                    "🗡️ *BANKAI INDEX* 🗡️\n" +
+                    "👤 *Owner:* [Name]\n" +
+                    "🎖️ *Position:* [Position/Identity]\n" +
+                    "🔥 *Bankai:* [Bankai Name]\n" +
+                    "🔮 *Abilities:* [Short 1-sentence ability description]";
 
                 const messages = [
                     { role: "system", content: systemPrompt },
@@ -521,7 +416,7 @@ module.exports = [
         }
     },
 
-    // 2. .dom-exp / .domain-expansion COMMANDS
+    // 2. .dom-exp / .domain-expansion COMMANDS (Shortened Layout)
     {
         name: 'dom-exp',
         isPrefixless: false,
@@ -530,13 +425,11 @@ module.exports = [
 
             if (!args) {
                 const randomDomain = domainData[Math.floor(Math.random() * domainData.length)];
-                const text = `🌀 *RANDOM DOMAIN EXPANSION* 🌀\n` +
-                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                             `👤 *Owner Name:* ${randomDomain.name}\n` +
+                const text = `🌀 *DOMAIN EXPANSION* 🌀\n` +
+                             `👤 *Owner:* ${randomDomain.name}\n` +
                              `🎖️ *Status/Grade:* ${randomDomain.position}\n` +
-                             `🔥 *Domain Expansion:* ${randomDomain.domainName}\n\n` +
-                             `🔮 *Abilities:* ${randomDomain.abilities}\n\n` +
-                             `_“Ryoiki Tenkai...”_ 🤞`;
+                             `🔥 *Domain:* ${randomDomain.domainName}\n` +
+                             `🔮 *Abilities:* ${randomDomain.abilities}`;
                 return await sock.sendMessage(jid, { text }, { quoted: msg });
             }
 
@@ -544,13 +437,11 @@ module.exports = [
 
             const matched = domainData.find(d => d.aliases.includes(cleanQuery) || d.name.toLowerCase().includes(cleanQuery));
             if (matched) {
-                const text = `🌀 *DOMAIN EXPANSION ARCHIVE* 🌀\n` +
-                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                             `👤 *Owner Name:* ${matched.name}\n` +
+                const text = `🌀 *DOMAIN EXPANSION* 🌀\n` +
+                             `👤 *Owner:* ${matched.name}\n` +
                              `🎖️ *Status/Grade:* ${matched.position}\n` +
-                             `🔥 *Domain Expansion:* ${matched.domainName}\n\n` +
-                             `🔮 *Abilities:* ${matched.abilities}\n\n` +
-                             `_“Ryoiki Tenkai...”_ 🤞`;
+                             `🔥 *Domain:* ${matched.domainName}\n` +
+                             `🔮 *Abilities:* ${matched.abilities}`;
                 return await sock.sendMessage(jid, { text }, { quoted: msg });
             }
 
@@ -563,22 +454,19 @@ module.exports = [
             }
 
             try {
-                await sock.sendMessage(jid, { text: "Expanding Domain coordinates... 🤞🌀" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Expanding Domain... 🤞🌀" }, { quoted: msg });
 
                 const systemPrompt = 
-                    "You are an expert on the Jujutsu Kaisen (JJK) anime and manga universe.\n" +
-                    "Analyze the user's query, which represents a character name or a Domain Expansion.\n\n" +
-                    "1. If this character/object is NOT from the Jujutsu Kaisen universe, reply ONLY with the exact word 'NOT_FROM_JJK'.\n" +
-                    "2. If they are from Jujutsu Kaisen but DO NOT possess a Domain Expansion (or have never shown one in canon), reply ONLY with the exact word 'NO_DOMAIN'.\n" +
-                    "3. If they are from Jujutsu Kaisen and possess a Domain Expansion, respond ONLY in this exact layout:\n\n" +
-                    "🌀 *DOMAIN EXPANSION ARCHIVE* 🌀\n" +
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
-                    "👤 *Owner Name:* [Insert Character Name]\n" +
-                    "🎖️ *Status/Grade:* [Insert status/grade/identity]\n" +
-                    "🔥 *Domain Expansion:* [Insert Domain Expansion Name]\n\n" +
-                    "🔮 *Abilities:* [Short but detailed description of the Domain's barrier rules and sure-hit abilities]\n\n" +
-                    "_“Ryoiki Tenkai...”_ 🤞\n\n" +
-                    "Keep formatting consistent and do not write any introductory or concluding pleasantries.";
+                    "You are an expert on the Jujutsu Kaisen (JJK) universe.\n" +
+                    "Analyze the user's query.\n\n" +
+                    "1. If NOT from JJK, reply ONLY: 'NOT_FROM_JJK'.\n" +
+                    "2. If from JJK but has NO Domain, reply ONLY: 'NO_DOMAIN'.\n" +
+                    "3. If they possess a Domain, respond ONLY in this layout:\n\n" +
+                    "🌀 *DOMAIN EXPANSION* 🌀\n" +
+                    "👤 *Owner:* [Name]\n" +
+                    "🎖️ *Status:* [Status/Grade]\n" +
+                    "🔥 *Domain:* [Domain Expansion Name]\n" +
+                    "🔮 *Abilities:* [Short 1-sentence ability description]";
 
                 const messages = [
                     { role: "system", content: systemPrompt },
@@ -628,7 +516,7 @@ module.exports = [
         }
     },
 
-    // 4. .joke COMMAND (DAD JOKES & HUMOROUS JOKES)
+    // 4. .joke COMMAND
     {
         name: 'joke',
         isPrefixless: false,
@@ -636,7 +524,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             try {
                 const selectedJoke = jokeData[Math.floor(Math.random() * jokeData.length)];
-                await sock.sendMessage(jid, { text: `😂 *Here is a joke for you:* \n\n${selectedJoke}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `😂 *Joke:* \n\n${selectedJoke}` }, { quoted: msg });
             } catch (err) {
                 console.error("Joke error:", err);
             }
@@ -654,7 +542,7 @@ module.exports = [
             try {
                 const insult = insultData[Math.floor(Math.random() * insultData.length)];
                 await sock.sendMessage(jid, { 
-                    text: `👿 *Hey @${targetNumber}!* \n\n${insult}`,
+                    text: `👿 @${targetNumber}: \n${insult}`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             } catch (err) {
@@ -674,7 +562,7 @@ module.exports = [
             try {
                 const roast = roastData[Math.floor(Math.random() * roastData.length)];
                 await sock.sendMessage(jid, { 
-                    text: `🔥 *Prepare yourself @${targetNumber}!* \n\n${roast}`,
+                    text: `🔥 @${targetNumber}: \n${roast}`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             } catch (err) {
@@ -738,20 +626,19 @@ module.exports = [
 
                 let verdict = "";
                 if (percentage >= 80) {
-                    verdict = "💍 *True Soulmates!* Satoru Gojo approves of this divine union. Plan the wedding already! ❤️";
+                    verdict = "💍 *Soulmates!* Gojo approves. Plan the wedding! ❤️";
                 } else if (percentage >= 50) {
-                    verdict = "💒 *A Match Made in Heaven!* Go ahead and confess your feelings! ✨";
+                    verdict = "💒 *Perfect Match!* Confess already! ✨";
                 } else if (percentage >= 20) {
-                    verdict = "⚡ *There is a spark!* But you both need to work on your communication. 🗣️";
+                    verdict = "⚡ *There is a spark!* Keep talking. 🗣️";
                 } else {
-                    verdict = "🏃💨 *Complete Mismatch.* Even my Six Eyes can't find compatibility here. Flee!";
+                    verdict = "🏃💨 *Mismatch.* My Six Eyes find zero compatibility. Flee!";
                 }
 
                 const shipCaption = 
-                    `💞 *LIMITLESS LOVE TRANSMITTER* 💞\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `👩‍❤️‍👨 *Lovers:* @${target1.split('@')[0]}  x  @${target2.split('@')[0]}\n` +
-                    `📊 *Compatibility:* [${bar}] *${percentage}%*\n\n` +
+                    `💞 *LOVE TRANSMITTER* 💞\n` +
+                    `👩‍❤️‍👨 @${target1.split('@')[0]}  x  @${target2.split('@')[0]}\n` +
+                    `📊 [${bar}] *${percentage}%*\n` +
                     `📢 *Verdict:* ${verdict}`;
 
                 await sock.sendMessage(jid, {
@@ -766,7 +653,7 @@ module.exports = [
         }
     },
 
-    // 8. .wed COMMAND (WEDDING SIMULATOR)
+    // 8. .wed COMMAND (Shortened Layout)
     {
         name: 'wed',
         isPrefixless: false,
@@ -824,12 +711,10 @@ module.exports = [
                 const p2Num = partner2.split('@')[0];
 
                 const ceremonyText = 
-                    `🔔 *HOLY MATRIMONY CEREMONY* 🔔\n` +
+                    `👰🤵 *HOLY MATRIMONY* 👰🤵\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `🎤 *Priest:* "Dearly beloved, we are gathered here today in this domain to join these two souls in holy matrimony."\n\n` +
-                    `💍 *Priest:* "Do you, @${p1Num}, take @${p2Num} to be your lawfully wedded partner, in active typing and in silence, in spam and in Simple Domains, until a kick do you part?"\n\n` +
-                    `🤵‍♂️ *Priest:* "By the power vested in me by Satoru Gojo and the Limitless framework, I now declare you partners in life!"\n\n` +
-                    `💋 *Priest:* "You may now kiss the bride!" 🤵‍♂️👰‍♀️💍`;
+                    `🎤 "By Satoru Gojo's authority, I declare @${p1Num} and @${p2Num} joined in holy matrimony!"\n\n` +
+                    `💋 *“You may kiss the bride!”* 💍✨`;
 
                 await sock.sendMessage(jid, {
                     text: ceremonyText,
@@ -842,7 +727,7 @@ module.exports = [
         }
     },
 
-    // 9. .propose COMMAND
+    // 9. .propose COMMAND (Shortened Layout)
     {
         name: 'propose',
         isPrefixless: false,
@@ -862,7 +747,7 @@ module.exports = [
                 const targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
 
                 if (!targetJid || targetJid === senderJid) {
-                    return await sock.sendMessage(jid, { text: "❌ Please mention (@user) or reply to the message of the user you wish to propose to." }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: "❌ Please mention (@user) or reply to the user you wish to propose to." }, { quoted: msg });
                 }
 
                 const senderNum = senderJid.split('@')[0];
@@ -870,13 +755,11 @@ module.exports = [
                 const heartMsg = proposalMessages[Math.floor(Math.random() * proposalMessages.length)];
 
                 const text = 
-                    `🌹 *A HEARTFELT PROPOSAL AMONGST INFINITY* 🌹\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `🌹 *A CONFESSION AMONGST INFINITY* 🌹\n` +
                     `💖 *To:* @${targetNum}\n` +
                     `📝 _"${heartMsg}"_\n\n` +
                     `💍 *WILL YOU MARRY ME?* @${targetNum} 💍\n\n` +
-                    `⚠️ _Only @${targetNum} can respond to this proposal._\n` +
-                    `💡 _If buttons are not visible on your client, reply with:_\n` +
+                    `💡 _Reply with:_\n` +
                     `• \`${settings.prefix}prop_ans yes ${targetNum} ${senderNum}\`\n` +
                     `• \`${settings.prefix}prop_ans no ${targetNum} ${senderNum}\``;
 
@@ -922,7 +805,7 @@ module.exports = [
 
             if (clickerNum !== targetNumInput) {
                 return await sock.sendMessage(jid, { 
-                    text: `❌ *Hey!* This proposal is not meant for you. Let @${targetNumInput} answer! 👿`,
+                    text: `❌ This proposal is not meant for you. Let @${targetNumInput} answer! 👿`,
                     mentions: [`${targetNumInput}@s.whatsapp.net`]
                 }, { quoted: msg });
             }
@@ -931,17 +814,17 @@ module.exports = [
             const targetJid = `${targetNumInput}@s.whatsapp.net`;
 
             if (action === 'yes') {
-                const text = `💍 *PROPOSAL ACCEPTED!* 💍\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${targetNumInput} and @${senderNumInput} are now officially *ENGAGED*! Satoru Gojo has blessed this union! 🥂✨`;
+                const text = `💍 *PROPOSAL ACCEPTED!* 💍\n\n🎉 @${targetNumInput} and @${senderNumInput} are now officially *ENGAGED*! Gojo has blessed this union! 🥂✨`;
                 await sock.sendMessage(jid, { text, mentions: [targetJid, senderJid] }, { quoted: msg });
             } else if (action === 'no') {
                 const sadness = sadnessQuotes[Math.floor(Math.random() * sadnessQuotes.length)];
-                const text = `💔 *PROPOSAL REJECTED* 💔\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumInput}... \n${sadness}`;
+                const text = `💔 *PROPOSAL REJECTED* 💔\n\n@${senderNumInput}... \n${sadness}`;
                 await sock.sendMessage(jid, { text, mentions: [senderJid] }, { quoted: msg });
             }
         }
     },
 
-    // 11. .askout COMMAND
+    // 11. .askout COMMAND (Shortened Layout)
     {
         name: 'askout',
         isPrefixless: false,
@@ -970,12 +853,10 @@ module.exports = [
 
                 const text = 
                     `💌 *A CONFESSION UNDER THE LIGHTS* 💌\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `💖 *To:* @${targetNum}\n` +
                     `📝 _"${heartMsg}"_\n\n` +
                     `👉 *WILL YOU GO OUT WITH ME?* @${targetNum} 👈\n\n` +
-                    `⚠️ _Only @${targetNum} can respond to this confession._\n` +
-                    `💡 _If buttons are not visible on your client, reply with:_\n` +
+                    `💡 _Reply with:_\n` +
                     `• \`${settings.prefix}ask_ans yes ${targetNum} ${senderNum}\`\n` +
                     `• \`${settings.prefix}ask_ans no ${targetNum} ${senderNum}\``;
 
@@ -1021,7 +902,7 @@ module.exports = [
 
             if (clickerNum !== targetNumInput) {
                 return await sock.sendMessage(jid, { 
-                    text: `❌ *Hey!* This confession is not meant for you. Let @${targetNumInput} answer! 👿`,
+                    text: `❌ This confession is not meant for you. Let @${targetNumInput} answer! 👿`,
                     mentions: [`${targetNumInput}@s.whatsapp.net`]
                 }, { quoted: msg });
             }
@@ -1030,11 +911,11 @@ module.exports = [
             const targetJid = `${targetNumInput}@s.whatsapp.net`;
 
             if (action === 'yes') {
-                const text = `🎉 *CONFESSION ACCEPTED!* 🎉\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💖 @${targetNumInput} and @${senderNumInput} are now officially in a *relationship*! Protect this bond! 💖`;
+                const text = `🎉 *CONFESSION ACCEPTED!* 🎉\n\n💖 @${targetNumInput} and @${senderNumInput} are now officially in a *relationship*! 💖`;
                 await sock.sendMessage(jid, { text, mentions: [targetJid, senderJid] }, { quoted: msg });
             } else if (action === 'no') {
                 const sadness = sadnessQuotes[Math.floor(Math.random() * sadnessQuotes.length)];
-                const text = `💔 *CONFESSION REJECTED* 💔\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumInput}... \n${sadness}`;
+                const text = `💔 *CONFESSION REJECTED* 💔\n\n@${senderNumInput}... \n${sadness}`;
                 await sock.sendMessage(jid, { text, mentions: [senderJid] }, { quoted: msg });
             }
         }
@@ -1464,16 +1345,14 @@ module.exports = [
 
                 let verdict = "";
                 if (isLying) {
-                    verdict = `🔴 *Lying with ${percentage}% certainty!* \n_“Even my Six Eyes can see right through your lies!”_ 👿`;
+                    verdict = `🔴 *Lying with ${percentage}% certainty!* \n_“Biometric patterns reveal deviancies.”_ 👿`;
                 } else {
-                    verdict = `🟢 *Saying the truth with ${percentage}% certainty!* \n_“Your biometric signatures match up. You are safe.”_ 🤞`;
+                    verdict = `🟢 *Saying the truth with ${percentage}% certainty!* \n_“Your biometric signatures match.”_ 🤞`;
                 }
 
                 const responseText = 
-                    `🧬 *LIMITLESS BIOMETRIC LIE DETECTOR* 🧬\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `🧬 *BIOMETRIC LIE DETECTOR* 🧬\n` +
                     `👤 *Subject:* @${targetNum}\n` +
-                    `⚖️ *Tester:* @${senderNum}\n\n` +
                     `📊 *Signal Deviances:* [${bar}]\n\n` +
                     `📢 *Verdict:* ${verdict}`;
 
@@ -1497,7 +1376,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             try {
                 const rizz = rizzLines[Math.floor(Math.random() * rizzLines.length)];
-                await sock.sendMessage(jid, { text: `🌹 *Infinite Rizz manifested:* \n\n${rizz}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `🌹 *Rizz:* \n\n${rizz}` }, { quoted: msg });
             } catch (err) {
                 console.error("Rizz command failed:", err.message);
             }
@@ -1511,34 +1390,27 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            // Case A: Fetch random speech from local dataset
             if (!args) {
                 const randomSpeech = famousSpeeches[Math.floor(Math.random() * famousSpeeches.length)];
                 const text = 
-                    `🎬 *FAMOUS ANIME SPEECH RECOVERED* 🎬\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `👤 *Character:* *${randomSpeech.character}*\n` +
-                    `📺 *Anime:* _${randomSpeech.anime}_\n\n` +
-                    `🗣️ *Speech:* \n_"${randomSpeech.speech}"_`;
+                    `🎬 *ANIME SPEECH RECOVERED* 🎬\n` +
+                    `👤 *Character:* *${randomSpeech.character}*\n\n` +
+                    `🗣️ _"${randomSpeech.speech}"_`;
                 return await sock.sendMessage(jid, { text }, { quoted: msg });
             }
 
-            // Case B: Query specific character speech using Groq LLM [INDEX: ai.js]
             try {
-                await sock.sendMessage(jid, { text: `Searching chronicles for speeches of *"${args}"*... 📜✨` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `Searching speech archives for *"${args}"*... 📜✨` }, { quoted: msg });
 
                 const systemPrompt = 
-                    "You are an expert anime/manga librarian.\n" +
-                    "Find or write the most iconic, impactful, or epic speech delivered by the requested character.\n" +
+                    "You are an expert anime librarian.\n" +
+                    "Find or write the most iconic speech delivered by the requested character.\n" +
                     "Format your response exactly like this:\n\n" +
-                    "🎬 *ANIME SPEECH RECOVERED* 🎬\n" +
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
-                    "👤 *Character:* [Character Name]\n" +
-                    "📺 *Anime:* [Anime Name]\n\n" +
-                    "🗣️ *Speech:* \n" +
-                    "\"[Epic/Impactful Speech text]\"\n\n" +
-                    "If the character does not exist in any anime/manga, write: 'NOT_FOUND'.\n" +
-                    "Do not include any greeting or conversational pleasantries.";
+                    "🎬 *ANIME SPEECH RECOVERED* 🎬\n\n" +
+                    "👤 *Character:* [Character Name]\n\n" +
+                    "🗣️ \"[Epic Speech text]\"\n\n" +
+                    "If the character does not exist, write: 'NOT_FOUND'.\n" +
+                    "Do not include any conversational pleasantries.";
 
                 const messages = [
                     { role: "system", content: systemPrompt },
@@ -1549,7 +1421,7 @@ module.exports = [
                 const cleanResponse = responseText.trim();
 
                 if (cleanResponse.includes("NOT_FOUND")) {
-                    await sock.sendMessage(jid, { text: `❌ Character *"${args}"* was not found in anime databases.` }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: `❌ Character *"${args}"* was not found.` }, { quoted: msg });
                 } else {
                     await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
                 }
@@ -1581,20 +1453,17 @@ module.exports = [
             const emoji2 = emojis[1];
 
             try {
-                const craftingMsg = await sock.sendMessage(jid, { text: `Combining ${emoji1} and ${emoji2} into a hybrid sticker... 🧪🎨` }, { quoted: msg });
+                const craftingMsg = await sock.sendMessage(jid, { text: `Combining ${emoji1} and ${emoji2}... 🧪🎨` }, { quoted: msg });
 
-                // Generate mixed emoji vector using a high-quality prompt and Pollinations AI
                 const prompt = `a 3D high-resolution render of a mixed emoji combining ${emoji1} and ${emoji2} on a transparent white background, official high-quality emoji sticker style`;
                 const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true&private=true`;
 
-                // Download image buffer
                 const imageRes = await fetch(imageUrl);
                 if (!imageRes.ok) throw new Error("Image generation server timed out.");
 
                 const arrayBuffer = await imageRes.arrayBuffer();
                 const imageBuffer = Buffer.from(arrayBuffer);
 
-                // Compile transparent sticker using wa-sticker-formatter
                 const sticker = new Sticker(imageBuffer, {
                     pack: settings.packName || "Limitless Pack",
                     author: settings.author || "Infinity",
