@@ -20,14 +20,18 @@ function saveSettings() {
             sudo: settings.sudo || [],
             banned: settings.banned || [],
             lizzyChats: settings.lizzyChats || [],
-            chatbotChats: settings.chatbotChats || [], // Added persistent tracking array
-            autoReact: settings.autoReact || "cmd",
+            chatbotChats: settings.chatbotChats || [], 
+            autoReact: settings.autoReact || "off",
             antilink: settings.antilink || {},
             antitag: settings.antitag || {},
             antibot: settings.antibot || {},
             warns: settings.warns || {},
             stickerCommands: settings.stickerCommands || {},
-            geminiApiKey: settings.geminiApiKey
+            geminiApiKey: settings.geminiApiKey,
+            // Newly added persistent parameters to prevent reset on reboot
+            vvEmoji: settings.vvEmoji || "🥷",
+            antipm: settings.antipm || "off",
+            antispam: settings.antispam || {}
         };
 
         const fileContent = `// settings.js\n\nmodule.exports = ${JSON.stringify(configToSave, null, 4)};\n`;
