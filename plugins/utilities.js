@@ -49,12 +49,111 @@ function readNotes() {
     return {};
 }
 
+// Saves note entries securely
 function saveNotes(notes) {
     try {
         fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
     } catch (e) {
         console.error("❌ [NOTES] Failed to write notes database:", e.message);
     }
+}
+
+// Recursive Helper to automatically unwrap ephemeral, view-once, and document-caption envelopes
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
+// Helper to crop an image, WebP Sticker, or GIF buffer to a square
+async function cropToSquare(buffer) {
+    try {
+        let lib = {};
+        try {
+            const baileys = await import('@itsliaaa/baileys');
+            if (typeof baileys.getImageProcessingLibrary === 'function') {
+                lib = await baileys.getImageProcessingLibrary();
+            }
+        } catch (baileysErr) {
+            console.error("Defensive Baileys dynamic fetch failed:", baileysErr.message);
+        }
+        
+        if (lib.sharp?.default) {
+            return await lib.sharp.default(buffer)
+                .resize(512, 512, { fit: 'cover' })
+                .toBuffer();
+        }
+        else if (lib.image?.Transformer) {
+            const img = new lib.image.Transformer(buffer);
+            return await img.resize(512, 512, 2).png();
+        }
+        else if (lib.jimp?.Jimp) {
+            const img = await lib.jimp.Jimp.read(buffer);
+            return await img.cover({ w: 512, h: 512 }).getBuffer('image/png');
+        }
+    } catch (e) {
+        console.error("Square cropping error:", e.message);
+    }
+    return buffer; 
+}
+
+// Helper to upload media buffer natively to a multi-host pipeline
+async function uploadToCloud(buffer, mimeType) {
+    const ext = mimeType.split('/')[1] || 'bin';
+    const filename = `file_${Date.now()}.${ext}`;
+
+    try {
+        console.log(`🌐 [UPLOADER] Trying Pixeldrain PUT...`);
+        const response = await fetch(`https://pixeldrain.com/api/file/${filename}`, {
+            method: 'PUT',
+            body: buffer
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.id) {
+                console.log(`✅ [UPLOADER] Successfully uploaded to Pixeldrain: ${data.id}`);
+                return `https://pixeldrain.com/api/file/${data.id}`;
+            }
+        }
+    } catch (err) {
+        console.error(`⚠️ [UPLOADER] Pixeldrain PUT failed:`, err.message);
+    }
+
+    const formData = new FormData();
+    const blob = new Blob([buffer], { type: mimeType });
+    formData.append('files[]', blob, filename); 
+
+    const hosts = [
+        'https://qu.ax/upload.php',
+        'https://pomf2.lain.la/upload.php'
+    ];
+
+    for (const host of hosts) {
+        try {
+            console.log(`🌐 [UPLOADER] Trying fallback host: ${host}`);
+            const response = await fetch(host, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.files?.[0]?.url) {
+                    console.log(`✅ [UPLOADER] Successfully uploaded to: ${host}`);
+                    return data.files[0].url;
+                }
+            }
+        } catch (err) {
+            console.error(`⚠️ [UPLOADER] Host ${host} failed:`, err.message);
+        }
+    }
+
+    throw new Error("All upload hosts failed.");
 }
 
 module.exports = [
@@ -110,13 +209,11 @@ module.exports = [
 
             const timing = parseDuration(durationInput);
             if (!timing) {
-                return await sock.sendMessage(jid, { text: "⚠️ *Invalid Format:* Please specify a valid format parameter (e.g., `s` for seconds, `m` for minutes)." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "⚠️ *Invalid Format:* Please specify a valid duration parameter (e.g., \`s\` for seconds, \`m\` for minutes)." }, { quoted: msg });
             }
 
-            // Confirm schedule to chat flow
             await sock.sendMessage(jid, { text: `⏳ *Deletion Scheduled:* Target message will be self-destructed in *${timing.label}*.` }, { quoted: msg });
 
-            // Fire off background thread countdown task
             setTimeout(async () => {
                 try {
                     await sock.sendMessage(jid, {
@@ -140,18 +237,104 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            // Existing sticker implementation...
-            await sock.sendMessage(jid, { text: "🎨 Sticker engine triggered. Processing media canvas..." }, { quoted: msg });
+            
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            let mediaContent = getRawMessage(quoted || msg.message);
+            
+            let mediaMessage = null;
+            let mediaType = "";
+
+            if (mediaContent?.imageMessage) {
+                mediaMessage = mediaContent.imageMessage;
+                mediaType = "image";
+            } else if (mediaContent?.videoMessage) {
+                mediaMessage = mediaContent.videoMessage;
+                mediaType = "video";
+            } else if (mediaContent?.stickerMessage) {
+                mediaMessage = mediaContent.stickerMessage;
+                mediaType = "sticker";
+            }
+
+            if (!mediaMessage) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to or attach an image or short video." }, { quoted: msg });
+            }
+
+            try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                await sock.sendMessage(jid, { text: "Formulating sticker... 📃" }, { quoted: msg });
+
+                const mimeType = mediaMessage.mimetype || (mediaType === "image" ? "image/jpeg" : (mediaType === "sticker" ? "image/webp" : "video/mp4"));
+
+                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+
+                const sticker = new Sticker(buffer, {
+                    pack: settings.packName,
+                    author: settings.author,
+                    type: StickerTypes.FULL,
+                    quality: 75
+                });
+
+                const stickerBuffer = await sticker.toBuffer();
+
+                await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
+
+            } catch (error) {
+                console.error("Sticker Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to convert media to sticker." }, { quoted: msg });
+            }
         }
     },
 
-    // 4. METADATA STEAL / CUSTOMIZER
+    // 4. METADATA STEALER / CUSTOMIZER
     {
         name: 'take',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            // Existing metadata implementation...
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawContent = getRawMessage(quoted);
+            const isSticker = rawContent?.stickerMessage;
+
+            if (!isSticker) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to the sticker you want to steal/take." }, { quoted: msg });
+            }
+
+            try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                await sock.sendMessage(jid, { text: "Stealing metadata... 🥷" }, { quoted: msg });
+
+                const targetMessage = rawContent.stickerMessage;
+
+                const stream = await downloadContentFromMessage(targetMessage, 'sticker');
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+
+                const parts = args.split('|');
+                const packName = parts[0] ? parts[0].trim() : settings.packName;
+                const publisher = parts[1] ? parts[1].trim() : settings.author;
+
+                const sticker = new Sticker(buffer, {
+                    pack: packName,
+                    author: publisher,
+                    type: StickerTypes.FULL,
+                    quality: 100 
+                });
+
+                const stickerBuffer = await sticker.toBuffer();
+
+                await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
+
+                } catch (error) {
+                console.error("Take Command Error:", error);
+                await sock.sendMessage(jid, { text: "❌ Failed to customize sticker metadata." }, { quoted: msg });
+            }
         }
     },
 
@@ -203,7 +386,7 @@ module.exports = [
     }
 ];
 
-// Safely generate aliases using an external collector array
+// Safely generate aliases using an external collector array [3]
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'sticker') {
@@ -213,14 +396,11 @@ module.exports.forEach(cmd => {
     if (cmd.name === 'take') {
         aliases.push({ ...cmd, name: 'steal' });
     }
-    // Added structural requested aliases for standard and timed deletes
     if (cmd.name === 'delete') {
         aliases.push({ ...cmd, name: 'del' });
-        aliases.push({ ...cmd, name: 'dlt' });
     }
     if (cmd.name === 'tdelete') {
         aliases.push({ ...cmd, name: 'tdel' });
-        aliases.push({ ...cmd, name: 'tdlt' });
     }
 });
 module.exports.push(...aliases);
