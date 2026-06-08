@@ -7,6 +7,7 @@ const commands = require('../commands'); // Access command registry for redirect
 if (!global.tkickTimers) global.tkickTimers = {};
 if (!global.kickallActive) global.kickallActive = {};
 if (!global.groupTimers) global.groupTimers = {};
+if (!global.silencedUsers) global.silencedUsers = {}; // Silenced users memory cache
 
 // Reusable Helper to resolve any JID (such as LID) to standard Phone format
 async function resolveToPhoneJid(sock, jid) {
@@ -89,9 +90,9 @@ function parseDuration(str) {
 }
 
 module.exports = [
-    // 1. TIMED GROUP MODE
+    // 1. .mute / .unmute UNIFIED INTERACTIVE TOGGLE SUITE (Aliases: open/close, lock/unlock)
     {
-        name: 'gmode',
+        name: 'mute',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
@@ -107,12 +108,22 @@ module.exports = [
                     return await sock.sendMessage(jid, { text: "❌ Only Group Administrators can run this command." }, { quoted: msg });
                 }
 
+                // If no argument is provided, drop interactive mute toggles
                 if (!args) {
-                    return await sock.sendMessage(jid, { 
-                        text: `🔮 *Group Mode Settings:*\n\n` +
-                              `• \`${settings.prefix}gmode open <duration>\` — Unlock group (e.g. open 10m).\n` +
-                              `• \`${settings.prefix}gmode close <duration>\` — Lock group (e.g. close 1h).` 
-                    }, { quoted: msg });
+                    const prompt = `🔒 *Gotei 13 Domain Control Panel:*\n\nSelect an option below to update domain parameters:`;
+                    const buttonMessage = {
+                        text: prompt,
+                        buttons: [
+                            { buttonId: `${settings.prefix}mute close`, buttonText: { displayText: 'Mute Group 🔒' }, type: 1 },
+                            { buttonId: `${settings.prefix}mute open`, buttonText: { displayText: 'Unmute Group 🔓' }, type: 1 }
+                        ],
+                        headerType: 1
+                    };
+                    try { 
+                        return await sock.sendMessage(jid, buttonMessage, { quoted: msg }); 
+                    } catch (e) { 
+                        return await sock.sendMessage(jid, { text: `${prompt}\n\n• \`${settings.prefix}mute close\`\n• \`${settings.prefix}mute open\`` }, { quoted: msg }); 
+                    }
                 }
 
                 const parts = args.split(' ');
@@ -120,7 +131,10 @@ module.exports = [
                 const timeString = parts[1] || '';
                 const durationMs = timeString ? parseDuration(timeString) : null;
 
-                if (action === 'open' || action === 'unlock') {
+                // Determine target execution path (Lid-Safe/Standard mute mechanics)
+                const isOpening = ['open', 'unlock', 'unmute'].includes(action);
+
+                if (isOpening) {
                     await sock.groupSettingUpdate(jid, 'not_announcement');
                     let timeNotice = "";
 
@@ -140,7 +154,7 @@ module.exports = [
                         text: `🔓 *Group Status Updated:*\n\nUnlimited Void expanded. Everyone is now free to speak.${timeNotice}` 
                     }, { quoted: msg });
 
-                } else if (action === 'close' || action === 'lock') {
+                } else {
                     await sock.groupSettingUpdate(jid, 'announcement');
                     let timeNotice = "";
 
@@ -159,12 +173,10 @@ module.exports = [
                     await sock.sendMessage(jid, { 
                         text: `🔒 *Group Status Updated:*\n\nInfinite Void restricted. Only Administrators can speak.${timeNotice}` 
                     }, { quoted: msg });
-                } else {
-                    await sock.sendMessage(jid, { text: "❌ Invalid action. Use `open` or `close` followed by time (e.g. `open 5m`)." }, { quoted: msg });
                 }
 
             } catch (error) {
-                console.error("Group Mode Error:", error);
+                console.error("Mute command error:", error);
                 await sock.sendMessage(jid, { text: "❌ Failed to change group settings. Ensure the bot is an admin." }, { quoted: msg });
             }
         }
@@ -883,7 +895,6 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `✅ Custom welcome message set:\n"${customMsg}"` }, { quoted: msg });
             }
 
-            // Button toggle prompt output
             const currentStatus = settings.welcome[jid]?.active ? "Enabled ✅" : "Disabled ❌";
             const prompt = `🌸 *Welcome Module Configuration:*\n\n• *Status:* \`${currentStatus}\`\n• *Custom Message:* \`${settings.welcome[jid]?.msg || "Default"}\`\n\nSelect an option below:`;
             
@@ -944,7 +955,6 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `✅ Custom goodbye message set:\n"${customMsg}"` }, { quoted: msg });
             }
 
-            // Button toggle prompt output
             const currentStatus = settings.goodbye[jid]?.active ? "Enabled ✅" : "Disabled ❌";
             const prompt = `🌸 *Goodbye Module Configuration:*\n\n• *Status:* \`${currentStatus}\`\n• *Custom Message:* \`${settings.goodbye[jid]?.msg || "Default"}\`\n\nSelect an option below:`;
             
@@ -1086,7 +1096,7 @@ module.exports = [
         }
     },
 
-    // 22. CONVERSATION LOGGER & SUMMARIZER (100% Groq-Powered)
+    // 22. CONVERSATION LOGGER & SUMMARIZER (100% Groq-Powered) [INDEX: ai.js]
     {
         name: 'gclog',
         isPrefixless: false,
@@ -1118,7 +1128,6 @@ module.exports = [
                     return;
                 }
 
-                // Check/Retrieve summary logs (.gclog check)
                 if (action === 'check') {
                     const active = settings.gclogActive[jid];
                     const logs = settings.conversationLogs?.[jid] || [];
@@ -1135,7 +1144,6 @@ module.exports = [
 
                     const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
 
-                    // Unified Groq Fetch
                     const s1 = "gsk_";
                     const s2 = "tPB0xMyZ2oijloaBNcDs";
                     const s3 = "WGdyb3FY5iC2p9hwRE";
@@ -1170,7 +1178,6 @@ module.exports = [
                     return;
                 }
 
-                // Button toggle prompt output
                 const activeStatus = settings.gclogActive[jid] ? "Active 🟢" : "Inactive 💤";
                 const prompt = `📊 *Group Chat Log (GCLOG) Configuration:*\n\n• *Status:* \`${activeStatus}\`\n\nSelect an option below to toggle the logger:`;
                 
@@ -1247,7 +1254,6 @@ module.exports = [
                 const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
                 const botLid = sock.user.id.split(':')[0] + '@lid';
 
-                // Verifies if the bot itself possesses administrative status safely
                 const botParticipant = participants.find(p => p.id === botJid || p.id === botLid);
                 const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
@@ -1257,7 +1263,6 @@ module.exports = [
 
                 await sock.sendMessage(jid, { text: "🌪️ *Channelling Limitless Void... Exorcising all members from this domain.*" }, { quoted: msg });
 
-                // Safely filter out owners, creators, developers, and administrators
                 const targets = participants.filter(p => 
                     p.id !== botJid && 
                     p.id !== botLid && 
@@ -1280,7 +1285,7 @@ module.exports = [
                     }
                     try {
                         await sock.groupParticipantsUpdate(jid, [target], "remove");
-                        await new Promise(r => setTimeout(r, 1000)); // Throttled 1s delay to protect connection
+                        await new Promise(r => setTimeout(r, 1000)); 
                     } catch (err) {
                         console.error(`Failed to kick ${target}:`, err.message);
                     }
@@ -1312,7 +1317,7 @@ module.exports = [
         }
     },
 
-    // 28. TIMED KICK CONTROLLER
+    // 26. TIMED KICK CONTROLLER
     {
         name: 'tkick',
         isPrefixless: false,
@@ -1330,13 +1335,11 @@ module.exports = [
 
                 const cleanTargets = targets.filter(t => t && t.split('@')[0] !== settings.ownerNumber);
 
-                // Check manual typing redirection
                 const durationString = args.replace(/@[^ ]+/g, '').trim().split(' ')[0] || '';
                 if (durationString.toLowerCase() === 'cancel' || durationString.toLowerCase() === 'stop') {
                     return await commands[`${settings.prefix}tkick_cancel_all`](sock, msg, args, { isOwner });
                 }
 
-                // If no targets are mentioned, display pending timers status
                 if (cleanTargets.length === 0) {
                     const activeKeys = Object.keys(global.tkickTimers).filter(k => k.startsWith(jid));
                     if (activeKeys.length === 0) {
@@ -1350,7 +1353,6 @@ module.exports = [
                         list += `${idx + 1}. @${task.targetJid.split('@')[0]} — Remaining: *${remainingSec}s*\n`;
                     });
 
-                    // Single button to cancel all pending kicks in this group
                     const buttonMessage = {
                         text: list,
                         buttons: [
@@ -1373,7 +1375,6 @@ module.exports = [
                     return await sock.sendMessage(jid, { text: `❌ Please provide a valid duration string (e.g. \`10s\`, \`5m\`).` }, { quoted: msg });
                 }
 
-                // Register Timers
                 for (const target of cleanTargets) {
                     const timerKey = `${jid}_${target}`;
                     
@@ -1407,7 +1408,7 @@ module.exports = [
         }
     },
 
-    // 29. CANCEL ALL TIMED KICKS IN GROUP
+    // 27. CANCEL ALL TIMED KICKS IN GROUP
     {
         name: 'tkick_cancel_all',
         isPrefixless: false,
@@ -1432,6 +1433,199 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "✅ Successfully cancelled all pending timed kicks in this group." }, { quoted: msg });
         }
+    },
+
+    // 28. FETCH GROUP JID (.gcjid)
+    {
+        name: 'gcjid',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            await sock.sendMessage(jid, { text: `🆔 *Group JID:* \`${jid}\`` }, { quoted: msg });
+        }
+    },
+
+    // 29. ANTISPAM CONTROLLER PANEL
+    {
+        name: 'antispam',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+            if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin privileges required." }, { quoted: msg });
+
+            if (!settings.antispam) settings.antispam = {};
+
+            const action = args ? args.toLowerCase().trim() : '';
+
+            if (action === 'on') {
+                settings.antispam[jid] = settings.antispam[jid] || { status: 'on', rate: { count: 1, seconds: 2 } };
+                settings.antispam[jid].status = 'on';
+                saveSettings();
+                return await sock.sendMessage(jid, { text: "🔒 *Antispam Protection activated!* Rates set to standard: `1 chat/2s`." }, { quoted: msg });
+            }
+
+            if (action === 'off') {
+                if (settings.antispam[jid]) settings.antispam[jid].status = 'off';
+                saveSettings();
+                return await sock.sendMessage(jid, { text: "🔓 *Antispam Protection deactivated completely.*" }, { quoted: msg });
+            }
+
+            if (action.startsWith('trig')) {
+                const param = action.replace('trig', '').trim(); // e.g. "1/2s"
+                const match = param.match(/^(\d+)\/(\d+)s$/);
+
+                if (!match) {
+                    return await sock.sendMessage(jid, { text: "❌ Invalid trigger rate. Use format: `.antispam trig 1/2s` (messages/seconds)." }, { quoted: msg });
+                }
+
+                const count = parseInt(match[1]);
+                const seconds = parseInt(match[2]);
+
+                settings.antispam[jid] = settings.antispam[jid] || { status: 'on' };
+                settings.antispam[jid].rate = { count, seconds };
+                settings.antispam[jid].status = 'on';
+                saveSettings();
+
+                return await sock.sendMessage(jid, { text: `✅ *Spam threshold modified:* \`${count} message(s) per ${seconds} second(s)\`.` }, { quoted: msg });
+            }
+
+            const current = settings.antispam[jid]?.status || 'off';
+            const rate = settings.antispam[jid]?.rate ? `${settings.antispam[jid].rate.count}/${settings.antispam[jid].rate.seconds}s` : '1/2s';
+            const prompt = `🛡️ *Antispam Moderation Panel:* (Status: \`${current.toUpperCase()}\`)\n• *Current Threshold:* \`${rate}\`\n\nSelect an option below:`;
+
+            const buttonMessage = {
+                text: prompt,
+                buttons: [
+                    { buttonId: `${settings.prefix}antispam on`, buttonText: { displayText: 'Enable' }, type: 1 },
+                    { buttonId: `${settings.prefix}antispam off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                ],
+                headerType: 1
+            };
+
+            try {
+                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+            }
+        }
+    },
+
+    // 30. .silence MODULE (AUTO-DELETER & CHAT MUTOR CONTROLLER)
+    {
+        name: 'silence',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+            if (!isAuthorized) return await sock.sendMessage(jid, { text: "❌ Admin privileges required." }, { quoted: msg });
+
+            const senderJid = msg.key.participant || msg.key.remoteJid || '';
+            const repliedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
+            const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+
+            const targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
+
+            if (!targetJid || targetJid === senderJid) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to a user's message or mention (@user) to silence them." }, { quoted: msg });
+            }
+
+            const targetNum = targetJid.split('@')[0];
+
+            const cleanArgs = args ? args.replace(/@[^ ]+/g, '').trim() : '';
+            const parts = cleanArgs.split(' ');
+            
+            let mode = '';
+            let timerStr = '1h'; // default duration if unspecified
+
+            if (parts[0]) {
+                if (['-s', '-m', 'all'].includes(parts[0])) {
+                    mode = parts[0];
+                    if (parts[1]) timerStr = parts[1];
+                } else {
+                    timerStr = parts[0];
+                }
+            }
+
+            const durationMs = parseDuration(timerStr) || 3600000; // fallback to 1h
+
+            // If no mode is specified, drop interactive selection buttons
+            if (!mode) {
+                const prompt = `⛓️ *Silence Detention Panel:* @${targetNum}\n\nSelect the type of communication to auto-delete for *${timerStr}*:`;
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}silence_ans sticker ${targetNum} ${timerStr}`, buttonText: { displayText: 'Sticker Only' }, type: 1 },
+                        { buttonId: `${settings.prefix}silence_ans message ${targetNum} ${timerStr}`, buttonText: { displayText: 'Messages/Media' }, type: 1 },
+                        { buttonId: `${settings.prefix}silence_ans all ${targetNum} ${timerStr}`, buttonText: { displayText: 'Silence All' }, type: 1 }
+                    ],
+                    headerType: 1,
+                    mentions: [targetJid]
+                };
+
+                try {
+                    return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    return await sock.sendMessage(jid, { text: `${prompt}\n\n• \`.silence -s ${timerStr}\`\n• \`.silence -m ${timerStr}\`\n• \`.silence all ${timerStr}\``, mentions: [targetJid] }, { quoted: msg });
+                }
+            }
+
+            // Direct CLI execution path
+            let mappedType = 'all';
+            if (mode === '-s') mappedType = 'sticker';
+            if (mode === '-m') mappedType = 'message';
+
+            global.silencedUsers[jid] = global.silencedUsers[jid] || {};
+            global.silencedUsers[jid][targetJid] = {
+                type: mappedType,
+                endTime: Date.now() + durationMs
+            };
+
+            await sock.sendMessage(jid, { 
+                text: `⛓️ *Target @${targetNum} silenced:* \`${mappedType.toUpperCase()}\` constraints active for *${timerStr}*.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
+    },
+
+    // 31. .silence_ans DETENTION SECURE INTERACTOR BUTTON HANDLER
+    {
+        name: 'silence_ans',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner);
+            if (!isAuthorized) return;
+
+            const parts = args.split(' ');
+            const type = parts[0]?.toLowerCase().trim(); // 'sticker', 'message', 'all'
+            const targetNum = parts[1]?.trim();
+            const timerStr = parts[2]?.trim() || '1h';
+
+            if (!type || !targetNum) return;
+
+            const targetJid = `${targetNum}@s.whatsapp.net`;
+            const durationMs = parseDuration(timerStr) || 3600000;
+
+            global.silencedUsers[jid] = global.silencedUsers[jid] || {};
+            global.silencedUsers[jid][targetJid] = {
+                type: type,
+                endTime: Date.now() + durationMs
+            };
+
+            await sock.sendMessage(jid, {
+                text: `⛓️ *Target @${targetNum} silenced:* \`${type.toUpperCase()}\` constraints active for *${timerStr}*.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
     }
 ];
 
@@ -1440,6 +1634,13 @@ const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'antilink') {
         aliases.push({ ...cmd, name: 'infinity' });
+    }
+    if (cmd.name === 'mute') {
+        aliases.push({ ...cmd, name: 'unmute' });
+        aliases.push({ ...cmd, name: 'open' });
+        aliases.push({ ...cmd, name: 'close' });
+        aliases.push({ ...cmd, name: 'lock' });
+        aliases.push({ ...cmd, name: 'unlock' });
     }
 });
 module.exports.push(...aliases);
