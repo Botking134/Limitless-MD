@@ -6,6 +6,80 @@ const { exec } = require('child_process'); // Process runner for system commands
 const fs = require('fs');
 const path = require('path');
 
+const remindersPath = path.join(__dirname, '../reminders.json');
+
+// Initialize reminders dynamic memory
+if (!global.reminders) global.reminders = [];
+if (!global.reminderSessions) global.reminderSessions = [];
+if (!global.cancelSessions) global.cancelSessions = {};
+
+// Helpers to read/write persistent reminders to JSON
+function readReminders() {
+    try {
+        if (fs.existsSync(remindersPath)) {
+            return JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
+        }
+    } catch (e) {
+        console.error("Failed to read reminders database:", e.message);
+    }
+    return [];
+}
+
+function saveReminders(reminders) {
+    try {
+        fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8');
+    } catch (e) {
+        console.error("Failed to save reminders database:", e.message);
+    }
+}
+
+// Duration string parser (e.g., '10s' -> 10000ms, '5m' -> 300000ms, '1h' -> 3600000ms)
+function parseDuration(str) {
+    const match = str.match(/^(\d+)([smh])$/i);
+    if (!match) return null;
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    if (unit === 's') return value * 1000;
+    if (unit === 'm') return value * 60 * 1000;
+    if (unit === 'h') return value * 60 * 60 * 1000;
+    return null;
+}
+
+// Autonomous reminder checking loop (Runs silently on class import)
+if (!global.reminderInterval) {
+    global.reminderInterval = setInterval(async () => {
+        if (!global.activeSock) return; // Wait for active socket capture
+
+        const reminders = readReminders();
+        if (reminders.length === 0) return;
+
+        const now = Date.now();
+        const due = reminders.filter(r => r.triggerTime <= now);
+        const remaining = reminders.filter(r => r.triggerTime > now);
+
+        if (due.length > 0) {
+            for (const r of due) {
+                try {
+                    const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour12: true });
+                    const alertText = 
+                        `🔔 *LIMITLESS REMINDER ALERT!* 🔔\n` +
+                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        `📌 *Title:* *${r.title}*\n` +
+                        `📝 *Cursed Note:* _"${r.text}"_\n\n` +
+                        `🕒 *Set At:* \`${formattedTime} WAT\`\n` +
+                        `⏳ *Timer Duration:* \`${r.durationStr}\`\n\n` +
+                        `_“My six eyes never forget a scheduled task.”_ 🤞`;
+
+                    await global.activeSock.sendMessage(r.jid, { text: alertText });
+                } catch (err) {
+                    console.error("Failed to broadcast due reminder:", err.message);
+                }
+            }
+            saveReminders(remaining);
+        }
+    }, 10000); // Check every 10 seconds
+}
+
 // Highly versatile target parser supporting replied JID, @mentions, and digits
 function parseTarget(msg, args) {
     let target = '';
@@ -48,7 +122,6 @@ module.exports = [
                 }
 
                 try {
-                    // Decache and attempt a compile-time require test
                     delete require.cache[require.resolve(filePath)];
                     require(filePath);
                     report += `✅ *${file}*:\n• *Status:* Loaded successfully!\n\n`;
@@ -73,9 +146,8 @@ module.exports = [
             const option = parts[1] ? parts[1].toLowerCase().trim() : '';
             const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
 
-            // Package Repair Tool (Strictly Developer Exclusive, Silent, and Non-Visible)
             if (action === 'install' || action === 'repair' || action === 'npm') {
-                if (!isDev) return; // Silent discard/block for any non-developer call
+                if (!isDev) return; 
 
                 await sock.sendMessage(jid, { text: "⏳ *Running npm install to download and repair missing packages...*" }, { quoted: msg });
 
@@ -91,18 +163,16 @@ module.exports = [
                     }, { quoted: msg });
 
                     setTimeout(() => {
-                        process.exit(1); // Panel restarts the process
+                        process.exit(1); 
                     }, 3000);
                 });
                 return;
             }
 
-            // All standard updates require Owner/Sudo authorization
             if (!isOwner && !isSudo) return;
 
-            // Git Auto-Setup bypass using hardcoded URL
             if (action === 'setup') {
-                await sock.sendMessage(jid, { text: "⏳ *Initializing Git and linking your repository directly from the server...*" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "⏳ *Initializing Git tracking directly from the server...*" }, { quoted: msg });
 
                 const setupCommand = `git init && git remote add origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`;
                 
@@ -124,12 +194,11 @@ module.exports = [
                 return;
             }
 
-            // Handle confirmation action: Apply the update
             const isForce = action === 'force' || option === 'force';
 
             if (action === 'yes' || action === 'confirm' || action === 'force') {
                 if (isForce) {
-                    await sock.sendMessage(jid, { text: "⏳ *Force-pulling updates from upstream (overwriting all local panel changes)... Please wait.*" }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: "⏳ *Force-pulling updates from upstream... Please wait.*" }, { quoted: msg });
 
                     exec('git fetch --all && git reset --hard origin/master', async (err, stdout, stderr) => {
                         if (err) {
@@ -143,7 +212,7 @@ module.exports = [
                         }, { quoted: msg });
 
                         setTimeout(() => {
-                            process.exit(1); // Panel restarts the process
+                            process.exit(1); 
                         }, 3000);
                     });
                 } else {
@@ -161,25 +230,23 @@ module.exports = [
                         }, { quoted: msg });
 
                         setTimeout(() => {
-                            process.exit(1); // Panel restarts the process
+                            process.exit(1); 
                         }, 3000);
                     });
                 }
                 return;
             }
 
-            // Handle decline action: Cancel update
             if (action === 'no' || action === 'cancel') {
                 return await sock.sendMessage(jid, { text: "🔮 *Process aborted.* Infinite Void update cancelled." }, { quoted: msg });
             }
 
-            // Default Action: Check for updates
             await sock.sendMessage(jid, { text: "🔍 *Checking for system updates...*" }, { quoted: msg });
 
             exec('git fetch && git status -uno', async (err, stdout, stderr) => {
                 if (err) {
                     return await sock.sendMessage(jid, { 
-                        text: `❌ *Error accessing repository:*\n\`\`\`${err.message}\`\`\`\n\n💡 _If Git is not set up, run:_\n\`${settings.prefix}update setup\`` 
+                        text: `❌ *Error accessing source code:*\n\`\`\`${err.message}\`\`\`\n\n💡 _If Git tracking is not set up, run:_\n\`${settings.prefix}update setup\`` 
                     }, { quoted: msg });
                 }
 
@@ -219,7 +286,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; // Strict Sudo/Owner Guard
+            if (!isOwner && !isSudo) return; 
 
             if (!args) {
                 return await sock.sendMessage(jid, { 
@@ -239,7 +306,7 @@ module.exports = [
             } else {
                 await sock.sendMessage(jid, { text: `❌ Invalid option. Use \`public\` or \`private\`.` }, { quoted: msg });
             }
-            saveSettings(); // Physically rewrites settings.js
+            saveSettings(); 
         }
     },
 
@@ -249,7 +316,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return; // Locked strictly to Owners/Devs
+            if (!isOwner) return; 
 
             if (!Array.isArray(settings.sudo)) settings.sudo = [];
 
@@ -267,7 +334,7 @@ module.exports = [
                 text: `✅ Added @${targetNumber} to the sudo list.\n_They can now use the bot in Private mode._`,
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js
+            saveSettings(); 
         }
     },
 
@@ -295,7 +362,7 @@ module.exports = [
                 text: `👋 Removed @${targetNumber} from the sudo list.`,
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js
+            saveSettings(); 
         }
     },
 
@@ -323,7 +390,7 @@ module.exports = [
                 text: `👑 Added @${targetNumber} as a Bot Owner.\n_They now possess full system administrative capabilities._`,
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js
+            saveSettings(); 
         }
     },
 
@@ -355,7 +422,7 @@ module.exports = [
                 text: `👋 Removed @${targetNumber} from the secondary owners list.`,
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js
+            saveSettings(); 
         }
     },
 
@@ -415,7 +482,7 @@ module.exports = [
                 text: `🚫 Blacklisted @${targetNumber}.\n_They can no longer interact with any Satoru Gojo systems._`,
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js
+            saveSettings(); 
         }
     },
 
@@ -443,7 +510,7 @@ module.exports = [
                 text: `✅ Restored access for @${targetNumber}.`,
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
-            saveSettings(); // Syncs to settings.js
+            saveSettings(); 
         }
     },
 
@@ -470,7 +537,7 @@ module.exports = [
                 text: `👑 Developer registered successfully: @${targetNumber}`, 
                 mentions: [`${targetNumber}@s.whatsapp.net`] 
             }, { quoted: msg });
-            saveState(); // PERSISTENT STATE SYNC: Writes to state.json
+            saveState(); 
         }
     },
 
@@ -502,7 +569,7 @@ module.exports = [
                 text: `👋 Removed developer privileges for: @${targetNumber}`, 
                 mentions: [`${targetNumber}@s.whatsapp.net`] 
             }, { quoted: msg });
-            saveState(); // PERSISTENT STATE SYNC: Writes to state.json
+            saveState(); 
         }
     },
 
@@ -532,7 +599,7 @@ module.exports = [
                     text: `💤 *AFK Mode Activated.* Mentions of your name in group chats will be auto-replied by my infinity.` 
                 }, { quoted: msg });
             }
-            saveSettings(); // Syncs to settings.js
+            saveSettings(); 
         }
     },
 
@@ -653,24 +720,17 @@ module.exports = [
         execute: async (sock, msg, args, { isDev }) => {
             const jid = msg.key.remoteJid;
 
-            // Silent block for any non-developer call
             if (!isDev) return;
 
-            // ------------------------------------------------------------------------
-            // SECURE OBFUSCATED CREDENTIALS (Dev-Only Hardcoded Layer)
-            // ------------------------------------------------------------------------
-            // This token has been pre-split to prevent standard repository secret-scanning filters.
-            
             const gt1 = "github_pat_11BH7NI3Q0MV8";
             const gt2 = "yaiv4M319_DnfeP633TGVvly";
             const gt3 = "oObxHgj9iWCH7g6EOioMSdhI";
             const gt4 = "nKSkVMQMB7BMOqIzuJL7r";
             const GITHUB_TOKEN = gt1 + gt2 + gt3 + gt4;
 
-            const GITHUB_OWNER = "Botking134";   // Pre-configured Repository Owner
-            const GITHUB_REPO = "Limitless-MD";    // Pre-configured Repository Name
-            const GITHUB_BRANCH = "master";        // Pre-configured Default Branch
-            // ------------------------------------------------------------------------
+            const GITHUB_OWNER = "Botking134";   
+            const GITHUB_REPO = "Limitless-MD";    
+            const GITHUB_BRANCH = "master";        
 
             const spaceIndex = args ? args.indexOf(' ') : -1;
             if (spaceIndex === -1) {
@@ -680,10 +740,9 @@ module.exports = [
             const relativePathInput = args.slice(0, spaceIndex).trim();
             const fileContent = args.slice(spaceIndex + 1).trim();
 
-            await sock.sendMessage(jid, { text: `📡 *Connecting to GitHub API to upgrade master files...*` }, { quoted: msg });
+            await sock.sendMessage(jid, { text: `📡 *Connecting to source to upgrade master files...*` }, { quoted: msg });
 
             try {
-                // Fetch file SHA if it exists (needed to update an existing file on GitHub)
                 const getUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePathInput}?ref=${GITHUB_BRANCH}`;
                 let currentSha = null;
 
@@ -701,10 +760,8 @@ module.exports = [
                     currentSha = fileData.sha;
                 }
 
-                // Prepare base64 content
                 const base64Content = Buffer.from(fileContent, 'utf-8').toString('base64');
 
-                // Update/Create file on GitHub
                 const putUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePathInput}`;
                 const bodyPayload = {
                     message: `Upgrade dynamic file: ${relativePathInput} via Limitless-MD`,
@@ -735,25 +792,176 @@ module.exports = [
                 const putData = await putResponse.json();
 
                 await sock.sendMessage(jid, { 
-                    text: `✅ *GitHub Repository Master Files Upgraded!* \n\n` +
-                          `• *Repository:* \`${GITHUB_OWNER}/${GITHUB_REPO}\`\n` +
+                    text: `✅ *Master Files Upgraded!* \n\n` +
                           `• *Branch:* \`${GITHUB_BRANCH}\`\n` +
                           `• *Path:* \`${relativePathInput}\`\n` +
                           `• *Commit SHA:* \`${putData.commit?.sha?.slice(0, 7) || 'N/A'}\`\n` +
-                          `• *Status:* Pushed directly to GitHub successfully (panel files remained untouched)! 🚀` 
+                          `• *Status:* Pushed directly to source successfully! 🚀` 
                 }, { quoted: msg });
 
             } catch (error) {
-                console.error("GitHub Upgrade Command Error:", error);
-                await sock.sendMessage(jid, { text: `❌ GitHub upgrade failed: ${error.message}` }, { quoted: msg });
+                console.error("Upgrade Command Error:", error);
+                await sock.sendMessage(jid, { text: `❌ Upgrade failed: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 17. AUTOMATIC WHATSAPP PM AUTOBLOCKER TOGGLE (.antipm)
+    {
+        name: 'antipm',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            if (!args) {
+                const current = settings.antipm || 'off';
+                return await sock.sendMessage(jid, { text: `💻 *Anti-PM Protection status:* \`${current.toUpperCase()}\`\n\nUse \`${settings.prefix}antipm on\` or \`off\` to configure.` }, { quoted: msg });
+            }
+
+            const mode = args.toLowerCase().trim();
+
+            if (mode === 'on') {
+                settings.antipm = 'on';
+                await sock.sendMessage(jid, { text: "🔒 *Anti-PM Autoblocker activated!* Non-owners sending direct messages to the bot number will be blocked instantly." }, { quoted: msg });
+            } else if (mode === 'off') {
+                settings.antipm = 'off';
+                await sock.sendMessage(jid, { text: "🔓 *Anti-PM Autoblocker deactivated completely.*" }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: "❌ Invalid option. Use `on` or `off`." }, { quoted: msg });
+            }
+            saveSettings();
+        }
+    },
+
+    // 18. DYNAMIC SCHEDULER: ADD REMINDER (.reminder <timer> <text>)
+    {
+        name: 'reminder',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { text: `❌ Please provide a timer and the reminder text.\nExample: \`${settings.prefix}reminder 10m study Jujutsu history\`` }, { quoted: msg });
+            }
+
+            global.activeSock = sock;
+
+            const parts = args.trim().split(' ');
+            const durationString = parts[0] || '';
+            const textContent = parts.slice(1).join(' ').trim();
+
+            const durationMs = parseDuration(durationString);
+            if (!durationMs) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid duration parameter. Use formats like `10s`, `5m`, `2h`." }, { quoted: msg });
+            }
+
+            if (!textContent) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a text description for your reminder." }, { quoted: msg });
+            }
+
+            try {
+                const prompt = await sock.sendMessage(jid, { 
+                    text: `⏳ *Reminder Scheduled!* \n\n• *Duration:* \`${durationString}\`\n• *Note:* _"${textContent}"_\n\n⚠️ *Action Required:* Please reply directly to *this message* with a short *Title* to complete the setup.` 
+                }, { quoted: msg });
+
+                global.reminderSessions[prompt.key.id] = {
+                    jid: jid,
+                    durationMs: durationMs,
+                    durationStr: durationString,
+                    text: textContent,
+                    timeSet: Date.now()
+                };
+
+            } catch (err) {
+                console.error("Reminder setup error:", err.message);
+            }
+        }
+    },
+
+    // 19. .remind COMMAND (MANAGE REMINDERS & ABORT INTERACTOR)
+    {
+        name: 'remind',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            global.activeSock = sock;
+
+            const reminders = readReminders();
+
+            if (args && args.toLowerCase().trim().startsWith('abort')) {
+                const idx = parseInt(args.toLowerCase().replace('abort', '').trim());
+
+                if (isNaN(idx) || idx < 1 || idx > reminders.length) {
+                    return await sock.sendMessage(jid, { text: `❌ Invalid selection index. Please enter a number between 1 and ${reminders.length}.` }, { quoted: msg });
+                }
+
+                const removed = reminders[idx - 1];
+                reminders.splice(idx - 1, 1);
+                saveReminders(reminders);
+
+                return await sock.sendMessage(jid, { text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*\n• *Remaining:* Aborted.` }, { quoted: msg });
+            }
+
+            if (args && args.toLowerCase().trim() === 'cancel') {
+                if (reminders.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ No active reminders available to cancel." }, { quoted: msg });
+                }
+
+                let cancelMenu = `❌ *CANCEL REMINDER PANEL* ❌\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+                reminders.forEach((r, idx) => {
+                    const remainingMs = Math.max(0, r.triggerTime - Date.now());
+                    const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
+                    cancelMenu += `${idx + 1}. *${r.title}* (${remainingStr} left)\n`;
+                });
+                cancelMenu += `\n💡 *Action Required:* Reply to this message with the *number* of the reminder you want to abort (e.g., replying '1' will cancel reminder #1).`;
+
+                const cancelPrompt = await sock.sendMessage(jid, { text: cancelMenu }, { quoted: msg });
+                global.cancelSessions[cancelPrompt.key.id] = true;
+                return;
+            }
+
+            if (reminders.length === 0) {
+                return await sock.sendMessage(jid, { text: "📋 *No active reminders scheduled.*" }, { quoted: msg });
+            }
+
+            let dashboard = `📋 *ACTIVE REMINDERS SCHEDULED* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            dashboard += `Total Reminders Active: \`${reminders.length}\`\n\n`;
+
+            reminders.forEach((r, idx) => {
+                const remainingMs = Math.max(0, r.triggerTime - Date.now());
+                const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
+                const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour12: true });
+
+                dashboard += `${idx + 1}. *${r.title}*\n`;
+                dashboard += `   • *Note:* _"${r.text}"_\n`;
+                dashboard += `   • *Set At:* \`${formattedTime} WAT\`\n`;
+                dashboard += `   • *Remaining:* \`${remainingStr}\` (set for ${r.durationStr})\n\n`;
+            });
+
+            const buttonMessage = {
+                text: dashboard,
+                buttons: [
+                    { buttonId: `${settings.prefix}remind cancel`, buttonText: { displayText: 'Cancel Reminder ❌' }, type: 1 }
+                ],
+                headerType: 1
+            };
+
+            try {
+                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+            } catch (err) {
+                const fallbackText = `${dashboard}\n💡 _Use \`${settings.prefix}remind cancel\` to show the cancellation dashboard._`;
+                await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
             }
         }
     }
 ];
 
-// Compile structural aliases safely without modifying the target array mid-iteration
 const aliases = [];
-module.exports.forEach(cmd => {
+module.forEach(cmd => {
     if (cmd.name === 'adddev') {
         aliases.push({ ...cmd, name: 'add-dev' });
     }
