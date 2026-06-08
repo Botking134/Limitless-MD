@@ -10,7 +10,7 @@ const remindersPath = path.join(__dirname, '../reminders.json');
 
 // Initialize reminders dynamic memory
 if (!global.reminders) global.reminders = [];
-if (!global.reminderSessions) global.reminderSessions = {}; // Corrected to object format
+if (!global.reminderSessions) global.reminderSessions = {};
 if (!global.cancelSessions) global.cancelSessions = {};
 
 // Helpers to read/write persistent reminders to JSON
@@ -33,7 +33,7 @@ function saveReminders(reminders) {
     }
 }
 
-// Duration string parser (e.g., '10s' -> 10000ms, '5m' -> 300000ms, '1h' -> 3600000ms)
+// Duration string parser
 function parseDuration(str) {
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
@@ -45,10 +45,19 @@ function parseDuration(str) {
     return null;
 }
 
-// Autonomous reminder checking loop (Runs silently on class import)
+// Uptime format helper
+function formatUptime(seconds) {
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
+}
+
+// Autonomous reminder checking loop
 if (!global.reminderInterval) {
     global.reminderInterval = setInterval(async () => {
-        if (!global.activeSock) return; // Wait for active socket capture
+        if (!global.activeSock) return;
 
         const reminders = readReminders();
         if (reminders.length === 0) return;
@@ -77,27 +86,20 @@ if (!global.reminderInterval) {
             }
             saveReminders(remaining);
         }
-    }, 10000); // Check every 10 seconds
+    }, 10000);
 }
 
-// Highly versatile target parser supporting replied JID, @mentions, and digits
+// Highly versatile target parser
 function parseTarget(msg, args) {
     let target = '';
-    
-    // 1. Quoted participant JID (Replying)
     const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
     if (quotedParticipant) {
         target = quotedParticipant.split('@')[0];
-    }
-    // 2. Mentioned JIDs (@user)
-    else if (msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
+    } else if (msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
         target = msg.message.extendedTextMessage.contextInfo.mentionedJid[0].split('@')[0];
-    }
-    // 3. Arguments containing a number
-    else if (args) {
+    } else if (args) {
         target = args.replace(/[^0-9]/g, '');
     }
-    
     return target;
 }
 
@@ -111,7 +113,7 @@ module.exports = [
             if (!isOwner && !isSudo) return;
 
             let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
-            const filesToTest = ['plugins/utilities.js', 'plugins/group.js', 'plugins/ai.js'];
+            const filesToTest = ['plugins/utilities.js', 'plugins/group.js', 'plugins/ai.js', 'plugins/games.js', 'plugins/games2.js'];
 
             for (const file of filesToTest) {
                 const filePath = path.join(__dirname, '..', file);
@@ -280,7 +282,7 @@ module.exports = [
         }
     },
 
-    // 2. TOGGLE PUBLIC/PRIVATE MODE (Owner & Sudo Authorized)
+    // 2. TOGGLE PUBLIC/PRIVATE MODE
     {
         name: 'mode',
         isPrefixless: false,
@@ -310,7 +312,7 @@ module.exports = [
         }
     },
 
-    // 3. ADD SUDO (Owner Only - Sudoers cannot run this)
+    // 3. ADD SUDO
     {
         name: 'setsudo',
         isPrefixless: false,
@@ -338,7 +340,7 @@ module.exports = [
         }
     },
 
-    // 4. REMOVE SUDO (Owner Only)
+    // 4. REMOVE SUDO
     {
         name: 'delsudo',
         isPrefixless: false,
@@ -366,7 +368,7 @@ module.exports = [
         }
     },
 
-    // 5. ADD BOT OWNER (Owner Only)
+    // 5. ADD BOT OWNER
     {
         name: 'addowner',
         isPrefixless: false,
@@ -394,7 +396,7 @@ module.exports = [
         }
     },
 
-    // 6. REMOVE OWNER (Owner Only)
+    // 6. REMOVE OWNER
     {
         name: 'delowner',
         isPrefixless: false,
@@ -426,7 +428,7 @@ module.exports = [
         }
     },
 
-    // 7. SYSTEM RESTART (Owner & Sudo Authorized)
+    // 7. SYSTEM RESTART
     {
         name: 'restart',
         isPrefixless: false,
@@ -435,12 +437,11 @@ module.exports = [
             if (!isOwner && !isSudo) return;
 
             await sock.sendMessage(jid, { text: "🔄 _Rebooting Satoru Gojo's visual and physical engines..._" }, { quoted: msg });
-            console.log("🔄 Process terminated cleanly for restart by Owner.");
             process.exit(1); 
         }
     },
 
-    // 8. SYSTEM SHUTDOWN (Owner & Sudo Authorized)
+    // 8. SYSTEM SHUTDOWN
     {
         name: 'shutdown',
         isPrefixless: false,
@@ -449,12 +450,11 @@ module.exports = [
             if (!isOwner && !isSudo) return;
 
             await sock.sendMessage(jid, { text: "💤 _Deactivating Infinite Void. System shutting down..._" }, { quoted: msg });
-            console.log("🔌 Bot process terminated by Owner.");
             process.exit(0); 
         }
     },
 
-    // 9. GLOBAL BOT BAN CONTROLLER (Owner & Sudo Authorized)
+    // 9. GLOBAL BOT BAN CONTROLLER
     {
         name: 'ban',
         isPrefixless: false,
@@ -486,7 +486,7 @@ module.exports = [
         }
     },
 
-    // 10. GLOBAL BOT UNBAN CONTROLLER (Owner & Sudo Authorized)
+    // 10. GLOBAL BOT UNBAN CONTROLLER
     {
         name: 'unban',
         isPrefixless: false,
@@ -514,7 +514,7 @@ module.exports = [
         }
     },
 
-    // 11. SYSTEM CREATOR EXCLUSIVE COMMAND: ADD DEVELOPER (Strict Developer Guard)
+    // 11. REGISTER DEVELOPER
     {
         name: 'adddev',
         isPrefixless: false,
@@ -573,7 +573,7 @@ module.exports = [
         }
     },
 
-    // 13. AFK TOGGLE COMMAND (Owner & Sudo Authorized)
+    // 13. AFK TOGGLE COMMAND
     {
         name: 'afk',
         isPrefixless: false,
@@ -603,7 +603,7 @@ module.exports = [
         }
     },
 
-    // 14. DYNAMIC CONFIGURATION EDITOR (.setvar) (Owner & Sudo Authorized)
+    // 14. DYNAMIC CONFIGURATION EDITOR (.setvar)
     {
         name: 'setvar',
         isPrefixless: false,
@@ -662,7 +662,7 @@ module.exports = [
         }
     },
 
-    // 15. GET SYSTEM SETTINGS (.settings) (Owner & Sudo Authorized)
+    // 15. GET SYSTEM SETTINGS (.settings)
     {
         name: 'settings',
         isPrefixless: false,
@@ -713,7 +713,7 @@ module.exports = [
         }
     },
 
-    // 16. SYSTEM UPGRADE/REPLACE FILE WRITER (.upgrade) [Developer Exclusive]
+    // 16. SYSTEM UPGRADE/REPLACE FILE WRITER (.upgrade)
     {
         name: 'upgrade',
         isPrefixless: false,
@@ -806,7 +806,7 @@ module.exports = [
         }
     },
 
-    // 17. AUTOMATIC WHATSAPP PM AUTOBLOCKER TOGGLE (.antipm)
+    // 17. AUTOMATIC WHATSAPP PM AUTOBLOCKER TOGGLE
     {
         name: 'antipm',
         isPrefixless: false,
@@ -834,7 +834,7 @@ module.exports = [
         }
     },
 
-    // 18. DYNAMIC SCHEDULER: ADD REMINDER (.reminder <timer> <text>)
+    // 18. DYNAMIC SCHEDULER: ADD REMINDER
     {
         name: 'reminder',
         isPrefixless: false,
@@ -880,7 +880,7 @@ module.exports = [
         }
     },
 
-    // 19. .remind COMMAND (MANAGE REMINDERS & ABORT INTERACTOR)
+    // 19. .remind COMMAND (MANAGE REMINDERS)
     {
         name: 'remind',
         isPrefixless: false,
@@ -889,7 +889,6 @@ module.exports = [
             if (!isOwner && !isSudo) return;
 
             global.activeSock = sock;
-
             const reminders = readReminders();
 
             if (args && args.toLowerCase().trim().startsWith('abort')) {
@@ -917,7 +916,7 @@ module.exports = [
                     const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
                     cancelMenu += `${idx + 1}. *${r.title}* (${remainingStr} left)\n`;
                 });
-                cancelMenu += `\n💡 *Action Required:* Reply to this message with the *number* of the reminder you want to abort (e.g., replying '1' will cancel reminder #1).`;
+                cancelMenu += `\n💡 *Action Required:* Reply to this message with the *number* of the reminder you want to abort.`;
 
                 const cancelPrompt = await sock.sendMessage(jid, { text: cancelMenu }, { quoted: msg });
                 global.cancelSessions[cancelPrompt.key.id] = true;
@@ -928,8 +927,9 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "📋 *No active reminders scheduled.*" }, { quoted: msg });
             }
 
-            let dashboard = `📋 *ACTIVE REMINDERS SCHEDULED* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-            dashboard += `Total Reminders Active: \`${reminders.length}\`\n\n`;
+            let dashboard = `📋 *ACTIVE REMINDERS SCHEDULED* 📋\n` +
+                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                            `Total Reminders Active: \`${reminders.length}\`\n\n`;
 
             reminders.forEach((r, idx) => {
                 const remainingMs = Math.max(0, r.triggerTime - Date.now());
@@ -957,11 +957,148 @@ module.exports = [
                 await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
             }
         }
+    },
+
+    // 20. ACTIVE GAME INSTANCES OVERVIEW
+    {
+        name: 'games',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            const tttCount = Object.keys(global.gameSessions || {}).filter(k => k.endsWith('_ttt')).length;
+            const guessCount = Object.keys(global.gameSessions || {}).filter(k => k.endsWith('_guess')).length;
+            const v8Count = Object.keys(global.vault8Sessions || {}).length;
+            const triviaCount = Object.keys(global.triviaSessions || {}).length;
+            const charadeCount = Object.keys(global.charadeSessions || {}).length;
+            const anagramCount = Object.keys(global.anagramSessions || {}).length;
+            const wcgCount = Object.keys(global.wcgSessions || {}).length;
+            const millionaireCount = Object.keys(global.millionaireSessions || {}).length;
+            const torfCount = Object.keys(global.torfSessions || {}).length;
+            const pvpCount = Object.keys(global.pvpSessions || {}).length;
+            const escapeCount = Object.keys(global.escapeSessions || {}).length;
+
+            const totalActive = tttCount + guessCount + v8Count + triviaCount + charadeCount + anagramCount + wcgCount + millionaireCount + torfCount + pvpCount + escapeCount;
+
+            const summary = 
+                `🎮 *LIMITLESS ACTIVE GAMES REGISTER* 🎮\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `• *Tic-Tac-Toe:* \`${tttCount}\` active\n` +
+                `• *Cursed Energy Guessing:* \`${guessCount}\` active\n` +
+                `• *The Vault 8 RPG:* \`${v8Count}\` active\n` +
+                `• *Trivia Quizzes:* \`${triviaCount}\` active\n` +
+                `• *Emoji Charades:* \`${charadeCount}\` active\n` +
+                `• *Anagram Scrambles:* \`${anagramCount}\` active\n` +
+                `• *Word Chain Game:* \`${wcgCount}\` active\n` +
+                `• *Who Wants to Be a Millionaire:* \`${millionaireCount}\` active\n` +
+                `• *Truth or False:* \`${torfCount}\` active\n` +
+                `• *PVP Lore Battles:* \`${pvpCount}\` active\n` +
+                `• *Escape Rooms:* \`${escapeCount}\` active\n\n` +
+                `📈 *Total Running Instances:* \`${totalActive}\` game(s)\n\n` +
+                `👉 _Click the button below to force-terminate all running game instances instantly._`;
+
+            const buttons = {
+                text: summary,
+                buttons: [
+                    { buttonId: `${settings.prefix}games_closeall`, buttonText: { displayText: 'Terminate All Games 🛑' }, type: 1 }
+                ],
+                headerType: 1
+            };
+
+            await sock.sendMessage(jid, buttons, { quoted: msg });
+        }
+    },
+
+    // 21. CLOSE ALL GAMES RECOVERY CONTROLLER
+    {
+        name: 'games_closeall',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            // Memory-safe cleanup of all intervals/timeouts first
+            Object.keys(global.anagramSessions || {}).forEach(k => {
+                if (global.anagramSessions[k].timerId) clearTimeout(global.anagramSessions[k].timerId);
+            });
+            Object.keys(global.wcgSessions || {}).forEach(k => {
+                if (global.wcgSessions[k].timerId) clearTimeout(global.wcgSessions[k].timerId);
+            });
+            Object.keys(global.millionaireSessions || {}).forEach(k => {
+                if (global.millionaireSessions[k].timerId) clearTimeout(global.millionaireSessions[k].timerId);
+            });
+            Object.keys(global.pvpSessions || {}).forEach(k => {
+                if (global.pvpSessions[k].timerId) clearTimeout(global.pvpSessions[k].timerId);
+            });
+
+            // Wipe game memories
+            global.gameSessions = {};
+            global.vault8Sessions = {};
+            global.vault8SavedStories = {};
+            global.triviaSessions = {};
+            global.charadeSessions = {};
+            global.anagramSessions = {};
+            global.wcgSessions = {};
+            global.millionaireSessions = {};
+            global.torfSessions = {};
+            global.pvpSessions = {};
+            global.escapeSessions = {};
+
+            await sock.sendMessage(jid, { text: "🛑 *RECOVERY ACTION COMPLETE:* All running game registries and background timers have been terminated." }, { quoted: msg });
+        }
+    },
+
+    // 22. EXCLUSIVE OWNER & SUDO LIST VIEWER
+    {
+        name: 'owner',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            const secondaries = settings.owners || [];
+            const sudos = settings.sudo || [];
+
+            let list = `👑 *LIMITLESS OWNER & SUDO REGISTER* 👑\n` +
+                       `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                       `👤 *Primary Creator JID:*\n` +
+                       `• @${settings.ownerNumber}\n\n`;
+
+            if (secondaries.length > 0) {
+                list += `👑 *Secondary Owners:*\n`;
+                secondaries.forEach((num) => {
+                    list += `• @${num}\n`;
+                });
+                list += `\n`;
+            } else {
+                list += `👑 *Secondary Owners:* _None_\n\n`;
+            }
+
+            if (sudos.length > 0) {
+                list += `🛡️ *Registered Sudoers:*\n`;
+                sudos.forEach((num) => {
+                    list += `• @${num}\n`;
+                });
+                list += `\n`;
+            } else {
+                list += `🛡️ *Registered Sudoers:* _None_\n\n`;
+            }
+
+            // Compile mentions array cleanly
+            const mentionsList = [
+                `${settings.ownerNumber}@s.whatsapp.net`,
+                ...secondaries.map(num => `${num}@s.whatsapp.net`),
+                ...sudos.map(num => `${num}@s.whatsapp.net`)
+            ];
+
+            await sock.sendMessage(jid, { text: list, mentions: mentionsList }, { quoted: msg });
+        }
     }
 ];
 
 const aliases = [];
-module.exports.forEach(cmd => { // Corrected from module.forEach to module.exports.forEach
+module.exports.forEach(cmd => {
     if (cmd.name === 'adddev') {
         aliases.push({ ...cmd, name: 'add-dev' });
     }
