@@ -265,6 +265,7 @@ _║ ⊱ getnote_`;
         const audioUrl = "https://github.com/Botking134/Limitless-MD/raw/refs/heads/master/plugins/AUD-20260604-WA0001.mp3";
 
         try {
+            // Buffer the audio on the server first to ensure correct mimetype formatting
             const audioResponse = await fetch(audioUrl);
             if (audioResponse.ok) {
                 const arrayBuffer = await audioResponse.arrayBuffer();
@@ -277,6 +278,7 @@ _║ ⊱ getnote_`;
                 throw new Error();
             }
         } catch (audioErr) {
+            // Fallback to direct URL if the server download fails
             await sock.sendMessage(jid, {
                 audio: { url: audioUrl },
                 mimetype: "audio/mpeg",
@@ -295,6 +297,7 @@ async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
 
+    // Generate Satoru Gojo Header Panel
     const headerText = 
 `┌──────────────────┐
 │   *Limitless-MD*   │
@@ -313,8 +316,10 @@ _Throughout Heaven And Earth 🌏_
         const { generateWAMessageFromContent } = await import('@itsliaaa/baileys');
         await sock.sendMessage(jid, { text: "Channelling Infinity Domain... 🌀" }, { quoted: msg });
 
+        // Shuffle images array to dynamically allocate unique images across slides
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
+        // Define Category slides configurations
         const categories = [
             { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
             { name: "GROUP MANAGEMENT 👥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
@@ -339,6 +344,7 @@ _Throughout Heaven And Earth 🌏_
             cards.push(card);
         }
 
+        // Compile standard interactive Carousel Message structure
         const messageContent = {
             interactiveMessage: {
                 body: { text: headerText },
@@ -359,6 +365,7 @@ _Throughout Heaven And Earth 🌏_
 
     } catch (error) {
         console.error("Carousel Menu Render Error:", error);
+        // Fallback to standard text menu if device/connection rejects Interactive Relaying
         await renderMenu(sock, msg);
     }
 }
@@ -498,7 +505,7 @@ module.exports = [
 • *${settings.prefix}play <query>* — Song downloader with clean metadata artwork.
 • *${settings.prefix}ytmp3 / .ytmp4* — Dual-fallback YouTube link downloaders.
 • *${settings.prefix}yt <url>* — YouTube v3 multi-format media downloader.
-• *${settings.prefix}tt2 <url>* — Sample watermark-free link downloader.
+• *${settings.prefix}tt2 <url>* — TikTok v2 watermark-free link downloader.
 • *${settings.prefix}img <query> <count>* — Google bulk image downloader.
 • *${settings.prefix}song <query>* — Numbered song index selector & downloader.
 • *${settings.prefix}video <query>* — YouTube video search downloader.
