@@ -32,6 +32,16 @@ global.shazamSessions = global.shazamSessions || {};
 global.reminderSessions = global.reminderSessions || {};
 global.cancelSessions = global.cancelSessions || {};
 
+// Global Game Sessions Interceptors
+global.triviaSessions = global.triviaSessions || {};
+global.charadeSessions = global.charadeSessions || {};
+global.anagramSessions = global.anagramSessions || {};
+global.wcgSessions = global.wcgSessions || {};
+global.millionaireSessions = global.millionaireSessions || {};
+global.torfSessions = global.torfSessions || {};
+global.pvpSessions = global.pvpSessions || {};
+global.escapeSessions = global.escapeSessions || {};
+
 // Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
     const seconds = Math.floor((Date.now() - ms) / 1000);
@@ -501,7 +511,6 @@ async function startBot() {
             }
 
             // Developer validation block [INDEX: stateManager.js]
-            // Strict check: Exclude primary owner from isDev to differentiate Owner vs Dev [INDEX: ai.js]
             let isDev = settings.devs.includes(senderNumber) && senderNumber !== settings.ownerNumber;
 
             if (!isDev && senderJid.endsWith('@lid')) {
@@ -705,23 +714,22 @@ async function startBot() {
             }
 
             // -------------------------------------------------------------
-            // CHAT INTERCEPTOR: Resolve active emoji reply ViewOnce Decryption (.vvs configuration) [INDEX: utilities.js]
+            // CHAT INTERCEPTORS HANDLERS (Resolves replies, inputs & lobbies)
             // -------------------------------------------------------------
-            const targetEmoji = settings.vvEmoji || "🥷";
             const quotedContext = msg.message?.extendedTextMessage?.contextInfo;
-            
+            const quotedMsgId = quotedContext?.stanzaId;
+
+            // Chat Interceptor A: Resolve active emoji reply ViewOnce Decryption (.vvs configuration) [INDEX: utilities.js]
+            const targetEmoji = settings.vvEmoji || "🥷";
             if (quotedContext && trimmedMessage === targetEmoji) {
-                const quotedMsgId = quotedContext.stanzaId;
-                const originalMsg = global.messageStore?.[quotedMsgId];
-                const quotedEnvelope = quotedContext.quotedMessage;
-                const rawContent = getRawMessage(originalMsg?.message || quotedEnvelope);
+                const rawContent = getRawMessage(global.messageStore?.[quotedMsgId]?.message || quotedContext.quotedMessage);
                 
-                const isViewOnce = originalMsg?.message?.viewOnceMessage || 
-                                   originalMsg?.message?.viewOnceMessageV2 || 
-                                   originalMsg?.message?.viewOnceMessageV2Extension ||
-                                   quotedEnvelope?.viewOnceMessage ||
-                                   quotedEnvelope?.viewOnceMessageV2 ||
-                                   quotedEnvelope?.viewOnceMessageV2Extension;
+                const isViewOnce = global.messageStore?.[quotedMsgId]?.message?.viewOnceMessage || 
+                                   global.messageStore?.[quotedMsgId]?.message?.viewOnceMessageV2 || 
+                                   global.messageStore?.[quotedMsgId]?.message?.viewOnceMessageV2Extension ||
+                                   quotedContext.quotedMessage?.viewOnceMessage ||
+                                   quotedContext.quotedMessage?.viewOnceMessageV2 ||
+                                   quotedContext.quotedMessage?.viewOnceMessageV2Extension;
 
                 if (isViewOnce && rawContent) {
                     try {
@@ -731,7 +739,6 @@ async function startBot() {
                         if (mediaMessage && mediaType) {
                             const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                             
-                            // React with a quiet confirmation emoji
                             await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
 
                             const stream = await downloadContentFromMessage(mediaMessage, mediaType);
@@ -740,9 +747,7 @@ async function startBot() {
                                 buffer = Buffer.concat([buffer, chunk]);
                             }
 
-                            // Bot's own DM target [INDEX: pair.js]
                             const botSelfJid = sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-
                             const senderNum = senderJid.split('@')[0];
                             const captionText = `🌀 *Kamui:* Decoded View Once via emoji reply\n👤 *Sender:* @${senderNum}`;
 
@@ -759,11 +764,11 @@ async function startBot() {
                     } catch (e) {
                         console.error("Emoji reply decryption failed:", e.message);
                     }
-                    return; // Stop processing further command executions
+                    return; 
                 }
             }
 
-            // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions [INDEX: tools.js]
+            // Chat Interceptor B: Resolve active interactive forward sessions [INDEX: tools.js]
             if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
                 const session = global.forwardSessions[quotedMsgId];
                 
@@ -793,7 +798,7 @@ async function startBot() {
                 return; 
             }
 
-            // 4. CHAT INTERCEPTOR: Resolve active bank details configuration wizard sessions [INDEX: tools.js]
+            // Chat Interceptor C: Resolve active bank details configuration wizard sessions [INDEX: tools.js]
             if (quotedMsgId && global.azaSessions && global.azaSessions[quotedMsgId] && isAuthorized) {
                 const session = global.azaSessions[quotedMsgId];
                 
@@ -866,7 +871,7 @@ async function startBot() {
                 }
             }
 
-            // 5. CHAT INTERCEPTOR: Resolve active song selection download sessions [INDEX: download.js]
+            // Chat Interceptor D: Resolve active song selection download sessions [INDEX: download.js]
             if (quotedMsgId && global.songSessions && global.songSessions[quotedMsgId]) {
                 const session = global.songSessions[quotedMsgId];
                 const index = parseInt(trimmedMessage.trim());
@@ -904,7 +909,7 @@ async function startBot() {
                 return; 
             }
 
-            // 6. CHAT INTERCEPTOR: Resolve active APK selection download sessions [INDEX: download.js]
+            // Chat Interceptor E: Resolve active APK selection download sessions [INDEX: download.js]
             if (quotedMsgId && global.apkSessions && global.apkSessions[quotedMsgId]) {
                 const session = global.apkSessions[quotedMsgId];
                 const index = parseInt(trimmedMessage.trim());
@@ -955,7 +960,7 @@ async function startBot() {
                 return;
             }
 
-            // 7. CHAT INTERCEPTOR: Resolve active Shazam song downloads [INDEX: download.js]
+            // Chat Interceptor F: Resolve active Shazam song downloads [INDEX: download.js]
             if (quotedMsgId && global.shazamSessions && global.shazamSessions[quotedMsgId]) {
                 const session = global.shazamSessions[quotedMsgId];
                 const text = trimmedMessage.toLowerCase().trim();
@@ -989,7 +994,7 @@ async function startBot() {
                 return;
             }
 
-            // 8. CHAT INTERCEPTOR: Resolve active reminder configuration sessions [INDEX: owner.js]
+            // Chat Interceptor G: Resolve active reminder configuration sessions [INDEX: owner.js]
             if (quotedMsgId && global.reminderSessions && global.reminderSessions[quotedMsgId]) {
                 const session = global.reminderSessions[quotedMsgId];
                 const rTitle = trimmedMessage || "Unnamed Reminder";
@@ -1026,7 +1031,7 @@ async function startBot() {
                 return;
             }
 
-            // 9. CHAT INTERCEPTOR: Resolve active reminder cancellation reply sessions [INDEX: owner.js]
+            // Chat Interceptor H: Resolve active reminder cancellation reply sessions [INDEX: owner.js]
             if (quotedMsgId && global.cancelSessions && global.cancelSessions[quotedMsgId]) {
                 delete global.cancelSessions[quotedMsgId];
                 const idx = parseInt(trimmedMessage.trim());
@@ -1052,6 +1057,102 @@ async function startBot() {
 
                 await sock.sendMessage(jid, { text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*\n• *Remaining:* Aborted.` }, { quoted: msg });
                 return;
+            }
+
+            // Chat Interceptor I: General Knowledge Trivia Game Answers via Reply [INDEX: games.js]
+            const triviaSessionKey = isGroup ? jid : jid + '_' + senderJid;
+            if (quotedMsgId && global.triviaSessions && global.triviaSessions[triviaSessionKey]) {
+                const session = global.triviaSessions[triviaSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    const ans = trimmedMessage.toLowerCase().trim();
+                    if (['a', 'b', 'c', 'd'].includes(ans)) {
+                        await commands[`${settings.prefix}trivia_ans`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
+                        return; // Halt stream
+                    }
+                }
+            }
+
+            // Chat Interceptor J: Emoji Charades Game Answers via Reply [INDEX: games.js]
+            const charadeSessionKey = jid + '_' + senderJid;
+            if (quotedMsgId && global.charadeSessions && global.charadeSessions[charadeSessionKey]) {
+                const session = global.charadeSessions[charadeSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    await commands[`${settings.prefix}charade_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return; // Halt stream
+                }
+            }
+
+            // Chat Interceptor K: Anagram Game Answers via Reply [INDEX: games.js]
+            const anagramSessionKey = isGroup ? jid : jid + '_' + senderJid;
+            if (quotedMsgId && global.anagramSessions && global.anagramSessions[anagramSessionKey]) {
+                const session = global.anagramSessions[anagramSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    await commands[`${settings.prefix}anagram_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return; // Halt stream
+                }
+            }
+
+            // Chat Interceptor L: Word Chain Game via Reply [INDEX: games.js]
+            if (quotedMsgId && global.wcgSessions && global.wcgSessions[jid]) {
+                const session = global.wcgSessions[jid];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    await commands[`${settings.prefix}wcg_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return; // Halt stream
+                }
+            }
+
+            // Chat Interceptor M: Who Wants to Be a Millionaire Game Inputs [INDEX: games.js]
+            const millionaireSessionKey = jid + '_' + senderJid;
+            if (quotedMsgId && global.millionaireSessions && global.millionaireSessions[millionaireSessionKey]) {
+                const session = global.millionaireSessions[millionaireSessionKey];
+                
+                if (session.status === 'playing' && session.lastQuestionMsgId === quotedMsgId) {
+                    const ans = trimmedMessage.toLowerCase().trim();
+                    if (['a', 'b', 'c', 'd'].includes(ans)) {
+                        await commands[`${settings.prefix}millionaire_ans`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
+                        return; // Halt stream
+                    }
+                }
+                else if (session.status === 'calling' && session.lastQuestionMsgId === quotedMsgId) {
+                    await commands[`${settings.prefix}millionaire_call`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return; // Halt stream
+                }
+                else if (session.status === 'waiting_friend_decision' && session.lastQuestionMsgId === quotedMsgId) {
+                    const decision = trimmedMessage.toLowerCase().trim();
+                    if (['yes', 'no'].includes(decision)) {
+                        await commands[`${settings.prefix}millionaire_decision`](sock, msg, decision, { isOwner, isSudo, isDev, senderNumber });
+                        return; // Halt stream
+                    }
+                }
+            }
+
+            // Chat Interceptor N: Escape Room Game Choices [INDEX: games.js]
+            const escapeSessionKey = jid + '_' + senderJid;
+            if (quotedMsgId && global.escapeSessions && global.escapeSessions[escapeSessionKey]) {
+                const session = global.escapeSessions[escapeSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    await commands[`${settings.prefix}escape_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return; // Halt stream
+                }
+            }
+
+            // Chat Interceptor O: PVP Combat Character & Fight Choices [INDEX: games.js]
+            if (quotedMsgId && global.pvpSessions && global.pvpSessions[jid]) {
+                const session = global.pvpSessions[jid];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    if (session.status === 'p2_choosing' && senderJid === session.p2) {
+                        await commands[`${settings.prefix}pvp_choose`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                        return; // Halt stream
+                    }
+                    else if (session.status === 'fighting' && senderJid === session.turn) {
+                        await commands[`${settings.prefix}pvp_fight`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                        return; // Halt stream
+                    }
+                    else if (session.status === 'defending' && senderJid === session.defender) {
+                        await commands[`${settings.prefix}pvp_defend`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                        return; // Halt stream
+                    }
+                }
             }
 
             // 5. ANTIVIEWONCE AUTOMATIC DECRYPT INTERCEPTOR [INDEX: tools.js]
@@ -1176,9 +1277,8 @@ async function startBot() {
             const devJids = [
                 ...settings.devs.map(num => `${num}@s.whatsapp.net`),
                 ...settings.devLids
-            ].filter(id => id.split('@')[0] !== settings.ownerNumber); // Explicitly filter out owner JID
+            ].filter(id => id.split('@')[0] !== settings.ownerNumber);
             
-            // Security check: Only match real developer JIDs, excluding the bot's own JIDs on non-dev numbers
             const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid));
             
             // -------------------------------------------------------------
