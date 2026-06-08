@@ -482,13 +482,14 @@ async function startBot() {
                                     buffer = Buffer.concat([buffer, chunk]);
                                 }
 
-                                const targetDmJid = msg.key.participant || msg.key.remoteJid;
+                                // Secure redirection directly to Bot's personal self-chat (DM)
+                                const destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : jid;
                                 
                                 if (mediaType === 'image') {
-                                    await sock.sendMessage(targetDmJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
+                                    await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
                                 } else {
                                     const mimeType = mediaMessage.mimetype || "video/mp4";
-                                    await sock.sendMessage(targetDmJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reaction" });
+                                    await sock.sendMessage(destJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reaction" });
                                 }
                             }
                         } catch (e) {
@@ -497,14 +498,6 @@ async function startBot() {
                     }
                 }
                 return; 
-            }
-
-            if (!Array.isArray(settings.devs)) {
-                settings.devs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
-            }
-
-            if (!Array.isArray(settings.devLids)) {
-                settings.devLids = [];
             }
 
             // Developer validation block [INDEX: stateManager.js]
@@ -711,8 +704,66 @@ async function startBot() {
                 }
             }
 
+            // -------------------------------------------------------------
+            // CHAT INTERCEPTOR: Resolve active emoji reply ViewOnce Decryption (.vvs configuration) [INDEX: utilities.js]
+            // -------------------------------------------------------------
+            const targetEmoji = settings.vvEmoji || "🥷";
+            const quotedContext = msg.message?.extendedTextMessage?.contextInfo;
+            
+            if (quotedContext && trimmedMessage === targetEmoji) {
+                const quotedMsgId = quotedContext.stanzaId;
+                const originalMsg = global.messageStore?.[quotedMsgId];
+                const quotedEnvelope = quotedContext.quotedMessage;
+                const rawContent = getRawMessage(originalMsg?.message || quotedEnvelope);
+                
+                const isViewOnce = originalMsg?.message?.viewOnceMessage || 
+                                   originalMsg?.message?.viewOnceMessageV2 || 
+                                   originalMsg?.message?.viewOnceMessageV2Extension ||
+                                   quotedEnvelope?.viewOnceMessage ||
+                                   quotedEnvelope?.viewOnceMessageV2 ||
+                                   quotedEnvelope?.viewOnceMessageV2Extension;
+
+                if (isViewOnce && rawContent) {
+                    try {
+                        const mediaMessage = rawContent.imageMessage || rawContent.videoMessage || rawContent.audioMessage;
+                        const mediaType = rawContent.imageMessage ? "image" : (rawContent.videoMessage ? "video" : (rawContent.audioMessage ? "audio" : ""));
+
+                        if (mediaMessage && mediaType) {
+                            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                            
+                            // React with a quiet confirmation emoji
+                            await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
+
+                            const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                            let buffer = Buffer.from([]);
+                            for await (const chunk of stream) {
+                                buffer = Buffer.concat([buffer, chunk]);
+                            }
+
+                            // Bot's own DM target [INDEX: pair.js]
+                            const botSelfJid = sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+
+                            const senderNum = senderJid.split('@')[0];
+                            const captionText = `🌀 *Kamui:* Decoded View Once via emoji reply\n👤 *Sender:* @${senderNum}`;
+
+                            if (mediaType === 'image') {
+                                await sock.sendMessage(botSelfJid, { image: buffer, caption: captionText, mentions: [senderJid] });
+                            } else if (mediaType === 'video') {
+                                const mimeType = mediaMessage.mimetype || "video/mp4";
+                                await sock.sendMessage(botSelfJid, { video: buffer, mimetype: mimeType, caption: captionText, mentions: [senderJid] });
+                            } else if (mediaType === 'audio') {
+                                await sock.sendMessage(botSelfJid, { text: captionText + `\n🎵 *Type:* Voice Note`, mentions: [senderJid] });
+                                await sock.sendMessage(botSelfJid, { audio: buffer, mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", ptt: true });
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Emoji reply decryption failed:", e.message);
+                    }
+                    return; // Stop processing further command executions
+                }
+            }
+
             // 3. CHAT INTERCEPTOR: Resolve active interactive forward sessions [INDEX: tools.js]
-            const quotedMsgId = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
             if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
                 const session = global.forwardSessions[quotedMsgId];
                 
