@@ -114,11 +114,11 @@ async function queryVaultEngine(messages) {
     }
 }
 
-// General Knowledge Trivia Question Generator
+// General Knowledge Trivia Question Generator (Linked directly to Groq with Random Seeds)
 async function generateGeneralQuestion(excludeList = []) {
-    const salt = Math.random(); // Ensures infinite variety
+    const salt = Math.random() + '_' + Date.now(); // Ensures infinite variety
     const prompt = 
-        `Generate an interesting, unique general knowledge trivia question (avoid anime completely).\n` +
+        `Generate an interesting, unique general knowledge trivia question (strictly avoid anime themes).\n` +
         `Respond strictly with a JSON object in this exact layout. No other text or markdown:\n` +
         `{"q": "The question?", "options": ["A) Opt1", "B) Opt2", "C) Opt3", "D) Opt4"], "ans": "a" | "b" | "c" | "d"}\n` +
         `To ensure uniqueness, use this random seed: ${salt}.\n` +
@@ -133,9 +133,9 @@ async function generateGeneralQuestion(excludeList = []) {
     }
 }
 
-// Topic-Specific Category Quiz Question Generator
+// Topic-Specific Category Quiz Generator (Linked directly to Groq with Random Seeds)
 async function generateCategoryQuestion(category, excludeList = []) {
-    const salt = Math.random(); // Ensures infinite variety
+    const salt = Math.random() + '_' + Date.now(); // Ensures infinite variety
     const prompt = 
         `Generate an interesting, unique quiz question strictly under the category: "${category}".\n` +
         `Respond strictly with a JSON object in this exact layout. No other text or markdown:\n` +
@@ -152,9 +152,9 @@ async function generateCategoryQuestion(category, excludeList = []) {
     }
 }
 
-// Emoji Charades Generator (Optimized for Balanced, Easy-to-Medium Difficulty)
+// Emoji Charades Generator (Optimized for Easy-to-Medium Balanced Difficulty)
 async function generateEmojiPuzzle(excludeList = []) {
-    const salt = Math.random();
+    const salt = Math.random() + '_' + Date.now();
     const prompt = 
         `Generate a simple, highly recognizable, and fun emoji charades puzzle representing a globally famous movie, cartoon, brand, food, or well-known object.\n` +
         `Strictly make the puzzle easy-to-medium difficulty so players can easily guess it. Do not generate obscure phrases, local slang, abstract proverbs, or complex references.\n` +
@@ -178,14 +178,14 @@ async function generateEmojiPuzzle(excludeList = []) {
     }
 }
 
-// AI semantic analyzer
+// AI semantic analyzer to grade guess variations
 async function checkAnswerCorrectness(correctAnswer, userGuess) {
     const prompt = `System: Compare correct answer "${correctAnswer}" with guess "${userGuess}". Are they semantically equivalent or highly similar? Respond with exactly YES or NO.`;
     const response = await queryLLM(prompt, 0.1);
     return response ? response.trim().toUpperCase().includes("YES") : false;
 }
 
-// Core General Trivia Question Dispatcher
+// Core Trivia Question Dispatcher
 async function askNextTriviaQuestion(sock, jid, sessionKey) {
     const session = global.triviaSessions[sessionKey];
     const isSingle = session.type === 'single';
@@ -297,7 +297,7 @@ async function askNextCharadePuzzle(sock, jid, sessionKey) {
     session.lastQuestionMsgId = prompt.key.id;
 }
 
-// Vault 8 Story Progression handler (Strict fatal settings)
+// Vault 8 Story Progression handler (Strict brief scenarios with high fatal risk)
 async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     const jid = msg.key.remoteJid;
     const session = global.vault8Sessions[sessionKey];
