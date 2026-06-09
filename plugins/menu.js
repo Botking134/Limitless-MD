@@ -8,7 +8,6 @@ function formatUptime(seconds) {
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);
-    
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
 }
 
@@ -78,6 +77,7 @@ _Throughout Heaven And Earth 🌏_
 ${readMore}
 _❖ ── [ AI & CHATBOT ] ── ❖_
 _║ ⊱ ai_
+_║ ⊱ groq_
 _║ ⊱ gojo_
 _║ ⊱ debug_
 _║ ⊱ summon_
@@ -93,6 +93,7 @@ _║ ⊱ rps_
 _║ ⊱ guess_
 _║ ⊱ vault8_
 _║ ⊱ trivia_
+_║ ⊱ quiz_
 _║ ⊱ charade_
 _║ ⊱ anagram_
 _║ ⊱ wcg_
@@ -114,6 +115,8 @@ _║ ⊱ demote_
 _║ ⊱ tagall_
 _║ ⊱ tag_
 _║ ⊱ link_
+_║ ⊱ invite_
+_║ ⊱ gclink_
 _║ ⊱ antilink_
 _║ ⊱ admins_
 _║ ⊱ antitag_
@@ -136,6 +139,8 @@ _║ ⊱ tkick_
 _║ ⊱ gcjid_
 _║ ⊱ antispam_
 _║ ⊱ silence_
+_║ ⊱ gcalerts_
+_║ ⊱ antigcstatus_
 
 _❖ ── [ TOOLS ] ── ❖_
 _║ ⊱ track_
@@ -169,6 +174,8 @@ _║ ⊱ livescore_
 _║ ⊱ football_
 _║ ⊱ ss_
 _║ ⊱ calc_
+_║ ⊱ trt_
+_║ ⊱ translate_
 
 _❖ ── [ DOWNLOADER ] ── ❖_
 _║ ⊱ play_
@@ -421,6 +428,7 @@ module.exports = [
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 • *${settings.prefix}ai <prompt>* — Solves complex queries.
+• *${settings.prefix}groq <prompt>* — High-speed dynamic model completions.
 • *Gojo <prompt>* — Speak with Satoru Gojo directly.
 • *${settings.prefix}debug <code>* — Auto-diagnoses compile errors & bugs.
 • *${settings.prefix}summon <char> <prompt>* — Summons any fictional character.
@@ -446,6 +454,7 @@ module.exports = [
 • *${settings.prefix}guess* — Guess Gojo's Cursed Energy amount.
 • *${settings.prefix}vault8* — Creepy text-RPG terminal simulator.
 • *${settings.prefix}trivia* — General knowledge Trivia (Single/Multiplayer).
+• *${settings.prefix}quiz <category>* — Categorized dynamic quiz module.
 • *${settings.prefix}charade* — Semantic Guess the Emoji Phrase.
 • *${settings.prefix}anagram* — Scrambled Anagram solver (Single/Multiplayer).
 • *${settings.prefix}wcg* — Turn-based Word Chain game lobby.
@@ -465,7 +474,7 @@ module.exports = [
 `👥 *DOMAIN EXPANSION: GROUP MODS* 👥
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-• *${settings.prefix}mute <duration>* — Locks/unlocks group conversation flows (mute/unmute, open/close, lock/unlock).
+• *${settings.prefix}mute <duration>* — Locks/unlocks group conversation flows.
 • *${settings.prefix}kick / .promote / .demote* — User state management.
 • *${settings.prefix}tagall / .tag* — Dynamic tags or ghost tags all members.
 • *${settings.prefix}link* — Fetches active invitation link.
@@ -482,7 +491,9 @@ module.exports = [
 • *${settings.prefix}tkick <duration>* — Timed participant ejections.
 • *${settings.prefix}gcjid* — Extract group cryptographic JID.
 • *${settings.prefix}antispam <on/off/trig>* — Rate-limiting spam shield.
-• *${settings.prefix}silence <-s/-m/all>* — Auto-delete chat constraints.`;
+• *${settings.prefix}silence <-s/-m/all>* — Auto-delete chat constraints.
+• *${settings.prefix}gcalerts <promote/demote/welcome/goodbye> <on/off>* — Real-time event notifications.
+• *${settings.prefix}antigcstatus <warn/delete/kick/off>* — Blocks unapproved status posts.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -504,8 +515,8 @@ module.exports = [
 • *${settings.prefix}presence* — Presence dashboards overview.
 • *${settings.prefix}autotyping / .autorecording* — Active status simulation.
 • *${settings.prefix}alwaysonline / .autoread* — Continuous online state.
-• *${settings.prefix}antidelete* — Captures and forwards deleted files (LID-mindful).
-• *${settings.prefix}antiviewonce* — Automated view-once decryptor (LID-mindful).
+• *${settings.prefix}antidelete* — Captures and forwards deleted files.
+• *${settings.prefix}antiviewonce* — Automated view-once decryptor.
 • *${settings.prefix}antibug* — Active flood rate-limit protection.
 • *${settings.prefix}clear* — Completely empties server chat logs.
 • *${settings.prefix}archive / .unarchive* — Archive states controllers.
@@ -520,7 +531,8 @@ module.exports = [
 • *${settings.prefix}livescore* — Real-time ESPN sports scoreboard.
 • *${settings.prefix}football* — ESPN global soccer news wire.
 • *${settings.prefix}ss <url>* — Render high-speed website screenshot.
-• *${settings.prefix}calc <expr>* — Secure mathematical expression evaluator.`;
+• *${settings.prefix}calc <expr>* — Secure mathematical expression evaluator.
+• *${settings.prefix}trt <route> <text>* — Dynamic Google translation translator.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -534,14 +546,14 @@ module.exports = [
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 • *${settings.prefix}play <query>* — Song downloader with clean metadata artwork.
-• *${settings.prefix}ytmp3 / .ytmp4* — Dual-fallback YouTube link downloaders.
+• *${settings.prefix}ytmp3 / .ytmp4* — Dual-fallback YouTube downloaders (supports search queries).
 • *${settings.prefix}yt <url>* — YouTube v3 multi-format media downloader.
 • *${settings.prefix}tt2 <url>* — TikTok v2 watermark-free link downloader.
 • *${settings.prefix}img <query> <count>* — Google bulk image downloader.
 • *${settings.prefix}song <query>* — Numbered song index selector & downloader.
 • *${settings.prefix}video <query>* — YouTube video search downloader.
-• *${settings.prefix}fb / .facebook* — Upgraded Facebook2 video downloader.
-• *${settings.prefix}tt / .tiktok* — Watermark-free TikTok downloader.
+• *${settings.prefix}fb / .facebook* — Facebook HD video downloader (supports search queries).
+• *${settings.prefix}tt / .tiktok* — Watermark-free TikTok downloader (supports search queries).
 • *${settings.prefix}mediafire* — MediaFire file document downloader.
 • *${settings.prefix}apk <query>* — Direct APK application downloader.
 • *${settings.prefix}apksearch <query>* — Numbered APK search list downloader.
@@ -549,13 +561,13 @@ module.exports = [
 • *${settings.prefix}lyrics <query>* — Detailed lyrics scraper.
 • *${settings.prefix}gdrive* — Google Drive file document downloader.
 • *${settings.prefix}gitclone* — GitHub repository master branch zip-cloner.
-• *${settings.prefix}pinterest / .pint* — Pinterest video/image downloader.
+• *${settings.prefix}pinterest / .pint* — Pinterest video/image downloader (supports search queries).
 • *${settings.prefix}subtitle* — Movie English subtitles .srt document downloader.
 • *${settings.prefix}ytmp3doc / .ytmp4doc* — YouTube documents downloaders.
 • *${settings.prefix}playdoc / .videodoc* — YouTube search document downloaders.
 • *${settings.prefix}spotify / .spotify2* — Spotify v1 and v2 music downloaders.
 • *${settings.prefix}web* — Website assets zipper and downloader.
-• *${settings.prefix}x2 / .xdl2* — Twitter/X video and image downloader.`;
+• *${settings.prefix}x2 / .xdl2* — Twitter/X video and image downloader (supports search queries).`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -646,7 +658,6 @@ module.exports = [
     }
 ];
 
-// Add structural aliases
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'menu') {
