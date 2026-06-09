@@ -46,7 +46,7 @@ async function queryLLM(prompt, temperature = 0.8) {
 
 // Self-Contained General Question Generator with Random Seeds (Infinite Variety)
 async function generateGeneralQuestion(excludeList = []) {
-    const salt = Math.random();
+    const salt = Math.random() + '_' + Date.now();
     const prompt = 
         `Generate an interesting general knowledge trivia question (strictly avoid anime themes).\n` +
         `Respond strictly with a JSON object in this exact layout. No other text or markdown:\n` +
@@ -75,7 +75,7 @@ async function isValidEnglishWord(word, minLen, maxLen) {
 
 // Anagram Word Generator with Random Seeds
 async function generateAnagramWord(difficulty, excludeList = []) {
-    const salt = Math.random();
+    const salt = Math.random() + '_' + Date.now();
     let charLimit = "3 to 5 letters";
     if (difficulty === 'medium') charLimit = "6 to 8 letters";
     if (difficulty === 'hard') charLimit = "9 or more letters";
@@ -108,7 +108,7 @@ function scrambleWord(word) {
 }
 
 async function generateTorfQuestion(category, excludeList = []) {
-    const salt = Math.random();
+    const salt = Math.random() + '_' + Date.now();
     const prompt = 
         `Generate an interesting True or False statement under the category: "${category}".\n` +
         `Respond strictly with a JSON object in this exact layout. No other text or markdown:\n` +
@@ -267,6 +267,7 @@ async function promptNextWcgTurn(sock, jid) {
     if (session.turnIndex >= session.players.length) session.turnIndex = 0;
     const activePlayer = session.players[session.turnIndex];
 
+    // Determine current constraints (Dynamic Escalation vs Hardcoded)
     let minLen = 4;
     let maxLen = 5;
     let timeLimit = 20000;
@@ -892,10 +893,9 @@ module.exports = [
     {
         name: 'wcg_ans',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const senderNumber = senderJid.split('@')[0];
 
             const session = global.wcgSessions[jid];
             if (!session || session.status !== 'playing') return;
@@ -1247,7 +1247,7 @@ module.exports = [
             } else {
                 results = `❌ *INCORRECT!* \n\n🎯 Correct was *${correctAns.toUpperCase()}*.\n📖 Explanation: _${session.explanation}_`;
             }
-            await sock.sendMessage(jid, { text: results }, { quoted: msg });
+            await sock.sendMessage(jid, { text: SandyResults }, { quoted: msg });
         }
     },
 
@@ -1327,7 +1327,7 @@ module.exports = [
     {
         name: 'pvp_fight',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
             const session = global.pvpSessions[jid];
@@ -1374,7 +1374,7 @@ module.exports = [
     {
         name: 'pvp_defend',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
             const session = global.pvpSessions[jid];
@@ -1450,7 +1450,7 @@ module.exports = [
     {
         name: 'escape_ans',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
             const sessionKey = jid + '_' + senderJid;
