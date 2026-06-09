@@ -2,6 +2,9 @@
 const settings = require('../settings'); 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
 
+// Hardcoded API Credentials
+const KLIPY_API_KEY = "EJp0obDxHHa1J9l8as9wyBl0HLiLhbxeBT4wmAgJhzJt2R6pB00iHkOZXylY9pT8";
+
 const s1 = "gsk_";
 const s2 = "tPB0xMyZ2oijloaBNcDs";
 const s3 = "WGdyb3FY5iC2p9hwRE";
@@ -93,19 +96,14 @@ const askoutMessages = [
     "Will you go out with me?"
 ];
 
-const sadnessQuotes = [
-    "Ouch... the conceptual void collapsed. My heart is shattered. 💔😭",
-    "Rejected... Even absolute zero feels warmer than this cold refusal. 🥀"
+const rizzLines = [
+    "Are you a cursed spirit? Because you've been haunting my mind all day.",
+    "Is your name Gojo? Because you're the strongest thing that's ever hit my heart."
 ];
 
 const famousSpeeches = [
     { character: "Satoru Gojo", speech: "Don't worry, I'm the strongest." },
     { character: "Sosuke Aizen", speech: "No one stands on the top of the world from the beginning. Not you, not me, not even Gods." }
-];
-
-const rizzLines = [
-    "Are you a cursed spirit? Because you've been haunting my mind all day.",
-    "Is your name Gojo? Because you're the strongest thing that's ever hit my heart."
 ];
 
 async function executeAction(sock, msg, action, verb) {
@@ -135,11 +133,49 @@ async function executeAction(sock, msg, action, verb) {
     }
 
     try {
-        const res = await fetch(`https://api.waifu.pics/sfw/${action}`);
-        if (!res.ok) throw new Error();
+        const searchQuery = `anime ${action}`;
+        
+        // Retrieve results from Klipy using the hardcoded key
+        const res = await fetch(`https://api.klipy.co/v1/gifs/search?api_key=${KLIPY_API_KEY}&q=${encodeURIComponent(searchQuery)}&limit=15`);
+        if (!res.ok) throw new Error("Klipy lookup failed");
+
         const data = await res.json();
-        await sock.sendMessage(jid, { video: { url: data.url }, gifPlayback: true, caption: captionText, mentions: finalMentions }, { quoted: msg });
+        const results = data.data || [];
+
+        if (results.length > 0) {
+            // Select a random GIF for variety
+            const chosenGif = results[Math.floor(Math.random() * results.length)];
+            const mp4Url = chosenGif.images?.original?.mp4 || chosenGif.images?.downsized?.mp4 || chosenGif.mp4;
+            const gifUrl = chosenGif.images?.original?.url || chosenGif.gif;
+            const mediaUrl = mp4Url || gifUrl;
+
+            if (mediaUrl) {
+                return await sock.sendMessage(jid, { 
+                    video: { url: mediaUrl }, 
+                    gifPlayback: true, 
+                    caption: captionText, 
+                    mentions: finalMentions 
+                }, { quoted: msg });
+            }
+        }
+        throw new Error("Empty collection retrieved from Klipy");
+
     } catch (err) {
+        // Fallback to waifu.pics API
+        try {
+            const fallbackRes = await fetch(`https://api.waifu.pics/sfw/${action === 'kick' ? 'kick' : action}`);
+            if (fallbackRes.ok) {
+                const fallbackData = await fallbackRes.json();
+                return await sock.sendMessage(jid, { 
+                    video: { url: fallbackData.url }, 
+                    gifPlayback: true, 
+                    caption: captionText, 
+                    mentions: finalMentions 
+                }, { quoted: msg });
+            }
+        } catch (fallbackErr) {}
+
+        // Text fallback
         await sock.sendMessage(jid, { text: `${captionText}`, mentions: finalMentions }, { quoted: msg });
     }
 }
@@ -265,7 +301,7 @@ module.exports = [
         }
     },
 
-    // 8. WED PROPOSAL COMMAND (Consent buttons setup)
+    // 8. WED PROPOSAL COMMAND
     {
         name: 'wed',
         isPrefixless: false,
@@ -587,7 +623,7 @@ module.exports = [
 
                 const senderNum = senderJid.split('@')[0];
                 const targetNum = targetJid.split('@')[0];
-                const targetJidArg = targetJid.replace('@', '_at_'); // LID-Safe parameters transfer
+                const targetJidArg = targetJid.replace('@', '_at_'); 
 
                 const text = 
                     `🚨 *ARREST WARRANT* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -760,7 +796,7 @@ module.exports = [
         }
     },
 
-    // 24. EMOJIMIX GENERATOR (Optimized high-speed Fallback chain)
+    // 24. EMOJIMIX GENERATOR
     {
         name: 'emojimix',
         isPrefixless: false,
@@ -775,7 +811,6 @@ module.exports = [
             const emoji2 = emojis[1];
 
             try {
-                // Attempt 1: Highly reliable, dedicated EmojiMix API
                 const mixApiUrl = `https://api.sandipbbaruwal.onrender.com/emojimix?emoji1=${encodeURIComponent(emoji1)}&emoji2=${encodeURIComponent(emoji2)}`;
                 const mixRes = await fetch(mixApiUrl);
                 
@@ -793,7 +828,6 @@ module.exports = [
                 }
                 throw new Error();
             } catch (err) {
-                // Attempt 2: Fallback to high-resolution Pollinations rendering
                 try {
                     const prompt = `a 3D high-resolution render of a mixed emoji combining ${emoji1} and ${emoji2} on a transparent white background, official high-quality emoji sticker style`;
                     const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true&private=true`;
