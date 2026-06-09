@@ -1,4 +1,7 @@
 // index.js
+const { loadState } = require('./stateManager');
+loadState(); // Restore persistent sudoers, owners, group modifications, and bans on boot
+
 const { startBot } = require('./pair');
 const settings = require('./settings');
 
