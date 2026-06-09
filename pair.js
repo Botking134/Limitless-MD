@@ -9,18 +9,30 @@ const path = require('path');
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
+// Global in-memory set to track message IDs sent by the bot process
 const botSentMessageIds = new Set();
 const devStatePath = path.join(__dirname, 'dev_state.json');
 
+// Global Cache for deleted message tracking
 global.messageStore = global.messageStore || {};
+
+// Global Cache for spam/antibug block tracking
 global.spamTracker = global.spamTracker || {};
 global.spamDeletedCount = global.spamDeletedCount || {}; 
+
+// Global bank details wizard session tracker
 global.azaSessions = global.azaSessions || {};
+
+// Global song search and download sessions
 global.songSessions = global.songSessions || {};
 global.apkSessions = global.apkSessions || {};
 global.shazamSessions = global.shazamSessions || {};
+
+// Global reminder configuration sessions
 global.reminderSessions = global.reminderSessions || {};
 global.cancelSessions = global.cancelSessions || {};
+
+// Global Game Sessions Interceptors
 global.triviaSessions = global.triviaSessions || {};
 global.charadeSessions = global.charadeSessions || {};
 global.anagramSessions = global.anagramSessions || {};
@@ -30,6 +42,7 @@ global.torfSessions = global.torfSessions || {};
 global.pvpSessions = global.pvpSessions || {};
 global.escapeSessions = global.escapeSessions || {};
 
+// Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
     const seconds = Math.floor((Date.now() - ms) / 1000);
     const h = Math.floor(seconds / 3600);
@@ -38,6 +51,7 @@ function getAfkDuration(ms) {
     return `${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 }
 
+// Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -48,15 +62,7 @@ function getRawMessage(message) {
     return message;
 }
 
-function getDeviceTypeFromId(id) {
-    if (!id) return "UNKNOWN";
-    const len = id.length;
-    if (len === 20 && id.startsWith('3A')) return "iOS (iPhone) 🍏";
-    if (len === 12 || id.startsWith('3EB0') || id.startsWith('BAE5')) return "PC (Desktop) 💻";
-    if (len === 32 || (len >= 16 && len <= 22 && !id.startsWith('3A'))) return "Android! 🤖";
-    return "UNKNOWN ❓";
-}
-
+// Unified Message Deletion Logger Helper
 async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
     try {
         const antideleteConfig = settings.antidelete || { status: 'off', logDestination: 'bot' };
@@ -69,6 +75,7 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
             shouldLog = (antideleteConfig.hereJid === jid);
         }
 
+        // Avoid logging self-deletions to prevent endless loopbacks
         if (shouldLog && !originalMsg.key.fromMe) {
             const sender = originalMsg.key.participant || originalMsg.key.remoteJid || '';
             const rawContent = getRawMessage(originalMsg.message);
@@ -111,26 +118,30 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                 await sock.sendMessage(destJid, { image: buffer, caption: `${logHeader}📷 *Type:* Image\n📝 *Caption:* "${textContent}"`, mentions: [sender, revokerJid] });
-            } else if (rawContent.videoMessage) {
+            } 
+            else if (rawContent.videoMessage) {
                 const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                 const mime = rawContent.videoMessage.mimetype || "video/mp4";
                 await sock.sendMessage(destJid, { video: buffer, mimetype: mime, caption: `${logHeader}🎥 *Type:* Video\n📝 *Caption:* "${textContent}"`, mentions: [sender, revokerJid] });
-            } else if (rawContent.audioMessage) {
+            } 
+            else if (rawContent.audioMessage) {
                 const stream = await downloadContentFromMessage(rawContent.audioMessage, 'audio');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                 const mime = rawContent.audioMessage.mimetype || "audio/ogg; codecs=opus";
                 await sock.sendMessage(destJid, { text: `${logHeader}🎵 *Type:* Voice Note`, mentions: [sender, revokerJid] });
                 await sock.sendMessage(destJid, { audio: buffer, mimetype: mime, ptt: rawContent.audioMessage.ptt || false });
-            } else if (rawContent.stickerMessage) {
+            }
+            else if (rawContent.stickerMessage) {
                 const stream = await downloadContentFromMessage(rawContent.stickerMessage, 'sticker');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                 await sock.sendMessage(destJid, { text: `${logHeader}🎨 *Type:* Sticker`, mentions: [sender, revokerJid] });
                 await sock.sendMessage(destJid, { sticker: buffer });
-            } else {
+            }
+            else {
                 if (textContent) {
                     await sock.sendMessage(destJid, { text: `${logHeader}💬 *Type:* Text\n📝 *Content:* \n\n"${textContent}"`, mentions: [sender, revokerJid] });
                 }
@@ -260,8 +271,6 @@ async function startBot() {
                     try { await sock.sendPresenceUpdate('available'); } catch (e) {}
                 }
             }, 15000);
-
-            // Automated summarizer interval setup (keep your WAT logs running)
         }
     });
 
@@ -566,11 +575,19 @@ async function startBot() {
             const quotedContext = msg.message?.extendedTextMessage?.contextInfo;
             const quotedMsgId = quotedContext?.stanzaId;
 
-            // Chat Interceptor I: General Knowledge Trivia & Quiz Answers via Reply
-            const triviaSessionKey = jid + '_' + senderJid;
+            // =================================================================
+            // RE-DESIGNED SESSION KEY RESOLUTIONS FOR DIRECT REPLIES
+            // =================================================================
+            const singleKey = jid + '_' + senderJid;
             const quizKey = jid + '_' + senderJid + '_quiz';
-            const activeKey = global.triviaSessions[quizKey] ? quizKey : (global.triviaSessions[triviaSessionKey] ? triviaSessionKey : '');
+            const multiKey = jid; 
 
+            let activeKey = '';
+            if (global.triviaSessions[quizKey]) activeKey = quizKey;
+            else if (global.triviaSessions[singleKey]) activeKey = singleKey;
+            else if (global.triviaSessions[multiKey]) activeKey = multiKey;
+
+            // Chat Interceptor I: General Knowledge Trivia & Quiz Answers via Reply
             if (quotedMsgId && activeKey && global.triviaSessions && global.triviaSessions[activeKey]) {
                 const session = global.triviaSessions[activeKey];
                 if (session.lastQuestionMsgId === quotedMsgId) {
@@ -582,31 +599,36 @@ async function startBot() {
                 }
             }
 
-            // Chat Interceptor: True or False (Torf) Answers via Reply
+            // Chat Interceptor II: True or False (Torf) Answers via Reply
             const torfSessionKey = jid + '_' + senderJid + '_torf';
             if (quotedMsgId && global.torfSessions && global.torfSessions[torfSessionKey]) {
                 const session = global.torfSessions[torfSessionKey];
-                const ans = trimmedMessage.toLowerCase().trim();
-                if (['true', 'false', 'yes', 'no'].includes(ans)) {
-                    let cleanAns = ans;
-                    if (ans === 'yes') cleanAns = 'true';
-                    if (ans === 'no') cleanAns = 'false';
-                    await commands[`${settings.prefix}torf_ans`](sock, msg, cleanAns, { isOwner, isSudo, isDev, senderNumber });
-                    return; 
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    const ans = trimmedMessage.toLowerCase().trim();
+                    if (['true', 'false', 'yes', 'no'].includes(ans)) {
+                        let cleanAns = ans;
+                        if (ans === 'yes') cleanAns = 'true';
+                        if (ans === 'no') cleanAns = 'false';
+                        await commands[`${settings.prefix}torf_ans`](sock, msg, cleanAns, { isOwner, isSudo, isDev, senderNumber });
+                        return; 
+                    }
                 }
             }
 
-            // Chat Interceptor: Guessing Game Inputs via Reply
+            // Chat Interceptor III: Guessing Game Inputs via Reply
             const guessSessionKey = jid + '_' + senderJid + '_guess';
             if (quotedMsgId && global.gameSessions && global.gameSessions[guessSessionKey]) {
-                const num = parseInt(trimmedMessage);
-                if (!isNaN(num)) {
-                    await commands[`${settings.prefix}guess`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                    return; 
+                const session = global.gameSessions[guessSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    const num = parseInt(trimmedMessage);
+                    if (!isNaN(num)) {
+                        await commands[`${settings.prefix}guess`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                        return; 
+                    }
                 }
             }
 
-            // Chat Interceptor: Who Wants to Be a Millionaire Game Inputs
+            // Chat Interceptor IV: Who Wants to Be a Millionaire Game Inputs
             const millionaireSessionKey = jid + '_' + senderJid;
             if (quotedMsgId && global.millionaireSessions && global.millionaireSessions[millionaireSessionKey]) {
                 const session = global.millionaireSessions[millionaireSessionKey];
@@ -630,7 +652,31 @@ async function startBot() {
                 }
             }
 
-            // (Include other standard interactive sessions like word chain and escape rooms...)
+            // Chat Interceptor V: Anagram Game Answers via Reply
+            const singleAnagramKey = jid + '_' + senderJid;
+            const multiAnagramKey = jid;
+            let activeAnagramKey = '';
+            if (global.anagramSessions[singleAnagramKey]) activeAnagramKey = singleAnagramKey;
+            else if (global.anagramSessions[multiAnagramKey]) activeAnagramKey = multiAnagramKey;
+
+            if (quotedMsgId && activeAnagramKey && global.anagramSessions && global.anagramSessions[activeAnagramKey]) {
+                const session = global.anagramSessions[activeAnagramKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    await commands[`${settings.prefix}anagram_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return; 
+                }
+            }
+
+            // Chat Interceptor VI: Word Chain Game via Reply
+            if (quotedMsgId && global.wcgSessions && global.wcgSessions[jid]) {
+                const session = global.wcgSessions[jid];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    await commands[`${settings.prefix}wcg_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return; 
+                }
+            }
+
+            // (Include other standard interactive sessions like escape rooms and PVP...)
 
             if (quotedContext && trimmedMessage === (settings.vvEmoji || "🥷")) {
                 const rawContent = getRawMessage(global.messageStore?.[quotedMsgId]?.message || quotedContext.quotedMessage);
@@ -709,7 +755,7 @@ async function startBot() {
                         }
 
                         const captionText = mediaMessage.caption || "";
-                        const logHeader = `👁 *ANTIVIEWONCE AUTO-DECRYPT LOG:* 👁\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        const logHeader = `👁️ *ANTIVIEWONCE AUTO-DECRYPT LOG:* 👁️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                                           `👥 *Chat Origin:* @${jid.split('@')[0]}\n` +
                                           `👤 *Sender:* @${senderNumber}\n` +
                                           `📝 *Caption:* "${captionText}"\n`;
