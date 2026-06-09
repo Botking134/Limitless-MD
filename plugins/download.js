@@ -1,12 +1,10 @@
 // plugins/download.js
 const settings = require('../settings');
 
-// Initialize sessions securely in global memory
 global.songSessions = global.songSessions || {};
 global.apkSessions = global.apkSessions || {};
 global.shazamSessions = global.shazamSessions || {};
 
-// Recursive Helper to automatically unwrap message envelopes safely
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -17,7 +15,6 @@ function getRawMessage(message) {
     return message;
 }
 
-// Helper to safely extract any links matching a specific regex from user inputs/quoted text
 function extractLink(text, regex) {
     if (!text) return null;
     const matches = text.match(/(https?:\/\/[^\s]+)/gi);
@@ -25,7 +22,7 @@ function extractLink(text, regex) {
     return matches.find(url => regex.test(url)) || null;
 }
 
-// Lightweight cloud uploader with multi-host redundancy for Shazam file uploads
+// Highly robust ESM upload to cloud helper with multi-host redundancy
 async function uploadToCloud(buffer, mimeType) {
     const ext = mimeType.split('/')[1] || 'bin';
     const filename = `shazam_${Date.now()}.${ext}`;
@@ -35,38 +32,50 @@ async function uploadToCloud(buffer, mimeType) {
             method: 'PUT',
             body: buffer
         });
-
         if (response.ok) {
             const data = await response.json();
-            if (data.success && data.id) {
-                return `https://pixeldrain.com/api/file/${data.id}`;
-            }
+            if (data.success && data.id) return `https://pixeldrain.com/api/file/${data.id}`;
         }
-    } catch (err) {
-        console.error("Pixeldrain upload failed:", err.message);
-    }
+    } catch (err) {}
 
+    const formData = new FormData();
+    const blob = new Blob([buffer], { type: mimeType });
+    formData.append('files[]', blob, filename);
+
+    const hosts = [
+        'https://qu.ax/upload.php',
+        'https://pomf2.lain.la/upload.php'
+    ];
+
+    for (const host of hosts) {
+        try {
+            const response = await fetch(host, { method: 'POST', body: formData });
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.files?.[0]?.url) return data.files[0].url;
+            }
+        } catch (err) {}
+    }
+    throw new Error("All upload hosts failed.");
+}
+
+// Helper to resolve direct URL or search query using yt-search
+async function resolveUrlOrSearch(args) {
+    if (!args) return null;
+    const urlRegex = /^(https?:\/\/[^\s]+)/i;
+    if (urlRegex.test(args)) {
+        return args.trim();
+    }
     try {
-        const formData = new FormData();
-        const blob = new Blob([buffer], { type: mimeType });
-        formData.append('files[]', blob, filename);
-
-        const response = await fetch('https://qu.ax/upload.php', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            if (data.success && data.files?.[0]?.url) {
-                return data.files[0].url;
-            }
+        const yts = require('yt-search');
+        const results = await yts(args);
+        if (results.videos && results.videos.length > 0) {
+            return results.videos[0].url;
         }
-    } catch (err) {
-        console.error("Quax upload failed:", err.message);
+    } catch (e) {
+        console.error("resolveUrlOrSearch error:", e.message);
     }
-
-    throw new Error("Cloud upload failed.");
+    return null;
 }
 
 module.exports = [
@@ -76,37 +85,22 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a song query.\nExample: \`${settings.prefix}play Alan Walker Faded\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a song query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Searching song... 🔍" }, { quoted: msg });
 
                 const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
-                }
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ No results found for your song query." }, { quoted: msg });
-                }
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ No results found." }, { quoted: msg });
 
-                const { title, video_url, thumbnail, duration, views, published, download_url } = data.result;
-
-                const metadataCaption = `🎵 *SONG FOUND* 🎵\n━━━━━━━━━━━━━━━━━━━\n\n` +
-                                        `📌 *Title:* ${title}\n` +
-                                        `⏳ *Duration:* ${duration}\n` +
-                                        `👁️ *Views:* ${views ? views.toLocaleString() : 'N/A'}\n` +
-                                        `📅 *Published:* ${published || 'N/A'}`;
+                const { title, thumbnail, duration, download_url } = data.result;
 
                 await sock.sendMessage(jid, { 
                     image: { url: thumbnail }, 
-                    caption: metadataCaption 
+                    caption: `🎵 *SONG FOUND*\n\n📌 *Title:* ${title}\n⏳ *Duration:* ${duration}` 
                 }, { quoted: msg });
 
                 await sock.sendMessage(jid, {
@@ -114,12 +108,8 @@ module.exports = [
                     mimetype: 'audio/mpeg',
                     ptt: false
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("Play Command Error:", error);
-                await sock.sendMessage(jid, { 
-                    text: "❌ Failed to download and process your song. Please try again later." 
-                }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download song." }, { quoted: msg });
             }
         }
     },
@@ -130,69 +120,56 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let url = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!url && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                url = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
-            if (!url || !ytRegex.test(url)) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid YouTube link.\nExample: \`${settings.prefix}ytmp3 https://youtube.com/watch?v=qdpXxGPqW-Y\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a YouTube link or search query." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Fetching YouTube audio... 📥" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Fetching audio... 📥" }, { quoted: msg });
+
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return await sock.sendMessage(jid, { text: "❌ No results found." }, { quoted: msg });
 
                 let downloadUrl = "";
                 let title = "YouTube Audio";
 
-                // Attempt 1: Query primary /youtube/mp33 endpoint
                 try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp33?url=${encodeURIComponent(url)}`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp33?url=${encodeURIComponent(resolvedUrl)}`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
-                            title = data.result.title || "YouTube Audio";
+                            title = data.result.title || title;
                             downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
                         }
                     }
-                } catch (e) {
-                    console.warn("Primary ytmp33 failed, trying fallback...", e.message);
-                }
+                } catch (e) {}
 
-                // Attempt 2: Auto redirect/fallback to /download/ytmp3 endpoint
                 if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp3?url=${encodeURIComponent(url)}`);
-                    if (!response.ok) {
-                        throw new Error(`Fallback API status code ${response.status}`);
-                    }
-                    const data = await response.json();
-                    if (data.status && data.result) {
-                        title = data.result.title || "YouTube Audio";
-                        downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp3?url=${encodeURIComponent(resolvedUrl)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            title = data.result.title || title;
+                            downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
+                        }
                     }
                 }
 
-                if (!downloadUrl) {
-                    throw new Error("Unable to fetch audio download stream from both endpoints.");
-                }
+                if (!downloadUrl) throw new Error();
 
                 await sock.sendMessage(jid, {
                     audio: { url: downloadUrl },
                     mimetype: 'audio/mpeg',
                     ptt: false
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("YTMP3 Command Error:", error);
-                await sock.sendMessage(jid, { 
-                    text: "❌ Failed to download audio. Ensure the link is valid and try again." 
-                }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download audio." }, { quoted: msg });
             }
         }
     },
@@ -203,69 +180,56 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let url = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!url && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                url = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
-            if (!url || !ytRegex.test(url)) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid YouTube link.\nExample: \`${settings.prefix}ytmp4 https://youtube.com/watch?v=qdpXxGPqW-Y\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a YouTube link or search query." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Fetching YouTube video... 🎬" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Fetching video... 🎬" }, { quoted: msg });
+
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return await sock.sendMessage(jid, { text: "❌ No results found." }, { quoted: msg });
 
                 let downloadUrl = "";
                 let title = "YouTube Video";
 
-                // Attempt 1: Query primary /youtube/mp444 endpoint
                 try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(url)}`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(resolvedUrl)}`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
-                            title = data.result.title || "YouTube Video";
+                            title = data.result.title || title;
                             downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
                         }
                     }
-                } catch (e) {
-                    console.warn("Primary ytmp444 failed, trying fallback...", e.message);
-                }
+                } catch (e) {}
 
-                // Attempt 2: Auto redirect/fallback to /download/ytmp4 endpoint
                 if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(url)}`);
-                    if (!response.ok) {
-                        throw new Error(`Fallback API status code ${response.status}`);
-                    }
-                    const data = await response.json();
-                    if (data.status && data.result) {
-                        title = data.result.title || "YouTube Video";
-                        downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(resolvedUrl)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            title = data.result.title || title;
+                            downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                        }
                     }
                 }
 
-                if (!downloadUrl) {
-                    throw new Error("Unable to fetch video download stream from both endpoints.");
-                }
+                if (!downloadUrl) throw new Error();
 
                 await sock.sendMessage(jid, {
                     video: { url: downloadUrl },
                     caption: `🎥 *Title:* ${title}`,
                     mimetype: 'video/mp4'
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("YTMP4 Command Error:", error);
-                await sock.sendMessage(jid, { 
-                    text: "❌ Failed to download video. Ensure the link is valid and try again." 
-                }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download video." }, { quoted: msg });
             }
         }
     },
@@ -276,12 +240,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a search query.\nExample: \`${settings.prefix}img cute cats 3\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a search query." }, { quoted: msg });
 
             const parts = args.trim().split(' ');
             const lastPart = parts[parts.length - 1];
@@ -302,25 +261,17 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `Searching for "${query}"... 📷` }, { quoted: msg });
 
                 const response = await fetch(`https://api.fdci.se/rep.php?gambar=${encodeURIComponent(query)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                if (!response.ok) throw new Error();
 
                 const urls = await response.json();
-                if (!Array.isArray(urls) || urls.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No images found for your query." }, { quoted: msg });
-                }
+                if (!Array.isArray(urls) || urls.length === 0) return await sock.sendMessage(jid, { text: "❌ No images found." }, { quoted: msg });
 
                 const selectedUrls = urls.slice(0, count);
                 for (const imgUrl of selectedUrls) {
                     await sock.sendMessage(jid, { image: { url: imgUrl } });
                 }
-
             } catch (error) {
-                console.error("Image Command Error:", error);
-                await sock.sendMessage(jid, { 
-                    text: "❌ Failed to search images. Try again later." 
-                }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to search images." }, { quoted: msg });
             }
         }
     },
@@ -331,52 +282,33 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a song query.\nExample: \`${settings.prefix}song Alan Walker Faded\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a song query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Searching song index... 🔍" }, { quoted: msg });
 
-                // Loaded dynamically inside the command execution to prevent startup boot crashes
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
 
-                if (videos.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No search results found for your song query." }, { quoted: msg });
-                }
+                if (videos.length === 0) return await sock.sendMessage(jid, { text: "❌ No results found." }, { quoted: msg });
 
                 const selectedResults = videos.slice(0, 10);
 
-                let listCaption = `🎵 *SONG SEARCH RESULTS* 🎵\n`;
-                listCaption += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                listCaption += `🔍 *Query:* "${args}"\n\n`;
-
+                let listCaption = `🎵 *SONG SEARCH RESULTS*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
                 selectedResults.forEach((video, index) => {
-                    const durationText = video.duration || video.timestamp || "N/A";
-                    listCaption += `${index + 1}. *${video.title}* (${durationText})\n`;
+                    listCaption += `${index + 1}. *${video.title}* (${video.duration || 'N/A'})\n`;
                 });
-
-                listCaption += `\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
-                listCaption += `💡 *Reply directly to this list message with the number of the song you want to download.* 📥`;
+                listCaption += `\n💡 *Reply with the number of the song to download.*`;
 
                 const prompt = await sock.sendMessage(jid, { text: listCaption }, { quoted: msg });
 
                 global.songSessions[prompt.key.id] = {
                     query: args,
-                    results: selectedResults.map(v => ({
-                        title: v.title,
-                        url: v.url
-                    }))
+                    results: selectedResults.map(v => ({ title: v.title, url: v.url }))
                 };
-
             } catch (error) {
-                console.error("Song Search Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to complete song search. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to search song." }, { quoted: msg });
             }
         }
     },
@@ -387,24 +319,16 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a video search query.\nExample: \`${settings.prefix}video Alan Walker Faded\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a video query." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Searching video index... 🎥" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Searching video... 🎥" }, { quoted: msg });
 
-                // Natively traces top matching YouTube URLs using yt-search
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
 
-                if (videos.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No video results found for your query." }, { quoted: msg });
-                }
+                if (videos.length === 0) return await sock.sendMessage(jid, { text: "❌ No results found." }, { quoted: msg });
 
                 const firstVideo = videos[0];
                 const videoUrl = firstVideo.url;
@@ -412,7 +336,6 @@ module.exports = [
                 let downloadUrl = "";
                 let title = firstVideo.title || "YouTube Video";
 
-                // Attempt 1: Query primary /youtube/mp444 endpoint (matching ytmp4 fix)
                 try {
                     const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(videoUrl)}`);
                     if (response.ok) {
@@ -422,226 +345,118 @@ module.exports = [
                             downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
                         }
                     }
-                } catch (e) {
-                    console.warn("Primary ytv444 failed, trying fallback...", e.message);
-                }
+                } catch (e) {}
 
-                // Attempt 2: Auto redirect/fallback to /download/ytmp4 endpoint
                 if (!downloadUrl) {
                     const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(videoUrl)}`);
-                    if (!response.ok) {
-                        throw new Error(`Fallback API status code ${response.status}`);
-                    }
-                    const data = await response.json();
-                    if (data.status && data.result) {
-                        title = data.result.title || title;
-                        downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            title = data.result.title || title;
+                            downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                        }
                     }
                 }
 
-                if (!downloadUrl) {
-                    throw new Error("Unable to fetch video download stream from both endpoints.");
-                }
-
-                const duration = firstVideo.duration || firstVideo.timestamp || "N/A";
-                const caption = `🎥 *VIDEO FOUND* 🎥\n━━━━━━━━━━━━━━━━━━━\n\n` +
-                                `📌 *Title:* ${title}\n` +
-                                `⏳ *Duration:* ${duration}\n` +
-                                `👁️ *Views:* ${firstVideo.views ? firstVideo.views.toLocaleString() : 'N/A'}`;
+                if (!downloadUrl) throw new Error();
 
                 await sock.sendMessage(jid, {
                     video: { url: downloadUrl },
-                    caption: caption,
-                    mimetype: 'video/mp4'
+                    caption: `🎥 *Title:* ${title}\n⏳ *Duration:* ${firstVideo.duration || 'N/A'}`
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("Video Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download and process video. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download video." }, { quoted: msg });
             }
         }
     },
 
-    // 7. FACEBOOK VIDEO DOWNLOADER (.fb / .facebook)
+    // 7. FACEBOOK VIDEO DOWNLOADER (.fb)
     {
         name: 'fb',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const fbregex = /^(https?:\/\/)?(www\.)?(fb\.com|facebook\.?com|fb\.watch)\/.+/i;
-            const url = extractLink(targetUrl, fbregex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid Facebook video link.\nExample: \`${settings.prefix}fb https://facebook.com/.../posts/...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a Facebook link or search query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Downloading Facebook video... 📥" }, { quoted: msg });
 
-                // Queries the active /facebook2 endpoint used on his direct downloader website
-                const response = await fetch(`https://apis.davidcyril.name.ng/facebook2?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return;
+
+                // If resolved is YouTube search fallback, hand-off execution directly
+                if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
+                    const commandsList = require('../commands');
+                    return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
                 }
 
+                const response = await fetch(`https://apis.davidcyril.name.ng/facebook2?url=${encodeURIComponent(resolvedUrl)}`);
+                if (!response.ok) throw new Error();
+
                 const data = await response.json();
-                if (!data.status || !data.video) {
-                    return await sock.sendMessage(jid, { text: "❌ Facebook video parse failed or link is currently unsupported." }, { quoted: msg });
-                }
+                if (!data.status || !data.video) return await sock.sendMessage(jid, { text: "❌ Failed to parse Facebook video." }, { quoted: msg });
 
                 const title = data.video.title || "Facebook Video";
                 const downloads = data.video.downloads || [];
+                const downloadUrl = downloads.find(d => d.quality === 'hd')?.downloadUrl || downloads.find(d => d.quality === 'sd')?.downloadUrl || downloads[0]?.downloadUrl;
 
-                const hd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'hd');
-                const sd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'sd');
-                const downloadUrl = hd?.downloadUrl || sd?.downloadUrl || downloads[0]?.downloadUrl;
+                if (!downloadUrl) throw new Error();
 
-                if (!downloadUrl) {
-                    throw new Error("No download URL found in API response.");
-                }
-
-                await sock.sendMessage(jid, {
-                    video: { url: downloadUrl },
-                    caption: `🎬 *Title:* ${title}`,
-                    mimetype: 'video/mp4'
-                }, { quoted: msg });
-
+                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
             } catch (error) {
-                console.error("Facebook Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download Facebook video. Ensure the video is public and try again." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download Facebook video." }, { quoted: msg });
             }
         }
     },
 
-    // 8. TIKTOK VIDEO DOWNLOADER (.tt / .tiktok)
+    // 8. TIKTOK VIDEO DOWNLOADER (.tt)
     {
         name: 'tt',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const ttregex = /https:\/\/(?:www\.|vm\.|m\.|vt\.)?tiktok\.com\/.+/i;
-            const url = extractLink(targetUrl, ttregex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid TikTok link.\nExample: \`${settings.prefix}tt https://vm.tiktok.com/...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a TikTok link or search query." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Downloading TikTok video... 📥" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Downloading TikTok... 📥" }, { quoted: msg });
 
-                // 1. Resolve short links (vm.tiktok.com) to the full expanded URL on the server first
-                let longUrl = url;
-                try {
-                    const headRes = await fetch(url, { method: 'HEAD', redirect: 'follow' });
-                    if (headRes.url) {
-                        longUrl = headRes.url;
-                    }
-                } catch (redirectErr) {
-                    console.warn("Failed to resolve TikTok redirect, using original URL:", redirectErr.message);
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return;
+
+                // Hand-off fallback to YouTube downloader if search query was parsed
+                if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
+                    const commandsList = require('../commands');
+                    return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
                 }
 
-                let downloadUrl = "";
-                let title = "TikTok Video";
+                const response = await fetch(`https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(resolvedUrl)}`);
+                if (!response.ok) throw new Error();
 
-                // Attempt 1: Upgraded TikSave v2 API (Unified Endpoint)
-                try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/tiktok2?url=${encodeURIComponent(longUrl)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.video) {
-                            title = data.video.title || "TikTok Video";
-                            const downloads = data.video.downloads || [];
-                            
-                            const hd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'hd');
-                            const sd = downloads.find(d => d.quality && d.quality.toLowerCase() === 'sd');
-                            downloadUrl = hd?.downloadUrl || sd?.downloadUrl || downloads[0]?.downloadUrl;
-                        }
-                    }
-                } catch (err) {
-                    console.warn("TikSave v2 API failed, trying legacy route...", err.message);
-                }
+                const data = await response.json();
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Failed to parse TikTok." }, { quoted: msg });
 
-                // Attempt 2: Legacy TikTok API (Fallback)
-                if (!downloadUrl) {
-                    try {
-                        const response = await fetch(`https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(longUrl)}`);
-                        if (response.ok) {
-                            const data = await response.json();
-                            const result = data.result || data;
-                            if (result) {
-                                title = result.title || "TikTok Video";
-                                downloadUrl = result.video || result.video_url || result.mp4 || result.download_url || result.url;
-                            }
-                        }
-                    } catch (err) {
-                        console.warn("Legacy TikTok API failed, trying Kord/TikSave route...", err.message);
-                    }
-                }
+                const title = data.result.title || "TikTok Video";
+                const downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
 
-                // Attempt 3: Kord / TikSave Native API structure check
-                if (!downloadUrl) {
-                    try {
-                        const response = await fetch(`https://api.kord.live/api/tiktok?url=${encodeURIComponent(longUrl)}`);
-                        if (response.ok) {
-                            const data = await response.json();
-                            if (data && data.success && data.data) {
-                                title = data.data.title || "TikTok Video";
-                                if (Array.isArray(data.data.downloadLinks) && data.data.downloadLinks.length > 0) {
-                                    downloadUrl = data.data.downloadLinks[0].link;
-                                }
-                            }
-                        }
-                    } catch (err) {
-                        console.warn("Kord API route failed, trying multi-platform scraper...", err.message);
-                    }
-                }
-
-                // Attempt 4: Multi-Platform Scraper (Third-Party Fallback)
-                if (!downloadUrl) {
-                    try {
-                        const response = await fetch(`https://api.sandipbbaruwal.onrender.com/tiktok?url=${encodeURIComponent(longUrl)}`);
-                        if (response.ok) {
-                            const data = await response.json();
-                            downloadUrl = data.video || data.url || data.download_url;
-                        }
-                    } catch (err) {
-                        console.error("All TikTok API endpoints failed:", err.message);
-                    }
-                }
-
-                if (!downloadUrl) {
-                    return await sock.sendMessage(jid, { text: "❌ Failed to parse TikTok download links from all available APIs." }, { quoted: msg });
-                }
-
-                await sock.sendMessage(jid, {
-                    video: { url: downloadUrl },
-                    caption: `🎵 *Title:* ${title}`,
-                    mimetype: 'video/mp4'
-                }, { quoted: msg });
-
+                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎵 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
             } catch (error) {
-                console.error("TikTok Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to complete TikTok download. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download TikTok." }, { quoted: msg });
             }
         }
     },
@@ -652,164 +467,113 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const mfregex = /^(https?:\/\/)?(www\.)?(mediafire\.com)\/.+/i;
-            const url = extractLink(targetUrl, mfregex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid MediaFire download link.\nExample: \`${settings.prefix}mediafire https://www.mediafire.com/file/...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a MediaFire link." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Retrieving MediaFire file parameters... 📥" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Retrieving file parameters... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/mediafire?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
-                }
+                const response = await fetch(`https://apis.davidcyril.name.ng/mediafire?url=${encodeURIComponent(query)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ MediaFire link parsing failed." }, { quoted: msg });
-                }
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ MediaFire parsing failed." }, { quoted: msg });
 
-                const filename = data.result.filename || data.result.name || "MediaFire File";
+                const filename = data.result.filename || "MediaFire File";
                 const size = data.result.size || "Unknown Size";
-                const downloadUrl = data.result.direct_url || data.result.download_url || data.result.link;
+                const downloadUrl = data.result.direct_url || data.result.download_url;
 
-                if (!downloadUrl) {
-                    throw new Error("Direct download link is missing in response parameters.");
-                }
-
-                await sock.sendMessage(jid, {
-                    document: { url: downloadUrl },
-                    fileName: filename,
-                    caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}`
-                }, { quoted: msg });
-
+                await sock.sendMessage(jid, { document: { url: downloadUrl }, fileName: filename, caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}` }, { quoted: msg });
             } catch (error) {
-                console.error("MediaFire Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download MediaFire file. Ensure the file size is reasonable and try again." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download MediaFire file." }, { quoted: msg });
             }
         }
     },
 
-    // 10. DIRECT APK DOWNLOADER (.apk)
+    // 10. DIRECT APK DOWNLOADER (.apk - Upgraded with Kord Endpoint)
     {
         name: 'apk',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide an application name.\nExample: \`${settings.prefix}apk WhatsApp\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide an application name." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: `Searching and downloading APK for "${args}"... 🔍` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Searching and packaging APK... 🔍📦" }, { quoted: msg });
 
-                // Query David Cyril's official /download/apk endpoint directly
-                const response = await fetch(`https://apis.davidcyril.name.ng/download/apk?query=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
-                }
+                // Upgraded to verified Kord APK download API endpoint
+                const response = await fetch(`https://api.kord.live/api/apk?q=${encodeURIComponent(args)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result || !data.result.download_url) {
-                    return await sock.sendMessage(jid, { text: "❌ Application not found on the APK catalog." }, { quoted: msg });
-                }
+                if (data.error || !data.download_url) return await sock.sendMessage(jid, { text: "❌ Application not found." }, { quoted: msg });
 
-                const { name, package: pkgName, size, version, download_url } = data.result;
+                const { app_name, package_name, size, version, download_url } = data;
 
                 const cap = `📦 *APK COMPLETED* 📦\n━━━━━━━━━━━━━━━━━━━\n\n` +
-                            `📌 *Name:* ${name}\n` +
-                            `⚙️ *Package Name:* ${pkgName || "N/A"}\n` +
+                            `📌 *Name:* ${app_name}\n` +
+                            `⚙️ *Package Name:* ${package_name || "N/A"}\n` +
                             `🔄 *Version:* ${version || "N/A"}\n` +
                             `⚖️ *Size:* ${size || "Unknown Size"}`;
 
                 await sock.sendMessage(jid, {
                     document: { url: download_url },
                     mimetype: "application/vnd.android.package-archive",
-                    fileName: `${name}.apk`,
+                    fileName: `${app_name}.apk`,
                     caption: cap
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("APK Command Error:", error);
-                await sock.sendMessage(jid, { text: `❌ Failed to download APK: ${error.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download APK." }, { quoted: msg });
             }
         }
     },
 
-    // 11. INTERACTIVE APK SEARCHER (.apksearch)
+    // 11. INTERACTIVE APK SEARCHER (.apksearch - Upgraded with Kord Endpoint)
     {
         name: 'apksearch',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide an application search query.\nExample: \`${settings.prefix}apksearch WhatsApp\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide an application search query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Searching app catalog... 🔍" }, { quoted: msg });
 
-                // Query the APK search endpoint securely
-                const response = await fetch(`https://apis.davidcyril.name.ng/apksearch?query=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
-                }
+                // Upgraded to verified Kord APK search API endpoint
+                const response = await fetch(`https://api.kord.live/api/apksearch?query=${encodeURIComponent(args)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!Array.isArray(data) || data.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No matching applications found." }, { quoted: msg });
-                }
+                if (!Array.isArray(data) || data.length === 0) return await sock.sendMessage(jid, { text: "❌ No matching applications found." }, { quoted: msg });
 
                 const selectedResults = data.slice(0, 10);
 
-                let listCaption = `📦 *APK SEARCH RESULTS* 📦\n`;
-                listCaption += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                listCaption += `🔍 *Query:* "${args}"\n\n`;
-
+                let listCaption = `📦 *APK SEARCH RESULTS* 📦\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
                 selectedResults.forEach((app, index) => {
-                    listCaption += `${index + 1}. *${app.name}* (${app.id || 'N/A'})\n`;
+                    listCaption += `${index + 1}. *${app.name}* (ID: ${app.id || 'N/A'})\n`;
                 });
-
-                listCaption += `\n━━━━━━━━━━━━━━━━━━━━━━━\n`;
-                listCaption += `💡 *Reply directly to this list message with the number of the app you want to download.* 📥`;
+                listCaption += `\n💡 *Reply directly with the number of the app to download.*`;
 
                 const prompt = await sock.sendMessage(jid, { text: listCaption }, { quoted: msg });
 
                 global.apkSessions[prompt.key.id] = {
                     query: args,
-                    results: selectedResults.map(app => ({
-                        name: app.name,
-                        id: app.id
-                    }))
+                    results: selectedResults.map(app => ({ name: app.name, id: app.id }))
                 };
-
             } catch (error) {
-                console.error("APKSearch Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to search application index. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to search applications." }, { quoted: msg });
             }
         }
     },
 
-    // 12. AUDIO RECOGNIZER & SUMMONER (.shazam)
+    // 12. AUDIO RECOGNIZER (.shazam - Upgraded & Debugged)
     {
         name: 'shazam',
         isPrefixless: false,
@@ -817,73 +581,51 @@ module.exports = [
             const jid = msg.key.remoteJid;
 
             const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) {
-                return await sock.sendMessage(jid, { 
-                    text: "❌ Please reply directly to an audio voice note, file, or video to identify the track." 
-                }, { quoted: msg });
-            }
+            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply to an audio or video file." }, { quoted: msg });
 
             const rawContent = getRawMessage(quoted);
-            let mediaMessage = null;
-            let mediaType = "";
+            let mediaMessage = rawContent?.audioMessage || rawContent?.videoMessage;
+            let mediaType = rawContent?.audioMessage ? "audio" : (rawContent?.videoMessage ? "video" : "");
 
-            if (rawContent?.audioMessage) {
-                mediaMessage = rawContent.audioMessage;
-                mediaType = "audio";
-            } else if (rawContent?.videoMessage) {
-                mediaMessage = rawContent.videoMessage;
-                mediaType = "video";
-            }
-
-            if (!mediaMessage) {
-                return await sock.sendMessage(jid, { text: "❌ Quoted message must be a valid audio voice note, song, or video." }, { quoted: msg });
-            }
+            if (!mediaMessage) return await sock.sendMessage(jid, { text: "❌ Quoted message must be a valid audio or video." }, { quoted: msg });
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                await sock.sendMessage(jid, { text: "Downloading and listening to the track... 🎧🌀" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Listening to the track... 🎧" }, { quoted: msg });
 
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                 let buffer = Buffer.from([]);
-                for await (const chunk of stream) {
-                    buffer = Buffer.concat([buffer, chunk]);
-                }
+                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const mimeType = mediaMessage.mimetype || (mediaType === "audio" ? "audio/ogg" : "video/mp4");
+                
+                // Debugged and upgraded robust cloud uploader logic
                 const uploadedUrl = await uploadToCloud(buffer, mimeType);
+                if (!uploadedUrl) throw new Error("Cloud upload returned an empty URL");
 
                 const response = await fetch(`https://apis.davidcyril.name.ng/shazam?url=${encodeURIComponent(uploadedUrl)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
-                }
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Unable to identify the song. Ensure the audio is clear." }, { quoted: msg });
-                }
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Unable to identify the song." }, { quoted: msg });
 
                 const { title, artist, album, release_date, genre } = data.result;
 
-                const recognitionCaption = `🎧 *SHAZAM RECOGNITION COMPLETE* 🎧\n` +
-                                           `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                           `📌 *Title:* ${title || "Unknown"}\n` +
-                                           `👤 *Artist:* ${artist || "Unknown"}\n` +
-                                           `📀 *Album:* ${album || "N/A"}\n` +
-                                           `📅 *Release:* ${release_date || "N/A"}\n` +
-                                           `🎵 *Genre:* ${genre || "N/A"}\n\n` +
-                                           `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                           `💡 *Reply directly to this recognition message with "1" or "download" to automatically fetch and play this track!* 📥`;
+                const recognitionCaption = 
+                    `🎧 *SHAZAM RECOGNITION* 🎧\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `📌 *Title:* ${title || "Unknown"}\n` +
+                    `👤 *Artist:* ${artist || "Unknown"}\n` +
+                    `📀 *Album:* ${album || "N/A"}\n` +
+                    `📅 *Release:* ${release_date || "N/A"}\n` +
+                    `🎵 *Genre:* ${genre || "N/A"}\n\n` +
+                    `👉 *Reply to this message with "1" or "download" to play this track!*`;
 
                 const prompt = await sock.sendMessage(jid, { text: recognitionCaption }, { quoted: msg });
 
-                global.shazamSessions[prompt.key.id] = {
-                    title: title,
-                    artist: artist
-                };
-
+                global.shazamSessions[prompt.key.id] = { title, artist };
             } catch (error) {
-                console.error("Shazam Command Error:", error);
-                await sock.sendMessage(jid, { text: `❌ Shazam recognition failed: ${error.message}` }, { quoted: msg });
+                console.error("Shazam Error:", error.message);
+                await sock.sendMessage(jid, { text: `❌ Shazam recognition failed.` }, { quoted: msg });
             }
         }
     },
@@ -894,46 +636,25 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a song title and artist.\nExample: \`${settings.prefix}lyrics Alan Walker Faded\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a song title." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Retrieving song lyrics... 📝" }, { quoted: msg });
 
                 const response = await fetch(`https://apis.davidcyril.name.ng/lyrics?query=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
-                }
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Lyrics not found for this query." }, { quoted: msg });
-                }
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Lyrics not found." }, { quoted: msg });
 
                 const title = data.result.title || "Lyrics Result";
                 const artist = data.result.artist || "Unknown Artist";
-                const lyrics = data.result.lyrics || data.result.lyricsText || "";
+                const lyrics = data.result.lyrics || "";
 
-                if (!lyrics) {
-                    return await sock.sendMessage(jid, { text: "❌ The lyrics are currently blank on the server index." }, { quoted: msg });
-                }
-
-                const lyricsText = `📝 *LYRICS DETECTED* 📝\n` +
-                                   `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                   `🎵 *Song:* ${title}\n` +
-                                   `👤 *Artist:* ${artist}\n\n` +
-                                   `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                   `${lyrics}`;
-
+                const lyricsText = `📝 *LYRICS DETECTED*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n🎵 *Song:* ${title}\n👤 *Artist:* ${artist}\n\n${lyrics}`;
                 await sock.sendMessage(jid, { text: lyricsText }, { quoted: msg });
-
             } catch (error) {
-                console.error("Lyrics Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to fetch song lyrics. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to fetch lyrics." }, { quoted: msg });
             }
         }
     },
@@ -944,53 +665,32 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const gdRegex = /^(https?:\/\/)?(drive\.google\.com)\/.+/i;
-            const url = extractLink(targetUrl, gdRegex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid Google Drive link.\nExample: \`${settings.prefix}gdrive https://drive.google.com/file/d/...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a Google Drive link." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Retrieving Google Drive download stream... 📥" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Retrieving Google Drive file... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/gdrive?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                const response = await fetch(`https://apis.davidcyril.name.ng/gdrive?url=${encodeURIComponent(query)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Failed to parse Google Drive files parameters." }, { quoted: msg });
-                }
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Google Drive parsing failed." }, { quoted: msg });
 
-                const filename = data.result.filename || data.result.name || "Drive_File";
+                const filename = data.result.filename || "Drive_File";
                 const size = data.result.size || "Unknown Size";
-                const downloadUrl = data.result.direct_url || data.result.download_url || data.result.link;
+                const downloadUrl = data.result.direct_url || data.result.download_url;
 
-                if (!downloadUrl) {
-                    throw new Error("No download link found in response parameters.");
-                }
-
-                await sock.sendMessage(jid, {
-                    document: { url: downloadUrl },
-                    fileName: filename,
-                    caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}`
-                }, { quoted: msg });
-
+                await sock.sendMessage(jid, { document: { url: downloadUrl }, fileName: filename, caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}` }, { quoted: msg });
             } catch (error) {
-                console.error("GDrive Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download Google Drive file. Ensure file parameters are accessible." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download Google Drive file." }, { quoted: msg });
             }
         }
     },
@@ -1001,33 +701,24 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const gcregex = /^(https?:\/\/)?(www\.)?(github\.com)\/.$/i;
-            const url = extractLink(targetUrl, gcregex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid GitHub repository link.\nExample: \`${settings.prefix}gitclone https://github.com/Botking134/Limitless-MD\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a GitHub link." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Packing GitHub repository zipball... ⏳" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Packing GitHub repository... ⏳" }, { quoted: msg });
 
-                const pathParts = url.split("/");
+                const pathParts = query.split("/");
                 const user = pathParts[3];
                 const repo = pathParts[4]?.replace(".git", "");
 
-                if (!user || !repo) {
-                    throw new Error("Invalid repo path format");
-                }
+                if (!user || !repo) throw new Error();
 
                 const downloadUrl = `https://api.github.com/repos/${user}/${repo}/zipball`;
 
@@ -1037,115 +728,89 @@ module.exports = [
                     fileName: `${repo}-master.zip`,
                     caption: `📦 *GitHub Repository:* \`${user}/${repo}\``
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("GitClone Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to clone repository. Ensure the repository is public." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to clone repository." }, { quoted: msg });
             }
         }
     },
 
-    // 16. PINTEREST DOWNPARSER (.pinterest / .pint)
+    // 16. PINTEREST DOWNPARSER (.pinterest / .pint - Upgraded with Kord Endpoint)
     {
         name: 'pinterest',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const pinregex = /^(https?:\/\/)?(www\.)?(pin\.it|pinterest\.?com)\/.+/i;
-            const url = extractLink(targetUrl, pinregex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid Pinterest link.\nExample: \`${settings.prefix}pinterest https://pin.it/...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a Pinterest link or search query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Downloading Pinterest media... 📥" }, { quoted: msg });
 
-                // Upgraded to use the official David Cyril Pinterest endpoint
-                const response = await fetch(`https://apis.davidcyril.name.ng/download/pinterest?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return;
+
+                // Hand-off fallback to YouTube downloader if search query was parsed
+                if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
+                    const commandsList = require('../commands');
+                    return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
                 }
 
-                const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Failed to parse Pinterest media links." }, { quoted: msg });
-                }
+                // Upgraded to verified Kord Pinterest API endpoint
+                const response = await fetch(`https://api.kord.live/api/pinterest?url=${encodeURIComponent(resolvedUrl)}`);
+                if (!response.ok) throw new Error();
 
-                const downloadUrl = data.result.video || data.result.image || data.result.download_url;
-                if (!downloadUrl) {
-                    throw new Error("No download media found inside parameters.");
-                }
+                const json = await response.json();
+                const data = json?.data?.data;
+                if (!data) return await sock.sendMessage(jid, { text: "❌ Pinterest parsing failed." }, { quoted: msg });
 
-                const isVideo = downloadUrl.toLowerCase().includes(".mp4") || data.result.video;
+                const downloads = data.downloads || [];
+                const video = downloads.find(v => v.format === "MP4")?.url;
+                const thumb = downloads.find(v => v.format === "JPG")?.url;
+                const downloadUrl = video || thumb;
 
-                if (isVideo) {
-                    await sock.sendMessage(jid, {
-                        video: { url: downloadUrl },
-                        caption: `🎬 *Title:* Pinterest Video`,
-                        mimetype: 'video/mp4'
-                    }, { quoted: msg });
+                if (!downloadUrl) throw new Error();
+
+                if (video) {
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Pinterest Video`, mimetype: 'video/mp4' }, { quoted: msg });
                 } else {
-                    await sock.sendMessage(jid, {
-                        image: { url: downloadUrl },
-                        caption: `📸 *Title:* Pinterest Image`
-                    }, { quoted: msg });
+                    await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Pinterest Image` }, { quoted: msg });
                 }
-
             } catch (error) {
-                console.error("Pinterest Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to complete Pinterest download. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to complete Pinterest download." }, { quoted: msg });
             }
         }
     },
 
-    // 17. SUBTITLE FILE DOWNLOADER (.subtitle)
+    // 17. SUBTITLE FILE DOWNLOADER (.subtitle - Upgraded with Kord Endpoint)
     {
         name: 'subtitle',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a movie name.\nExample: \`${settings.prefix}subtitle Avengers Doomsday\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a movie name." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Searching English subtitles... 🎬" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/subtitle?q=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                // Upgraded to verified Kord Subtitle API endpoint
+                const response = await fetch(`https://api.kord.live/api/subtitle?q=${encodeURIComponent(args)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result || !data.result.downloadLinks) {
-                    return await sock.sendMessage(jid, { text: "❌ Subtitles not found for this movie query." }, { quoted: msg });
-                }
+                if (!data.downloadLinks || data.downloadLinks.length === 0) return await sock.sendMessage(jid, { text: "❌ Subtitles not found." }, { quoted: msg });
 
-                const links = data.result.downloadLinks;
-                const englishSub = links.find(d => d.language.toLowerCase().includes("english"));
+                const englishSub = data.downloadLinks.find(d => d.language.toLowerCase().includes("english"));
+                if (!englishSub || !englishSub.url) return await sock.sendMessage(jid, { text: "❌ English subtitles not available." }, { quoted: msg });
 
-                if (!englishSub || !englishSub.url) {
-                    return await sock.sendMessage(jid, { text: "❌ English subtitles not available for this movie query." }, { quoted: msg });
-                }
-
-                const movieTitle = data.result.title || args;
-                const caption = `🎬 *Subtitle Downloader Completed*\n\n` +
-                                `📌 *Title:* ${movieTitle}\n` +
-                                `🌐 *Language:* English`;
+                const movieTitle = data.title || args;
+                const caption = `🎬 *Subtitle Downloader*\n\n📌 *Title:* ${movieTitle}\n🌐 *Language:* English`;
 
                 await sock.sendMessage(jid, {
                     document: { url: englishSub.url },
@@ -1153,54 +818,42 @@ module.exports = [
                     fileName: `${movieTitle}-en.srt`,
                     caption: caption
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("Subtitle Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to retrieve subtitles. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to retrieve subtitles." }, { quoted: msg });
             }
         }
     },
 
-    // 18. DOCUMENT-FORMAT YOUTUBE LINK AUDIO/VIDEO DOWNLOADER (.ytmp3doc / .ytmp4doc)
+    // 18. DOCUMENT-FORMAT YOUTUBE LINK AUDIO DOWNLOADER (.ytmp3doc)
     {
         name: 'ytmp3doc',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let url = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!url && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                url = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
-            if (!url || !ytRegex.test(url)) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid YouTube link.\nExample: \`${settings.prefix}ytmp3doc https://youtube.com/watch?v=...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a YouTube link or search query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Fetching YouTube audio as document... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
-                }
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return;
+
+                const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(resolvedUrl)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Failed to parse media details." }, { quoted: msg });
-                }
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Failed to parse media." }, { quoted: msg });
 
                 const title = data.result.title || "YouTube Audio";
                 const downloadUrl = data.result.mp3 || data.result.download_url;
-
-                if (!downloadUrl) {
-                    throw new Error("No download stream URL found.");
-                }
 
                 await sock.sendMessage(jid, {
                     document: { url: downloadUrl },
@@ -1208,50 +861,36 @@ module.exports = [
                     fileName: `${title}.mp3`,
                     caption: `🎵 *Title:* ${title}`
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("YTMP3Doc Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download audio document. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download audio document." }, { quoted: msg });
             }
         }
     },
 
-    // 19. DOCUMENT-FORMAT YOUTUBE SEARCH AUDIO/VIDEO DOWNLOADER (.playdoc / .videodoc)
+    // 19. DOCUMENT-FORMAT YOUTUBE SEARCH AUDIO DOWNLOADER (.playdoc)
     {
         name: 'playdoc',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a song query.\nExample: \`${settings.prefix}playdoc Alan Walker Faded\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a song query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Searching song index for document... 🔍" }, { quoted: msg });
 
-                // Loaded dynamically inside the command execution to prevent startup boot crashes
                 const yts = require('yt-search');
                 const results = await yts(args);
                 const videos = results.videos || [];
 
-                if (videos.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ Song not found." }, { quoted: msg });
-                }
+                if (videos.length === 0) return await sock.sendMessage(jid, { text: "❌ Song not found." }, { quoted: msg });
 
                 const firstSong = videos[0];
 
                 const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(firstSong.title)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Song not found." }, { quoted: msg });
-                }
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Song not found." }, { quoted: msg });
 
                 const { title, download_url } = data.result;
 
@@ -1261,74 +900,56 @@ module.exports = [
                     fileName: `${title}.mp3`,
                     caption: `🎵 *Title:* ${title}`
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("PlayDoc Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to process audio document download. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to process document download." }, { quoted: msg });
             }
         }
     },
 
-    // 20. INSTAGRAM DOWNLOADER (.ig / .instagram)
+    // 20. INSTAGRAM DOWNLOADER (.ig)
     {
         name: 'ig',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const igregex = /^(https?:\/\/)?(www\.)?(ig\.com|instagram\.?com)\/.+/i;
-            const url = extractLink(targetUrl, igregex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid Instagram link.\nExample: \`${settings.prefix}ig https://www.instagram.com/p/...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide an Instagram link or search query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Downloading Instagram media... 📥" }, { quoted: msg });
 
-                // Query David Cyril's official /instagram endpoint directly
-                const response = await fetch(`https://apis.davidcyril.name.ng/instagram?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API returned status code ${response.status}`);
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return;
+
+                // Hand-off fallback to YouTube downloader if search query was parsed
+                if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
+                    const commandsList = require('../commands');
+                    return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
                 }
+
+                const response = await fetch(`https://apis.davidcyril.name.ng/instagram?url=${encodeURIComponent(resolvedUrl)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    return await sock.sendMessage(jid, { text: "❌ Instagram download failed or link is currently unsupported." }, { quoted: msg });
-                }
+                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Instagram download failed." }, { quoted: msg });
 
                 const downloadUrl = data.result.url || data.result.video || data.result.image || data.result.download_url;
-                if (!downloadUrl) {
-                    throw new Error("No download stream URL found in API response.");
-                }
-
                 const isVideo = downloadUrl.toLowerCase().includes(".mp4") || downloadUrl.includes("video");
 
                 if (isVideo) {
-                    await sock.sendMessage(jid, {
-                        video: { url: downloadUrl },
-                        caption: `🎬 *Title:* Instagram Video`,
-                        mimetype: 'video/mp4'
-                    }, { quoted: msg });
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Instagram Video`, mimetype: 'video/mp4' }, { quoted: msg });
                 } else {
-                    await sock.sendMessage(jid, {
-                        image: { url: downloadUrl },
-                        caption: `📸 *Title:* Instagram Image`
-                    }, { quoted: msg });
+                    await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Instagram Image` }, { quoted: msg });
                 }
-
             } catch (error) {
-                console.error("Instagram Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download Instagram media. Ensure the account is public and try again." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download Instagram media." }, { quoted: msg });
             }
         }
     },
@@ -1339,44 +960,26 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a Spotify link or song query.\nExample: \`${settings.prefix}spotify Alan Walker Faded\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a Spotify link or song query." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Searching and fetching Spotify track... 📥" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Searching Spotify track... 📥" }, { quoted: msg });
 
-                // Query David Cyril's Spotify v1 endpoint
                 const response = await fetch(`https://apis.davidcyril.name.ng/spotifydl?query=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    throw new Error("No track details found inside parameters.");
-                }
+                if (!data.status || !data.result) throw new Error();
 
-                const title = data.result.title || "Spotify Track";
-                const artist = data.result.artist || "Unknown Artist";
                 const downloadUrl = data.result.download_url || data.result.link;
-
-                if (!downloadUrl) {
-                    throw new Error("Download link empty in API response.");
-                }
 
                 await sock.sendMessage(jid, {
                     audio: { url: downloadUrl },
                     mimetype: 'audio/mpeg',
                     ptt: false
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("Spotify Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track." }, { quoted: msg });
             }
         }
     },
@@ -1387,44 +990,26 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a Spotify link or song query.\nExample: \`${settings.prefix}spotify2 Alan Walker Faded\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a Spotify link or song query." }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Searching and fetching Spotify track v2... 📥" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Searching Spotify track v2... 📥" }, { quoted: msg });
 
-                // Query David Cyril's Spotify v2 endpoint
                 const response = await fetch(`https://apis.davidcyril.name.ng/spotifydl2?query=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    throw new Error("No track details found inside parameters.");
-                }
+                if (!data.status || !data.result) throw new Error();
 
-                const title = data.result.title || "Spotify Track";
-                const artist = data.result.artist || "Unknown Artist";
                 const downloadUrl = data.result.download_url || data.result.link;
-
-                if (!downloadUrl) {
-                    throw new Error("Download link empty in API response.");
-                }
 
                 await sock.sendMessage(jid, {
                     audio: { url: downloadUrl },
                     mimetype: 'audio/mpeg',
                     ptt: false
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("Spotify2 Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track." }, { quoted: msg });
             }
         }
     },
@@ -1435,33 +1020,19 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a website URL.\nExample: \`${settings.prefix}web https://google.com\`` 
-                }, { quoted: msg });
-            }
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a website URL." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Downloading and packing website assets... 🌐⏳" }, { quoted: msg });
 
-                // Query David Cyril's web downloader endpoint directly
                 const response = await fetch(`https://apis.davidcyril.name.ng/tools/downloadweb?url=${encodeURIComponent(args)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    throw new Error("Website packaging failed.");
-                }
+                if (!data.status || !data.result) throw new Error();
 
                 const filename = data.result.filename || "website_source.zip";
                 const downloadUrl = data.result.download_url || data.result.link;
-
-                if (!downloadUrl) {
-                    throw new Error("No download link returned by server.");
-                }
 
                 await sock.sendMessage(jid, {
                     document: { url: downloadUrl },
@@ -1469,89 +1040,73 @@ module.exports = [
                     fileName: filename,
                     caption: `📁 *Source Website:* \`${args}\``
                 }, { quoted: msg });
-
             } catch (error) {
-                console.error("Web Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to package website. Ensure the URL is valid and reachable." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to package website." }, { quoted: msg });
             }
         }
     },
 
-    // 24. TWITTER VIDEO & IMAGE DOWNLOADER V2 (.x2 / .xdl2)
+    // 24. TWITTER VIDEO & IMAGE DOWNLOADER V2 (.x2)
     {
         name: 'x2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const xregex = /^(https?:\/\/)?(www\.)?(x\.com|twitter\.?com)\/.+/i;
-            const url = extractLink(targetUrl, xregex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid Twitter/X video link.\nExample: \`${settings.prefix}x2 https://x.com/...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a Twitter/X link or search query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Downloading Twitter/X media... 📥" }, { quoted: msg });
 
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return;
+
+                // Hand-off fallback to YouTube downloader if search query was parsed
+                if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
+                    const commandsList = require('../commands');
+                    return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
+                }
+
                 let downloadUrl = "";
 
-                // Attempt 1: Upgraded Twitter v2 API
                 try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/twitterV2?url=${encodeURIComponent(url)}`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/twitterV2?url=${encodeURIComponent(resolvedUrl)}`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
                             downloadUrl = data.result.video || data.result.image || data.result.download_url || data.result.link;
                         }
                     }
-                } catch (e) {
-                    console.warn("TwitterV2 failed, trying fallback xdownloader...", e.message);
-                }
+                } catch (e) {}
 
-                // Attempt 2: Auto redirect/fallback to alternate xdownloader endpoint
                 if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/xdownloader?url=${encodeURIComponent(url)}`);
-                    if (!response.ok) {
-                        throw new Error(`Fallback API status code ${response.status}`);
-                    }
-                    const data = await response.json();
-                    if (data.status && data.result) {
-                        downloadUrl = data.result.video || data.result.image || data.result.download_url || data.result.link;
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/xdownloader?url=${encodeURIComponent(resolvedUrl)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            downloadUrl = data.result.video || data.result.image || data.result.download_url || data.result.link;
+                        }
                     }
                 }
 
-                if (!downloadUrl) {
-                    throw new Error("Unable to parse Twitter media from both endpoints.");
-                }
+                if (!downloadUrl) throw new Error();
 
                 const isVideo = downloadUrl.toLowerCase().includes(".mp4") || downloadUrl.includes("video");
 
                 if (isVideo) {
-                    await sock.sendMessage(jid, {
-                        video: { url: downloadUrl },
-                        caption: `🎬 *Title:* Twitter Video`,
-                        mimetype: 'video/mp4'
-                    }, { quoted: msg });
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Twitter Video`, mimetype: 'video/mp4' }, { quoted: msg });
                 } else {
-                    await sock.sendMessage(jid, {
-                        image: { url: downloadUrl },
-                        caption: `📸 *Title:* Twitter Image`
-                    }, { quoted: msg });
+                    await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Twitter Image` }, { quoted: msg });
                 }
-
             } catch (error) {
-                console.error("Twitter Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to download Twitter/X media. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to download Twitter/X media." }, { quoted: msg });
             }
         }
     },
@@ -1562,61 +1117,40 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let url = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!url && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                url = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
-            if (!url || !ytRegex.test(url)) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid YouTube link.\nExample: \`${settings.prefix}yt https://youtube.com/watch?v=...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a YouTube link or search query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Fetching YouTube media v3... 📥" }, { quoted: msg });
 
-                // Query David Cyril's official /download/ytv3 endpoint directly
-                const response = await fetch(`https://apis.davidcyril.name.ng/download/ytv3?url=${encodeURIComponent(url)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return;
+
+                const response = await fetch(`https://apis.davidcyril.name.ng/download/ytv3?url=${encodeURIComponent(resolvedUrl)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    throw new Error("YouTube v3 parse failed.");
-                }
+                if (!data.status || !data.result) throw new Error();
 
                 const title = data.result.title || "YouTube Media";
                 const downloadUrl = data.result.mp4 || data.result.video || data.result.mp3 || data.result.download_url;
 
-                if (!downloadUrl) {
-                    throw new Error("No media download stream found.");
-                }
-
                 const isVideo = downloadUrl.toLowerCase().includes(".mp4") || data.result.mp4;
 
                 if (isVideo) {
-                    await sock.sendMessage(jid, {
-                        video: { url: downloadUrl },
-                        caption: `🎥 *Title:* ${title}`,
-                        mimetype: 'video/mp4'
-                    }, { quoted: msg });
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎥 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
                 } else {
-                    await sock.sendMessage(jid, {
-                        audio: { url: downloadUrl },
-                        mimetype: 'audio/mpeg',
-                        ptt: false
-                    }, { quoted: msg });
+                    await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 }
-
             } catch (error) {
-                console.error("YT Command Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to fetch YouTube media. Ensure the link is valid and try again." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to fetch YouTube media." }, { quoted: msg });
             }
         }
     },
@@ -1627,85 +1161,53 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetUrl = args ? args.trim() : '';
+            let query = args ? args.trim() : '';
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!targetUrl && quoted) {
+            if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
-                targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            const ttregex = /https:\/\/(?:www\.|vm\.|m\.|vt\.)?tiktok\.com\/.+/i;
-            const url = extractLink(targetUrl, ttregex);
-
-            if (!url) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please provide a valid TikTok link.\nExample: \`${settings.prefix}tt2 https://vm.tiktok.com/...\`` 
-                }, { quoted: msg });
-            }
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a TikTok link or search query." }, { quoted: msg });
 
             try {
                 await sock.sendMessage(jid, { text: "Downloading TikTok v2 video... 📥" }, { quoted: msg });
 
-                // 1. Resolve short links (vm.tiktok.com) to full expanded URL first
-                let longUrl = url;
-                try {
-                    const headRes = await fetch(url, { method: 'HEAD', redirect: 'follow' });
-                    if (headRes.url) {
-                        longUrl = headRes.url;
-                    }
-                } catch (redirectErr) {
-                    console.warn("Failed to resolve TikTok redirect:", redirectErr.message);
+                const resolvedUrl = await resolveUrlOrSearch(query);
+                if (!resolvedUrl) return;
+
+                // Hand-off fallback to YouTube downloader if search query was parsed
+                if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
+                    const commandsList = require('../commands');
+                    return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
                 }
 
-                // Query David Cyril's official /download/tiktokv2 endpoint directly
-                const response = await fetch(`https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(longUrl)}`);
-                if (!response.ok) {
-                    throw new Error(`API status code ${response.status}`);
-                }
+                const response = await fetch(`https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(resolvedUrl)}`);
+                if (!response.ok) throw new Error();
 
                 const data = await response.json();
-                if (!data.status || !data.result) {
-                    throw new Error("No download media found inside parameters.");
-                }
+                if (!data.status || !data.result) throw new Error();
 
                 const title = data.result.title || "TikTok Video";
                 const downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
 
-                await sock.sendMessage(jid, {
-                    video: { url: downloadUrl },
-                    caption: `🎵 *Title:* ${title}`,
-                    mimetype: 'video/mp4'
-                }, { quoted: msg });
-
+                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎵 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
             } catch (error) {
-                console.error("TikTok v2 Downloader Error:", error);
-                await sock.sendMessage(jid, { text: "❌ Failed to complete TikTok v2 download. Try again later." }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "❌ Failed to complete TikTok v2 download." }, { quoted: msg });
             }
         }
     }
 ];
 
-// Add structural aliases safely via external array collector
+// Add structural aliases
 const aliases = [];
 module.exports.forEach(cmd => {
-    if (cmd.name === 'fb') {
-        aliases.push({ ...cmd, name: 'facebook' });
-    }
-    if (cmd.name === 'tt') {
-        aliases.push({ ...cmd, name: 'tiktok' });
-    }
-    if (cmd.name === 'ig') {
-        aliases.push({ ...cmd, name: 'instagram' });
-    }
-    if (cmd.name === 'gitclone') {
-        aliases.push({ ...cmd, name: 'gitdl' });
-    }
-    if (cmd.name === 'pinterest') {
-        aliases.push({ ...cmd, name: 'pint' });
-    }
-    if (cmd.name === 'x2') {
-        aliases.push({ ...cmd, name: 'xdl2' });
-    }
+    if (cmd.name === 'fb') aliases.push({ ...cmd, name: 'facebook' });
+    if (cmd.name === 'tt') aliases.push({ ...cmd, name: 'tiktok' });
+    if (cmd.name === 'ig') aliases.push({ ...cmd, name: 'instagram' });
+    if (cmd.name === 'gitclone') aliases.push({ ...cmd, name: 'gitdl' });
+    if (cmd.name === 'pinterest') aliases.push({ ...cmd, name: 'pint' });
+    if (cmd.name === 'x2') aliases.push({ ...cmd, name: 'xdl2' });
 });
 module.exports.push(...aliases);
