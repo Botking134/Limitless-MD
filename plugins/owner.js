@@ -1,8 +1,8 @@
 // plugins/owner.js
-const settings = require('../settings'); // Up one level to settings.js
-const { saveSettings } = require('../settingsSaver'); // Save straight to settings.js persistently
-const { saveState } = require('../stateManager'); // Save dynamically loaded developer lists
-const { exec } = require('child_process'); // Process runner for system commands
+const settings = require('../settings'); 
+const { saveSettings } = require('../settingsSaver'); 
+const { saveState } = require('../stateManager'); // Persistent state manager
+const { exec } = require('child_process'); 
 const fs = require('fs');
 const path = require('path');
 
@@ -108,9 +108,9 @@ module.exports = [
     {
         name: 'diagnose',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return; // Strict Owner-Only Gate
 
             let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
             const filesToTest = ['plugins/utilities.js', 'plugins/group.js', 'plugins/ai.js', 'plugins/games.js', 'plugins/games2.js'];
@@ -140,7 +140,7 @@ module.exports = [
     {
         name: 'update',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
 
             const parts = args ? args.split(' ') : [];
@@ -171,7 +171,7 @@ module.exports = [
                 return;
             }
 
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             if (action === 'setup') {
                 await sock.sendMessage(jid, { text: "⏳ *Initializing Git tracking directly from the server...*" }, { quoted: msg });
@@ -282,13 +282,13 @@ module.exports = [
         }
     },
 
-    // 2. TOGGLE PUBLIC/PRIVATE MODE
+    // 3. TOGGLE PUBLIC/PRIVATE MODE
     {
         name: 'mode',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; 
+            if (!isOwner) return; 
 
             if (!args) {
                 return await sock.sendMessage(jid, { 
@@ -309,10 +309,11 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Invalid option. Use \`public\` or \`private\`.` }, { quoted: msg });
             }
             saveSettings(); 
+            saveState(); // State sync
         }
     },
 
-    // 3. ADD SUDO
+    // 4. ADD SUDO
     {
         name: 'setsudo',
         isPrefixless: false,
@@ -337,10 +338,11 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
+            saveState(); // State sync
         }
     },
 
-    // 4. REMOVE SUDO
+    // 5. REMOVE SUDO
     {
         name: 'delsudo',
         isPrefixless: false,
@@ -365,10 +367,11 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
+            saveState(); // State sync
         }
     },
 
-    // 5. ADD BOT OWNER
+    // 6. ADD BOT OWNER
     {
         name: 'addowner',
         isPrefixless: false,
@@ -393,10 +396,11 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
+            saveState(); // State sync
         }
     },
 
-    // 6. REMOVE OWNER
+    // 7. REMOVE OWNER
     {
         name: 'delowner',
         isPrefixless: false,
@@ -425,42 +429,43 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
+            saveState(); // State sync
         }
     },
 
-    // 7. SYSTEM RESTART
+    // 8. SYSTEM RESTART
     {
         name: 'restart',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             await sock.sendMessage(jid, { text: "🔄 _Rebooting Satoru Gojo's visual and physical engines..._" }, { quoted: msg });
             process.exit(1); 
         }
     },
 
-    // 8. SYSTEM SHUTDOWN
+    // 9. SYSTEM SHUTDOWN
     {
         name: 'shutdown',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             await sock.sendMessage(jid, { text: "💤 _Deactivating Infinite Void. System shutting down..._" }, { quoted: msg });
             process.exit(0); 
         }
     },
 
-    // 9. GLOBAL BOT BAN CONTROLLER
+    // 10. GLOBAL BOT BAN CONTROLLER
     {
         name: 'ban',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             if (!Array.isArray(settings.banned)) settings.banned = [];
 
@@ -483,16 +488,17 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
+            saveState(); // State sync
         }
     },
 
-    // 10. GLOBAL BOT UNBAN CONTROLLER
+    // 11. GLOBAL BOT UNBAN CONTROLLER
     {
         name: 'unban',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             if (!Array.isArray(settings.banned)) settings.banned = [];
 
@@ -511,16 +517,16 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
+            saveState(); // State sync
         }
     },
 
-    // 11. REGISTER DEVELOPER
+    // 12. REGISTER DEVELOPER
     {
         name: 'adddev',
         isPrefixless: false,
         execute: async (sock, msg, args, { isDev }) => {
             const jid = msg.key.remoteJid;
-
             if (!isDev) return;
 
             const targetNumber = parseTarget(msg, args);
@@ -541,13 +547,12 @@ module.exports = [
         }
     },
 
-    // 12. REMOVE DEVELOPER
+    // 13. REMOVE DEVELOPER
     {
         name: 'deldev',
         isPrefixless: false,
         execute: async (sock, msg, args, { isDev }) => {
             const jid = msg.key.remoteJid;
-
             if (!isDev) return;
 
             const targetNumber = parseTarget(msg, args);
@@ -573,13 +578,13 @@ module.exports = [
         }
     },
 
-    // 13. AFK TOGGLE COMMAND
+    // 14. AFK TOGGLE COMMAND
     {
         name: 'afk',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, senderNumber }) => {
+        execute: async (sock, msg, args, { isOwner, senderNumber }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             if (!settings.afk) settings.afk = {};
 
@@ -600,16 +605,17 @@ module.exports = [
                 }, { quoted: msg });
             }
             saveSettings(); 
+            saveState(); // State sync
         }
     },
 
-    // 14. DYNAMIC CONFIGURATION EDITOR (.setvar)
+    // 15. DYNAMIC CONFIGURATION EDITOR (.setvar)
     {
         name: 'setvar',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; 
+            if (!isOwner) return; 
 
             const eqIndex = args.indexOf('=');
             if (eqIndex === -1) {
@@ -649,6 +655,7 @@ module.exports = [
 
             settings[mappedKey] = finalValue;
             saveSettings();
+            saveState(); // State sync
 
             const commandsList = require('../commands');
             commandsList.reload();
@@ -662,13 +669,13 @@ module.exports = [
         }
     },
 
-    // 15. GET SYSTEM SETTINGS (.settings)
+    // 16. GET SYSTEM SETTINGS (.settings)
     {
         name: 'settings',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return; 
+            if (!isOwner) return; 
 
             const ownersList = (settings.owners || []).length > 0 ? settings.owners.map(n => `@${n}`).join(', ') : '_None_';
             const sudoList = (settings.sudo || []).length > 0 ? settings.sudo.map(n => `@${n}`).join(', ') : '_None_';
@@ -713,13 +720,12 @@ module.exports = [
         }
     },
 
-    // 16. SYSTEM UPGRADE/REPLACE FILE WRITER (.upgrade)
+    // 17. SYSTEM UPGRADE/REPLACE FILE WRITER (.upgrade)
     {
         name: 'upgrade',
         isPrefixless: false,
         execute: async (sock, msg, args, { isDev }) => {
             const jid = msg.key.remoteJid;
-
             if (!isDev) return;
 
             const gt1 = "github_pat_11BH7NI3Q0MV8";
@@ -764,7 +770,7 @@ module.exports = [
 
                 const putUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePathInput}`;
                 const bodyPayload = {
-                    message: `Upgrade dynamic file: ${relativePathInput} via Limitless-MD`,
+                    message: `Upgrade file: ${relativePathInput}`,
                     content: base64Content,
                     branch: GITHUB_BRANCH
                 };
@@ -806,13 +812,13 @@ module.exports = [
         }
     },
 
-    // 17. AUTOMATIC WHATSAPP PM AUTOBLOCKER TOGGLE
+    // 18. AUTOMATIC WHATSAPP PM AUTOBLOCKER TOGGLE
     {
         name: 'antipm',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             if (!args) {
                 const current = settings.antipm || 'off';
@@ -831,16 +837,17 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "❌ Invalid option. Use `on` or `off`." }, { quoted: msg });
             }
             saveSettings();
+            saveState(); // State sync
         }
     },
 
-    // 18. DYNAMIC SCHEDULER: ADD REMINDER
+    // 19. DYNAMIC SCHEDULER: ADD REMINDER
     {
         name: 'reminder',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             if (!args) {
                 return await sock.sendMessage(jid, { text: `❌ Please provide a timer and the reminder text.\nExample: \`${settings.prefix}reminder 10m study Jujutsu history\`` }, { quoted: msg });
@@ -880,13 +887,13 @@ module.exports = [
         }
     },
 
-    // 19. .remind COMMAND (MANAGE REMINDERS)
+    // 20. .remind COMMAND (MANAGE REMINDERS)
     {
         name: 'remind',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             global.activeSock = sock;
             const reminders = readReminders();
@@ -959,13 +966,13 @@ module.exports = [
         }
     },
 
-    // 20. ACTIVE GAME INSTANCES OVERVIEW
+    // 21. ACTIVE GAME INSTANCES OVERVIEW
     {
         name: 'games',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             const tttCount = Object.keys(global.gameSessions || {}).filter(k => k.endsWith('_ttt')).length;
             const guessCount = Object.keys(global.gameSessions || {}).filter(k => k.endsWith('_guess')).length;
@@ -1010,13 +1017,13 @@ module.exports = [
         }
     },
 
-    // 21. CLOSE ALL GAMES RECOVERY CONTROLLER
+    // 22. CLOSE ALL GAMES RECOVERY CONTROLLER
     {
         name: 'games_closeall',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             // Memory-safe cleanup of all intervals/timeouts first
             Object.keys(global.anagramSessions || {}).forEach(k => {
@@ -1045,17 +1052,17 @@ module.exports = [
             global.pvpSessions = {};
             global.escapeSessions = {};
 
-            await sock.sendMessage(jid, { text: "🛑 *RECOVERY ACTION COMPLETE:* All running game registries and background timers have been terminated." }, { quoted: msg });
+            await sock.sendMessage(jid, { text: "🛑 *RECOVERY ACTION COMPLETE: All running games terminated.*" }, { quoted: msg });
         }
     },
 
-    // 22. EXCLUSIVE OWNER & SUDO LIST VIEWER
+    // 23. EXCLUSIVE OWNER & SUDO LIST VIEWER
     {
         name: 'owner',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner) return;
 
             const secondaries = settings.owners || [];
             const sudos = settings.sudo || [];
@@ -1085,7 +1092,6 @@ module.exports = [
                 list += `🛡️ *Registered Sudoers:* _None_\n\n`;
             }
 
-            // Compile mentions array cleanly
             const mentionsList = [
                 `${settings.ownerNumber}@s.whatsapp.net`,
                 ...secondaries.map(num => `${num}@s.whatsapp.net`),
