@@ -676,184 +676,216 @@ async function startBot() {
                 }
             }
 
-            // (Include other standard interactive sessions like escape rooms and PVP...)
-
-            if (quotedContext && trimmedMessage === (settings.vvEmoji || "🥷")) {
-                const rawContent = getRawMessage(global.messageStore?.[quotedMsgId]?.message || quotedContext.quotedMessage);
-                const isViewOnce = global.messageStore?.[quotedMsgId]?.message?.viewOnceMessage || 
-                                   global.messageStore?.[quotedMsgId]?.message?.viewOnceMessageV2 || 
-                                   global.messageStore?.[quotedMsgId]?.message?.viewOnceMessageV2Extension ||
-                                   quotedContext.quotedMessage?.viewOnceMessage ||
-                                   quotedContext.quotedMessage?.viewOnceMessageV2 ||
-                                   quotedContext.quotedMessage?.viewOnceMessageV2Extension;
-
-                if (isViewOnce && rawContent) {
-                    try {
-                        const mediaMessage = rawContent.imageMessage || rawContent.videoMessage || rawContent.audioMessage;
-                        const mediaType = rawContent.imageMessage ? "image" : (rawContent.videoMessage ? "video" : (rawContent.audioMessage ? "audio" : ""));
-
-                        if (mediaMessage && mediaType) {
-                            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                            await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
-
-                            const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                            let buffer = Buffer.from([]);
-                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                            const senderNum = senderJid.split('@')[0];
-                            const destJid = senderJid.endsWith('@g.us') ? (senderNum + '@s.whatsapp.net') : senderJid;
-                            const captionText = `🌀 *Kamui:* Decoded View Once Image`;
-
-                            if (mediaType === 'image') {
-                                await sock.sendMessage(destJid, { image: buffer, caption: captionText, mentions: [senderJid] });
-                            } else if (mediaType === 'video') {
-                                const mimeType = mediaMessage.mimetype || "video/mp4";
-                                await sock.sendMessage(destJid, { video: buffer, mimetype: mimeType, caption: captionText, mentions: [senderJid] });
-                            } else if (mediaType === 'audio') {
-                                await sock.sendMessage(destJid, { audio: buffer, mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", ptt: true });
-                            }
-                        }
-                    } catch (e) {}
-                    return; 
+            // Chat Interceptor VII: Interactive Forwarding Sessions
+            if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
+                const session = global.forwardSessions[quotedMsgId];
+                const parsedNumber = trimmedMessage.replace(/[^0-9]/g, '');
+                if (parsedNumber.length < 7) {
+                    await sock.sendMessage(jid, { text: "❌ Invalid target phone number format." }, { quoted: msg });
+                    return;
                 }
-            }
 
-            const isViewOnceAuto = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
-            const configAuto = settings.antiviewonce || { status: 'off', logDestination: 'bot' };
-            const statusAuto = configAuto.status || 'off';
-            let shouldDecryptAuto = (statusAuto === 'all') || (statusAuto === 'here' && configAuto.hereJid === jid);
-
-            if (isViewOnceAuto && shouldDecryptAuto && !msg.key.fromMe) {
+                const targetDestJid = `${parsedNumber}@s.whatsapp.net`;
                 try {
-                    const rawContent = getRawMessage(msg.message);
-                    const mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
-                    const mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.audioMessage ? "audio" : ""));
-
-                    if (mediaMessage && mediaType) {
-                        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                        const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                        let buffer = Buffer.from([]);
-                        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                        let destJid = '';
-                        if (statusAuto === 'here') {
-                            destJid = jid; 
-                        } else {
-                            const isTargetOwner = configAuto.logUserJid && (
-                                configAuto.logUserJid.split('@')[0] === settings.ownerNumber || 
-                                settings.owners.includes(configAuto.logUserJid.split('@')[0]) ||
-                                settings.devs.includes(configAuto.logUserJid.split('@')[0]) ||
-                                settings.sudo?.includes(configAuto.logUserJid.split('@')[0])
-                            );
-
-                            if (configAuto.logDestination === 'user' && isTargetOwner) {
-                                destJid = configAuto.logUserJid;
-                            } else {
-                                destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
-                                if (!destJid) destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
-                            }
-                        }
-
-                        const captionText = mediaMessage.caption || "";
-                        const logHeader = `👁️ *ANTIVIEWONCE AUTO-DECRYPT LOG:* 👁️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                          `👥 *Chat Origin:* @${jid.split('@')[0]}\n` +
-                                          `👤 *Sender:* @${senderNumber}\n` +
-                                          `📝 *Caption:* "${captionText}"\n`;
-
-                        if (mediaType === "image") {
-                            await sock.sendMessage(destJid, { image: buffer, caption: logHeader, mentions: [jid, senderJid] });
-                        } else if (mediaType === "video") {
-                            await sock.sendMessage(destJid, { video: buffer, mimetype: mediaMessage.mimetype || "video/mp4", caption: logHeader, mentions: [jid, senderJid] });
-                        } else if (mediaType === "audio") {
-                            await sock.sendMessage(destJid, { text: logHeader + `🎵 *Type:* View-Once Audio`, mentions: [jid, senderJid] });
-                            await sock.sendMessage(destJid, { audio: buffer, mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", ptt: mediaMessage.ptt || false });
-                        }
-                    }
-                } catch (e) {}
-            }
-
-            if (!isGroup && !msg.key.fromMe && !isAuthorized && settings.antipm === 'on' && !isDev) {
-                try {
-                    await sock.sendMessage(jid, { text: "❌ *Connection Blocked:* Direct messages are restricted." });
-                    await sock.updateBlockStatus(senderJid, 'block');
-                } catch (e) {}
+                    await sock.sendMessage(targetDestJid, { forward: { key: { id: session.originalMsgKey, remoteJid: jid, participant: session.originalParticipant }, message: session.msgToForward } });
+                    await sock.sendMessage(jid, { text: `✅ Message forwarded successfully!` }, { quoted: msg });
+                    delete global.forwardSessions[quotedMsgId];
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: `❌ Forwarding session failed: ${e.message}` }, { quoted: msg });
+                }
                 return; 
             }
 
-            if (isGroup && !msg.key.fromMe) {
-                if (!settings.msgCount) settings.msgCount = {};
-                if (!settings.msgCount[jid]) settings.msgCount[jid] = {};
-                if (!settings.msgCount[jid][senderJid]) settings.msgCount[jid][senderJid] = { count: 0, lastMsgTime: 0 };
+            // Chat Interceptor VIII: Bank Details Configuration Wizard
+            if (quotedMsgId && global.azaSessions && global.azaSessions[quotedMsgId] && isAuthorized) {
+                const session = global.azaSessions[quotedMsgId];
                 
-                settings.msgCount[jid][senderJid].count++;
-                settings.msgCount[jid][senderJid].lastMsgTime = Date.now();
+                if (session.step === 1) {
+                    const cleanNum = trimmedMessage.replace(/[^0-9]/g, '');
+                    if (cleanNum.length < 5) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Account Number!*\n\nPlease reply directly to the Step 1 message with a valid number." }, { quoted: msg });
+                        return;
+                    }
 
-                if (settings.gclogActive?.[jid]) {
-                    if (!settings.conversationLogs) settings.conversationLogs = {};
-                    if (!settings.conversationLogs[jid]) settings.conversationLogs[jid] = [];
-                    settings.conversationLogs[jid].push({ sender: msg.pushName || senderNumber, text: trimmedMessage, time: Date.now() });
-                    if (settings.conversationLogs[jid].length > 200) settings.conversationLogs[jid].shift();
-                }
-            }
-
-            if (settings.autoReact === 'all' && !msg.key.fromMe) {
-                try { await sock.sendMessage(msg.key.remoteJid, { react: { text: "❄", key: msg.key } }); } catch (err) {}
-            }
-
-            const mentionedJids = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-            const devJids = [...settings.devs.map(num => `${num}@s.whatsapp.net`), ...settings.devLids].filter(id => id.split('@')[0] !== settings.ownerNumber);
-            const isAnyDevMentioned = mentionedJids.some(jid => devJids.includes(jid));
-            
-            if (isGroup && isAnyDevMentioned) {
-                const devEmojis = ["⚡", "❄", "🤞"];
-                for (const emoji of devEmojis) {
-                    try {
-                        await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
-                        await delay(200);
-                    } catch (e) {}
-                }
-            }
-
-            if (settings.afk?.[senderNumber] && !trimmedMessage.startsWith(`${settings.prefix}afk`)) {
-                const afkState = settings.afk[senderNumber];
-                const elapsed = getAfkDuration(afkState.time);
-                delete settings.afk[senderNumber];
-                saveSettings(); 
-                saveState(); 
-                
-                await sock.sendMessage(jid, {
-                    text: `👋 *Welcome Back @${senderNumber}!* AFK deactivated. You were away for *${elapsed}*.`,
-                    mentions: [`${senderNumber}@s.whatsapp.net`]
-                }, { quoted: msg });
-            }
-
-            if (isGroup && !msg.key.fromMe) {
-                const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant?.split('@')[0];
-                const quotedAfkState = settings.afk?.[quotedParticipant];
-
-                const afkMentionedJid = mentionedJids.find(jid => settings.afk?.[jid.split('@')[0]]);
-                const afkMentionedNumber = afkMentionedJid ? afkMentionedJid.split('@')[0] : '';
-                const mentionedAfkState = settings.afk?.[afkMentionedNumber];
-
-                const afkUser = quotedAfkState ? quotedParticipant : (mentionedAfkState ? afkMentionedNumber : '');
-                const afkState = quotedAfkState || mentionedAfkState;
-
-                if (afkState && senderNumber !== afkUser) {
-                    const gojoAfkQuotes = [
-                        "Tch. Don't bother him right now. He's busy, and honestly, you're not important enough to disturb his peace.",
-                        "Hey, look. Infinity is currently active around my owner. In other words: don't touch, don't speak, don't exist in his notifications.",
-                        "Are you seriously trying to get his attention? I'm the one who decides who gets to talk to him. Quiet down, weakling.",
-                        "Don't annoy him. I'm protecting his quiet time right now, and you really don't want to irritate the strongest."
-                    ];
-                    const randomQuote = gojoAfkQuotes[Math.floor(Math.random() * gojoAfkQuotes.length)];
-                    const elapsed = getAfkDuration(afkState.time);
-
-                    await sock.sendMessage(jid, {
-                        text: `@${senderNumber}\n*${randomQuote}*\n\n💤 *${afkUser}* is currently off.\n*Reason:* ${afkState.reason}\n*Afk for:* ${elapsed} since turning on AFK.`,
-                        mentions: [`${senderNumber}@s.whatsapp.net`] 
+                    const prompt = await sock.sendMessage(jid, { 
+                        text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `• *Step 2:* Excellent. Now, please reply directly to *this message* with your *Bank Name* (e.g., Sterling Bank, Access Bank).` 
                     }, { quoted: msg });
+
+                    global.azaSessions[prompt.key.id] = { step: 2, account: cleanNum };
+                    delete global.azaSessions[quotedMsgId];
+                    return;
+                }
+
+                if (session.step === 2) {
+                    const bankName = trimmedMessage.trim();
+                    if (bankName.length < 2) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Bank Name!*\n\nPlease reply directly to the Step 2 message with a valid bank name." }, { quoted: msg });
+                        return;
+                    }
+
+                    const prompt = await sock.sendMessage(jid, { 
+                        text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `• *Step 3:* Almost done. Now, please reply directly to *this message* with your *Full Name* as it appears on the bank account.` 
+                    }, { quoted: msg });
+
+                    global.azaSessions[prompt.key.id] = { step: 3, account: session.account, bank: bankName };
+                    delete global.azaSessions[quotedMsgId];
+                    return;
+                }
+
+                if (session.step === 3) {
+                    const fullName = trimmedMessage.trim();
+                    if (fullName.length < 3) {
+                        await sock.sendMessage(jid, { text: "❌ *Invalid Full Name!*\n\nPlease reply directly to the Step 3 message." }, { quoted: msg });
+                        return;
+                    }
+
+                    settings.aza = { set: true, account: session.account, bank: session.bank, name: fullName };
+                    const { saveSettings } = require('./settingsSaver');
+                    saveSettings();
+                    saveState();
+
+                    await sock.sendMessage(jid, { 
+                        text: `✅ *Bank Details Setup Complete!* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `👤 *NAME:* \`${fullName}\`\n` +
+                              `🏦 *BANK:* \`${session.bank}\`\n` +
+                              `💳 *ACCOUNT NO:* \`${session.account}\`` 
+                    }, { quoted: msg });
+
+                    delete global.azaSessions[quotedMsgId];
+                    return;
                 }
             }
+
+            // Chat Interceptor IX: Interactive Song Selector
+            if (quotedMsgId && global.songSessions && global.songSessions[quotedMsgId]) {
+                const session = global.songSessions[quotedMsgId];
+                const index = parseInt(trimmedMessage.trim());
+
+                if (!isNaN(index) && index >= 1 && index <= session.results.length) {
+                    const chosen = session.results[index - 1];
+                    delete global.songSessions[quotedMsgId]; 
+
+                    await sock.sendMessage(jid, { text: `📥 *Downloading song:* "${chosen.title}"...` }, { quoted: msg });
+
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(chosen.title)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.status && data.result?.download_url) {
+                                await sock.sendMessage(jid, { audio: { url: data.result.download_url }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                                return;
+                            }
+                        }
+                    } catch (err) {}
+                }
+                return; 
+            }
+
+            // Chat Interceptor X: Interactive APK Selector
+            if (quotedMsgId && global.apkSessions && global.apkSessions[quotedMsgId]) {
+                const session = global.apkSessions[quotedMsgId];
+                const index = parseInt(trimmedMessage.trim());
+
+                if (!isNaN(index) && index >= 1 && index <= session.results.length) {
+                    const chosen = session.results[index - 1];
+                    delete global.apkSessions[quotedMsgId]; 
+
+                    await sock.sendMessage(jid, { text: `📥 *Downloading APK:* "${chosen.name}"...` }, { quoted: msg });
+
+                    try {
+                        const response = await fetch(`https://api.kord.live/api/apkdl?id=${encodeURIComponent(chosen.id)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.downloadUrl) {
+                                await sock.sendMessage(jid, {
+                                    document: { url: data.downloadUrl },
+                                    mimetype: "application/vnd.android.package-archive",
+                                    fileName: `${chosen.name}.apk`,
+                                    caption: `📦 *APK COMPLETED* 📦\n━━━━━━━━━━━━━━━━━━━\n\n📌 *Name:* ${chosen.name}`
+                                }, { quoted: msg });
+                                return;
+                            }
+                        }
+                    } catch (err) {}
+                }
+                return;
+            }
+
+            // Chat Interceptor XI: Interactive Shazam Downloads
+            if (quotedMsgId && global.shazamSessions && global.shazamSessions[quotedMsgId]) {
+                const session = global.shazamSessions[quotedMsgId];
+                const text = trimmedMessage.toLowerCase().trim();
+
+                if (text === '1' || text === 'download') {
+                    delete global.shazamSessions[quotedMsgId]; 
+                    await sock.sendMessage(jid, { text: `📥 *Downloading recognized song:* "${session.title} - ${session.artist}"...` }, { quoted: msg });
+
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(session.title + ' ' + session.artist)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.status && data.result?.download_url) {
+                                await sock.sendMessage(jid, { audio: { url: data.result.download_url }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                                return;
+                            }
+                        }
+                    } catch (err) {}
+                }
+                return;
+            }
+
+            // Chat Interceptor XII: Reminder Configuration Confirmation
+            if (quotedMsgId && global.reminderSessions && global.reminderSessions[quotedMsgId]) {
+                const session = global.reminderSessions[quotedMsgId];
+                const rTitle = trimmedMessage || "Unnamed Reminder";
+
+                let reminders = [];
+                const remindersPath = path.join(__dirname, 'reminders.json');
+                try {
+                    if (fs.existsSync(remindersPath)) reminders = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
+                } catch (e) {}
+
+                reminders.push({
+                    title: rTitle,
+                    text: session.text,
+                    jid: session.jid,
+                    sender: session.sender,
+                    timeSet: session.timeSet,
+                    triggerTime: session.timeSet + session.durationMs,
+                    durationStr: session.durationStr
+                });
+
+                try { fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8'); } catch (e) {}
+                delete global.reminderSessions[quotedMsgId];
+
+                await sock.sendMessage(jid, { text: `✅ *Reminder persistently saved!* \n\n• *Title:* *${rTitle}*\n• *Note:* _"${session.text}"_\n• *Duration:* \`${session.durationStr}\`` }, { quoted: msg });
+                return;
+            }
+
+            // Chat Interceptor XIII: Reminder Cancellations
+            if (quotedMsgId && global.cancelSessions && global.cancelSessions[quotedMsgId]) {
+                delete global.cancelSessions[quotedMsgId];
+                const idx = parseInt(trimmedMessage.trim());
+
+                let reminders = [];
+                const remindersPath = path.join(__dirname, 'reminders.json');
+                try {
+                    if (fs.existsSync(remindersPath)) reminders = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
+                } catch (e) {}
+
+                if (isNaN(idx) || idx < 1 || idx > reminders.length) return;
+
+                const removed = reminders[idx - 1];
+                reminders.splice(idx - 1, 1);
+                try { fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8'); } catch (e) {}
+
+                await sock.sendMessage(jid, { text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*` }, { quoted: msg });
+                return;
+            }
+
+            // (Include other standard interactive sessions like escape rooms and PVP...)
 
             if (isGroup && !msg.key.fromMe) {
                 const groupMetadata = await sock.groupMetadata(jid);
