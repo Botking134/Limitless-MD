@@ -574,6 +574,7 @@ async function startBot() {
 
             const quotedContext = msg.message?.extendedTextMessage?.contextInfo;
             const quotedMsgId = quotedContext?.stanzaId;
+            const mentionedJids = quotedContext?.mentionedJid || [];
 
             // =================================================================
             // RE-DESIGNED SESSION KEY RESOLUTIONS FOR DIRECT REPLIES
@@ -885,7 +886,55 @@ async function startBot() {
                 return;
             }
 
-            // (Include other standard interactive sessions like escape rooms and PVP...)
+            // Chat Interceptor XIV: PVP Lore Battle Inputs via Reply
+            const pvpSessionKey = jid; 
+            if (quotedMsgId && global.pvpSessions && global.pvpSessions[pvpSessionKey]) {
+                const session = global.pvpSessions[pvpSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    const ans = trimmedMessage.trim();
+                    if (session.status === 'p2_choosing' && senderJid === session.p2) {
+                        await commands[`${settings.prefix}pvp_choose`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
+                        return;
+                    } else if (session.status === 'fighting' && senderJid === session.turn) {
+                        await commands[`${settings.prefix}pvp_fight`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
+                        return;
+                    } else if (session.status === 'defending' && senderJid === session.defender) {
+                        await commands[`${settings.prefix}pvp_defend`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
+                        return;
+                    }
+                }
+            }
+
+            // Chat Interceptor XV: Emoji Charades Answers via Reply
+            const charadeSessionKey = jid + '_' + senderJid;
+            if (quotedMsgId && global.charadeSessions && global.charadeSessions[charadeSessionKey]) {
+                const session = global.charadeSessions[charadeSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    await commands[`${settings.prefix}charade_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return;
+                }
+            }
+
+            // Chat Interceptor XVI: Escape Room Choice via Reply
+            const escapeSessionKey = jid + '_' + senderJid;
+            if (quotedMsgId && global.escapeSessions && global.escapeSessions[escapeSessionKey]) {
+                const session = global.escapeSessions[escapeSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    if (['1', '2', '3'].includes(trimmedMessage)) {
+                        await commands[`${settings.prefix}escape_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                        return;
+                    }
+                }
+            }
+
+            // Chat Interceptor XVII: Vault 8 Choice via Reply
+            const vaultSessionKey = jid + '_' + senderJid + '_v8';
+            if (quotedMsgId && global.vault8Sessions && global.vault8Sessions[vaultSessionKey]) {
+                if (['1', '2', '3'].includes(trimmedMessage)) {
+                    await commands[`${settings.prefix}vault8`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                    return;
+                }
+            }
 
             if (isGroup && !msg.key.fromMe) {
                 const groupMetadata = await sock.groupMetadata(jid);
