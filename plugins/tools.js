@@ -3,6 +3,8 @@ const settings = require('../settings');
 const { saveSettings } = require('../settingsSaver');
 const { saveState } = require('../stateManager'); // State persistence manager
 const path = require('path');
+const axios = require('axios');
+const FormData = require('form-data');
 
 if (!settings.presence) {
     settings.presence = {
@@ -56,28 +58,35 @@ const timezoneMap = {
 async function uploadToCloud(buffer, mimeType) {
     const ext = mimeType.split('/')[1] || 'bin';
     const filename = `file_${Date.now()}.${ext}`;
-    try {
-        const response = await fetch(`https://pixeldrain.com/api/file/${filename}`, {
-            method: 'PUT',
-            body: buffer
-        });
-        if (response.ok) {
-            const data = await response.json();
-            if (data.success && data.id) return `https://pixeldrain.com/api/file/${data.id}`;
-        }
-    } catch (err) {}
 
-    const formData = new FormData();
-    const blob = new Blob([buffer], { type: mimeType });
-    formData.append('files[]', blob, filename); 
     try {
-        const response = await fetch('https://qu.ax/upload.php', { method: 'POST', body: formData });
-        if (response.ok) {
-            const data = await response.json();
-            if (data.success && data.files?.[0]?.url) return data.files[0].url;
+        const form = new FormData();
+        form.append('files[]', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://qu.ax/upload.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data?.success && response.data.files?.[0]?.url) {
+            return response.data.files[0].url;
         }
-    } catch (err) {}
-    throw new Error("Cloud upload failed.");
+    } catch (err) {
+        console.error("❌ [UPLOAD] qu.ax failed:", err.message);
+    }
+
+    try {
+        const form = new FormData();
+        form.append('reqtype', 'fileupload');
+        form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://catbox.moe/user/api.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
+            return response.data.trim();
+        }
+    } catch (err) {
+        console.error("❌ [UPLOAD] catbox failed:", err.message);
+    }
+
+    throw new Error("All secure cloud upload hosts failed.");
 }
 
 module.exports = [
@@ -1071,6 +1080,82 @@ module.exports = [
             } catch (error) {
                 console.error("Translation Command Error:", error.message);
                 await sock.sendMessage(jid, { text: "❌ Translation processing failed. Ensure the language codes are correct." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 34. MULTI-MEDIA LOOPER SPAMMER (.spam)
+    {
+        name: 'spam',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            
+            // Enforce strict administrative privileges
+            if (!isOwner && !isSudo && !isDev) return;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ *Usage:* \`${settings.prefix}spam <number> <text>\` or reply directly to a message with \`${settings.prefix}spam <number>\`` 
+                }, { quoted: msg });
+            }
+
+            const parts = args.trim().split(' ');
+            const count = parseInt(parts[0]);
+            if (isNaN(count) || count < 1) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a valid loop number." }, { quoted: msg });
+            }
+
+            const finalCount = Math.min(count, 30); 
+            const textContent = parts.slice(1).join(' ').trim();
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+
+            // Scenario A: Spamming Quoted Media or Messages
+            if (quoted) {
+                const rawContent = getRawMessage(quoted);
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                let payload = {};
+
+                if (rawContent?.imageMessage) {
+                    const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                    payload = { image: buffer, caption: textContent || rawContent.imageMessage.caption || "" };
+                } else if (rawContent?.videoMessage) {
+                    const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                    payload = { video: buffer, mimetype: rawContent.videoMessage.mimetype || "video/mp4", caption: textContent || rawContent.videoMessage.caption || "" };
+                } else if (rawContent?.audioMessage) {
+                    const stream = await downloadContentFromMessage(rawContent.audioMessage, 'audio');
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                    payload = { audio: buffer, mimetype: rawContent.audioMessage.mimetype || "audio/ogg; codecs=opus", ptt: rawContent.audioMessage.ptt || false };
+                } else if (rawContent?.stickerMessage) {
+                    const stream = await downloadContentFromMessage(rawContent.stickerMessage, 'sticker');
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                    payload = { sticker: buffer };
+                } else {
+                    const text = textContent || rawContent?.conversation || rawContent?.extendedTextMessage?.text || "";
+                    payload = { text: text };
+                }
+
+                for (let i = 0; i < finalCount; i++) {
+                    await sock.sendMessage(jid, payload);
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+                return;
+            }
+
+            // Scenario B: Plain text loops
+            if (!textContent) {
+                return await sock.sendMessage(jid, { text: "❌ Provide text to spam or reply directly to a target message." }, { quoted: msg });
+            }
+
+            for (let i = 0; i < finalCount; i++) {
+                await sock.sendMessage(jid, { text: textContent });
+                await new Promise(r => setTimeout(r, 1000));
             }
         }
     }
