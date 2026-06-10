@@ -22,6 +22,24 @@ function extractLink(text, regex) {
     return matches.find(url => regex.test(url)) || null;
 }
 
+// Browser-spoofed binary fetch helper to guarantee uncorrupted media downloads
+async function fetchBuffer(url) {
+    try {
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+                'Accept': '*/*'
+            }
+        });
+        if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
+    } catch (e) {
+        console.error("❌ [DOWNLOADER] fetchBuffer failed:", e.message);
+        return null;
+    }
+}
+
 // Highly robust ESM upload to cloud helper with multi-host redundancy
 async function uploadToCloud(buffer, mimeType) {
     const ext = mimeType.split('/')[1] || 'bin';
@@ -103,11 +121,17 @@ module.exports = [
                     caption: `🎵 *SONG FOUND*\n\n📌 *Title:* ${title}\n⏳ *Duration:* ${duration}` 
                 }, { quoted: msg });
 
-                await sock.sendMessage(jid, {
-                    audio: { url: download_url },
-                    mimetype: 'audio/mpeg',
-                    ptt: false
-                }, { quoted: msg });
+                const audioBuffer = await fetchBuffer(download_url);
+                if (audioBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    } catch (err) {
+                        // Fallback directly to document formatting to prevent player rejection
+                        await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { audio: { url: download_url }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download song." }, { quoted: msg });
             }
@@ -163,11 +187,16 @@ module.exports = [
 
                 if (!downloadUrl) throw new Error();
 
-                await sock.sendMessage(jid, {
-                    audio: { url: downloadUrl },
-                    mimetype: 'audio/mpeg',
-                    ptt: false
-                }, { quoted: msg });
+                const audioBuffer = await fetchBuffer(downloadUrl);
+                if (audioBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download audio." }, { quoted: msg });
             }
@@ -223,11 +252,16 @@ module.exports = [
 
                 if (!downloadUrl) throw new Error();
 
-                await sock.sendMessage(jid, {
-                    video: { url: downloadUrl },
-                    caption: `🎥 *Title:* ${title}`,
-                    mimetype: 'video/mp4'
-                }, { quoted: msg });
+                const videoBuffer = await fetchBuffer(downloadUrl);
+                if (videoBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: `🎥 *Title:* ${title}` }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(jid, { document: videoBuffer, mimetype: 'video/mp4', fileName: `${title}.mp4`, caption: `🎥 *Title:* ${title}\n\n⚠️ _Sent as raw document due to player codec limits._` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎥 *Title:* ${title}` }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download video." }, { quoted: msg });
             }
@@ -360,10 +394,17 @@ module.exports = [
 
                 if (!downloadUrl) throw new Error();
 
-                await sock.sendMessage(jid, {
-                    video: { url: downloadUrl },
-                    caption: `🎥 *Title:* ${title}\n⏳ *Duration:* ${firstVideo.duration || 'N/A'}`
-                }, { quoted: msg });
+                const caption = `🎥 *Title:* ${title}\n⏳ *Duration:* ${firstVideo.duration || 'N/A'}`;
+                const videoBuffer = await fetchBuffer(downloadUrl);
+                if (videoBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: caption }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(jid, { document: videoBuffer, mimetype: 'video/mp4', fileName: `${title}.mp4`, caption: `${caption}\n\n⚠️ _Sent as raw document due to player codec limits._` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: caption }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download video." }, { quoted: msg });
             }
@@ -392,7 +433,6 @@ module.exports = [
                 const resolvedUrl = await resolveUrlOrSearch(query);
                 if (!resolvedUrl) return;
 
-                // If resolved is YouTube search fallback, hand-off execution directly
                 if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
                     const commandsList = require('../commands');
                     return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
@@ -410,7 +450,16 @@ module.exports = [
 
                 if (!downloadUrl) throw new Error();
 
-                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                const videoBuffer = await fetchBuffer(downloadUrl);
+                if (videoBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: `🎬 *Title:* ${title}` }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(jid, { document: videoBuffer, mimetype: 'video/mp4', fileName: `${title}.mp4`, caption: `🎬 *Title:* ${title}\n\n⚠️ _Sent as raw document due to player codec limits._` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎬 *Title:* ${title}` }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download Facebook video." }, { quoted: msg });
             }
@@ -439,7 +488,6 @@ module.exports = [
                 const resolvedUrl = await resolveUrlOrSearch(query);
                 if (!resolvedUrl) return;
 
-                // Hand-off fallback to YouTube downloader if search query was parsed
                 if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
                     const commandsList = require('../commands');
                     return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
@@ -454,7 +502,16 @@ module.exports = [
                 const title = data.result.title || "TikTok Video";
                 const downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
 
-                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎵 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                const videoBuffer = await fetchBuffer(downloadUrl);
+                if (videoBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(jid, { document: videoBuffer, mimetype: 'video/mp4', fileName: `${title}.mp4`, caption: `🎵 *Title:* ${title}\n\n⚠️ _Sent as raw document due to player codec limits._` }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download TikTok." }, { quoted: msg });
             }
@@ -490,7 +547,12 @@ module.exports = [
                 const size = data.result.size || "Unknown Size";
                 const downloadUrl = data.result.direct_url || data.result.download_url;
 
-                await sock.sendMessage(jid, { document: { url: downloadUrl }, fileName: filename, caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}` }, { quoted: msg });
+                const docBuffer = await fetchBuffer(downloadUrl);
+                if (docBuffer) {
+                    await sock.sendMessage(jid, { document: docBuffer, fileName: filename, caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { document: { url: downloadUrl }, fileName: filename, caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}` }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download MediaFire file." }, { quoted: msg });
             }
@@ -508,7 +570,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching and packaging APK... 🔍📦" }, { quoted: msg });
 
-                // Upgraded to verified Kord APK download API endpoint
                 const response = await fetch(`https://api.kord.live/api/apk?q=${encodeURIComponent(args)}`);
                 if (!response.ok) throw new Error();
 
@@ -523,12 +584,12 @@ module.exports = [
                             `🔄 *Version:* ${version || "N/A"}\n` +
                             `⚖️ *Size:* ${size || "Unknown Size"}`;
 
-                await sock.sendMessage(jid, {
-                    document: { url: download_url },
-                    mimetype: "application/vnd.android.package-archive",
-                    fileName: `${app_name}.apk`,
-                    caption: cap
-                }, { quoted: msg });
+                const apkBuffer = await fetchBuffer(download_url);
+                if (apkBuffer) {
+                    await sock.sendMessage(jid, { document: apkBuffer, mimetype: "application/vnd.android.package-archive", fileName: `${app_name}.apk`, caption: cap }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { document: { url: download_url }, mimetype: "application/vnd.android.package-archive", fileName: `${app_name}.apk`, caption: cap }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download APK." }, { quoted: msg });
             }
@@ -546,7 +607,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching app catalog... 🔍" }, { quoted: msg });
 
-                // Upgraded to verified Kord APK search API endpoint
                 const response = await fetch(`https://api.kord.live/api/apksearch?query=${encodeURIComponent(args)}`);
                 if (!response.ok) throw new Error();
 
@@ -599,7 +659,6 @@ module.exports = [
 
                 const mimeType = mediaMessage.mimetype || (mediaType === "audio" ? "audio/ogg" : "video/mp4");
                 
-                // Debugged and upgraded robust cloud uploader logic
                 const uploadedUrl = await uploadToCloud(buffer, mimeType);
                 if (!uploadedUrl) throw new Error("Cloud upload returned an empty URL");
 
@@ -688,7 +747,12 @@ module.exports = [
                 const size = data.result.size || "Unknown Size";
                 const downloadUrl = data.result.direct_url || data.result.download_url;
 
-                await sock.sendMessage(jid, { document: { url: downloadUrl }, fileName: filename, caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}` }, { quoted: msg });
+                const docBuffer = await fetchBuffer(downloadUrl);
+                if (docBuffer) {
+                    await sock.sendMessage(jid, { document: docBuffer, fileName: filename, caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { document: { url: downloadUrl }, fileName: filename, caption: `📁 *File Name:* ${filename}\n⚖️ *Size:* ${size}` }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download Google Drive file." }, { quoted: msg });
             }
@@ -756,13 +820,11 @@ module.exports = [
                 const resolvedUrl = await resolveUrlOrSearch(query);
                 if (!resolvedUrl) return;
 
-                // Hand-off fallback to YouTube downloader if search query was parsed
                 if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
                     const commandsList = require('../commands');
                     return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
                 }
 
-                // Upgraded to verified Kord Pinterest API endpoint
                 const response = await fetch(`https://api.kord.live/api/pinterest?url=${encodeURIComponent(resolvedUrl)}`);
                 if (!response.ok) throw new Error();
 
@@ -777,10 +839,24 @@ module.exports = [
 
                 if (!downloadUrl) throw new Error();
 
+                const mediaBuffer = await fetchBuffer(downloadUrl);
+
                 if (video) {
-                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Pinterest Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                    if (mediaBuffer) {
+                        try {
+                            await sock.sendMessage(jid, { video: mediaBuffer, caption: `🎬 Pinterest Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                        } catch (err) {
+                            await sock.sendMessage(jid, { document: mediaBuffer, mimetype: 'video/mp4', fileName: `pinterest-video.mp4`, caption: `🎬 Pinterest Video\n\n⚠️ _Sent as document due to player limits._` }, { quoted: msg });
+                        }
+                    } else {
+                        await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Pinterest Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                    }
                 } else {
-                    await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Pinterest Image` }, { quoted: msg });
+                    if (mediaBuffer) {
+                        await sock.sendMessage(jid, { image: mediaBuffer, caption: `📸 Pinterest Image` }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Pinterest Image` }, { quoted: msg });
+                    }
                 }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to complete Pinterest download." }, { quoted: msg });
@@ -799,7 +875,6 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching English subtitles... 🎬" }, { quoted: msg });
 
-                // Upgraded to verified Kord Subtitle API endpoint
                 const response = await fetch(`https://api.kord.live/api/subtitle?q=${encodeURIComponent(args)}`);
                 if (!response.ok) throw new Error();
 
@@ -812,12 +887,12 @@ module.exports = [
                 const movieTitle = data.title || args;
                 const caption = `🎬 *Subtitle Downloader*\n\n📌 *Title:* ${movieTitle}\n🌐 *Language:* English`;
 
-                await sock.sendMessage(jid, {
-                    document: { url: englishSub.url },
-                    mimetype: "application/x-subrip",
-                    fileName: `${movieTitle}-en.srt`,
-                    caption: caption
-                }, { quoted: msg });
+                const subBuffer = await fetchBuffer(englishSub.url);
+                if (subBuffer) {
+                    await sock.sendMessage(jid, { document: subBuffer, mimetype: "application/x-subrip", fileName: `${movieTitle}-en.srt`, caption: caption }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { document: { url: englishSub.url }, mimetype: "application/x-subrip", fileName: `${movieTitle}-en.srt`, caption: caption }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to retrieve subtitles." }, { quoted: msg });
             }
@@ -855,12 +930,12 @@ module.exports = [
                 const title = data.result.title || "YouTube Audio";
                 const downloadUrl = data.result.mp3 || data.result.download_url;
 
-                await sock.sendMessage(jid, {
-                    document: { url: downloadUrl },
-                    mimetype: 'audio/mpeg',
-                    fileName: `${title}.mp3`,
-                    caption: `🎵 *Title:* ${title}`
-                }, { quoted: msg });
+                const docBuffer = await fetchBuffer(downloadUrl);
+                if (docBuffer) {
+                    await sock.sendMessage(jid, { document: docBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { document: { url: downloadUrl }, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download audio document." }, { quoted: msg });
             }
@@ -894,12 +969,12 @@ module.exports = [
 
                 const { title, download_url } = data.result;
 
-                await sock.sendMessage(jid, {
-                    document: { url: download_url },
-                    mimetype: 'audio/mpeg',
-                    fileName: `${title}.mp3`,
-                    caption: `🎵 *Title:* ${title}`
-                }, { quoted: msg });
+                const docBuffer = await fetchBuffer(download_url);
+                if (docBuffer) {
+                    await sock.sendMessage(jid, { document: docBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { document: { url: download_url }, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to process document download." }, { quoted: msg });
             }
@@ -928,7 +1003,6 @@ module.exports = [
                 const resolvedUrl = await resolveUrlOrSearch(query);
                 if (!resolvedUrl) return;
 
-                // Hand-off fallback to YouTube downloader if search query was parsed
                 if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
                     const commandsList = require('../commands');
                     return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
@@ -943,10 +1017,24 @@ module.exports = [
                 const downloadUrl = data.result.url || data.result.video || data.result.image || data.result.download_url;
                 const isVideo = downloadUrl.toLowerCase().includes(".mp4") || downloadUrl.includes("video");
 
+                const mediaBuffer = await fetchBuffer(downloadUrl);
+
                 if (isVideo) {
-                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Instagram Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                    if (mediaBuffer) {
+                        try {
+                            await sock.sendMessage(jid, { video: mediaBuffer, caption: `🎬 Instagram Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                        } catch (err) {
+                            await sock.sendMessage(jid, { document: mediaBuffer, caption: `🎬 Instagram Video`, mimetype: 'video/mp4', fileName: 'instagram-video.mp4' }, { quoted: msg });
+                        }
+                    } else {
+                        await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Instagram Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                    }
                 } else {
-                    await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Instagram Image` }, { quoted: msg });
+                    if (mediaBuffer) {
+                        await sock.sendMessage(jid, { image: mediaBuffer, caption: `📸 Instagram Image` }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Instagram Image` }, { quoted: msg });
+                    }
                 }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download Instagram media." }, { quoted: msg });
@@ -973,11 +1061,16 @@ module.exports = [
 
                 const downloadUrl = data.result.download_url || data.result.link;
 
-                await sock.sendMessage(jid, {
-                    audio: { url: downloadUrl },
-                    mimetype: 'audio/mpeg',
-                    ptt: false
-                }, { quoted: msg });
+                const audioBuffer = await fetchBuffer(downloadUrl);
+                if (audioBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: 'spotify-track.mp3' }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track." }, { quoted: msg });
             }
@@ -1003,11 +1096,16 @@ module.exports = [
 
                 const downloadUrl = data.result.download_url || data.result.link;
 
-                await sock.sendMessage(jid, {
-                    audio: { url: downloadUrl },
-                    mimetype: 'audio/mpeg',
-                    ptt: false
-                }, { quoted: msg });
+                const audioBuffer = await fetchBuffer(downloadUrl);
+                if (audioBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: 'spotify-track.mp3' }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track." }, { quoted: msg });
             }
@@ -1034,12 +1132,12 @@ module.exports = [
                 const filename = data.result.filename || "website_source.zip";
                 const downloadUrl = data.result.download_url || data.result.link;
 
-                await sock.sendMessage(jid, {
-                    document: { url: downloadUrl },
-                    mimetype: "application/zip",
-                    fileName: filename,
-                    caption: `📁 *Source Website:* \`${args}\``
-                }, { quoted: msg });
+                const zipBuffer = await fetchBuffer(downloadUrl);
+                if (zipBuffer) {
+                    await sock.sendMessage(jid, { document: zipBuffer, mimetype: "application/zip", fileName: filename, caption: `📁 *Source Website:* \`${args}\`` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { document: { url: downloadUrl }, mimetype: "application/zip", fileName: filename, caption: `📁 *Source Website:* \`${args}\`` }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to package website." }, { quoted: msg });
             }
@@ -1068,7 +1166,6 @@ module.exports = [
                 const resolvedUrl = await resolveUrlOrSearch(query);
                 if (!resolvedUrl) return;
 
-                // Hand-off fallback to YouTube downloader if search query was parsed
                 if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
                     const commandsList = require('../commands');
                     return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
@@ -1099,11 +1196,24 @@ module.exports = [
                 if (!downloadUrl) throw new Error();
 
                 const isVideo = downloadUrl.toLowerCase().includes(".mp4") || downloadUrl.includes("video");
+                const mediaBuffer = await fetchBuffer(downloadUrl);
 
                 if (isVideo) {
-                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Twitter Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                    if (mediaBuffer) {
+                        try {
+                            await sock.sendMessage(jid, { video: mediaBuffer, caption: `🎬 Twitter Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                        } catch (err) {
+                            await sock.sendMessage(jid, { document: mediaBuffer, caption: `🎬 Twitter Video`, mimetype: 'video/mp4', fileName: 'twitter-video.mp4' }, { quoted: msg });
+                        }
+                    } else {
+                        await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 Twitter Video`, mimetype: 'video/mp4' }, { quoted: msg });
+                    }
                 } else {
-                    await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Twitter Image` }, { quoted: msg });
+                    if (mediaBuffer) {
+                        await sock.sendMessage(jid, { image: mediaBuffer, caption: `📸 Twitter Image` }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(jid, { image: { url: downloadUrl }, caption: `📸 Twitter Image` }, { quoted: msg });
+                    }
                 }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download Twitter/X media." }, { quoted: msg });
@@ -1143,11 +1253,28 @@ module.exports = [
                 const downloadUrl = data.result.mp4 || data.result.video || data.result.mp3 || data.result.download_url;
 
                 const isVideo = downloadUrl.toLowerCase().includes(".mp4") || data.result.mp4;
+                const mediaBuffer = await fetchBuffer(downloadUrl);
 
                 if (isVideo) {
-                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎥 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                    if (mediaBuffer) {
+                        try {
+                            await sock.sendMessage(jid, { video: mediaBuffer, caption: `🎥 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                        } catch (err) {
+                            await sock.sendMessage(jid, { document: mediaBuffer, caption: `🎥 *Title:* ${title}`, mimetype: 'video/mp4', fileName: 'youtube-video.mp4' }, { quoted: msg });
+                        }
+                    } else {
+                        await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎥 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                    }
                 } else {
-                    await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    if (mediaBuffer) {
+                        try {
+                            await sock.sendMessage(jid, { audio: mediaBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                        } catch (err) {
+                            await sock.sendMessage(jid, { document: mediaBuffer, mimetype: 'audio/mpeg', fileName: 'youtube-audio.mp3' }, { quoted: msg });
+                        }
+                    } else {
+                        await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    }
                 }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to fetch YouTube media." }, { quoted: msg });
@@ -1177,7 +1304,6 @@ module.exports = [
                 const resolvedUrl = await resolveUrlOrSearch(query);
                 if (!resolvedUrl) return;
 
-                // Hand-off fallback to YouTube downloader if search query was parsed
                 if (resolvedUrl.includes("youtube.com") || resolvedUrl.includes("youtu.be")) {
                     const commandsList = require('../commands');
                     return await commandsList[`${settings.prefix}ytmp4`](sock, msg, resolvedUrl, { isOwner: false });
@@ -1192,7 +1318,16 @@ module.exports = [
                 const title = data.result.title || "TikTok Video";
                 const downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
 
-                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎵 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                const videoBuffer = await fetchBuffer(downloadUrl);
+                if (videoBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { video: videoBuffer, caption: `🎵 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                    } catch (err) {
+                        await sock.sendMessage(jid, { document: videoBuffer, caption: `🎵 *Title:* ${title}`, mimetype: 'video/mp4', fileName: 'tiktok-video.mp4' }, { quoted: msg });
+                    }
+                } else {
+                    await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎵 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to complete TikTok v2 download." }, { quoted: msg });
             }
@@ -1200,7 +1335,6 @@ module.exports = [
     }
 ];
 
-// Add structural aliases
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'fb') aliases.push({ ...cmd, name: 'facebook' });
