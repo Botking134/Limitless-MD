@@ -43,10 +43,11 @@ const server = http.createServer(async (req, res) => {
             const { default: makeWASocket, useMultiFileAuthState, Browsers } = await import('@itsliaaa/baileys');
             const tempSessionPath = path.join(__dirname, `session_temp_${targetNumber}`);
             
-            // Clean any dead sessions to prevent write locks
+            // Clean any dead sessions to prevent write locks and force fresh pairing state
             if (fs.existsSync(tempSessionPath)) {
                 fs.rmSync(tempSessionPath, { recursive: true, force: true });
             }
+            fs.mkdirSync(tempSessionPath);
 
             const { state, saveCreds } = await useMultiFileAuthState(tempSessionPath);
             const sock = makeWASocket({
@@ -58,15 +59,24 @@ const server = http.createServer(async (req, res) => {
 
             sock.ev.on('creds.update', saveCreds);
 
-            // Fetch pairing code from WhatsApp's servers
-            setTimeout(async () => {
+            // Dynamic Retry Handshake Polling (gives slow servers up to 15 seconds to connect)
+            let code = null;
+            let retries = 0;
+            
+            while (!code && retries < 10) {
                 try {
-                    const code = await sock.requestPairingCode(targetNumber, "INFINITY");
-                    res.end(JSON.stringify({ code }));
+                    await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5 seconds between retries
+                    code = await sock.requestPairingCode(targetNumber, "INFINITY");
                 } catch (err) {
-                    res.end(JSON.stringify({ error: 'WhatsApp rejected pairing handshake.' }));
+                    retries++;
                 }
-            }, 3000);
+            }
+
+            if (code) {
+                res.end(JSON.stringify({ code }));
+            } else {
+                res.end(JSON.stringify({ error: 'WhatsApp pairing handshake timed out. Please ensure your hosting panel is online and try again.' }));
+            }
 
             // Listen for successful authentication state
             sock.ev.on('connection.update', async (update) => {
