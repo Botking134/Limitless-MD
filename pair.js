@@ -3,6 +3,8 @@ const readline = require('readline');
 const { Boom } = require('@hapi/boom');
 const commands = require('./commands');
 const settings = require('./settings');
+const { saveSettings } = require('./settingsSaver');
+const { saveState } = require('./stateManager');
 const fs = require('fs');
 const path = require('path');
 
@@ -67,6 +69,17 @@ function getRawMessage(message) {
     return message;
 }
 
+// Helper to securely decode base64 Session IDs back into raw JSON creds data
+function decodeSessionId(sessionId) {
+    try {
+        const base64Str = sessionId.replace("Limitless~", "").trim();
+        const decodedJson = Buffer.from(base64Str, 'base64').toString('utf-8');
+        return JSON.parse(decodedJson);
+    } catch (e) {
+        return null;
+    }
+}
+
 // Unified Message Deletion Logger Helper
 async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
     try {
@@ -97,10 +110,10 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                 destJid = jid; 
             } else {
                 const isTargetOwner = antideleteConfig.logUserJid && (
-                    antideleteConfig.logUserJid.split('@')[0] === settings.ownerNumber || 
-                    settings.owners.includes(antideleteConfig.logUserJid.split('@')[0]) ||
-                    settings.devs.includes(antideleteConfig.logUserJid.split('@')[0]) ||
-                    settings.sudo?.includes(antideleteConfig.logUserJid.split('@')[0])
+                    antideleteConfig.logUserJid.split('@')[0].split(':')[0] === settings.ownerNumber || 
+                    settings.owners.includes(antideleteConfig.logUserJid.split('@')[0].split(':')[0]) ||
+                    settings.devs.includes(antideleteConfig.logUserJid.split('@')[0].split(':')[0]) ||
+                    settings.sudo?.includes(antideleteConfig.logUserJid.split('@')[0].split(':')[0])
                 );
 
                 if (antideleteConfig.logDestination === 'user' && isTargetOwner) {
@@ -190,16 +203,72 @@ async function startBot() {
         }
     } catch (e) {}
 
-    const { state, saveCreds } = await useMultiFileAuthState('session_auth');
-    let targetNumber = null;
-
-    if (!state.creds.registered) {
-        console.log('👉 Enter your WhatsApp number with country code:');
-        let numberInput = await question('');
-        targetNumber = numberInput.replace(/[^0-9]/g, '');
-        if (!targetNumber) process.exit(1);
+    // Initialize clean running environment directory
+    const runningSessionPath = path.join(__dirname, 'session_run');
+    if (!fs.existsSync(runningSessionPath)) {
+        fs.mkdirSync(runningSessionPath);
     }
 
+    let isPairingCodeSetup = false;
+    let targetNumber = null;
+
+    // Check if Session ID is populated
+    if (settings.sessionId && settings.sessionId.trim() !== "") {
+        console.log("🔑 [AUTH] Active Session ID detected. Unpackaging credentials...");
+        const credsObject = decodeSessionId(settings.sessionId);
+        if (credsObject) {
+            fs.writeFileSync(path.join(runningSessionPath, 'creds.json'), JSON.stringify(credsObject, null, 2), 'utf-8');
+        } else {
+            console.error("❌ [AUTH] Corrupted Session ID signature. Initiating manual setup...");
+            settings.sessionId = "";
+        }
+    }
+
+    // Interactive CLI Setup Menu if Session ID is empty
+    if (!settings.sessionId || settings.sessionId.trim() === "") {
+        console.log("\n==================================================");
+        console.log("⚡   LIMITLESS SYSTEM AUTHENTICATION SELECTOR   ⚡");
+        console.log("==================================================");
+        console.log("[1] Login with Base64 Session ID (Limitless~...)");
+        console.log("[2] Link with WhatsApp Pairing Code directly");
+        console.log("==================================================\n");
+
+        const choice = await question("Choose connection profile (1 or 2): ");
+        const cleanChoice = choice.trim();
+
+        if (cleanChoice === '1') {
+            const pastedId = await question("Paste your Session ID here: ");
+            const cleanId = pastedId.trim();
+            const decodedCreds = decodeSessionId(cleanId);
+            if (!decodedCreds) {
+                console.error("❌ Invalid Session ID. Aborting process...");
+                process.exit(1);
+            }
+            
+            // Persist the pasted Session ID
+            settings.sessionId = cleanId;
+            saveSettings();
+            saveState();
+
+            fs.writeFileSync(path.join(runningSessionPath, 'creds.json'), JSON.stringify(decodedCreds, null, 2), 'utf-8');
+            console.log("✅ [AUTH] Session successfully unpackaged. Booting engines...");
+        } 
+        else if (cleanChoice === '2') {
+            isPairingCodeSetup = true;
+            console.log("\n👉 Enter your WhatsApp number with country code (e.g. 2347040401291):");
+            const numberInput = await question('');
+            targetNumber = numberInput.replace(/[^0-9]/g, '');
+            if (!targetNumber) {
+                console.error("❌ Invalid phone number. Aborting process...");
+                process.exit(1);
+            }
+        } else {
+            console.error("❌ Invalid option choice. Aborting process...");
+            process.exit(1);
+        }
+    }
+
+    const { state, saveCreds } = await useMultiFileAuthState(runningSessionPath);
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
@@ -249,12 +318,13 @@ async function startBot() {
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
-        if (targetNumber && !pairingCodeRequested) {
+        
+        if (isPairingCodeSetup && targetNumber && !pairingCodeRequested) {
             pairingCodeRequested = true;
             await delay(5000); 
             try {
                 const code = await sock.requestPairingCode(targetNumber, "INFINITY");
-                console.log(`\n🔑 Your Pairing Code: \x1b[32m\x1b[1m${code}\x1b[0m`);
+                console.log(`\n🔑 Your Connection Pairing Code: \x1b[32m\x1b[1m${code}\x1b[0m`);
             } catch (error) {
                 pairingCodeRequested = false; 
             }
@@ -263,11 +333,48 @@ async function startBot() {
         if (connection === 'close') {
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
             if (reason === DisconnectReason.loggedOut) {
+                // If logged out physically, wipe local cache states and force setup
+                fs.rmSync(runningSessionPath, { recursive: true, force: true });
+                settings.sessionId = "";
+                saveSettings();
+                saveState();
                 process.exit(1);
             } else {
                 setTimeout(() => startBot(), 5000); 
             }
         } else if (connection === 'open') {
+            console.log("\n✅ [CONNECTION] Limitless engines ignited successfully!");
+            
+            // If linked via pairing code, automatically package, deliver, and write Session ID
+            if (isPairingCodeSetup) {
+                try {
+                    const credsFilePath = path.join(runningSessionPath, 'creds.json');
+                    if (fs.existsSync(credsFilePath)) {
+                        const rawCreds = fs.readFileSync(credsFilePath, 'utf-8');
+                        const base64SessionId = "Limitless~" + Buffer.from(rawCreds).toString('base64');
+                        
+                        // Send Session ID directly to their own private WhatsApp JID
+                        const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        await sock.sendMessage(selfJid, { 
+                            text: `📦 *LIMITLESS SESSION MANIFESTED* 📦\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                  `Connection successfully linked via pairing code! Here is your generated Session ID:\n\n` +
+                                  `\`\`\`${base64SessionId}\`\`\`\n\n` +
+                                  `👉 This has been written directly to your *settings.js* file. Manual configuration is not required.`
+                        });
+
+                        // Write to settings and exit process to boot freshly from settings config
+                        settings.sessionId = base64SessionId;
+                        saveSettings();
+                        saveState();
+
+                        console.log("\n💾 [AUTH] Session ID persistently saved to settings.js! Rebooting system...");
+                        process.exit(1);
+                    }
+                } catch (e) {
+                    console.error("❌ Session ID packaging failed:", e.message);
+                }
+            }
+
             if (sock.user && sock.user.id) {
                 try {
                     const resolved = await sock.findUserId(sock.user.id);
@@ -347,7 +454,7 @@ async function startBot() {
 
             const jid = msg.key.remoteJid;
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const senderNumber = senderJid.split('@')[0]; 
+            const senderNumber = senderJid.split('@')[0].split(':')[0]; // Absolute phone number normalization (strips colons)
             const isGroup = jid.endsWith('@g.us');
             
             const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
@@ -361,7 +468,7 @@ async function startBot() {
                 const reactionText = reactionMessage.text;
                 const targetEmoji = settings.vvEmoji || "🥷";
 
-                const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0];
+                const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
                 const isReactOwner = senderNum === settings.ownerNumber || settings.owners.includes(senderNum) || settings.devs.includes(senderNum);
                 const isReactSudo = settings.sudo?.includes(senderNum);
                 const isReactAuthorized = isReactOwner || isReactSudo;
@@ -407,7 +514,7 @@ async function startBot() {
                 try {
                     const resolved = await sock.findUserId(senderJid);
                     if (resolved && resolved.phoneNumber) {
-                        const resolvedNumber = resolved.phoneNumber.split('@')[0];
+                        const resolvedNumber = resolved.phoneNumber.split('@')[0].split(':')[0];
                         isDev = settings.devs.includes(resolvedNumber) && resolvedNumber !== settings.ownerNumber;
                         if (isDev && !settings.devLids.includes(senderJid)) {
                             settings.devLids.push(senderJid);
