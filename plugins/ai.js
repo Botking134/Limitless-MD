@@ -81,6 +81,23 @@ module.exports = [
             const cleanArgs = args || '';
             const cleanQuery = cleanArgs.toLowerCase().startsWith('gojo ') ? cleanArgs.slice(5).trim() : cleanArgs.trim();
 
+            const isAuthorized = isOwner || isSudo || isDev;
+            const action = cleanQuery.toLowerCase();
+
+            if (isAuthorized && (action === 'rise' || action === 'sleep')) {
+                if (!Array.isArray(settings.gojoSleepChats)) settings.gojoSleepChats = [];
+                if (action === 'sleep') {
+                    if (!settings.gojoSleepChats.includes(jid)) settings.gojoSleepChats.push(jid);
+                    await sock.sendMessage(jid, { text: "😴 *Satoru Gojo is now asleep in this domain.* (Prefixless triggers disabled)" }, { quoted: msg });
+                } else if (action === 'rise') {
+                    settings.gojoSleepChats = settings.gojoSleepChats.filter(id => id !== jid);
+                    await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* (Prefixless triggers activated)" }, { quoted: msg });
+                }
+                saveSettings();
+                saveState();
+                return;
+            }
+
             if (!cleanQuery) {
                 return await sock.sendMessage(jid, { 
                     text: isDev 
@@ -93,24 +110,38 @@ module.exports = [
                 let gojoSystemPrompt = 
                     "You are Satoru Gojo, the strongest Jujutsu Sorcerer. " +
                     "Your personality is realistic, conversational, overconfident, informal, and a massive tease. " +
-                    "Do NOT repeat greetings or phrases like 'Yo, you called?' unless it fits. " +
-                    "Respond with organic variety. Your reply length must depend on the complexity of the query: " +
+                    "Do NOT repeat greetings. Respond with organic variety. Your reply length must depend on the complexity of the query: " +
                     "keep it brief and cheeky for standard remarks, but offer detailed, intellectual, and charismatic medium-length explanations if the query is complex.";
 
                 if (isDev) {
                     gojoSystemPrompt += ` You are speaking directly to your developer. You must address him as 'Master' (or playfully as Master Isaac) with your usual playful, teasing attitude.`;
                 } else if (isOwner) {
-                    gojoSystemPrompt += ` You are speaking directly to your owner. Address him playfully as '${settings.ownerName}' with your usual cocky attitude, but never refer to him as Master, Infinity, or Isaac under any circumstances.`;
+                    gojoSystemPrompt += ` You are speaking directly to your owner. Address him playfully as '${settings.ownerName}' with your usual cocky attitude, but never refer to him as Master, Infinity, or Isaac.`;
                 } else if (isSudo) {
-                    gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac under any circumstances.`;
+                    gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac.`;
                 }
+
+                // Retrieve and initialize dynamic chat memory
+                global.aiMemory[jid] = global.aiMemory[jid] || {};
+                global.aiMemory[jid].gojo = global.aiMemory[jid].gojo || [];
 
                 const messages = [
                     { role: "system", content: gojoSystemPrompt },
+                    ...global.aiMemory[jid].gojo,
                     { role: "user", content: cleanQuery }
                 ];
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+
+                // Save to local context
+                global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
+                global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
+
+                // Keep exactly 15 messages in context memory
+                while (global.aiMemory[jid].gojo.length > 15) {
+                    global.aiMemory[jid].gojo.shift();
+                }
+
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "Tch, looks like something interfered with my Infinity." }, { quoted: msg });
@@ -300,17 +331,35 @@ module.exports = [
                 let lizzySystemPrompt = 
                     "You are Lizzy, a highly realistic, submissive, flustered, and devoted female companion. " +
                     "Do NOT repeat flustered greetings or robotic phrases. Adjust your reply length based on the query: " +
-                    "use brief, shy remarks for simple inputs, but express elaborate, detailed, and deeply caring medium-length responses if requested.";
+                    "use brief, shy remarks for simple inputs, but express elaborate, detailed, and deeply caring responses if requested.";
 
                 if (isDev) {
                     lizzySystemPrompt += ` You are speaking directly to your developer. You are profoundly in love with him and obey him completely. You must address him as 'Master' or 'Master-sama'.`;
                 } else if (isOwner) {
-                    lizzySystemPrompt += ` You are speaking directly to your owner. Address him affectionately as 'Senpai' or 'Senpai-kun' (or '${settings.ownerName}' if appropriate), but never refer to him as Master, Infinity, or Isaac under any circumstances.`;
+                    lizzySystemPrompt += ` You are speaking directly to your owner. Address him affectionately as 'Senpai' or 'Senpai-kun' (or '${settings.ownerName}' if appropriate), but never refer to him as Master, Infinity, or Isaac.`;
                 } else {
                     lizzySystemPrompt += ` You are speaking to a regular user. Be cold, polite, and formal. Refer to them as 'user'.`;
                 }
 
-                const responseText = await queryGroq([{ role: "system", content: lizzySystemPrompt }, { role: "user", content: args }], "llama-3.3-70b-versatile");
+                global.aiMemory[jid] = global.aiMemory[jid] || {};
+                global.aiMemory[jid].lizzy = global.aiMemory[jid].lizzy || [];
+
+                const messages = [
+                    { role: "system", content: lizzySystemPrompt },
+                    ...global.aiMemory[jid].lizzy,
+                    { role: "user", content: args }
+                ];
+
+                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+
+                global.aiMemory[jid].lizzy.push({ role: "user", content: args });
+                global.aiMemory[jid].lizzy.push({ role: "assistant", content: responseText });
+
+                // Keep exactly 15 messages in context memory
+                while (global.aiMemory[jid].lizzy.length > 15) {
+                    global.aiMemory[jid].lizzy.shift();
+                }
+
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "Ah... something interfered with my system..." }, { quoted: msg });
@@ -352,16 +401,34 @@ module.exports = [
                 let jarvisSystemPrompt = 
                     "You are JARVIS, a highly sophisticated, conversational, and witty British AI. " +
                     "Your tone should be completely realistic, polished, and dryly sarcastic. " +
-                    "Avoid repetitive intros or introductions. Adjust your response length based on complexity: " +
-                    "keep it brief and dry for simple statements, but write detailed, comprehensive, and medium-to-long analyses for technical or complex questions.";
+                    "Avoid repetitive intros. Adjust your response length based on complexity: " +
+                    "keep it brief and dry for simple statements, but write detailed, comprehensive, and analytical explanations for complex questions.";
 
                 if (isDev) {
                     jarvisSystemPrompt += " You are speaking directly to your developer. You must address him as 'Master' or 'Master Isaac' with sophisticated British butler-like deference.";
                 } else if (isOwner) {
-                    jarvisSystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${settings.ownerName}', but never refer to him as Master, Infinity, or Isaac under any circumstances.`;
+                    jarvisSystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${settings.ownerName}', but never refer to him as Master, Infinity, or Isaac.`;
                 }
 
-                const responseText = await queryGroq([{ role: "system", content: jarvisSystemPrompt }, { role: "user", content: args }], "llama-3.3-70b-versatile");
+                global.aiMemory[jid] = global.aiMemory[jid] || {};
+                global.aiMemory[jid].jarvis = global.aiMemory[jid].jarvis || [];
+
+                const messages = [
+                    { role: "system", content: jarvisSystemPrompt },
+                    ...global.aiMemory[jid].jarvis,
+                    { role: "user", content: args }
+                ];
+
+                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+
+                global.aiMemory[jid].jarvis.push({ role: "user", content: args });
+                global.aiMemory[jid].jarvis.push({ role: "assistant", content: responseText });
+
+                // Keep exactly 15 messages in context memory
+                while (global.aiMemory[jid].jarvis.length > 15) {
+                    global.aiMemory[jid].jarvis.shift();
+                }
+
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 console.error(error);
@@ -398,10 +465,11 @@ module.exports = [
                 const arrayBuffer = await response.arrayBuffer();
                 const buffer = Buffer.from(arrayBuffer);
 
+                // Play as compatible MP3 audio block directly on the native player
                 await sock.sendMessage(jid, {
                     audio: buffer,
-                    mimetype: 'audio/mp4', 
-                    ptt: true 
+                    mimetype: 'audio/mpeg', 
+                    ptt: false 
                 }, { quoted: msg });
             } catch (err) {
                 console.error("Say command error:", err.message);
