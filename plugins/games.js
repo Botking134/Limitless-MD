@@ -360,9 +360,10 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
         `${engineResponse}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `👉 *Reply to this message with:* \`${settings.prefix}v8 <your choice/number>\``;
+        `👉 *Reply directly to this message to submit your next choice (1, 2, or 3)!*`;
 
-    await sock.sendMessage(jid, { text: gameCard }, { quoted: msg });
+    const prompt = await sock.sendMessage(jid, { text: gameCard }, { quoted: msg });
+    session.lastQuestionMsgId = prompt.key.id;
 }
 
 // ============================================================================
@@ -580,11 +581,18 @@ module.exports = [
             if (!args) {
                 if (activeSession) return await sock.sendMessage(jid, { text: `⚠️ Active game running. Guess using \`${settings.prefix}guess <number>\`. ${6 - activeSession.attempts} attempts left.` }, { quoted: msg });
 
-                global.gameSessions[sessionKey] = { target: Math.floor(Math.random() * 100) + 1, attempts: 0 };
-                return await sock.sendMessage(jid, { text: `🌀 *CURSED ENERGY CONCENTRATION* 🌀\n\nI have suppressed a specific quantity of Cursed Energy between *1 and 100*.\n\nGuess the level using: \`${settings.prefix}guess <number>\`` }, { quoted: msg });
+                const targetNum = Math.floor(Math.random() * 100) + 1;
+                const prompt = await sock.sendMessage(jid, { text: `🌀 *CURSED ENERGY CONCENTRATION* 🌀\n\nI have suppressed a specific quantity of Cursed Energy between *1 and 100*.\n\n👉 Guess the level by replying directly to this message!` }, { quoted: msg });
+                
+                global.gameSessions[sessionKey] = { 
+                    target: targetNum, 
+                    attempts: 0,
+                    lastQuestionMsgId: prompt.key.id // Sets initial tracking JID
+                };
+                return;
             }
 
-            if (!activeSession) return await sock.sendMessage(jid, { text: `❌ No active guessing game running.` }, { quoted: msg });
+            if (!activeSession) return await sock.sendMessage(jid, { text: `❌ No active guessing game running.` }, { msg });
 
             const userGuess = parseInt(args.trim());
             if (isNaN(userGuess) || userGuess < 1 || userGuess > 100) return await sock.sendMessage(jid, { text: "❌ Please provide a valid integer guess." }, { quoted: msg });
@@ -603,7 +611,10 @@ module.exports = [
             }
 
             const clue = userGuess < activeSession.target ? "Too LOW! 📈" : "Too HIGH! 📉";
-            await sock.sendMessage(jid, { text: `🔮 *Cursed Energy Clue:* \`${clue}\`\n\n• Attempts remaining: \`${6 - activeSession.attempts}/6\`` }, { quoted: msg });
+            const updatedPrompt = await sock.sendMessage(jid, { text: `🔮 *Cursed Energy Clue:* \`${clue}\`\n\n• Attempts remaining: \`${6 - activeSession.attempts}/6\`\n\n👉 Reply directly to this message to submit your next guess!` });
+            
+            // Updates prompt ID to allow replying to the latest clue
+            activeSession.lastQuestionMsgId = updatedPrompt.key.id;
         }
     },
 
@@ -673,21 +684,24 @@ module.exports = [
 
                 if (saved) {
                     await sock.sendMessage(jid, { text: "💾 `[SYSTEM] Reloading saved scenario environment...`" }, { quoted: msg });
+                    
+                    const gameHeader = 
+                        `📁 *VAULT 8: STEP 1/20 (REPLAY)* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        `${saved.firstStep}\n\n` +
+                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                        `👉 *To progress, reply directly to this message with your choice (1, 2, or 3)!*`;
+
+                    const prompt = await sock.sendMessage(jid, { text: gameHeader }, { quoted: msg });
+
                     global.vault8Sessions[sessionKey] = {
                         step: 1,
                         history: [
                             { role: "system", content: saved.systemPrompt },
                             { role: "assistant", content: saved.firstStep }
-                        ]
+                        ],
+                        lastQuestionMsgId: prompt.key.id
                     };
-
-                    const gameHeader = 
-                        `📁 *VAULT 8: STEP 1/20 (REPLAY)* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `${saved.firstStep}\n\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                        `👉 *To progress, reply to this message using:* \`${settings.prefix}v8 <your choice/number>\``;
-
-                    return await sock.sendMessage(jid, { text: gameHeader }, { quoted: msg });
+                    return;
                 } else {
                     await sock.sendMessage(jid, { text: "👁️ `[SYSTEM] Generating new scenario file assets...`" }, { quoted: msg });
                     
@@ -701,22 +715,24 @@ module.exports = [
                     const firstStep = await queryVaultEngine(initialSession);
                     if (!firstStep) return await sock.sendMessage(jid, { text: "❌ Connection timeout." }, { quoted: msg });
 
+                    const gameHeader = 
+                        `📁 *VAULT 8: STEP 1/20* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        `${firstStep}\n\n` +
+                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                        `👉 *To progress, reply directly to this message with your choice (1, 2, or 3)!*`;
+
+                    const prompt = await sock.sendMessage(jid, { text: gameHeader }, { quoted: msg });
+
                     global.vault8SavedStories[sessionKey] = { systemPrompt: systemPrompt, firstStep: firstStep };
                     global.vault8Sessions[sessionKey] = {
                         step: 1,
                         history: [
                             { role: "system", content: systemPrompt },
                             { role: "assistant", content: firstStep }
-                        ]
+                        ],
+                        lastQuestionMsgId: prompt.key.id
                     };
-
-                    const gameHeader = 
-                        `📁 *VAULT 8: STEP 1/20* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `${firstStep}\n\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                        `👉 *To progress, reply to this message using:* \`${settings.prefix}v8 <your choice/number>\``;
-
-                    return await sock.sendMessage(jid, { text: gameHeader }, { quoted: msg });
+                    return;
                 }
             } 
             else if (action === 'refresh') {
@@ -893,12 +909,63 @@ module.exports = [
             await delay(1500);
             await askNextCharadePuzzle(sock, jid, sessionKey);
         }
+    },
+
+    // 13. UNIFIED PUBLIC ARCADE LOBBY LAUNCHER (.games)
+    {
+        name: 'games',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const prefix = settings.prefix || '⚡';
+
+            const portalText = 
+                `🎮 *INFINITE ARCADE LOBBY* 🎮\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `Welcome to Satoru Gojo's game domain! Select an active game category below to begin:\n\n` +
+                `🚀 *1. TRIVIA* — General Knowledge trivia quizzes.\n` +
+                `🔠 *2. ANAGRAM* — Scrambled letters word puzzle.\n` +
+                `🎭 *3. SHARADE* — Guess the phrase from emoji clues.\n` +
+                `📜 *4. TORF* — Interactive True or False statements.\n` +
+                `💰 *5. MILLIONAIRE* — 15-question Millionaire trivia ladder.\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `👉 *Tap a quick-button below, or type:* \`${prefix}<game_name>\` (e.g. \`${prefix}trivia\`)`;
+
+            const buttons = [
+                { buttonId: `${prefix}trivia`, buttonText: { displayText: 'Trivia 🚀' }, type: 1 },
+                { buttonId: `${prefix}anagram`, buttonText: { displayText: 'Anagram 🔠' }, type: 1 },
+                { buttonId: `${prefix}torf`, buttonText: { displayText: 'True or False 📜' }, type: 1 }
+            ];
+
+            const buttonMessage = {
+                text: portalText,
+                buttons: buttons,
+                headerType: 1
+            };
+
+            try {
+                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+            } catch (err) {
+                const fallbackText = `${portalText}\n\n` +
+                                     `💡 *Launch Commands:*\n` +
+                                     `• Trivia: \`${prefix}trivia\`\n` +
+                                     `• Anagram: \`${prefix}anagram\`\n` +
+                                     `• Sharade: \`${prefix}sharade\`\n` +
+                                     `• Torf: \`${prefix}torf\`\n` +
+                                     `• Millionaire: \`${prefix}millionaire\``;
+                await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
+            }
+        }
     }
 ];
 
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'ttt') aliases.push({ ...cmd, name: 'tictactoe' });
-    if (cmd.name === 'charade') aliases.push({ ...cmd, name: 'charades' });
+    if (cmd.name === 'charade') {
+        aliases.push({ ...cmd, name: 'charades' });
+        aliases.push({ ...cmd, name: 'sharade' });
+        aliases.push({ ...cmd, name: 'sharades' });
+    }
 });
 module.exports.push(...aliases);
