@@ -369,7 +369,7 @@ module.exports = [
         }
     },
 
-    // 11. TEXT-TO-SPEECH TRANSMITTER (.say)
+    // 11. TEXT-TO-SPEECH TRANSMITTER (.say - with Automated Document Fallback)
     {
         name: 'say',
         isPrefixless: false,
@@ -398,18 +398,28 @@ module.exports = [
                 const arrayBuffer = await response.arrayBuffer();
                 const buffer = Buffer.from(arrayBuffer);
 
-                await sock.sendMessage(jid, {
-                    audio: buffer,
-                    mimetype: 'audio/mp4', 
-                    ptt: true 
-                }, { quoted: msg });
+                try {
+                    // Attempt 1: Upload as standard, native WhatsApp PTT voice note
+                    await sock.sendMessage(jid, {
+                        audio: buffer,
+                        mimetype: 'audio/mp4', 
+                        ptt: true 
+                    }, { quoted: msg });
+                } catch (sendErr) {
+                    // Fallback: Send as raw document attachment if native PTT codec fails
+                    await sock.sendMessage(jid, {
+                        document: buffer,
+                        mimetype: 'audio/mpeg',
+                        fileName: `voice-note.mp3`,
+                        caption: `🎵 *Voice Note Output* (Google TTS)\n\n⚠️ _Sent as raw document due to client player limits._`
+                    }, { quoted: msg });
+                }
             } catch (err) {
                 console.error("Say command error:", err.message);
                 await sock.sendMessage(jid, { text: "❌ Failed to synthesize audio." }, { quoted: msg });
             }
         }
-    }
-];
+    }, 
 
 const aliases = [];
 module.exports.forEach(cmd => {
