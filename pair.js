@@ -203,8 +203,8 @@ async function startBot() {
         }
     } catch (e) {}
 
-    // Initialize/Load original session path directory
-    const runningSessionPath = path.join(__dirname, 'session_auth');
+    // Initialize clean running environment directory
+    const runningSessionPath = path.join(__dirname, 'session_run');
     if (!fs.existsSync(runningSessionPath)) {
         fs.mkdirSync(runningSessionPath);
     }
@@ -255,14 +255,6 @@ async function startBot() {
         } 
         else if (cleanChoice === '2') {
             isPairingCodeSetup = true;
-            
-            // CRITICAL FIX: Instantly and completely wipe the target directory to guarantee
-            // a fresh, clean, unregistered connection, matching your former working connection path!
-            if (fs.existsSync(runningSessionPath)) {
-                fs.rmSync(runningSessionPath, { recursive: true, force: true });
-            }
-            fs.mkdirSync(runningSessionPath);
-
             console.log("\n👉 Enter your WhatsApp number with country code (e.g. 2347040401291):");
             const numberInput = await question('');
             targetNumber = numberInput.replace(/[^0-9]/g, '');
