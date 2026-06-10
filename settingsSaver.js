@@ -9,6 +9,7 @@ function saveSettings() {
         
         // Compile the serializable configurations
         const configToSave = {
+            sessionId: settings.sessionId || "",
             botName: settings.botName,
             ownerName: settings.ownerName,
             prefix: settings.prefix,
