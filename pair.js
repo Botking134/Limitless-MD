@@ -601,6 +601,10 @@ async function startBot() {
                 } catch (reactErr) {}
             }
 
+            const quotedParticipant = contextInfo?.participant;
+            const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
+            const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
+
             // =================================================================
             // RE-DESIGNED SESSION KEY RESOLUTIONS FOR DIRECT REPLIES
             // =================================================================
