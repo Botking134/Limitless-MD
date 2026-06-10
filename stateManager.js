@@ -52,7 +52,8 @@ function saveState() {
             stickerCommands: settings.stickerCommands,
             afk: settings.afk || {},
             lizzyChats: settings.lizzyChats || [],
-            chatbotChats: settings.chatbotChats || [] // Added dynamic memory state
+            chatbotChats: settings.chatbotChats || [],
+            gojoSleepChats: settings.gojoSleepChats || [] // Added persistency
         };
         fs.writeFileSync(statePath, JSON.stringify(stateData, null, 2), 'utf-8');
     } catch (err) {
