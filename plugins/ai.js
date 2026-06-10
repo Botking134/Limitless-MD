@@ -419,7 +419,7 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "❌ Failed to synthesize audio." }, { quoted: msg });
             }
         }
-    }, 
+    } 
 
 const aliases = [];
 module.exports.forEach(cmd => {
