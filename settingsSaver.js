@@ -31,7 +31,8 @@ function saveSettings() {
             // Newly added persistent parameters to prevent reset on reboot
             vvEmoji: settings.vvEmoji || "🥷",
             antipm: settings.antipm || "off",
-            antispam: settings.antispam || {}
+            antispam: settings.antispam || {},
+            gojoSleepChats: settings.gojoSleepChats || []
         };
 
         const fileContent = `// settings.js\n\nmodule.exports = ${JSON.stringify(configToSave, null, 4)};\n`;
