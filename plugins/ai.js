@@ -452,25 +452,28 @@ module.exports = [
 
             if (!textToSay) return await sock.sendMessage(jid, { text: "❌ Please provide text." }, { quoted: msg });
 
+            // Smug English Male ("Joey/TikTok") Voice notes
             try {
-                let locale = "ja-JP";
-                if (textToSay.toLowerCase().startsWith("en:")) {
-                    locale = "en-US";
-                    textToSay = textToSay.slice(3).trim();
-                }
-
-                const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${locale}&client=tw-ob&q=${encodeURIComponent(textToSay)}`;
-
+                const ttsUrl = `https://api.kord.live/api/tiktoktts?text=${encodeURIComponent(textToSay)}&voice=en_us_006`;
                 const response = await fetch(ttsUrl);
+                if (response.ok) {
+                    const arrayBuffer = await response.arrayBuffer();
+                    const buffer = Buffer.from(arrayBuffer);
+                    
+                    // Plays beautifully and safely as standard compatible audio file
+                    await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    return;
+                }
+            } catch (ttsErr) {}
+
+            // Graceful fallback to Standard English Male Audio stream
+            try {
+                const fallbackUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-us&client=tw-ob&q=${encodeURIComponent(textToSay)}`;
+                const response = await fetch(fallbackUrl);
                 const arrayBuffer = await response.arrayBuffer();
                 const buffer = Buffer.from(arrayBuffer);
 
-                // Play as compatible MP3 audio block directly on the native player
-                await sock.sendMessage(jid, {
-                    audio: buffer,
-                    mimetype: 'audio/mpeg', 
-                    ptt: false 
-                }, { quoted: msg });
+                await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
             } catch (err) {
                 console.error("Say command error:", err.message);
                 await sock.sendMessage(jid, { text: "❌ Failed to synthesize audio." }, { quoted: msg });
