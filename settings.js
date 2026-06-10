@@ -1,13 +1,13 @@
 // settings.js
 
 module.exports = {
+    "sessionId": "",
     "botName": "Limitless",
     "ownerName": "Infinity",
     "prefix": "⚡",
     "packName": "♾️",
     "author": "Infinity",
     "isPublic": false,
-    "antipm": false, // Set to false by default [1]
     "ownerNumber": "601129363700",
     "owners": [],
     "sudo": [
