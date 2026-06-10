@@ -41,6 +41,11 @@ global.millionaireSessions = global.millionaireSessions || {};
 global.torfSessions = global.torfSessions || {};
 global.pvpSessions = global.pvpSessions || {};
 global.escapeSessions = global.escapeSessions || {};
+global.vault8Sessions = global.vault8Sessions || {};
+
+// Global AI Session Memory & Outbound Trackers
+global.aiMemory = global.aiMemory || {};
+global.botMessageAgents = global.botMessageAgents || {};
 
 // Helper to calculate AFK elapsed time
 function getAfkDuration(ms) {
@@ -226,6 +231,13 @@ async function startBot() {
             if (botSentMessageIds.size > 500) {
                 const firstKey = botSentMessageIds.values().next().value;
                 botSentMessageIds.delete(firstKey);
+            }
+
+            // Map outbound message ID directly to the active agent context
+            if (global.activeAgentContext) {
+                global.botMessageAgents[sent.key.id] = global.activeAgentContext;
+                const mappingKeys = Object.keys(global.botMessageAgents);
+                if (mappingKeys.length > 500) delete global.botMessageAgents[mappingKeys[0]];
             }
         }
         return sent;
@@ -572,9 +584,22 @@ async function startBot() {
                 }
             }
 
-            const quotedContext = msg.message?.extendedTextMessage?.contextInfo;
-            const quotedMsgId = quotedContext?.stanzaId;
-            const mentionedJids = quotedContext?.mentionedJid || [];
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+            const mentionedJids = contextInfo?.mentionedJid || [];
+
+            // Dev Mention Auto-Reaction Interceptor
+            const devJids = new Set([
+                ...(settings.devs || []).map(num => num + '@s.whatsapp.net'),
+                ...(settings.devLids || [])
+            ]);
+            const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
+            if (isDevMentioned && !msg.key.fromMe) {
+                try {
+                    await sock.sendMessage(jid, { react: { text: "👑", key: msg.key } });
+                } catch (reactErr) {}
+            }
 
             // =================================================================
             // RE-DESIGNED SESSION KEY RESOLUTIONS FOR DIRECT REPLIES
@@ -930,113 +955,11 @@ async function startBot() {
             // Chat Interceptor XVII: Vault 8 Choice via Reply
             const vaultSessionKey = jid + '_' + senderJid + '_v8';
             if (quotedMsgId && global.vault8Sessions && global.vault8Sessions[vaultSessionKey]) {
-                if (['1', '2', '3'].includes(trimmedMessage)) {
-                    await commands[`${settings.prefix}vault8`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                    return;
-                }
-            }
-
-            if (isGroup && !msg.key.fromMe) {
-                const groupMetadata = await sock.groupMetadata(jid);
-                const participants = groupMetadata.participants;
-                const sender = participants.find(p => p.id === senderJid);
-                const isAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
-
-                if (settings.presence && settings.presence.autoread) {
-                    const autoreadActive = settings.presence.autoread.all || settings.presence.autoread.chats.includes(jid);
-                    if (autoreadActive) {
-                        try { await sock.readMessages([msg.key]); } catch (e) {}
-                    }
-                }
-
-                if (!isAdmin && !isOwner && !isDev) {
-                    const msgId = msg.key.id;
-                    const isOtherBot = !msg.key.fromMe && (
-                        (msgId.startsWith('BAE5') && msgId.length === 16) || 
-                        (msgId.startsWith('3EB0') && msgId.length === 12) ||
-                        (msgId.startsWith('BAE5') && msgId.length === 12) ||
-                        msgId.startsWith('KSG') || 
-                        msgId.startsWith('Lumina') ||
-                        msgId.startsWith('ZEUS') ||
-                        msgId.startsWith('SIGMA') ||
-                        msgId.startsWith('QUEEN') ||
-                        msgId.startsWith('MD') ||
-                        msgId.startsWith('BOT') ||
-                        msgId.startsWith('HZ') ||
-                        (msgId.length === 12 && !msgId.startsWith('3A')) ||
-                        (msgId.length === 16 && !msgId.startsWith('3A')) ||
-                        (msgId.length === 18) ||
-                        (msgId.length === 22)
-                    );
-
-                    const antibotSetting = settings.antibot[jid];
-                    if (isOtherBot && antibotSetting && antibotSetting !== 'off') {
-                        try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) {}
-
-                        if (antibotSetting === 'kick') {
-                            try {
-                                await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-                                await sock.sendMessage(jid, { text: `Sayonara! @${senderNumber}`, mentions: [senderJid] });
-                            } catch (err) {}
-                        } else if (antibotSetting === 'warn') {
-                            const warnKey = `${jid}_${senderNumber}`;
-                            settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
-                            const count = settings.warns[warnKey];
-
-                            if (count >= 5) {
-                                try {
-                                    await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-                                    await sock.sendMessage(jid, { text: `Sayonara! @${senderNumber}`, mentions: [senderJid] });
-                                    settings.warns[warnKey] = 0;
-                                } catch (err) {}
-                            } else {
-                                await sock.sendMessage(jid, { text: `@${senderNumber} Bots are restricted.\n\n*Warn:* ${count}/5`, mentions: [senderJid] });
-                            }
-                        }
-                        return; 
-                    }
-
-                    const antilinkSetting = settings.antilink[jid];
-                    if (antilinkSetting && antilinkSetting !== 'off') {
-                        const containsLink = /chat\.whatsapp\.com\/[0-9A-Za-z]{20,24}|(https?:\/\/[^\s]+)/gi.test(body);
-                        if (containsLink) {
-                            try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) {}
-
-                            if (antilinkSetting === 'warn') {
-                                const warnKey = `${jid}_${senderNumber}`;
-                                settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
-                                const count = settings.warns[warnKey];
-
-                                if (count >= 5) {
-                                    try {
-                                        await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-                                        await sock.sendMessage(jid, { text: `Sayonara! @${senderNumber}`, mentions: [senderJid] });
-                                        settings.warns[warnKey] = 0;
-                                    } catch (err) {}
-                                } else {
-                                    await sock.sendMessage(jid, { text: `@${senderNumber}\nLinks are restricted here!\n\n*Warn:* ${count}/5`, mentions: [senderJid] });
-                                }
-                            } else if (antilinkSetting === 'kick') {
-                                try {
-                                    await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-                                    await sock.sendMessage(jid, { text: `Sayonara! @${senderNumber}`, mentions: [senderJid] });
-                                } catch (err) {}
-                            }
-                            return; 
-                        }
-                    }
-                }
-
-                const antitagSetting = settings.antitag[jid];
-                if (antitagSetting === 'on') {
-                    const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
-                    const isTaggingBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid)) || quotedParticipant === botJid || (botLid && quotedParticipant === botLid);
-
-                    if (isTaggingBot) {
-                        if (!isAdmin && !isOwner && !isDev) {
-                            try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) {}
-                            await sock.sendMessage(jid, { text: `@${senderNumber} Quit tagging me weakling`, mentions: [senderJid] });
-                        } 
+                const session = global.vault8Sessions[vaultSessionKey];
+                if (session.lastQuestionMsgId === quotedMsgId) {
+                    if (['1', '2', '3'].includes(trimmedMessage)) {
+                        await commands[`${settings.prefix}vault8`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                        return;
                     }
                 }
             }
@@ -1044,72 +967,79 @@ async function startBot() {
             let command;
             let args;
 
-            if (lowerMessage.includes('gojo') && !trimmedMessage.startsWith(settings.prefix)) {
-                command = 'gojo';
-                args = trimmedMessage; 
+            let identifiedAgent = null;
+
+            // 1. Thread Tracking: Resolve who sent the message the user is replying to
+            if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
+                identifiedAgent = global.botMessageAgents[quotedMsgId];
             } 
-            else if (lowerMessage.includes('kamui') && !trimmedMessage.startsWith(settings.prefix)) {
-                command = 'kamui';
-                args = trimmedMessage;
-            }
-            else if (lowerMessage === 'speed' || lowerMessage.startsWith('speed ')) {
-                command = 'speed';
-                args = '';
-            }
-            else if (trimmedMessage.startsWith(settings.prefix)) {
-                const spaceIndex = trimmedMessage.indexOf(' ');
-                if (spaceIndex === -1) {
-                    command = trimmedMessage.slice(settings.prefix.length).toLowerCase();
-                    args = '';
-                } else {
-                    command = trimmedMessage.slice(settings.prefix.length, spaceIndex).toLowerCase();
-                    args = trimmedMessage.slice(spaceIndex + 1);
-                }
-
-                if (command === `${settings.prefix}gojo`) {
-                    command = 'gojo';
-                    const spaceIndex = trimmedMessage.indexOf(' ');
-                    args = spaceIndex === -1 ? '' : trimmedMessage.slice(spaceIndex + 1);
-                }
-
-                if (command === `${settings.prefix}speed`) {
-                    command = 'speed';
-                    args = '';
+            // 2. Mentions & Explicit Name Calls
+            else if (isMentioningBot || isReplyingToBot) {
+                if (lowerMessage.includes('gojo')) identifiedAgent = 'gojo';
+                else if (lowerMessage.includes('lizzy')) identifiedAgent = 'lizzy';
+                else if (lowerMessage.includes('jarvis') || lowerMessage.includes('chatbot')) identifiedAgent = 'jarvis';
+                else {
+                    // Fallback to active chat configuration
+                    if (Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid)) identifiedAgent = 'lizzy';
+                    else if (Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid)) identifiedAgent = 'jarvis';
+                    else identifiedAgent = 'gojo';
                 }
             } 
-            else if (commands[trimmedMessage.toLowerCase()]) {
-                command = trimmedMessage.toLowerCase();
-                args = '';
-            }
+            // 3. Name Call triggers
             else {
-                const isLizzyActive = Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid);
-                const isChatbotActive = Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid);
-
-                const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
-                const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && msg.message.extendedTextMessage?.contextInfo?.stanzaId);
-                const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
-
-                if (isLizzyActive && !command) {
-                    const containsLizzyName = lowerMessage.includes('lizzy');
-                    if (isReplyingToBot || isMentioningBot || containsLizzyName) {
-                        command = 'lizzy_chat';
-                        args = trimmedMessage;
-                    }
-                }
-
-                if (isChatbotActive && !command) {
-                    if (isReplyingToBot || isMentioningBot) {
-                        command = 'chatbot_chat';
-                        args = trimmedMessage;
-                    }
-                }
-                
-                if (!command) return; 
+                if (lowerMessage.includes('gojo')) identifiedAgent = 'gojo';
+                else if (lowerMessage.includes('lizzy')) identifiedAgent = 'lizzy';
+                else if (lowerMessage.includes('jarvis') || lowerMessage.includes('chatbot')) identifiedAgent = 'jarvis';
             }
+
+            // Validate Gojo sleep status
+            if (identifiedAgent === 'gojo') {
+                const isAsleep = Array.isArray(settings.gojoSleepChats) && settings.gojoSleepChats.includes(jid);
+                if (isAsleep) identifiedAgent = null;
+            }
+
+            // Route standard conversation text to the identified agent
+            if (identifiedAgent && !trimmedMessage.startsWith(settings.prefix)) {
+                if (identifiedAgent === 'gojo') {
+                    command = 'gojo';
+                    args = trimmedMessage;
+                } else if (identifiedAgent === 'lizzy') {
+                    command = 'lizzy_chat';
+                    args = trimmedMessage;
+                } else if (identifiedAgent === 'jarvis') {
+                    command = 'chatbot_chat';
+                    args = trimmedMessage;
+                }
+            }
+
+            // Standard prefix commands processing fallback
+            if (!command) {
+                if (trimmedMessage.startsWith(settings.prefix)) {
+                    const spaceIndex = trimmedMessage.indexOf(' ');
+                    if (spaceIndex === -1) {
+                        command = trimmedMessage.slice(settings.prefix.length).toLowerCase();
+                        args = '';
+                    } else {
+                        command = trimmedMessage.slice(settings.prefix.length, spaceIndex).toLowerCase();
+                        args = trimmedMessage.slice(spaceIndex + 1);
+                    }
+                } else if (commands[trimmedMessage.toLowerCase()]) {
+                    command = trimmedMessage.toLowerCase();
+                    args = '';
+                }
+            }
+
+            if (!command) return;
 
             if (command) {
+                // Set contextual identity key before executing command
+                if (command === 'gojo') global.activeAgentContext = 'gojo';
+                else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
+                else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
+                else global.activeAgentContext = null;
+
                 const isPublicMode = settings.isPublic ?? false;
-                const isInteractiveResponse = ['prop_ans', 'ask_ans', 'wed_ans'].includes(command);
+                const isInteractiveResponse = ['prop_ans', 'ask_ans', 'wed_ans', 'v8_btn'].includes(command);
 
                 if (!isPublicMode && !isAuthorized && !isDev && !isInteractiveResponse) {
                     return; 
