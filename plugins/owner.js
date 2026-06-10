@@ -89,16 +89,16 @@ if (!global.reminderInterval) {
     }, 10000);
 }
 
-// Highly versatile target parser
+// Highly versatile target JID normalization parser (strips multi-device colons and country prefix symbols)
 function parseTarget(msg, args) {
     let target = '';
     const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
     if (quotedParticipant) {
-        target = quotedParticipant.split('@')[0];
+        target = quotedParticipant.split('@')[0].split(':')[0]; // Safely strip multi-device colons
     } else if (msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
-        target = msg.message.extendedTextMessage.contextInfo.mentionedJid[0].split('@')[0];
+        target = msg.message.extendedTextMessage.contextInfo.mentionedJid[0].split('@')[0].split(':')[0]; // Safely strip colons
     } else if (args) {
-        target = args.replace(/[^0-9]/g, '');
+        target = args.replace(/[^0-9]/g, ''); // Strips everything except base JID digits (strips '+' and ':')
     }
     return target;
 }
@@ -334,7 +334,7 @@ module.exports = [
 
             settings.sudo.push(targetNumber);
             await sock.sendMessage(jid, { 
-                text: `✅ Added @${targetNumber} to the sudo list.\n_They can now use the bot in Private mode._`,
+                text: `👑 Added @${targetNumber} to the sudo list.\n_They can now use the bot in Private mode._`,
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
