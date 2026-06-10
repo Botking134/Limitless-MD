@@ -176,7 +176,7 @@ async function askNextAnagram(sock, jid, sessionKey) {
     }
 
     let activePlayer = session.player;
-    if (!isSingle) {
+    if (!isDev) {
         if (session.turnIndex >= session.players.length) session.turnIndex = 0;
         activePlayer = session.players[session.turnIndex];
     }
@@ -234,8 +234,9 @@ async function handleAnagramTimeout(sock, jid, sessionKey) {
         }
     } else {
         session.lives[activePlayer]--;
-        resultMsg = `⏰ *TIME IS UP!* \n\n@${activePlayer.split('@')[0]} failed to answer. Correct word was *${session.currentWord}*.`;
-        if (session.lives[activePlayer] <= 0) resultMsg += `\n\n💀 @${senderNumber} has been *ELIMINATED*!`;
+        const activeNumber = activePlayer.split('@')[0];
+        resultMsg = `⏰ *TIME IS UP!* \n\n@${activeNumber} failed to answer. Correct word was *${session.currentWord}*.`;
+        if (session.lives[activePlayer] <= 0) resultMsg += `\n\n💀 @${activeNumber} has been *ELIMINATED*!`;
     }
 
     await sock.sendMessage(jid, { text: resultMsg, mentions: isSingle ? [] : [activePlayer] });
@@ -370,7 +371,6 @@ async function sendMillionaireDisplay(sock, jid, sessionKey) {
     const session = global.millionaireSessions[sessionKey];
     if (session.timerId) clearTimeout(session.timerId);
 
-    const currentReward = session.step * 100000;
     const optionsText = session.currentOptions.map(opt => {
         const letter = opt.charAt(0).toLowerCase();
         if (session.eliminatedOptions.includes(letter)) return `🚫 *[ELIMINATED]*`;
@@ -428,14 +428,15 @@ async function evaluatePvpAttack(attackerChar, move) {
 
 async function evaluatePvpClash(attackerChar, defenderChar, attackMove, defenseMove) {
     const prompt = 
-        `You are the referee of an epic anime/comic 1v1 battle between "${attackerChar}" and "${defenderChar}".\n` +
-        `The attacker "${attackerChar}" used the attack move: "${attackMove}".\n` +
-        `The defender "${defenderChar}" attempted to defend using: "${defenseMove}".\n\n` +
-        `Evaluate the clash strictly according to canon power scaling:\n` +
-        `1. Gojo's "Infinity" is an absolute barrier. If "${defenderChar}" is "Satoru Gojo" and uses "Infinity" as a defense, it completely nullifies any standard attack (deals 0 damage) unless "${attackerChar}" has a spatial bypass (like Sukuna's World-Cutting Slash or Domain Amplification).\n` +
-        `2. Standard physical punches or kicks should deal extremely low, realistic damage (3-8 HP).\n` +
-        `3. Powerful canonical techniques (like Hollow Purple or Rasenshuriken) deal heavy damage (25-35 HP).\n` +
-        `4. Describe the clash intensely in 2 lines, and state the damage as "DAMAGE: [number]" at the end.`;
+        `You are an expert, strict anime and comic book combat referee evaluating a 1v1 battle.\n` +
+        `Attacker: "${attackerChar}" | Attack used: "${attackMove}"\n` +
+        `Defender: "${defenderChar}" | Active Defense used: "${defenseMove}"\n\n` +
+        `Evaluate this interaction strictly adhering to the characters' canonical scaling, attributes, and lore:\n` +
+        `1. Character Profiles & Conceptual Barriers: Safely identify both characters. Respect absolute defenses, intangibility, and tier limits (e.g., standard physical strikes cannot penetrate absolute spatial barriers, high-durability armor, or elemental/Logia intangibility unless utilizing Haki, spatial/dimensional bypasses, or elements of their direct counter).\n` +
+        `2. Defense Sufficiency: If the defense canonically nullifies, dodges, or blocks the attack completely, the damage is strictly 0 HP.\n` +
+        `3. Scaling Damage: Basic standard strikes deal low damage (3-8 HP). High-level signature canonical attacks deal heavy damage (20-35 HP) if partially or fully unmitigated.\n` +
+        `4. Strict Combat Immersion: Write exactly 2 descriptive lines depicting the clash intensely in the active voice. Avoid any meta-commentary, rules referencing, conditional assumptions, or hypothetical explanations (e.g., never say "Assuming character X does not have ability Y").\n` +
+        `5. Output Suffix: End your response strictly with the formatting: "DAMAGE: [number]" (do not add trailing commas or punctuation after the damage output).`;
 
     const result = await queryLLM(prompt, 0.7);
     return result ? result.trim() : null;
@@ -443,11 +444,14 @@ async function evaluatePvpClash(attackerChar, defenderChar, attackMove, defenseM
 
 async function evaluatePvpUnmitigated(attackerChar, defenderChar, attackMove) {
     const prompt = 
-        `The attacker "${attackerChar}" hit the completely undefended "${defenderChar}" with their attack "${attackMove}".\n\n` +
-        `Evaluate the impact strictly according to canon power scaling:\n` +
-        `1. Gojo's "Infinity" is passively active. If "${defenderChar}" is Satoru Gojo, standard attacks still deal 0 damage even if undefended, unless bypassed canonically.\n` +
-        `2. Calculate damage (3-8 HP for basic strikes, 20-35 HP for high-level techniques).\n` +
-        `3. Describe the impact intensely in 2 lines, stating the final damage as "DAMAGE: [number]" at the end.`;
+        `You are an expert, strict anime and comic book combat referee evaluating a 1v1 battle.\n` +
+        `Attacker: "${attackerChar}" | Attack used: "${attackMove}"\n` +
+        `Defender: "${defenderChar}" | Target is completely undefended!\n\n` +
+        `Evaluate this impact strictly adhering to the characters' canonical scaling, attributes, and lore:\n` +
+        `1. Native Passive Defenses: Determine if the undefended target possesses native passive attributes, elemental traits, or conceptual barriers that would canonically mitigate or nullify the impact even without an active block (e.g., passive intangibility, passive spatial/energy barrier shields, or extreme physical durability).\n` +
+        `2. Scaling Damage: If passive protections nullify the attack, the damage is 0 HP. Basic standard strikes deal low damage (5-10 HP). Devastating signature canonical techniques deal heavy unmitigated damage (25-40 HP).\n` +
+        `3. Strict Combat Immersion: Write exactly 2 descriptive lines depicting the impact intensely in the active voice. Avoid any meta-commentary, rules referencing, conditional assumptions, or hypothetical explanations (e.g., never say "Assuming character X does not have ability Y").\n` +
+        `4. Output Suffix: End your response strictly with the formatting: "DAMAGE: [number]" (do not add trailing commas or punctuation after the damage output).`;
 
     const result = await queryLLM(prompt, 0.7);
     return result ? result.trim() : null;
@@ -783,7 +787,7 @@ module.exports = [
                 } else {
                     session.lives[senderJid]--;
                     resultLabel = `❌ *INCORRECT GUESS BY @${senderNumber}!* Correct word was *${correctWord}*.\n\n❤️ *Remaining Hearts:* \`${session.lives[senderJid]}/3\``;
-                    if (session.lives[senderJid] <= 0) resultMsg += `\n\n💀 @${senderNumber} has been *ELIMINATED*!`;
+                    if (session.lives[senderJid] <= 0) resultLabel += `\n\n💀 @${senderNumber} has been *ELIMINATED*!`;
                 }
             }
 
@@ -1247,7 +1251,7 @@ module.exports = [
             } else {
                 results = `❌ *INCORRECT!* \n\n🎯 Correct was *${correctAns.toUpperCase()}*.\n📖 Explanation: _${session.explanation}_`;
             }
-            await sock.sendMessage(jid, { text: SandyResults }, { quoted: msg });
+            await sock.sendMessage(jid, { text: results }, { quoted: msg });
         }
     },
 
