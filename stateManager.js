@@ -39,6 +39,7 @@ function loadState() {
 function saveState() {
     try {
         const stateData = {
+            sessionId: settings.sessionId || "",
             isPublic: settings.isPublic,
             owners: settings.owners,
             sudo: settings.sudo,
@@ -53,7 +54,7 @@ function saveState() {
             afk: settings.afk || {},
             lizzyChats: settings.lizzyChats || [],
             chatbotChats: settings.chatbotChats || [],
-            gojoSleepChats: settings.gojoSleepChats || [] // Added persistency
+            gojoSleepChats: settings.gojoSleepChats || []
         };
         fs.writeFileSync(statePath, JSON.stringify(stateData, null, 2), 'utf-8');
     } catch (err) {
