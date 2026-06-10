@@ -237,27 +237,29 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "YouTube Video";
 
-                // Standardized resolution parameters to request lightweight, single-muxed 360p containers
+                // Standardized classic endpoint to strictly download combined H.264/AAC videos
                 try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(resolvedUrl)}&quality=360`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(resolvedUrl)}`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
                             title = data.result.title || title;
-                            downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                            downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
                         }
                     }
                 } catch (e) {}
 
                 if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(resolvedUrl)}&quality=360`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result) {
-                            title = data.result.title || title;
-                            downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(resolvedUrl)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.status && data.result) {
+                                title = data.result.title || title;
+                                downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
+                            }
                         }
-                    }
+                    } catch (e) {}
                 }
 
                 if (!downloadUrl) throw new Error();
@@ -380,27 +382,29 @@ module.exports = [
                 let downloadUrl = "";
                 let title = firstVideo.title || "YouTube Video";
 
-                // Forces light 360p dynamic formats to ensure perfect mobile rendering stability
+                // Standardized classic endpoint to strictly download combined H.264/AAC videos
                 try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(videoUrl)}&quality=360`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(videoUrl)}`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
                             title = data.result.title || title;
-                            downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                            downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
                         }
                     }
                 } catch (e) {}
 
                 if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(videoUrl)}&quality=360`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result) {
-                            title = data.result.title || title;
-                            downloadUrl = data.result.mp4 || data.result.download_url || data.result.link;
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(videoUrl)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.status && data.result) {
+                                title = data.result.title || title;
+                                downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
+                            }
                         }
-                    }
+                    } catch (e) {}
                 }
 
                 if (!downloadUrl) throw new Error();
@@ -644,7 +648,7 @@ module.exports = [
         }
     },
 
-    // 12. AUDIO RECOGNIZER (.shazam - Upgraded & Debugged)
+    // 12. AUDIO RECOGNIZER (.shazam - Upgraded & Redundancy Stabilized)
     {
         name: 'shazam',
         isPrefixless: false,
@@ -652,7 +656,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
 
             const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply to an audio or video file." }, { quoted: msg });
+            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply directly to an audio or video file." }, { quoted: msg });
 
             const rawContent = getRawMessage(quoted);
             let mediaMessage = rawContent?.audioMessage || rawContent?.videoMessage;
@@ -673,13 +677,45 @@ module.exports = [
                 const uploadedUrl = await uploadToCloud(buffer, mimeType);
                 if (!uploadedUrl) throw new Error("Cloud upload returned an empty URL");
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/shazam?url=${encodeURIComponent(uploadedUrl)}`);
-                if (!response.ok) throw new Error();
+                let title = "";
+                let artist = "";
+                let album = "";
+                let release_date = "";
+                let genre = "";
 
-                const data = await response.json();
-                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Unable to identify the song." }, { quoted: msg });
+                // Attempt 1: Kord High-speed Shazam Recognition (Extremely stable)
+                try {
+                    const response = await fetch(`https://api.kord.live/api/shazam?url=${encodeURIComponent(uploadedUrl)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status && data.result) {
+                            title = data.result.title;
+                            artist = data.result.artist;
+                            album = data.result.album || "N/A";
+                            release_date = data.result.release_date || "N/A";
+                            genre = data.result.genres || "N/A";
+                        }
+                    }
+                } catch (e) {}
 
-                const { title, artist, album, release_date, genre } = data.result;
+                // Attempt 2: David Cyril API Fallback (Standardized plural key maps)
+                if (!title) {
+                    try {
+                        const response = await fetch(`https://apis.davidcyril.name.ng/shazam?url=${encodeURIComponent(uploadedUrl)}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.status && data.result) {
+                                title = data.result.title;
+                                artist = data.result.artists || data.result.artist;
+                                album = data.result.album || "N/A";
+                                release_date = data.result.release_date || "N/A";
+                                genre = data.result.genre || "N/A";
+                            }
+                        }
+                    } catch (e) {}
+                }
+
+                if (!title) return await sock.sendMessage(jid, { text: "❌ Unable to identify the song." }, { quoted: msg });
 
                 const recognitionCaption = 
                     `🎧 *SHAZAM RECOGNITION* 🎧\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -1110,7 +1146,7 @@ module.exports = [
                 const audioBuffer = await fetchBuffer(downloadUrl);
                 if (audioBuffer) {
                     try {
-                        await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                        await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                     } catch (err) {
                         await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: 'spotify-track.mp3' }, { quoted: msg });
                     }
