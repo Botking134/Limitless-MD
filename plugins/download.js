@@ -1,5 +1,7 @@
 // plugins/download.js
 const settings = require('../settings');
+const axios = require('axios');
+const FormData = require('form-data');
 
 global.songSessions = global.songSessions || {};
 global.apkSessions = global.apkSessions || {};
@@ -40,41 +42,49 @@ async function fetchBuffer(url) {
     }
 }
 
-// Highly robust ESM upload to cloud helper with multi-host redundancy
+// Strictly verifies the magic bytes to confirm the buffer is a real MP4 stream
+function isValidMp4(buffer) {
+    if (!buffer || buffer.length < 12) return false;
+    const hex = buffer.toString('hex', 0, 12);
+    const hasFtyp = buffer.toString('ascii', 4, 8) === 'ftyp' || buffer.toString('ascii', 8, 12) === 'ftyp';
+    const isHtml = hex.startsWith('3c21') || hex.startsWith('3c68'); // '<!' or '<h'
+    const isJson = hex.startsWith('7b22'); // '{"'
+    return hasFtyp && !isHtml && !isJson;
+}
+
+// Extremely stable dynamic form-uploader with catbox and qu.ax fallback redundancy
 async function uploadToCloud(buffer, mimeType) {
     const ext = mimeType.split('/')[1] || 'bin';
-    const filename = `shazam_${Date.now()}.${ext}`;
+    const filename = `file_${Date.now()}.${ext}`;
 
     try {
-        const response = await fetch(`https://pixeldrain.com/api/file/${filename}`, {
-            method: 'PUT',
-            body: buffer
+        const form = new FormData();
+        form.append('files[]', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://qu.ax/upload.php', form, {
+            headers: { ...form.getHeaders() }
         });
-        if (response.ok) {
-            const data = await response.json();
-            if (data.success && data.id) return `https://pixeldrain.com/api/file/${data.id}`;
+        if (response.data?.success && response.data.files?.[0]?.url) {
+            return response.data.files[0].url;
         }
-    } catch (err) {}
-
-    const formData = new FormData();
-    const blob = new Blob([buffer], { type: mimeType });
-    formData.append('files[]', blob, filename);
-
-    const hosts = [
-        'https://qu.ax/upload.php',
-        'https://pomf2.lain.la/upload.php'
-    ];
-
-    for (const host of hosts) {
-        try {
-            const response = await fetch(host, { method: 'POST', body: formData });
-            if (response.ok) {
-                const data = await response.json();
-                if (data.success && data.files?.[0]?.url) return data.files[0].url;
-            }
-        } catch (err) {}
+    } catch (err) {
+        console.error("❌ [UPLOAD] qu.ax failed:", err.message);
     }
-    throw new Error("All upload hosts failed.");
+
+    try {
+        const form = new FormData();
+        form.append('reqtype', 'fileupload');
+        form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://catbox.moe/user/api.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
+            return response.data.trim();
+        }
+    } catch (err) {
+        console.error("❌ [UPLOAD] catbox failed:", err.message);
+    }
+
+    throw new Error("All secure cloud upload hosts failed.");
 }
 
 // Helper to resolve direct URL or search query using yt-search
@@ -126,7 +136,6 @@ module.exports = [
                     try {
                         await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                     } catch (err) {
-                        // Fallback directly to document formatting to prevent player rejection
                         await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
                     }
                 } else {
@@ -228,8 +237,9 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "YouTube Video";
 
+                // Standardized resolution parameters to request lightweight, single-muxed 360p containers
                 try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(resolvedUrl)}`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(resolvedUrl)}&quality=360`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
@@ -240,7 +250,7 @@ module.exports = [
                 } catch (e) {}
 
                 if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(resolvedUrl)}`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(resolvedUrl)}&quality=360`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
@@ -253,14 +263,14 @@ module.exports = [
                 if (!downloadUrl) throw new Error();
 
                 const videoBuffer = await fetchBuffer(downloadUrl);
-                if (videoBuffer) {
+                if (videoBuffer && isValidMp4(videoBuffer)) {
                     try {
                         await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: `🎥 *Title:* ${title}` }, { quoted: msg });
                     } catch (err) {
                         await sock.sendMessage(jid, { document: videoBuffer, mimetype: 'video/mp4', fileName: `${title}.mp4`, caption: `🎥 *Title:* ${title}\n\n⚠️ _Sent as raw document due to player codec limits._` }, { quoted: msg });
                     }
                 } else {
-                    await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎥 *Title:* ${title}` }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: "❌ *Playback Limit Exceeded:* YouTube delivered a stream format exceeding mobile decoding profiles. Try downloading as standard audio instead." }, { quoted: msg });
                 }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download video." }, { quoted: msg });
@@ -370,8 +380,9 @@ module.exports = [
                 let downloadUrl = "";
                 let title = firstVideo.title || "YouTube Video";
 
+                // Forces light 360p dynamic formats to ensure perfect mobile rendering stability
                 try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(videoUrl)}`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp444?url=${encodeURIComponent(videoUrl)}&quality=360`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
@@ -382,7 +393,7 @@ module.exports = [
                 } catch (e) {}
 
                 if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(videoUrl)}`);
+                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(videoUrl)}&quality=360`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.status && data.result) {
@@ -396,14 +407,14 @@ module.exports = [
 
                 const caption = `🎥 *Title:* ${title}\n⏳ *Duration:* ${firstVideo.duration || 'N/A'}`;
                 const videoBuffer = await fetchBuffer(downloadUrl);
-                if (videoBuffer) {
+                if (videoBuffer && isValidMp4(videoBuffer)) {
                     try {
                         await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: caption }, { quoted: msg });
                     } catch (err) {
                         await sock.sendMessage(jid, { document: videoBuffer, mimetype: 'video/mp4', fileName: `${title}.mp4`, caption: `${caption}\n\n⚠️ _Sent as raw document due to player codec limits._` }, { quoted: msg });
                     }
                 } else {
-                    await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: caption }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: "❌ *Playback Limit Exceeded:* YouTube delivered a stream format exceeding mobile decoding profiles. Try downloading as standard audio instead." }, { quoted: msg });
                 }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to download video." }, { quoted: msg });
@@ -1332,6 +1343,53 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "❌ Failed to complete TikTok v2 download." }, { quoted: msg });
             }
         }
+    },
+
+    // 27. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url)
+    {
+        name: 'tourl',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawContent = getRawMessage(quoted || msg.message);
+            
+            let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.stickerMessage || rawContent?.audioMessage || rawContent?.documentMessage;
+            let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.stickerMessage ? "sticker" : (rawContent?.audioMessage ? "audio" : "document")));
+
+            if (!mediaMessage) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ *Invalid Context:* Please reply directly to an image, video, sticker, audio, or document file to generate a URL." 
+                }, { quoted: msg });
+            }
+
+            const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Channelling media into direct link...*" }, { quoted: msg });
+
+            try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+
+                const mimeType = mediaMessage.mimetype || "application/octet-stream";
+                const url = await uploadToCloud(buffer, mimeType);
+
+                const finalReport = `📦 *DIRECT URL MANIFESTED* 🌐\n` +
+                                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                    `🔗 *Link:* ${url}\n` +
+                                    `⚖️ *Size:* \`${(buffer.length / (1024 * 1024)).toFixed(2)} MB\`\n\n` +
+                                    `_“My six eyes see straight through the data.”_ 🤞`;
+
+                await sock.sendMessage(jid, { text: finalReport, edit: statusMsg.key });
+            } catch (error) {
+                await sock.sendMessage(jid, { 
+                    text: `❌ *Upload Failed:* ${error.message || "Unable to complete cloud stream."}`, 
+                    edit: statusMsg.key 
+                });
+            }
+        }
     }
 ];
 
@@ -1343,5 +1401,6 @@ module.exports.forEach(cmd => {
     if (cmd.name === 'gitclone') aliases.push({ ...cmd, name: 'gitdl' });
     if (cmd.name === 'pinterest') aliases.push({ ...cmd, name: 'pint' });
     if (cmd.name === 'x2') aliases.push({ ...cmd, name: 'xdl2' });
+    if (cmd.name === 'tourl') aliases.push({ ...cmd, name: 'url' });
 });
 module.exports.push(...aliases);
