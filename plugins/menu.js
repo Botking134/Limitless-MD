@@ -78,7 +78,7 @@ ${readMore}
 _❖ ── [ AI & CHATBOT ] ── ❖_
 _║ ⊱ ai_
 _║ ⊱ groq_
-_║ ⊱ gojo_
+_║ ⊱ gojo_ (rise/sleep)
 _║ ⊱ debug_
 _║ ⊱ summon_
 _║ ⊱ read_
@@ -88,13 +88,14 @@ _║ ⊱ chatbot_
 _║ ⊱ say_
 
 _❖ ── [ INTERACTIVE GAMES ] ── ❖_
+_║ ⊱ games_ (Unified Lobby)
 _║ ⊱ ttt_
 _║ ⊱ rps_
 _║ ⊱ guess_
 _║ ⊱ vault8_
 _║ ⊱ trivia_
 _║ ⊱ quiz_
-_║ ⊱ charade_
+_║ ⊱ charade_ / .sharade
 _║ ⊱ anagram_
 _║ ⊱ wcg_
 _║ ⊱ millionaire_
@@ -141,6 +142,7 @@ _║ ⊱ antispam_
 _║ ⊱ silence_
 _║ ⊱ gcalerts_
 _║ ⊱ antigcstatus_
+_║ ⊱ spamtag_
 
 _❖ ── [ TOOLS ] ── ❖_
 _║ ⊱ track_
@@ -176,6 +178,7 @@ _║ ⊱ ss_
 _║ ⊱ calc_
 _║ ⊱ trt_
 _║ ⊱ translate_
+_║ ⊱ spam_
 
 _❖ ── [ DOWNLOADER ] ── ❖_
 _║ ⊱ play_
@@ -252,6 +255,7 @@ _║ ⊱ settings_
 _║ ⊱ antipm_
 _║ ⊱ reminder_
 _║ ⊱ remind_
+_║ ⊱ activegames_
 
 _❖ ── [ UTILITIES ] ── ❖_
 _║ ⊱ ping_
@@ -429,7 +433,7 @@ module.exports = [
 
 • *${settings.prefix}ai <prompt>* — Solves complex queries.
 • *${settings.prefix}groq <prompt>* — High-speed dynamic model completions.
-• *Gojo <prompt>* — Speak with Satoru Gojo directly.
+• *Gojo <prompt>* — Speak with Satoru Gojo directly (supports 'rise'/'sleep').
 • *${settings.prefix}debug <code>* — Auto-diagnoses compile errors & bugs.
 • *${settings.prefix}summon <char> <prompt>* — Summons any fictional character.
 • *${settings.prefix}read <prompt>* — High-speed Vision image analyzer.
@@ -449,13 +453,14 @@ module.exports = [
 `🎮 *DOMAIN INTERACTIVE GAMES* 🎮
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+• *${settings.prefix}games* — Unified Public Game Lobby portal.
 • *${settings.prefix}ttt* — Play Tic-Tac-Toe (AI/Multiplayer).
 • *${settings.prefix}rps* — Play Rock-Paper-Scissors against Gojo.
 • *${settings.prefix}guess* — Guess Gojo's Cursed Energy amount.
 • *${settings.prefix}vault8* — Creepy text-RPG terminal simulator.
 • *${settings.prefix}trivia* — General knowledge Trivia (Single/Multiplayer).
 • *${settings.prefix}quiz <category>* — Categorized dynamic quiz module.
-• *${settings.prefix}charade* — Semantic Guess the Emoji Phrase.
+• *${settings.prefix}charade* / *sharade* — Guess the Emoji Phrase.
 • *${settings.prefix}anagram* — Scrambled Anagram solver (Single/Multiplayer).
 • *${settings.prefix}wcg* — Turn-based Word Chain game lobby.
 • *${settings.prefix}millionaire* — Interactive 15-question Millionaire.
@@ -493,7 +498,8 @@ module.exports = [
 • *${settings.prefix}antispam <on/off/trig>* — Rate-limiting spam shield.
 • *${settings.prefix}silence <-s/-m/all>* — Auto-delete chat constraints.
 • *${settings.prefix}gcalerts <promote/demote/welcome/goodbye> <on/off>* — Real-time event notifications.
-• *${settings.prefix}antigcstatus <warn/delete/kick/off>* — Blocks unapproved status posts.`;
+• *${settings.prefix}antigcstatus <warn/delete/kick/off>* — Blocks unapproved status posts.
+• *${settings.prefix}spamtag <count> <text>* — Repeatedly tags group members with mentions.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -516,6 +522,7 @@ module.exports = [
 • *${settings.prefix}autotyping / .autorecording* — Active status simulation.
 • *${settings.prefix}alwaysonline / .autoread* — Continuous online state.
 • *${settings.prefix}antidelete* — Captures and forwards deleted files.
+• *${settings.prefix}antidelete_log* — Configures delete logs destination.
 • *${settings.prefix}antiviewonce* — Automated view-once decryptor.
 • *${settings.prefix}antibug* — Active flood rate-limit protection.
 • *${settings.prefix}clear* — Completely empties server chat logs.
@@ -532,7 +539,8 @@ module.exports = [
 • *${settings.prefix}football* — ESPN global soccer news wire.
 • *${settings.prefix}ss <url>* — Render high-speed website screenshot.
 • *${settings.prefix}calc <expr>* — Secure mathematical expression evaluator.
-• *${settings.prefix}trt <route> <text>* — Dynamic Google translation translator.`;
+• *${settings.prefix}trt <route> <text>* — Dynamic Google translation translator.
+• *${settings.prefix}spam <count> <text/reply>* — Repeatedly loops/spams text or media.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -546,14 +554,14 @@ module.exports = [
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 • *${settings.prefix}play <query>* — Song downloader with clean metadata artwork.
-• *${settings.prefix}ytmp3 / .ytmp4* — Dual-fallback YouTube downloaders (supports search queries).
+• *${settings.prefix}ytmp3 / .ytmp4* — Dual-fallback YouTube downloaders.
 • *${settings.prefix}yt <url>* — YouTube v3 multi-format media downloader.
 • *${settings.prefix}tt2 <url>* — TikTok v2 watermark-free link downloader.
 • *${settings.prefix}img <query> <count>* — Google bulk image downloader.
 • *${settings.prefix}song <query>* — Numbered song index selector & downloader.
-• *${settings.prefix}video <query>* — YouTube video search downloader.
-• *${settings.prefix}fb / .facebook* — Facebook HD video downloader (supports search queries).
-• *${settings.prefix}tt / .tiktok* — Watermark-free TikTok downloader (supports search queries).
+• *${settings.prefix}video <query>* — YouTube video search downloader (mobile-optimized).
+• *${settings.prefix}fb / .facebook* — Facebook HD video downloader.
+• *${settings.prefix}tt / .tiktok* — Watermark-free TikTok downloader.
 • *${settings.prefix}mediafire* — MediaFire file document downloader.
 • *${settings.prefix}apk <query>* — Direct APK application downloader.
 • *${settings.prefix}apksearch <query>* — Numbered APK search list downloader.
@@ -561,13 +569,13 @@ module.exports = [
 • *${settings.prefix}lyrics <query>* — Detailed lyrics scraper.
 • *${settings.prefix}gdrive* — Google Drive file document downloader.
 • *${settings.prefix}gitclone* — GitHub repository master branch zip-cloner.
-• *${settings.prefix}pinterest / .pint* — Pinterest video/image downloader (supports search queries).
+• *${settings.prefix}pinterest / .pint* — Pinterest video/image downloader.
 • *${settings.prefix}subtitle* — Movie English subtitles .srt document downloader.
 • *${settings.prefix}ytmp3doc / .ytmp4doc* — YouTube documents downloaders.
 • *${settings.prefix}playdoc / .videodoc* — YouTube search document downloaders.
 • *${settings.prefix}spotify / .spotify2* — Spotify v1 and v2 music downloaders.
 • *${settings.prefix}web* — Website assets zipper and downloader.
-• *${settings.prefix}x2 / .xdl2* — Twitter/X video and image downloader (supports search queries).`;
+• *${settings.prefix}x2 / .xdl2* — Twitter/X video and image downloader.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -624,7 +632,8 @@ module.exports = [
 • *${settings.prefix}settings* — Displays active global settings card.
 • *${settings.prefix}antipm <on/off>* — Automated PM DM blocker.
 • *${settings.prefix}reminder <timer> <note>* — Persistently register custom cron reminders.
-• *${settings.prefix}remind* — Access active scheduled reminders board.`;
+• *${settings.prefix}remind* — Access active scheduled reminders board.
+• *${settings.prefix}activegames* — Displays active running game sessions.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -648,7 +657,7 @@ module.exports = [
 • *${settings.prefix}sticker / .crop* — Sticker creation & cropping.
 • *${settings.prefix}take / .steal* — Sticker metadata customization.
 • *${settings.prefix}setcmd / .delcmd* — Maps commands directly to stickers.
-• *${settings.prefix}tourl / .url* — Media file cloud uploaders (Pixeldrain/Quax).
+• *${settings.prefix}tourl / .url* — Media file cloud uploaders.
 • *${settings.prefix}kamui* — Silent decryption & DM-forwarding View Once.
 • *${settings.prefix}vvs <emoji>* — Trigger decryption kamui via specific emojis.
 • *${settings.prefix}addnote / .delnote* — Sticky note managers.
