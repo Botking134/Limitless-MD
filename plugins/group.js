@@ -1440,6 +1440,53 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `🔒 *Anti-Status Protection updated:* \`${action.toUpperCase()}\`` }, { quoted: msg });
             }
         }
+    },
+
+    // 35. MULTI-TAG LOOPER SPAMMER (.spamtag)
+    {
+        name: 'spamtag',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            // Enforce administrative permissions
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, 'spamtag');
+            if (!isAuthorized) return;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ *Usage:* \`${settings.prefix}spamtag <number> <text>\` or reply directly to a message with \`${settings.prefix}spamtag <number>\`` 
+                }, { quoted: msg });
+            }
+
+            const parts = args.trim().split(' ');
+            const count = parseInt(parts[0]);
+            if (isNaN(count) || count < 1) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a valid loop number." }, { quoted: msg });
+            }
+
+            // Cap the loop count to protect account standing
+            const finalCount = Math.min(count, 30); 
+
+            let textToSend = parts.slice(1).join(' ').trim();
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!textToSend && quoted) {
+                const rawContent = getRawMessage(quoted);
+                textToSend = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || '';
+            }
+
+            if (!textToSend) textToSend = "🔔 *Attention Everyone!*";
+
+            const groupMetadata = await sock.groupMetadata(jid);
+            const participants = groupMetadata.participants.map(p => p.id);
+
+            for (let i = 0; i < finalCount; i++) {
+                await sock.sendMessage(jid, { text: textToSend, mentions: participants });
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 1-second delay
+            }
+        }
     }
 ];
 
