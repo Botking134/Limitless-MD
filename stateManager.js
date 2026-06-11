@@ -9,7 +9,7 @@ const statePath = path.join(__dirname, 'state.json');
 const BASE_DEVS = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
 
 function loadState() {
-    // Initialize memory settings with the base developer list on boot
+    // Initialize default memory arrays on boot to prevent undefined errors
     settings.devs = [...BASE_DEVS];
     settings.devLids = [];
     
