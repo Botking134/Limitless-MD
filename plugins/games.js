@@ -7,6 +7,7 @@ global.vault8SavedStories = global.vault8SavedStories || {};
 global.triviaSessions = global.triviaSessions || {};
 global.charadeSessions = global.charadeSessions || {};
 
+// Obfuscated API key configuration
 const s1 = "gsk_";
 const s2 = "tPB0xMyZ2oijloaBNcDs";
 const s3 = "WGdyb3FY5iC2p9hwRE";
