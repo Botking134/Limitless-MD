@@ -153,7 +153,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                         } else {
                             await sock.sendMessage(jid, { text: `⚠️ @${senderNumber} Status updates are not allowed here! (${count}/5)`, mentions: [senderJid] });
                         }
-                        const { saveSettings } = require('../settingsSaver');
+                        const { saveSettings } = require('./settingsSaver');
                         const { saveState } = require('../stateManager');
                         saveSettings();
                         saveState();
@@ -450,7 +450,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 }
 
                 settings.aza = { set: true, account: session.account, bank: session.bank, name: fullName };
-                const { saveSettings } = require('../settingsSaver');
+                const { saveSettings } = require('./settingsSaver');
                 saveSettings();
                 const { saveState } = require('../stateManager');
                 saveState();
