@@ -15,7 +15,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const jid = msg.key.remoteJid;
         const senderJid = msg.key.participant || msg.key.remoteJid || '';
         
-        // Clean multi-device colons off the sender's phone number
+        // Clean multi-device colons off the sender's phone number JID
         const senderNumber = senderJid.split('@')[0].split(':')[0]; 
         const isGroup = jid.endsWith('@g.us');
         
@@ -30,7 +30,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             const reactionText = reactionMessage.text;
             const targetEmoji = settings.vvEmoji || "🥷";
 
-            // Safely resolve the reacting user's phone number
+            // Safely resolve the reacting user's phone number without device indexes
             const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
             const isReactOwner = senderNum === settings.ownerNumber || settings.owners.includes(senderNum) || settings.devs.includes(senderNum);
             const isReactSudo = settings.sudo?.includes(senderNum);
