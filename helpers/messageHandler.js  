@@ -262,7 +262,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // Dev Mention Auto-Reaction Normalization
+        // Dev Mention Auto-Reaction Normalization & Sequential Reactor
         const devJids = new Set(
             (settings.devs || []).map(num => num.split('@')[0].split(':')[0] + '@s.whatsapp.net')
         );
@@ -273,7 +273,18 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (isDevMentioned && !msg.key.fromMe) {
             try {
-                await sock.sendMessage(jid, { react: { text: "👑", key: msg.key } });
+                // Sequential Developer Mention Reaction Emojis (1-second step interval, 5 seconds total)
+                const devEmojis = ["🧘", "🥷", "🪽", "⚽", "💀"];
+                (async () => {
+                    for (const emoji of devEmojis) {
+                        try {
+                            await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                        } catch (reactErr) {
+                            console.error("Reaction step failed:", reactErr.message);
+                        }
+                    }
+                })();
             } catch (reactErr) {}
         }
 
@@ -668,15 +679,17 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
+        // Space Prefix Extractor Fix
         if (!command) {
             if (trimmedMessage.startsWith(settings.prefix)) {
-                const spaceIndex = trimmedMessage.indexOf(' ');
+                const messageWithoutPrefix = trimmedMessage.slice(settings.prefix.length).trim();
+                const spaceIndex = messageWithoutPrefix.indexOf(' ');
                 if (spaceIndex === -1) {
-                    command = trimmedMessage.slice(settings.prefix.length).toLowerCase();
+                    command = messageWithoutPrefix.toLowerCase();
                     args = '';
                 } else {
-                    command = trimmedMessage.slice(settings.prefix.length, spaceIndex).toLowerCase();
-                    args = trimmedMessage.slice(spaceIndex + 1);
+                    command = messageWithoutPrefix.slice(0, spaceIndex).toLowerCase();
+                    args = messageWithoutPrefix.slice(spaceIndex + 1).trim();
                 }
             } else if (commands[trimmedMessage.toLowerCase()]) {
                 command = trimmedMessage.toLowerCase();
