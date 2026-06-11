@@ -2,14 +2,9 @@
 const settings = require('../settings'); 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
 
-// Hardcoded API Credentials
-const KLIPY_API_KEY = "EJp0obDxHHa1J9l8as9wyBl0HLiLhbxeBT4wmAgJhzJt2R6pB00iHkOZXylY9pT8";
-
-const s1 = "gsk_";
-const s2 = "tPB0xMyZ2oijloaBNcDs";
-const s3 = "WGdyb3FY5iC2p9hwRE";
-const s4 = "SIJXAV3t53LZg9";
-const GROQ_API_KEY = s1 + s2 + s3 + s4;
+// Loaded securely from environment mapping configs in settings
+const KLIPY_API_KEY = settings.klipyApiKey;
+const GROQ_API_KEY = settings.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
@@ -135,7 +130,7 @@ async function executeAction(sock, msg, action, verb) {
     try {
         const searchQuery = `anime ${action}`;
         
-        // Retrieve results from Klipy using the hardcoded key
+        // Retrieve results from Klipy using the config key
         const res = await fetch(`https://api.klipy.co/v1/gifs/search?api_key=${KLIPY_API_KEY}&q=${encodeURIComponent(searchQuery)}&limit=15`);
         if (!res.ok) throw new Error("Klipy lookup failed");
 
