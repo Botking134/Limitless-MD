@@ -14,7 +14,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const jid = msg.key.remoteJid;
         const senderJid = msg.key.participant || msg.key.remoteJid || '';
-        const senderNumber = senderJid.split('@')[0]; 
+        
+        // Clean multi-device colons off the sender's phone number
+        const senderNumber = senderJid.split('@')[0].split(':')[0]; 
         const isGroup = jid.endsWith('@g.us');
         
         const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
@@ -28,7 +30,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             const reactionText = reactionMessage.text;
             const targetEmoji = settings.vvEmoji || "🥷";
 
-            const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0];
+            // Safely resolve the reacting user's phone number
+            const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
             const isReactOwner = senderNum === settings.ownerNumber || settings.owners.includes(senderNum) || settings.devs.includes(senderNum);
             const isReactSudo = settings.sudo?.includes(senderNum);
             const isReactAuthorized = isReactOwner || isReactSudo;
@@ -74,7 +77,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             try {
                 const resolved = await sock.findUserId(senderJid);
                 if (resolved && resolved.phoneNumber) {
-                    const resolvedNumber = resolved.phoneNumber.split('@')[0];
+                    const resolvedNumber = resolved.phoneNumber.split('@')[0].split(':')[0];
                     isDev = settings.devs.includes(resolvedNumber) && resolvedNumber !== settings.ownerNumber;
                     if (isDev && !settings.devLids.includes(senderJid)) {
                         settings.devLids.push(senderJid);
@@ -259,12 +262,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // Dev Mention Auto-Reaction Interceptor
-        const devJids = new Set([
-            ...(settings.devs || []).map(num => num + '@s.whatsapp.net'),
-            ...(settings.devLids || [])
-        ]);
-        const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
+        // Dev Mention Auto-Reaction Normalization
+        const devJids = new Set(
+            (settings.devs || []).map(num => num.split('@')[0].split(':')[0] + '@s.whatsapp.net')
+        );
+        const isDevMentioned = mentionedJids.some(mention => {
+            const cleanMention = mention.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+            return devJids.has(cleanMention) && mention.split('@')[0].split(':')[0] !== senderNumber;
+        });
+
         if (isDevMentioned && !msg.key.fromMe) {
             try {
                 await sock.sendMessage(jid, { react: { text: "👑", key: msg.key } });
@@ -625,7 +631,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         let identifiedAgent = null;
 
-        // Thread Tracking
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         } 
