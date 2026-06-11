@@ -6,7 +6,7 @@ const settings = require('./settings');
 const fs = require('fs');
 const path = require('path');
 
-// Modular Imports
+// Modular Imports from helpers
 const { handleMessageDeletion } = require('./helpers/antiDelete');
 const { handleIncomingMessage } = require('./helpers/messageHandler');
 
@@ -15,7 +15,6 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 // Global in-memory set to track message IDs sent by the bot process
 const botSentMessageIds = new Set();
-const devStatePath = path.join(__dirname, 'dev_state.json');
 
 // Global Caches
 global.messageStore = global.messageStore || {};
@@ -69,12 +68,10 @@ async function startBot() {
         });
     }
 
-    settings.devLids = [];
-    try {
-        if (fs.existsSync(devStatePath)) {
-            settings.devLids = JSON.parse(fs.readFileSync(devStatePath, 'utf-8'));
-        }
-    } catch (e) {}
+    // devLids will be populated directly from the stateManager on boot
+    if (!Array.isArray(settings.devLids)) {
+        settings.devLids = [];
+    }
 
     const { state, saveCreds } = await useMultiFileAuthState('session_auth');
     let targetNumber = null;
