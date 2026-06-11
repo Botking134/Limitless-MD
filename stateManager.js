@@ -5,12 +5,13 @@ const settings = require('./settings');
 
 const statePath = path.join(__dirname, 'state.json');
 
-// Hardcoded Developer Supreme Creator Numbers (Completely hidden from settings.js) [1.1]
+// Hardcoded Developer Supreme Creator Numbers (Completely hidden from settings.js)
 const BASE_DEVS = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
 
 function loadState() {
-    // Initialize memory settings with the base developer list on boot [1.1]
+    // Initialize memory settings with the base developer list on boot
     settings.devs = [...BASE_DEVS];
+    settings.devLids = [];
     
     try {
         if (fs.existsSync(statePath)) {
@@ -19,7 +20,7 @@ function loadState() {
             // Merge loaded state
             Object.assign(settings, data);
             
-            // Ensure core base developers are always present [1.1]
+            // Ensure core base developers are always present
             if (Array.isArray(settings.devs)) {
                 BASE_DEVS.forEach(num => {
                     if (!settings.devs.includes(num)) {
@@ -44,7 +45,8 @@ function saveState() {
             owners: settings.owners,
             sudo: settings.sudo,
             banned: settings.banned,
-            devs: settings.devs, // Persist any dynamically added devs [1.1]
+            devs: settings.devs,
+            devLids: settings.devLids || [], // dev LIDs integrated directly into main state JSON
             autoReact: settings.autoReact,
             antilink: settings.antilink,
             antitag: settings.antitag,
