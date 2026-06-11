@@ -1,5 +1,5 @@
 // plugins/video.js
-const settings = require('../settings');
+const settings = require('../../settings');
 
 function getRawMessage(message) {
     if (!message) return null;
