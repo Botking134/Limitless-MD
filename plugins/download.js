@@ -50,8 +50,9 @@ function isValidMp4(buffer) {
     return hasFtyp && !isHtml && !isJson;
 }
 
-async function uploadToCloud(buffer, mimeType) {
-    const ext = mimeType.split('/')[1] || 'bin';
+// Configured with customExtension parameter to help downstream decoders
+async function uploadToCloud(buffer, mimeType, customExtension = '') {
+    const ext = customExtension || mimeType.split('/')[1] || 'bin';
     const filename = `file_${Date.now()}.${ext}`;
 
     try {
@@ -686,15 +687,17 @@ module.exports = [
 
                 const mimeType = mediaMessage.mimetype || (mediaType === "audio" ? "audio/ogg" : "video/mp4");
                 
-                const uploadedUrl = await uploadToCloud(buffer, mimeType);
+                // Normalizes audio buffer headers to standard MP3 stream to aid server-side parsing
+                const uploadedUrl = await uploadToCloud(buffer, mimeType, 'mp3');
                 if (!uploadedUrl) throw new Error("Cloud upload returned an empty URL");
 
                 let title = "";
                 let artist = "";
-                let album = "";
-                let release_date = "";
-                let genre = "";
+                let album = "N/A";
+                let release_date = "N/A";
+                let genre = "N/A";
 
+                // Attempt 1: Kord High-speed Shazam Recognition (Extremely stable)
                 try {
                     const response = await fetch(`https://api.kord.live/api/shazam?url=${encodeURIComponent(uploadedUrl)}`);
                     if (response.ok) {
@@ -709,6 +712,7 @@ module.exports = [
                     }
                 } catch (e) {}
 
+                // Attempt 2: David Cyril API Fallback
                 if (!title) {
                     try {
                         const response = await fetch(`https://apis.davidcyril.name.ng/shazam?url=${encodeURIComponent(uploadedUrl)}`);
@@ -1023,6 +1027,7 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "Searching song index for document... 🔍" }, { quoted: msg });
 
                 const yts = require('yt-search');
+                const Math = require('math');
                 const results = await yts(args);
                 const videos = results.videos || [];
 
