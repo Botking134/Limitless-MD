@@ -4,11 +4,8 @@ const { saveSettings } = require('../settingsSaver');
 const { saveState } = require('../stateManager');
 const commands = require('../commands'); 
 
-const s1 = "gsk_";
-const s2 = "tPB0xMyZ2oijloaBNcDs";
-const s3 = "WGdyb3FY5iC2p9hwRE";
-const s4 = "SIJXAV3t53LZg9";
-const GROQ_API_KEY = s1 + s2 + s3 + s4;
+// Loaded securely from settings mapped to process.env.GROQ_API_KEY
+const GROQ_API_KEY = settings.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
