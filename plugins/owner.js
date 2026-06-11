@@ -1,19 +1,17 @@
 // plugins/owner.js
 const settings = require('../settings'); 
 const { saveSettings } = require('../helpers/settingsSaver');  
-const { saveState } = require('../stateManager'); // Persistent state manager
+const { saveState } = require('../stateManager'); 
 const { exec } = require('child_process'); 
 const fs = require('fs');
 const path = require('path');
 
 const remindersPath = path.join(__dirname, '../reminders.json');
 
-// Initialize reminders dynamic memory
 if (!global.reminders) global.reminders = [];
 if (!global.reminderSessions) global.reminderSessions = {};
 if (!global.cancelSessions) global.cancelSessions = {};
 
-// Helpers to read/write persistent reminders to JSON
 function readReminders() {
     try {
         if (fs.existsSync(remindersPath)) {
@@ -33,7 +31,6 @@ function saveReminders(reminders) {
     }
 }
 
-// Duration string parser
 function parseDuration(str) {
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
@@ -45,7 +42,6 @@ function parseDuration(str) {
     return null;
 }
 
-// Uptime format helper
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
@@ -54,7 +50,6 @@ function formatUptime(seconds) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 }
 
-// Autonomous reminder checking loop
 if (!global.reminderInterval) {
     global.reminderInterval = setInterval(async () => {
         if (!global.activeSock) return;
@@ -89,28 +84,55 @@ if (!global.reminderInterval) {
     }, 10000);
 }
 
-// Highly versatile target JID normalization parser (strips multi-device colons and country prefix symbols)
+// Normalized Target JID Parser
 function parseTarget(msg, args) {
     let target = '';
-    const quotedParticipant = msg.message.extendedTextMessage?.contextInfo?.participant;
+
+    const getRawMessage = (message) => {
+        if (!message) return null;
+        if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+        if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+        if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+        if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+        if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+        return message;
+    };
+
+    const rawMsg = getRawMessage(msg.message);
+
+    const contextInfo = rawMsg?.contextInfo || 
+                        rawMsg?.extendedTextMessage?.contextInfo || 
+                        rawMsg?.imageMessage?.contextInfo || 
+                        rawMsg?.videoMessage?.contextInfo || 
+                        rawMsg?.stickerMessage?.contextInfo || 
+                        rawMsg?.audioMessage?.contextInfo || 
+                        rawMsg?.documentMessage?.contextInfo;
+
+    const quotedParticipant = contextInfo?.participant;
+
     if (quotedParticipant) {
-        target = quotedParticipant.split('@')[0].split(':')[0]; // Safely strip multi-device colons
-    } else if (msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
-        target = msg.message.extendedTextMessage.contextInfo.mentionedJid[0].split('@')[0].split(':')[0]; // Safely strip colons
-    } else if (args) {
-        target = args.replace(/[^0-9]/g, ''); // Strips everything except base JID digits (strips '+' and ':')
+        target = quotedParticipant.split('@')[0].split(':')[0];
+    } 
+    else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+        const botJid = settings.botJid || '';
+        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
+        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
+        target = selectedJid.split('@')[0].split(':')[0];
+    } 
+    else if (args) {
+        target = args.replace(/[^0-9]/g, '');
     }
+
     return target;
 }
 
 module.exports = [
-    // SYSTEM DIAGNOSTIC TOOL
     {
         name: 'diagnose',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return; // Strict Owner-Only Gate
+            if (!isOwner) return;
 
             let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
             const filesToTest = ['plugins/utilities.js', 'plugins/group.js', 'plugins/ai.js', 'plugins/games.js', 'plugins/games2.js'];
@@ -136,7 +158,6 @@ module.exports = [
         }
     },
 
-    // SYSTEM UPDATE & REPAIR COMMAND
     {
         name: 'update',
         isPrefixless: false,
@@ -282,7 +303,6 @@ module.exports = [
         }
     },
 
-    // 3. TOGGLE PUBLIC/PRIVATE MODE
     {
         name: 'mode',
         isPrefixless: false,
@@ -309,11 +329,10 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Invalid option. Use \`public\` or \`private\`.` }, { quoted: msg });
             }
             saveSettings(); 
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 4. ADD SUDO
     {
         name: 'setsudo',
         isPrefixless: false,
@@ -338,11 +357,10 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 5. REMOVE SUDO
     {
         name: 'delsudo',
         isPrefixless: false,
@@ -367,11 +385,10 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 6. ADD BOT OWNER
     {
         name: 'addowner',
         isPrefixless: false,
@@ -396,11 +413,10 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 7. REMOVE OWNER
     {
         name: 'delowner',
         isPrefixless: false,
@@ -429,11 +445,10 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 8. SYSTEM RESTART
     {
         name: 'restart',
         isPrefixless: false,
@@ -446,7 +461,6 @@ module.exports = [
         }
     },
 
-    // 9. SYSTEM SHUTDOWN
     {
         name: 'shutdown',
         isPrefixless: false,
@@ -459,7 +473,6 @@ module.exports = [
         }
     },
 
-    // 10. GLOBAL BOT BAN CONTROLLER
     {
         name: 'ban',
         isPrefixless: false,
@@ -488,11 +501,10 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 11. GLOBAL BOT UNBAN CONTROLLER
     {
         name: 'unban',
         isPrefixless: false,
@@ -517,11 +529,10 @@ module.exports = [
                 mentions: [`${targetNumber}@s.whatsapp.net`]
             }, { quoted: msg });
             saveSettings(); 
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 12. REGISTER DEVELOPER
     {
         name: 'adddev',
         isPrefixless: false,
@@ -547,7 +558,6 @@ module.exports = [
         }
     },
 
-    // 13. REMOVE DEVELOPER
     {
         name: 'deldev',
         isPrefixless: false,
@@ -578,7 +588,6 @@ module.exports = [
         }
     },
 
-    // 14. AFK TOGGLE COMMAND
     {
         name: 'afk',
         isPrefixless: false,
@@ -605,11 +614,10 @@ module.exports = [
                 }, { quoted: msg });
             }
             saveSettings(); 
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 15. DYNAMIC CONFIGURATION EDITOR (.setvar)
     {
         name: 'setvar',
         isPrefixless: false,
@@ -655,7 +663,7 @@ module.exports = [
 
             settings[mappedKey] = finalValue;
             saveSettings();
-            saveState(); // State sync
+            saveState(); 
 
             const commandsList = require('../commands');
             commandsList.reload();
@@ -669,7 +677,6 @@ module.exports = [
         }
     },
 
-    // 16. GET SYSTEM SETTINGS (.settings)
     {
         name: 'settings',
         isPrefixless: false,
@@ -720,7 +727,6 @@ module.exports = [
         }
     },
 
-    // 17. SYSTEM UPGRADE/REPLACE FILE WRITER (.upgrade)
     {
         name: 'upgrade',
         isPrefixless: false,
@@ -812,7 +818,6 @@ module.exports = [
         }
     },
 
-    // 18. AUTOMATIC WHATSAPP PM AUTOBLOCKER TOGGLE
     {
         name: 'antipm',
         isPrefixless: false,
@@ -837,11 +842,10 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "❌ Invalid option. Use `on` or `off`." }, { quoted: msg });
             }
             saveSettings();
-            saveState(); // State sync
+            saveState(); 
         }
     },
 
-    // 19. DYNAMIC SCHEDULER: ADD REMINDER
     {
         name: 'reminder',
         isPrefixless: false,
@@ -887,7 +891,6 @@ module.exports = [
         }
     },
 
-    // 20. .remind COMMAND (MANAGE REMINDERS)
     {
         name: 'remind',
         isPrefixless: false,
@@ -966,7 +969,6 @@ module.exports = [
         }
     },
 
-    // 21. ACTIVE GAME INSTANCES OVERVIEW
     {
         name: 'games',
         isPrefixless: false,
@@ -1017,7 +1019,6 @@ module.exports = [
         }
     },
 
-    // 22. CLOSE ALL GAMES RECOVERY CONTROLLER
     {
         name: 'games_closeall',
         isPrefixless: false,
@@ -1025,7 +1026,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            // Memory-safe cleanup of all intervals/timeouts first
             Object.keys(global.anagramSessions || {}).forEach(k => {
                 if (global.anagramSessions[k].timerId) clearTimeout(global.anagramSessions[k].timerId);
             });
@@ -1039,7 +1039,6 @@ module.exports = [
                 if (global.pvpSessions[k].timerId) clearTimeout(global.pvpSessions[k].timerId);
             });
 
-            // Wipe game memories
             global.gameSessions = {};
             global.vault8Sessions = {};
             global.vault8SavedStories = {};
@@ -1056,7 +1055,6 @@ module.exports = [
         }
     },
 
-    // 23. EXCLUSIVE OWNER & SUDO LIST VIEWER
     {
         name: 'owner',
         isPrefixless: false,
