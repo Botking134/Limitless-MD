@@ -2,7 +2,6 @@
 const settings = require('../settings'); 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
 
-// Loaded securely from environment mapping configs in settings
 const KLIPY_API_KEY = settings.klipyApiKey;
 const GROQ_API_KEY = settings.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -27,6 +26,42 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
 }
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
+function parseTarget(msg, args) {
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo || 
+                        rawMsg?.extendedTextMessage?.contextInfo || 
+                        rawMsg?.imageMessage?.contextInfo || 
+                        rawMsg?.videoMessage?.contextInfo || 
+                        rawMsg?.stickerMessage?.contextInfo || 
+                        rawMsg?.audioMessage?.contextInfo || 
+                        rawMsg?.documentMessage?.contextInfo;
+
+    const quotedParticipant = contextInfo?.participant;
+    let target = '';
+
+    if (quotedParticipant) {
+        target = quotedParticipant.split('@')[0].split(':')[0];
+    } else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+        const botJid = settings.botJid || '';
+        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
+        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
+        target = selectedJid.split('@')[0].split(':')[0];
+    } else if (args) {
+        target = args.replace(/[^0-9]/g, '');
+    }
+    return target;
+}
 
 function toSans(text) {
     return text.split('').map(char => {
@@ -105,32 +140,34 @@ async function executeAction(sock, msg, action, verb) {
     const jid = msg.key.remoteJid;
     const isGroup = jid.endsWith('@g.us');
     const senderJid = msg.key.participant || msg.key.remoteJid || '';
-    const senderNum = senderJid.split('@')[0];
+    const senderNum = senderJid.split('@')[0].split(':')[0];
 
-    const repliedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
-    const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo;
+    const repliedJid = contextInfo?.participant;
+    const mentions = contextInfo?.mentionedJid || [];
+    
     let targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
+    let targetNum = targetJid ? targetJid.split('@')[0].split(':')[0] : '';
 
     let captionText = "";
     let finalMentions = [];
 
-    if (targetJid && targetJid !== senderJid) {
-        captionText = `✨ @${senderNum} ${verb} @${targetJid.split('@')[0]}`;
-        finalMentions = [senderJid, targetJid];
+    if (targetNum && targetNum !== senderNum) {
+        captionText = `✨ @${senderNum} ${verb} @${targetNum}`;
+        finalMentions = [`${senderNum}@s.whatsapp.net`, `${targetNum}@s.whatsapp.net`];
     } else {
         if (isGroup) {
             captionText = `✨ @${senderNum} ${verb} everybody!`;
-            finalMentions = [senderJid];
+            finalMentions = [`${senderNum}@s.whatsapp.net`];
         } else {
             captionText = `✨ @${senderNum} ${verb} themselves!`;
-            finalMentions = [senderJid];
+            finalMentions = [`${senderNum}@s.whatsapp.net`];
         }
     }
 
     try {
         const searchQuery = `anime ${action}`;
-        
-        // Retrieve results from Klipy using the config key
         const res = await fetch(`https://api.klipy.co/v1/gifs/search?api_key=${KLIPY_API_KEY}&q=${encodeURIComponent(searchQuery)}&limit=15`);
         if (!res.ok) throw new Error("Klipy lookup failed");
 
@@ -138,7 +175,6 @@ async function executeAction(sock, msg, action, verb) {
         const results = data.data || [];
 
         if (results.length > 0) {
-            // Select a random GIF for variety
             const chosenGif = results[Math.floor(Math.random() * results.length)];
             const mp4Url = chosenGif.images?.original?.mp4 || chosenGif.images?.downsized?.mp4 || chosenGif.mp4;
             const gifUrl = chosenGif.images?.original?.url || chosenGif.gif;
@@ -156,7 +192,6 @@ async function executeAction(sock, msg, action, verb) {
         throw new Error("Empty collection retrieved from Klipy");
 
     } catch (err) {
-        // Fallback to waifu.pics API
         try {
             const fallbackRes = await fetch(`https://api.waifu.pics/sfw/${action === 'kick' ? 'kick' : action}`);
             if (fallbackRes.ok) {
@@ -170,7 +205,6 @@ async function executeAction(sock, msg, action, verb) {
             }
         } catch (fallbackErr) {}
 
-        // Text fallback
         await sock.sendMessage(jid, { text: `${captionText}`, mentions: finalMentions }, { quoted: msg });
     }
 }
@@ -251,8 +285,9 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const targetJid = msg.key.participant || msg.key.remoteJid || '';
-            await sock.sendMessage(jid, { text: `👿 @${targetJid.split('@')[0]}: \n${insultData[Math.floor(Math.random() * insultData.length)]}`, mentions: [targetJid] }, { quoted: msg });
+            const targetNumber = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
+            const targetJid = targetNumber + '@s.whatsapp.net';
+            await sock.sendMessage(jid, { text: `👿 @${targetNumber}: \n${insultData[Math.floor(Math.random() * insultData.length)]}`, mentions: [targetJid] }, { quoted: msg });
         }
     },
 
@@ -262,8 +297,9 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const targetJid = msg.key.participant || msg.key.remoteJid || '';
-            await sock.sendMessage(jid, { text: `🔥 @${targetJid.split('@')[0]}: \n${roastData[Math.floor(Math.random() * roastData.length)]}`, mentions: [targetJid] }, { quoted: msg });
+            const targetNumber = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
+            const targetJid = targetNumber + '@s.whatsapp.net';
+            await sock.sendMessage(jid, { text: `🔥 @${targetNumber}: \n${roastData[Math.floor(Math.random() * roastData.length)]}`, mentions: [targetJid] }, { quoted: msg });
         }
     },
 
@@ -283,15 +319,21 @@ module.exports = [
 
                 if (cleanParticipants.length < 2) return;
 
-                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const rawMsg = getRawMessage(msg.message);
+                const contextInfo = rawMsg?.contextInfo;
+                const mentions = contextInfo?.mentionedJid || [];
+                
                 let target1 = mentions[0] || cleanParticipants[Math.floor(Math.random() * cleanParticipants.length)];
                 let target2 = mentions[1] || cleanParticipants.filter(p => p !== target1)[Math.floor(Math.random() * (cleanParticipants.length - 1))];
+
+                const t1Num = target1.split('@')[0].split(':')[0];
+                const t2Num = target2.split('@')[0].split(':')[0];
 
                 const percentage = Math.floor(Math.random() * 101);
                 let verdict = percentage >= 80 ? "💍 Soulmates!" : (percentage >= 50 ? "💒 Match!" : "🏃💨 Mismatch.");
 
-                const shipCaption = `💞 *SHIP* 💞\n👩‍❤️‍👨 @${target1.split('@')[0]} x @${target2.split('@')[0]} — *${percentage}%*\n📢 *Verdict:* ${verdict}`;
-                await sock.sendMessage(jid, { text: shipCaption, mentions: [target1, target2] }, { quoted: msg });
+                const shipCaption = `💞 *SHIP* 💞\n👩‍❤️‍👨 @${t1Num} x @${t2Num} — *${percentage}%*\n📢 *Verdict:* ${verdict}`;
+                await sock.sendMessage(jid, { text: shipCaption, mentions: [`${t1Num}@s.whatsapp.net`, `${t2Num}@s.whatsapp.net`] }, { quoted: msg });
             } catch (err) {}
         }
     },
@@ -307,34 +349,31 @@ module.exports = [
 
             try {
                 const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                const repliedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
-                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const senderNum = senderJid.split('@')[0].split(':')[0];
 
-                const targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
-                if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
+                const targetNum = parseTarget(msg, args);
+                if (!targetNum || targetNum === senderNum) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-                const senderNum = senderJid.split('@')[0];
-                const targetNum = targetJid.split('@')[0];
-                const targetJidArg = targetJid.replace('@', '_at_');
-                const senderJidArg = senderJid.replace('@', '_at_');
+                const targetJid = targetNum + '@s.whatsapp.net';
+                const senderJidArg = senderNum + '@s.whatsapp.net';
 
                 const text = `👰🤵 *HOLY MATRIMONY PROPOSAL* 👰🤵\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👉 @${targetNum}, do you accept @${senderNum} as your lawfully wedded partner?`;
 
                 const buttonMessage = {
                     text: text,
                     buttons: [
-                        { buttonId: `${settings.prefix}wed_ans yes ${targetJidArg} ${senderJidArg}`, buttonText: { displayText: '💍 I Do!' }, type: 1 },
-                        { buttonId: `${settings.prefix}wed_ans no ${targetJidArg} ${senderJidArg}`, buttonText: { displayText: "💔 I Don't" }, type: 1 }
+                        { buttonId: `${settings.prefix}wed_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💍 I Do!' }, type: 1 },
+                        { buttonId: `${settings.prefix}wed_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: "💔 I Don't" }, type: 1 }
                     ],
                     headerType: 1,
-                    mentions: [targetJid, senderJid]
+                    mentions: [targetJid, `${senderNum}@s.whatsapp.net`]
                 };
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
             } catch (err) {}
         }
     },
 
-    // 9. WED PROPOSAL ANSWER HANDLER
+    // 9. WED PROPOSAL ANSWER HANDLER (MD-Normalization)
     {
         name: 'wed_ans',
         isPrefixless: false,
@@ -344,14 +383,16 @@ module.exports = [
 
             const parts = args.split(' ');
             const action = parts[0]?.toLowerCase().trim();
-            const targetJid = parts[1]?.replace('_at_', '@').trim();
-            const senderJid = parts[2]?.replace('_at_', '@').trim();
+            const targetNum = parts[1]?.trim();
+            const senderNum = parts[2]?.trim();
 
             const clickerJid = msg.key.participant || msg.key.remoteJid || '';
-            if (clickerJid !== targetJid) return;
+            const clickerNum = clickerJid.split('@')[0].split(':')[0];
 
-            const targetNum = targetJid.split('@')[0];
-            const senderNum = senderJid.split('@')[0];
+            if (clickerNum !== targetNum) return; // Strict MD target check
+
+            const targetJid = targetNum + '@s.whatsapp.net';
+            const senderJid = senderNum + '@s.whatsapp.net';
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `👰🤵 *MATRIMONY COMPLETED!* 👰🤵\n\nBy Satoru Gojo's authority, I declare @${senderNum} and @${targetNum} joined in holy matrimony! 💍✨`, mentions: [senderJid, targetJid] }, { quoted: msg });
@@ -372,26 +413,21 @@ module.exports = [
 
             try {
                 const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                const repliedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
-                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const senderNum = senderJid.split('@')[0].split(':')[0];
 
-                const targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
-                if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
+                const targetNum = parseTarget(msg, args);
+                if (!targetNum || targetNum === senderNum) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-                const senderNum = senderJid.split('@')[0];
-                const targetNum = targetJid.split('@')[0];
+                const targetJid = targetNum + '@s.whatsapp.net';
                 const heartMsg = proposalMessages[Math.floor(Math.random() * proposalMessages.length)];
-                
-                const targetJidArg = targetJid.replace('@', '_at_');
-                const senderJidArg = senderJid.replace('@', '_at_');
 
                 const text = `🌹 *A CONFESSION* 🌹\n\n💖 *To:* @${targetNum}\n📝 _"${heartMsg}"_\n\n💍 *WILL YOU MARRY ME?* @${targetNum} 💍`;
 
                 const buttonMessage = {
                     text: text,
                     buttons: [
-                        { buttonId: `${settings.prefix}prop_ans yes ${targetJidArg} ${senderJidArg}`, buttonText: { displayText: '💍 Yes!' }, type: 1 },
-                        { buttonId: `${settings.prefix}prop_ans no ${targetJidArg} ${senderJidArg}`, buttonText: { displayText: '💔 No' }, type: 1 }
+                        { buttonId: `${settings.prefix}prop_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💍 Yes!' }, type: 1 },
+                        { buttonId: `${settings.prefix}prop_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: '💔 No' }, type: 1 }
                     ],
                     headerType: 1,
                     mentions: [targetJid]
@@ -401,7 +437,7 @@ module.exports = [
         }
     },
 
-    // 11. PROPOSE ANSWER HANDLER
+    // 11. PROPOSE ANSWER HANDLER (MD-Normalization)
     {
         name: 'prop_ans',
         isPrefixless: false,
@@ -411,14 +447,16 @@ module.exports = [
 
             const parts = args.split(' ');
             const action = parts[0]?.toLowerCase().trim();
-            const targetJid = parts[1]?.replace('_at_', '@').trim();
-            const senderJid = parts[2]?.replace('_at_', '@').trim();
+            const targetNum = parts[1]?.trim();
+            const senderNum = parts[2]?.trim();
 
             const clickerJid = msg.key.participant || msg.key.remoteJid || '';
-            if (clickerJid !== targetJid) return;
+            const clickerNum = clickerJid.split('@')[0].split(':')[0];
 
-            const targetNum = targetJid.split('@')[0];
-            const senderNum = senderJid.split('@')[0];
+            if (clickerNum !== targetNum) return; // Strict MD target check
+
+            const targetJid = targetNum + '@s.whatsapp.net';
+            const senderJid = senderNum + '@s.whatsapp.net';
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `💍 *ENGAGED!* 💍\n\n🎉 @${targetNum} and @${senderNum} are now officially *ENGAGED*!`, mentions: [targetJid, senderJid] }, { quoted: msg });
@@ -439,26 +477,21 @@ module.exports = [
 
             try {
                 const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                const repliedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
-                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const senderNum = senderJid.split('@')[0].split(':')[0];
 
-                const targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
-                if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
+                const targetNum = parseTarget(msg, args);
+                if (!targetNum || targetNum === senderNum) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-                const senderNum = senderJid.split('@')[0];
-                const targetNum = targetJid.split('@')[0];
+                const targetJid = targetNum + '@s.whatsapp.net';
                 const heartMsg = askoutMessages[Math.floor(Math.random() * askoutMessages.length)];
-
-                const targetJidArg = targetJid.replace('@', '_at_');
-                const senderJidArg = senderJid.replace('@', '_at_');
 
                 const text = `💌 *A CONFESSION* 💌\n\n💖 *To:* @${targetNum}\n📝 _"${heartMsg}"_\n\n👉 *WILL YOU GO OUT WITH ME?* @${targetNum} 👈`;
 
                 const buttonMessage = {
                     text: text,
                     buttons: [
-                        { buttonId: `${settings.prefix}ask_ans yes ${targetJidArg} ${senderJidArg}`, buttonText: { displayText: '💖 Yes!' }, type: 1 },
-                        { buttonId: `${settings.prefix}ask_ans no ${targetJidArg} ${senderJidArg}`, buttonText: { displayText: '💔 No' }, type: 1 }
+                        { buttonId: `${settings.prefix}ask_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💖 Yes!' }, type: 1 },
+                        { buttonId: `${settings.prefix}ask_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: '💔 No' }, type: 1 }
                     ],
                     headerType: 1,
                     mentions: [targetJid]
@@ -468,7 +501,7 @@ module.exports = [
         }
     },
 
-    // 13. ASKOUT ANSWER HANDLER
+    // 13. ASKOUT ANSWER HANDLER (MD-Normalization)
     {
         name: 'ask_ans',
         isPrefixless: false,
@@ -478,14 +511,16 @@ module.exports = [
 
             const parts = args.split(' ');
             const action = parts[0]?.toLowerCase().trim();
-            const targetJid = parts[1]?.replace('_at_', '@').trim();
-            const senderJid = parts[2]?.replace('_at_', '@').trim();
+            const targetNum = parts[1]?.trim();
+            const senderNum = parts[2]?.trim();
 
             const clickerJid = msg.key.participant || msg.key.remoteJid || '';
-            if (clickerJid !== targetJid) return;
+            const clickerNum = clickerJid.split('@')[0].split(':')[0];
 
-            const targetNum = targetJid.split('@')[0];
-            const senderNum = senderJid.split('@')[0];
+            if (clickerNum !== targetNum) return; // Strict MD target check
+
+            const targetJid = targetNum + '@s.whatsapp.net';
+            const senderJid = senderNum + '@s.whatsapp.net';
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `🎉 *CONFESSION ACCEPTED!* 🎉\n\n💖 @${targetNum} and @${senderNum} are now officially in a relationship!`, mentions: [targetJid, senderJid] }, { quoted: msg });
@@ -610,15 +645,12 @@ module.exports = [
 
             try {
                 const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                const repliedJid = msg.message.extendedTextMessage?.contextInfo?.participant;
-                const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                const senderNum = senderJid.split('@')[0].split(':')[0];
 
-                const targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
-                if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
+                const targetNum = parseTarget(msg, args);
+                if (!targetNum || targetNum === senderNum) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-                const senderNum = senderJid.split('@')[0];
-                const targetNum = targetJid.split('@')[0];
-                const targetJidArg = targetJid.replace('@', '_at_'); 
+                const targetJid = targetNum + '@s.whatsapp.net';
 
                 const text = 
                     `🚨 *ARREST WARRANT* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -628,9 +660,9 @@ module.exports = [
 
                 const buttonMessage = {
                     text: text,
-                    buttons: [{ buttonId: `${settings.prefix}jail_ans ${targetJidArg}`, buttonText: { displayText: 'Send to Jail ⛓️' }, type: 1 }],
+                    buttons: [{ buttonId: `${settings.prefix}jail_ans ${targetNum}`, buttonText: { displayText: 'Send to Jail ⛓️' }, type: 1 }],
                     headerType: 1,
-                    mentions: [targetJid, senderJid]
+                    mentions: [targetJid, `${senderNum}@s.whatsapp.net`]
                 };
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
             } catch (err) {}
@@ -645,8 +677,8 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!args) return;
 
-            const targetJid = args.trim().replace('_at_', '@');
-            const targetNum = targetJid.split('@')[0];
+            const targetNum = args.trim().split(' ')[0].split('@')[0].split(':')[0];
+            const targetJid = targetNum + '@s.whatsapp.net';
 
             try {
                 const craftingMsg = await sock.sendMessage(jid, { text: `Forging iron bars for target @${targetNum}... ⚙️`, mentions: [targetJid] }, { quoted: msg });
@@ -707,11 +739,12 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg) => {
             const jid = msg.key.remoteJid;
-            let targetJid = msg.key.participant || msg.key.remoteJid || '';
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-
-            if (quoted && quoted.participant) targetJid = quoted.participant;
-            const targetNum = targetJid.split('@')[0];
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo;
+            
+            let targetJid = contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '';
+            const targetNum = targetJid.split('@')[0].split(':')[0];
+            targetJid = targetNum + '@s.whatsapp.net';
 
             let pfpUrl;
             try {
@@ -723,7 +756,7 @@ module.exports = [
             let bio = "No bio set.";
             try { bio = (await sock.fetchStatus(targetJid))?.status || bio; } catch (e) {}
 
-            const device = getDeviceTypeFromId(quoted?.stanzaId || msg.key.id);
+            const device = getDeviceTypeFromId(contextInfo?.stanzaId || msg.key.id);
 
             const infoCaption = 
                 `📋 *LIMITLESS USER INTEL* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -742,11 +775,12 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg) => {
             const jid = msg.key.remoteJid;
-            let targetJid = msg.key.participant || msg.key.remoteJid || '';
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo;
 
-            if (quoted && quoted.participant) targetJid = quoted.participant;
-            const targetNum = targetJid.split('@')[0];
+            let targetJid = contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '';
+            const targetNum = targetJid.split('@')[0].split(':')[0];
+            targetJid = targetNum + '@s.whatsapp.net';
 
             const loadingMsg = await sock.sendMessage(jid, { text: `Analyzing biometric patterns...`, mentions: [targetJid] }, { quoted: msg });
             await delay(1500);
