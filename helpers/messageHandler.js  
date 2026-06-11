@@ -7,6 +7,15 @@ const path = require('path');
 
 const devStatePath = path.join(__dirname, '../dev_state.json');
 
+// Consolidated command access definitions for boundary protection
+const ownerCommands = [
+    'diagnose', 'update', 'mode', 'setsudo', 'delsudo', 
+    'addowner', 'delowner', 'restart', 'shutdown', 'ban', 
+    'unban', 'adddev', 'deldev', 'afk', 'setvar', 'settings', 
+    'upgrade', 'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
+];
+const devOnlyCommands = ['upgrade', 'adddev', 'deldev'];
+
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
         const msg = chatUpdate.messages[0];
@@ -14,9 +23,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const jid = msg.key.remoteJid;
         const senderJid = msg.key.participant || msg.key.remoteJid || '';
-        
-        // Clean multi-device colons off the sender's phone number JID
-        const senderNumber = senderJid.split('@')[0].split(':')[0]; 
+        const senderNumber = senderJid.split('@')[0]; 
         const isGroup = jid.endsWith('@g.us');
         
         const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
@@ -30,8 +37,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             const reactionText = reactionMessage.text;
             const targetEmoji = settings.vvEmoji || "🥷";
 
-            // Safely resolve the reacting user's phone number without device indexes
-            const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
+            const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0];
             const isReactOwner = senderNum === settings.ownerNumber || settings.owners.includes(senderNum) || settings.devs.includes(senderNum);
             const isReactSudo = settings.sudo?.includes(senderNum);
             const isReactAuthorized = isReactOwner || isReactSudo;
@@ -77,7 +83,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             try {
                 const resolved = await sock.findUserId(senderJid);
                 if (resolved && resolved.phoneNumber) {
-                    const resolvedNumber = resolved.phoneNumber.split('@')[0].split(':')[0];
+                    const resolvedNumber = resolved.phoneNumber.split('@')[0];
                     isDev = settings.devs.includes(resolvedNumber) && resolvedNumber !== settings.ownerNumber;
                     if (isDev && !settings.devLids.includes(senderJid)) {
                         settings.devLids.push(senderJid);
@@ -262,30 +268,25 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // Dev Mention Auto-Reaction Normalization & Sequential Reactor
-        const devJids = new Set(
-            (settings.devs || []).map(num => num.split('@')[0].split(':')[0] + '@s.whatsapp.net')
-        );
-        const isDevMentioned = mentionedJids.some(mention => {
-            const cleanMention = mention.split('@')[0].split(':')[0] + '@s.whatsapp.net';
-            return devJids.has(cleanMention) && mention.split('@')[0].split(':')[0] !== senderNumber;
-        });
-
+        // Dev Mention Auto-Reaction Interceptor (Animated 5-Second Sequence)
+        const devJids = new Set([
+            ...(settings.devs || []).map(num => num + '@s.whatsapp.net'),
+            ...(settings.devLids || [])
+        ]);
+        const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
+        
         if (isDevMentioned && !msg.key.fromMe) {
-            try {
-                // Sequential Developer Mention Reaction Emojis (1-second step interval, 5 seconds total)
-                const devEmojis = ["🧘", "🥷", "🪽", "⚽", "💀"];
-                (async () => {
-                    for (const emoji of devEmojis) {
-                        try {
-                            await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
-                            await new Promise(resolve => setTimeout(resolve, 1000));
-                        } catch (reactErr) {
-                            console.error("Reaction step failed:", reactErr.message);
-                        }
+            (async () => {
+                const reactionSequence = ["❄", "🥷", "🪽", "⚽", "💀"];
+                for (const emoji of reactionSequence) {
+                    try {
+                        await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
+                    } catch (reactErr) {
+                        break; 
                     }
-                })();
-            } catch (reactErr) {}
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
         }
 
         const quotedParticipant = contextInfo?.participant;
@@ -642,6 +643,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         let identifiedAgent = null;
 
+        // Thread Tracking
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         } 
@@ -679,17 +681,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // Space Prefix Extractor Fix
         if (!command) {
             if (trimmedMessage.startsWith(settings.prefix)) {
-                const messageWithoutPrefix = trimmedMessage.slice(settings.prefix.length).trim();
-                const spaceIndex = messageWithoutPrefix.indexOf(' ');
+                const spaceIndex = trimmedMessage.indexOf(' ');
                 if (spaceIndex === -1) {
-                    command = messageWithoutPrefix.toLowerCase();
+                    command = trimmedMessage.slice(settings.prefix.length).toLowerCase();
                     args = '';
                 } else {
-                    command = messageWithoutPrefix.slice(0, spaceIndex).toLowerCase();
-                    args = messageWithoutPrefix.slice(spaceIndex + 1).trim();
+                    command = trimmedMessage.slice(settings.prefix.length, spaceIndex).toLowerCase();
+                    args = trimmedMessage.slice(spaceIndex + 1);
                 }
             } else if (commands[trimmedMessage.toLowerCase()]) {
                 command = trimmedMessage.toLowerCase();
@@ -711,6 +711,22 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (!isPublicMode && !isAuthorized && !isDev && !isInteractiveResponse) {
                 return; 
             }
+        }
+
+        // Boundary protections for Sudoers and Owners
+        const cleanCmd = command.startsWith(settings.prefix) ? command.slice(settings.prefix.length) : command;
+        const isOwnerCmd = ownerCommands.includes(cleanCmd);
+        const isDevOnlyCmd = devOnlyCommands.includes(cleanCmd);
+
+        // 1. Block Sudo users from executing Owner-only files/commands
+        if (isOwnerCmd && isSudo && !isOwner && !isDev) {
+            return;
+        }
+
+        // 2. Block Owners/Sudoers from Developer-only administrative operations
+        const isPrimaryOwner = senderNumber === settings.ownerNumber;
+        if (isDevOnlyCmd && !isDev && !isPrimaryOwner) {
+            return;
         }
 
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
