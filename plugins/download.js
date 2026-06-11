@@ -24,7 +24,6 @@ function extractLink(text, regex) {
     return matches.find(url => regex.test(url)) || null;
 }
 
-// Browser-spoofed binary fetch helper to guarantee uncorrupted media downloads
 async function fetchBuffer(url) {
     try {
         const response = await fetch(url, {
@@ -42,17 +41,15 @@ async function fetchBuffer(url) {
     }
 }
 
-// Strictly verifies the magic bytes to confirm the buffer is a real MP4 stream
 function isValidMp4(buffer) {
     if (!buffer || buffer.length < 12) return false;
     const hex = buffer.toString('hex', 0, 12);
     const hasFtyp = buffer.toString('ascii', 4, 8) === 'ftyp' || buffer.toString('ascii', 8, 12) === 'ftyp';
-    const isHtml = hex.startsWith('3c21') || hex.startsWith('3c68'); // '<!' or '<h'
-    const isJson = hex.startsWith('7b22'); // '{"'
+    const isHtml = hex.startsWith('3c21') || hex.startsWith('3c68'); 
+    const isJson = hex.startsWith('7b22'); 
     return hasFtyp && !isHtml && !isJson;
 }
 
-// Extremely stable dynamic form-uploader with catbox and qu.ax fallback redundancy
 async function uploadToCloud(buffer, mimeType) {
     const ext = mimeType.split('/')[1] || 'bin';
     const filename = `file_${Date.now()}.${ext}`;
@@ -87,7 +84,6 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("All secure cloud upload hosts failed.");
 }
 
-// Helper to resolve direct URL or search query using yt-search
 async function resolveUrlOrSearch(args) {
     if (!args) return null;
     const urlRegex = /^(https?:\/\/[^\s]+)/i;
@@ -155,7 +151,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -220,7 +219,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -237,7 +239,6 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "YouTube Video";
 
-                // Standardized classic endpoint to strictly download combined H.264/AAC videos
                 try {
                     const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(resolvedUrl)}`);
                     if (response.ok) {
@@ -382,7 +383,6 @@ module.exports = [
                 let downloadUrl = "";
                 let title = firstVideo.title || "YouTube Video";
 
-                // Standardized classic endpoint to strictly download combined H.264/AAC videos
                 try {
                     const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(videoUrl)}`);
                     if (response.ok) {
@@ -434,7 +434,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -489,7 +492,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -541,7 +547,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -574,7 +583,7 @@ module.exports = [
         }
     },
 
-    // 10. DIRECT APK DOWNLOADER (.apk - Upgraded with Kord Endpoint)
+    // 10. DIRECT APK DOWNLOADER (.apk)
     {
         name: 'apk',
         isPrefixless: false,
@@ -611,7 +620,7 @@ module.exports = [
         }
     },
 
-    // 11. INTERACTIVE APK SEARCHER (.apksearch - Upgraded with Kord Endpoint)
+    // 11. INTERACTIVE APK SEARCHER (.apksearch)
     {
         name: 'apksearch',
         isPrefixless: false,
@@ -648,14 +657,17 @@ module.exports = [
         }
     },
 
-    // 12. AUDIO RECOGNIZER (.shazam - Upgraded & Redundancy Stabilized)
+    // 12. AUDIO RECOGNIZER (.shazam)
     {
         name: 'shazam',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply directly to an audio or video file." }, { quoted: msg });
 
             const rawContent = getRawMessage(quoted);
@@ -683,7 +695,6 @@ module.exports = [
                 let release_date = "";
                 let genre = "";
 
-                // Attempt 1: Kord High-speed Shazam Recognition (Extremely stable)
                 try {
                     const response = await fetch(`https://api.kord.live/api/shazam?url=${encodeURIComponent(uploadedUrl)}`);
                     if (response.ok) {
@@ -698,7 +709,6 @@ module.exports = [
                     }
                 } catch (e) {}
 
-                // Attempt 2: David Cyril API Fallback (Standardized plural key maps)
                 if (!title) {
                     try {
                         const response = await fetch(`https://apis.davidcyril.name.ng/shazam?url=${encodeURIComponent(uploadedUrl)}`);
@@ -773,7 +783,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -814,7 +827,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -845,7 +861,7 @@ module.exports = [
         }
     },
 
-    // 16. PINTEREST DOWNPARSER (.pinterest / .pint - Upgraded with Kord Endpoint)
+    // 16. PINTEREST DOWNPARSER (.pinterest)
     {
         name: 'pinterest',
         isPrefixless: false,
@@ -853,7 +869,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -911,7 +930,7 @@ module.exports = [
         }
     },
 
-    // 17. SUBTITLE FILE DOWNLOADER (.subtitle - Upgraded with Kord Endpoint)
+    // 17. SUBTITLE FILE DOWNLOADER (.subtitle)
     {
         name: 'subtitle',
         isPrefixless: false,
@@ -954,7 +973,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -1036,7 +1058,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -1199,7 +1224,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -1276,7 +1304,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -1337,7 +1368,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -1387,8 +1421,12 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const rawContent = getRawMessage(quoted || msg.message);
+            
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            
+            const rawContent = quoted ? getRawMessage(quoted) : getRawMessage(msg.message);
             
             let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.stickerMessage || rawContent?.audioMessage || rawContent?.documentMessage;
             let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.stickerMessage ? "sticker" : (rawContent?.audioMessage ? "audio" : "document")));
