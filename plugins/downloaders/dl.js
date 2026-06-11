@@ -1,5 +1,5 @@
 // plugins/dl.js
-const settings = require('../settings');
+const settings = require('../../settings');
 const axios = require('axios');
 const FormData = require('form-data');
 
