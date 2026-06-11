@@ -10,6 +10,24 @@ if (!fs.existsSync(pluginsDir)) {
     fs.mkdirSync(pluginsDir);
 }
 
+// Helper function to recursively find all JS files in any subdirectory
+function getFilesRecursive(dir) {
+    let results = [];
+    if (!fs.existsSync(dir)) return results;
+    
+    const list = fs.readdirSync(dir);
+    list.forEach(file => {
+        const filePath = path.join(dir, file);
+        const stat = fs.statSync(filePath);
+        if (stat && stat.isDirectory()) {
+            results = results.concat(getFilesRecursive(filePath));
+        } else if (file.endsWith('.js')) {
+            results.push(filePath);
+        }
+    });
+    return results;
+}
+
 // Helper function to register a command in our system
 function register(cmd) {
     if (cmd.name && typeof cmd.execute === 'function') {
@@ -22,7 +40,7 @@ function register(cmd) {
 }
 
 // 🔄 HOT-RELOAD REGISTRY REBUILDER [1]
-// Dynamically decaches and rebuilds all command triggers in real-time [1]
+// Dynamically decaches and rebuilds all command triggers in real-time, including subdirectories [1]
 function reloadCommands() {
     // Clear all existing command mappings except our special hidden reload handler [1]
     for (const key in commands) {
@@ -31,40 +49,38 @@ function reloadCommands() {
         }
     }
 
-    const pluginFiles = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
+    const pluginFiles = getFilesRecursive(pluginsDir);
 
-    for (const file of pluginFiles) {
+    for (const filePath of pluginFiles) {
         try {
-            const pluginPath = path.join(pluginsDir, file);
-            
             // Decache the file so Node pulls the newly written settings/updates [1]
-            delete require.cache[require.resolve(pluginPath)];
+            delete require.cache[require.resolve(filePath)];
             
-            const plugin = require(pluginPath);
+            const plugin = require(filePath);
             if (Array.isArray(plugin)) {
                 plugin.forEach(cmd => register(cmd));
             } else {
                 register(plugin);
             }
         } catch (error) {
-            console.error(`⚠️ Failed to load plugin [${file}]:`, error.message);
+            console.error(`⚠️ Failed to load plugin [${path.basename(filePath)}]:`, error.message);
         }
     }
     console.log(`🔄 [LOADER] Recompiled all triggers under active prefix: "${settings.prefix}"`);
 }
 
 // Initial Boot Loader
-const pluginFiles = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
-for (const file of pluginFiles) {
+const pluginFiles = getFilesRecursive(pluginsDir);
+for (const filePath of pluginFiles) {
     try {
-        const plugin = require(path.join(pluginsDir, file));
+        const plugin = require(filePath);
         if (Array.isArray(plugin)) {
             plugin.forEach(cmd => register(cmd));
         } else {
             register(plugin);
         }
     } catch (error) {
-        console.error(`⚠️ Failed to load plugin [${file}]:`, error.message);
+        console.error(`⚠️ Failed to load plugin [${path.basename(filePath)}]:`, error.message);
     }
 }
 
