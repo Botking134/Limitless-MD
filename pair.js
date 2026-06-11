@@ -8,7 +8,7 @@ const path = require('path');
 
 // Modular Imports from helpers
 const { handleMessageDeletion } = require('./helpers/antiDelete');
-const { handleIncomingMessage } = require('./helpers/messageHandler');
+const { handleIncomingMessage } = require('./helpers/messageHandlers');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
