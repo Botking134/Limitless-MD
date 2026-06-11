@@ -176,7 +176,7 @@ async function askNextAnagram(sock, jid, sessionKey) {
     }
 
     let activePlayer = session.player;
-    if (!isDev) {
+    if (!isSingle) {
         if (session.turnIndex >= session.players.length) session.turnIndex = 0;
         activePlayer = session.players[session.turnIndex];
     }
