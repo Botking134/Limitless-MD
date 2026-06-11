@@ -4,7 +4,6 @@ const { saveSettings } = require('../helpers/settingsSaver');
 const { saveState } = require('../stateManager');
 const commands = require('../commands'); 
 
-// Loaded securely from settings mapped to process.env.GROQ_API_KEY
 const GROQ_API_KEY = settings.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -118,7 +117,6 @@ module.exports = [
                     gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac.`;
                 }
 
-                // Retrieve and initialize dynamic chat memory
                 global.aiMemory[jid] = global.aiMemory[jid] || {};
                 global.aiMemory[jid].gojo = global.aiMemory[jid].gojo || [];
 
@@ -130,11 +128,9 @@ module.exports = [
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
 
-                // Save to local context
                 global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
                 global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
 
-                // Keep exactly 15 messages in context memory
                 while (global.aiMemory[jid].gojo.length > 15) {
                     global.aiMemory[jid].gojo.shift();
                 }
@@ -216,7 +212,10 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             const rawContent = quoted ? getRawMessage(quoted) : getRawMessage(msg.message);
             const imageMessage = rawContent?.imageMessage;
 
@@ -352,7 +351,6 @@ module.exports = [
                 global.aiMemory[jid].lizzy.push({ role: "user", content: args });
                 global.aiMemory[jid].lizzy.push({ role: "assistant", content: responseText });
 
-                // Keep exactly 15 messages in context memory
                 while (global.aiMemory[jid].lizzy.length > 15) {
                     global.aiMemory[jid].lizzy.shift();
                 }
@@ -421,7 +419,6 @@ module.exports = [
                 global.aiMemory[jid].jarvis.push({ role: "user", content: args });
                 global.aiMemory[jid].jarvis.push({ role: "assistant", content: responseText });
 
-                // Keep exactly 15 messages in context memory
                 while (global.aiMemory[jid].jarvis.length > 15) {
                     global.aiMemory[jid].jarvis.shift();
                 }
@@ -441,7 +438,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let textToSay = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!textToSay && quoted) {
                 const rawContent = getRawMessage(quoted);
                 textToSay = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || '';
@@ -449,7 +449,6 @@ module.exports = [
 
             if (!textToSay) return await sock.sendMessage(jid, { text: "❌ Please provide text." }, { quoted: msg });
 
-            // Smug English Male ("Joey/TikTok") Voice notes
             try {
                 const ttsUrl = `https://api.kord.live/api/tiktoktts?text=${encodeURIComponent(textToSay)}&voice=en_us_006`;
                 const response = await fetch(ttsUrl);
@@ -457,13 +456,11 @@ module.exports = [
                     const arrayBuffer = await response.arrayBuffer();
                     const buffer = Buffer.from(arrayBuffer);
                     
-                    // Plays beautifully and safely as standard compatible audio file
                     await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                     return;
                 }
             } catch (ttsErr) {}
 
-            // Graceful fallback to Standard English Male Audio stream
             try {
                 const fallbackUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-us&client=tw-ob&q=${encodeURIComponent(textToSay)}`;
                 const response = await fetch(fallbackUrl);
