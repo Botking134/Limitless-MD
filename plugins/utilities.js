@@ -516,8 +516,12 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const { delay } = await import('@itsliaaa/baileys');
 
-            const loadingMsg = await sock.sendMessage(jid, { text: "▮▯" }, { quoted: msg });
-            const frames = ["▮▮▯", "▮▮▮", "▮▮▮▮"];
+            const loadingMsg = await sock.sendMessage(jid, { text: "▮▮▮▮▮▮🔑" }, { quoted: msg });
+            const frames = [
+                "▮▮▮▮▮▮▮🔑", 
+                "▮▮▮▮▮▮▮▮", 
+                "▮▮▮▮▮▮▮▮▮"
+            ];
 
             for (const frame of frames) {
                 await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
