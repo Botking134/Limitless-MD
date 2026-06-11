@@ -3,6 +3,8 @@ const settings = require('../settings');
 const { saveSettings } = require('../helpers/settingsSaver'); 
 const { saveState } = require('../stateManager');
 const commands = require('../commands'); 
+const axios = require('axios');
+const FormData = require('form-data');
 
 const GROQ_API_KEY = settings.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -34,6 +36,40 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
+}
+
+async function uploadToCloud(buffer, mimeType) {
+    const ext = mimeType.split('/')[1] || 'bin';
+    const filename = `file_${Date.now()}.${ext}`;
+
+    try {
+        const form = new FormData();
+        form.append('files[]', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://qu.ax/upload.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data?.success && response.data.files?.[0]?.url) {
+            return response.data.files[0].url;
+        }
+    } catch (err) {
+        console.error("❌ [UPLOAD] qu.ax failed:", err.message);
+    }
+
+    try {
+        const form = new FormData();
+        form.append('reqtype', 'fileupload');
+        form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://catbox.moe/user/api.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
+            return response.data.trim();
+        }
+    } catch (err) {
+        console.error("❌ [UPLOAD] catbox failed:", err.message);
+    }
+
+    throw new Error("All secure cloud upload hosts failed.");
 }
 
 module.exports = [
@@ -234,7 +270,10 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const imageBase64 = buffer.toString("base64");
+                // Secure upload to cloud to prevent Base64 token timeouts
+                const uploadedUrl = await uploadToCloud(buffer, mimeType);
+                if (!uploadedUrl) throw new Error("Cloud upload returned empty URL");
+
                 let promptQuery = args || "Analyze this image in detail.";
                 if (isDev) {
                     promptQuery += " Address the user as 'Master'.";
@@ -247,7 +286,7 @@ module.exports = [
                         role: "user",
                         content: [
                             { type: "text", text: promptQuery },
-                            { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }
+                            { type: "image_url", image_url: { url: uploadedUrl } }
                         ]
                     }
                 ];
