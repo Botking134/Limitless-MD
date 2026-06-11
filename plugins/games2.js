@@ -8,6 +8,7 @@ global.torfSessions = global.torfSessions || {};
 global.pvpSessions = global.pvpSessions || {};
 global.escapeSessions = global.escapeSessions || {};
 
+// Obfuscated API key configuration
 const s1 = "gsk_";
 const s2 = "tPB0xMyZ2oijloaBNcDs";
 const s3 = "WGdyb3FY5iC2p9hwRE";
