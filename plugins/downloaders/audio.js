@@ -1,5 +1,5 @@
 // plugins/audio.js
-const settings = require('../settings');
+const settings = require('../../settings');
 
 global.songSessions = global.songSessions || {};
 
