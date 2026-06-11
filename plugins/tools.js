@@ -1,7 +1,7 @@
 // plugins/tools.js
 const settings = require('../settings');
 const { saveSettings } = require('../helpers/settingsSaver'); 
-const { saveState } = require('../stateManager'); // State persistence manager
+const { saveState } = require('../stateManager'); 
 const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
@@ -34,6 +34,32 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
+}
+
+function parseTarget(msg, args) {
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo || 
+                        rawMsg?.extendedTextMessage?.contextInfo || 
+                        rawMsg?.imageMessage?.contextInfo || 
+                        rawMsg?.videoMessage?.contextInfo || 
+                        rawMsg?.stickerMessage?.contextInfo || 
+                        rawMsg?.audioMessage?.contextInfo || 
+                        rawMsg?.documentMessage?.contextInfo;
+
+    const quotedParticipant = contextInfo?.participant;
+    let target = '';
+
+    if (quotedParticipant) {
+        target = quotedParticipant.split('@')[0].split(':')[0];
+    } else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+        const botJid = settings.botJid || '';
+        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
+        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
+        target = selectedJid.split('@')[0].split(':')[0];
+    } else if (args) {
+        target = args.replace(/[^0-9]/g, '');
+    }
+    return target;
 }
 
 function getDeviceTypeFromId(id) {
@@ -98,7 +124,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            
             if (!quoted || !quoted.imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
 
             try {
@@ -122,23 +151,16 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.remoteJid || msg.key.remoteJid;
-            let targetJid = msg.key.participant || msg.key.remoteJid || '';
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            const targetNumber = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
+            const targetJid = targetNumber + '@s.whatsapp.net';
 
-            if (quoted && quoted.participant) {
-                targetJid = quoted.participant;
-            } else if (quoted?.mentionedJid?.length > 0) {
-                targetJid = quoted.mentionedJid[0];
-            }
-
-            const phone = targetJid.split('@')[0];
             let country = "Unknown Region";
             let carrier = "Cellular Network Operator";
             let city = "Metadata Coordinates Range";
 
-            if (phone.startsWith('234')) {
+            if (targetNumber.startsWith('234')) {
                 country = "Nigeria 🇳🇬";
-                const prefix = phone.slice(3, 6);
+                const prefix = targetNumber.slice(3, 6);
                 if (['803', '806', '703', '706', '813', '816', '903', '906', '913', '916'].includes(prefix)) {
                     carrier = "MTN Nigeria"; city = "Lagos (Ikeja Hub)";
                 } else if (['802', '808', '701', '708', '812', '902', '901', '912'].includes(prefix)) {
@@ -146,25 +168,25 @@ module.exports = [
                 } else {
                     carrier = "Globacom / 9mobile"; city = "General Nigeria Coordinates";
                 }
-            } else if (phone.startsWith('27')) {
+            } else if (targetNumber.startsWith('27')) {
                 country = "South Africa 🇿🇦";
-                const prefix = phone.slice(2, 4);
+                const prefix = targetNumber.slice(2, 4);
                 if (['82', '72', '76', '79'].includes(prefix)) {
                     carrier = "Vodacom SA"; city = "Gauteng (Johannesburg)";
                 } else {
                     carrier = "MTN / Cell C"; city = "Western Cape (Cape Town)";
                 }
-            } else if (phone.startsWith('60')) {
+            } else if (targetNumber.startsWith('60')) {
                 country = "Malaysia 🇲🇾";
                 carrier = "Maxis / Celcom Axiata"; city = "Kuala Lumpur (Federal Territory)";
-            } else if (phone.startsWith('1')) {
+            } else if (targetNumber.startsWith('1')) {
                 country = "United States / Canada 🇺🇸🇨🇦"; carrier = "T-Mobile / AT&T"; city = "North America Range";
-            } else if (phone.startsWith('44')) {
+            } else if (targetNumber.startsWith('44')) {
                 country = "United Kingdom 🇬🇧"; carrier = "Vodafone UK / EE"; city = "London Core";
             }
 
             const report = `🎯 *SPATIAL LOCATOR MANIFESTED* 🎯\n━━━━━━━━━━━━━━━━━━━\n\n` +
-                           `👤 *Target User:* @${phone}\n` +
+                           `👤 *Target User:* @${targetNumber}\n` +
                            `🌍 *Region:* \`${country}\`\n` +
                            `📡 *Cell Carrier:* \`${carrier}\`\n` +
                            `🏢 *Regional Hub:* \`${city}\`\n\n` +
@@ -180,10 +202,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            let targetJid = msg.key.participant || msg.key.remoteJid || '';
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-
-            if (quoted && quoted.participant) targetJid = quoted.participant;
+            const targetNumber = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
+            const targetJid = targetNumber + '@s.whatsapp.net';
 
             try {
                 const profileUrl = await sock.profilePictureUrl(targetJid, 'image');
@@ -221,7 +241,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            
             if (!quoted) return await sock.sendMessage(jid, { text: "❌ Reply to media status." }, { quoted: msg });
 
             const rawContent = getRawMessage(quoted);
@@ -254,7 +277,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            
             if (!quoted) return await sock.sendMessage(jid, { text: "❌ Reply to status media." }, { quoted: msg });
 
             const rawContent = getRawMessage(quoted);
@@ -295,19 +321,20 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
 
-            if (quoted && quoted.stanzaId && !args) {
+            if (contextInfo && contextInfo.stanzaId && !args) {
                 const prompt = await sock.sendMessage(jid, { text: "💬 Reply directly to this prompt with target country phone number." }, { quoted: msg });
                 global.forwardSessions[prompt.key.id] = {
-                    msgToForward: quoted.quotedMessage,
-                    originalMsgKey: quoted.stanzaId,
-                    originalParticipant: quoted.participant
+                    msgToForward: contextInfo.quotedMessage,
+                    originalMsgKey: contextInfo.stanzaId,
+                    originalParticipant: contextInfo.participant
                 };
                 return;
             }
 
-            if (!quoted && args) {
+            if (!contextInfo && args) {
                 const spaceIdx = args.indexOf(' ');
                 if (spaceIdx === -1) return;
 
@@ -443,7 +470,7 @@ module.exports = [
         }
     },
 
-    // 13. ADVANCED ANTIDELETE CONTROLLER (Only Owner and Sudoer)
+    // 13. ADVANCED ANTIDELETE CONTROLLER
     {
         name: 'antidelete',
         isPrefixless: false,
@@ -508,7 +535,9 @@ module.exports = [
 
             if (target === 'user') {
                 settings.antidelete.logDestination = 'user';
-                settings.antidelete.logUserJid = msg.key.participant || msg.key.remoteJid || '';
+                // Split multi-device JID properly on save to prevent lookup mismatch
+                const senderJid = msg.key.participant || msg.key.remoteJid || '';
+                settings.antidelete.logUserJid = senderJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
                 await sock.sendMessage(jid, { text: "✅ Anti-Delete log redirected to *your personal DM*." }, { quoted: msg });
             } else if (target === 'bot') {
                 settings.antidelete.logDestination = 'bot';
@@ -520,7 +549,7 @@ module.exports = [
         }
     },
 
-    // 15. AUTOMATIC VIEW ONCE DECRYPT MODULE (Only Owner and Sudoer)
+    // 15. AUTOMATIC VIEW ONCE DECRYPT MODULE
     {
         name: 'antiviewonce',
         isPrefixless: false,
@@ -539,7 +568,9 @@ module.exports = [
             if (action === 'log') {
                 if (subAction === 'user') {
                     settings.antiviewonce.logDestination = 'user';
-                    settings.antiviewonce.logUserJid = msg.key.participant || msg.key.remoteJid || '';
+                    // Split multi-device JID properly on save to prevent lookup mismatch
+                    const senderJid = msg.key.participant || msg.key.remoteJid || '';
+                    settings.antiviewonce.logUserJid = senderJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
                     await sock.sendMessage(jid, { text: "✅ Anti-ViewOnce logs redirected to *your personal DM*." }, { quoted: msg });
                 } else if (subAction === 'bot') {
                     settings.antiviewonce.logDestination = 'bot';
@@ -566,7 +597,7 @@ module.exports = [
         }
     },
 
-    // 16. ANTIBUG RATE-LIMIT BLOCK PROTECTION (Only Owner and Sudoer)
+    // 16. ANTIBUG RATE-LIMIT BLOCK PROTECTION
     {
         name: 'antibug',
         isPrefixless: false,
@@ -687,18 +718,11 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            let targetJid = "";
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            const targetNumber = parseTarget(msg, args);
+            if (!targetNumber) return;
 
-            if (quoted && quoted.participant) {
-                targetJid = quoted.participant;
-            } else if (args) {
-                targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-            }
-
-            if (!targetJid) return;
             try {
-                await sock.updateBlockStatus(targetJid, 'block');
+                await sock.updateBlockStatus(targetNumber + '@s.whatsapp.net', 'block');
             } catch (e) {}
         }
     },
@@ -711,18 +735,11 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            let targetJid = "";
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            const targetNumber = parseTarget(msg, args);
+            if (!targetNumber) return;
 
-            if (quoted && quoted.participant) {
-                targetJid = quoted.participant;
-            } else if (args) {
-                targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-            }
-
-            if (!targetJid) return;
             try {
-                await sock.updateBlockStatus(targetJid, 'unblock');
+                await sock.updateBlockStatus(targetNumber + '@s.whatsapp.net', 'unblock');
             } catch (e) {}
         }
     },
@@ -861,9 +878,10 @@ module.exports = [
             let targetMsgId = msg.key.id;
             let label = "Your";
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-            if (quoted && quoted.stanzaId) {
-                targetMsgId = quoted.stanzaId;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            if (contextInfo && contextInfo.stanzaId) {
+                targetMsgId = contextInfo.stanzaId;
                 label = "Target's";
             }
 
@@ -975,7 +993,10 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let targetUrl = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             if (!targetUrl && quoted) {
                 const rawContent = getRawMessage(quoted);
                 targetUrl = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
@@ -1050,7 +1071,10 @@ module.exports = [
                     textToTranslate = parts.slice(1).join(' ');
                 }
 
-                const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+                const rawMsg = getRawMessage(msg.message);
+                const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+                const quoted = contextInfo?.quotedMessage;
+
                 if (!textToTranslate.trim() && quoted) {
                     const rawContent = getRawMessage(quoted);
                     textToTranslate = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || rawContent?.videoMessage?.caption || '';
@@ -1090,8 +1114,6 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            
-            // Enforce strict administrative privileges
             if (!isOwner && !isSudo && !isDev) return;
 
             if (!args) {
@@ -1108,9 +1130,11 @@ module.exports = [
 
             const finalCount = Math.min(count, 30); 
             const textContent = parts.slice(1).join(' ').trim();
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
 
-            // Scenario A: Spamming Quoted Media or Messages
             if (quoted) {
                 const rawContent = getRawMessage(quoted);
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -1148,7 +1172,6 @@ module.exports = [
                 return;
             }
 
-            // Scenario B: Plain text loops
             if (!textContent) {
                 return await sock.sendMessage(jid, { text: "❌ Provide text to spam or reply directly to a target message." }, { quoted: msg });
             }
@@ -1174,8 +1197,5 @@ module.exports.forEach(cmd => {
         aliases.push({ ...cmd, name: 'tdel' });
         aliases.push({ ...cmd, name: 'tdlt' });
     }
-    if (cmd.name === 'ss') aliases.push({ ...cmd, name: 'screenshot' });
-    if (cmd.name === 'calculator') aliases.push({ ...cmd, name: 'calc' });
-    if (cmd.name === 'trt') aliases.push({ ...cmd, name: 'translate' });
 });
 module.exports.push(...aliases);
