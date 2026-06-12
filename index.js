@@ -1,5 +1,5 @@
 // index.js
-require('dotenv').config(); // Load environment variables on boot
+
 const { loadState } = require('./stateManager');
 loadState(); // Restore persistent sudoers, owners, group modifications, and bans on boot
 
