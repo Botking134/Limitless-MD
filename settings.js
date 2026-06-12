@@ -9,9 +9,10 @@ module.exports = {
     "author": "Infinity",
     "isPublic": false,
     "ownerNumber": process.env.OWNER_NUMBER || "601129363700",
+    "ownerJid": "601129363700@s.whatsapp.net",
     "owners": [],
     "sudo": [
-        "27713655070"
+        "27713655070@s.whatsapp.net"
     ],
     "banned": [],
     "lizzyChats": [
