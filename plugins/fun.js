@@ -1,6 +1,7 @@
 // plugins/fun.js
 const settings = require('../settings'); 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
+const { getPhoneJid } = require('../helpers/messageHandlers');
 
 const GROQ_API_KEY = settings.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -463,8 +464,12 @@ module.exports = [
             const targetNum = parts[1]?.trim();
             const senderNum = parts[2]?.trim();
 
-            const clickerJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const clickerNum = clickerJid.split('@')[0];
+            const rawClicker = msg.key.participant || msg.key.remoteJid || '';
+            const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+
+            // Resolve clicker's JID to phone JID format to resolve the LID trap
+            const resolvedClickerJid = await getPhoneJid(sock, clickerJid, jid);
+            const clickerNum = resolvedClickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
@@ -527,8 +532,12 @@ module.exports = [
             const targetNum = parts[1]?.trim();
             const senderNum = parts[2]?.trim();
 
-            const clickerJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const clickerNum = clickerJid.split('@')[0];
+            const rawClicker = msg.key.participant || msg.key.remoteJid || '';
+            const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+
+            // Resolve clicker's JID to phone JID format to resolve the LID trap
+            const resolvedClickerJid = await getPhoneJid(sock, clickerJid, jid);
+            const clickerNum = resolvedClickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
@@ -591,8 +600,12 @@ module.exports = [
             const targetNum = parts[1]?.trim();
             const senderNum = parts[2]?.trim();
 
-            const clickerJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const clickerNum = clickerJid.split('@')[0];
+            const rawClicker = msg.key.participant || msg.key.remoteJid || '';
+            const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+
+            // Resolve clicker's JID to phone JID format to resolve the LID trap
+            const resolvedClickerJid = await getPhoneJid(sock, clickerJid, jid);
+            const clickerNum = resolvedClickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
