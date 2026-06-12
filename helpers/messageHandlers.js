@@ -669,14 +669,20 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         let identifiedAgent = null;
 
-        // Thread Tracking
+        // Substring name call detection in any position (Issue 6 word boundaries)
+        const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
+        const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
+        const isJarvisCalled = /\bjarvis\b|\bchatbot\b/i.test(lowerMessage);
+        const isFridayCalled = /\bfriday\b/i.test(lowerMessage);
+
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         } 
         else if (isMentioningBot || isReplyingToBot) {
-            if (lowerMessage.includes('gojo')) identifiedAgent = 'gojo';
-            else if (lowerMessage.includes('lizzy')) identifiedAgent = 'lizzy';
-            else if (lowerMessage.includes('jarvis') || lowerMessage.includes('chatbot')) identifiedAgent = 'jarvis';
+            if (isFridayCalled) identifiedAgent = 'friday';
+            else if (isGojoCalled) identifiedAgent = 'gojo';
+            else if (isLizzyCalled) identifiedAgent = 'lizzy';
+            else if (isJarvisCalled) identifiedAgent = 'jarvis';
             else {
                 if (Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid)) identifiedAgent = 'lizzy';
                 else if (Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid)) identifiedAgent = 'jarvis';
@@ -684,14 +690,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         } 
         else {
-            if (lowerMessage.includes('gojo')) identifiedAgent = 'gojo';
-            else if (lowerMessage.includes('lizzy')) identifiedAgent = 'lizzy';
-            else if (lowerMessage.includes('jarvis') || lowerMessage.includes('chatbot')) identifiedAgent = 'jarvis';
+            if (isFridayCalled) identifiedAgent = 'friday';
+            else if (isGojoCalled) identifiedAgent = 'gojo';
+            else if (isLizzyCalled) identifiedAgent = 'lizzy';
+            else if (isJarvisCalled) identifiedAgent = 'jarvis';
         }
 
         if (identifiedAgent === 'gojo') {
-            const isAsleep = Array.isArray(settings.gojoSleepChats) && settings.gojoSleepChats.includes(jid);
-            if (isAsleep) identifiedAgent = null;
+            const isAsleep = settings.gojoGlobalSleep;
+            if (isAsleep && !trimmedMessage.startsWith(settings.prefix)) identifiedAgent = null;
         }
 
         if (identifiedAgent && !trimmedMessage.startsWith(settings.prefix)) {
@@ -703,6 +710,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 args = trimmedMessage;
             } else if (identifiedAgent === 'jarvis') {
                 command = 'chatbot_chat';
+                args = trimmedMessage;
+            } else if (identifiedAgent === 'friday') {
+                command = 'friday_chat';
                 args = trimmedMessage;
             }
         }
@@ -729,6 +739,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (command === 'gojo') global.activeAgentContext = 'gojo';
             else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
             else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
+            else if (command === 'friday_chat') global.activeAgentContext = 'friday';
             else global.activeAgentContext = null;
 
             const isPublicMode = settings.isPublic ?? false;
