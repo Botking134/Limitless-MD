@@ -493,7 +493,7 @@ async function handlePvpDefenseTimeout(sock, jid) {
     const attackMove = session.lastAttack;
 
     const attackerChar = attacker === session.p1 ? session.p1Char : session.p2Char;
-    const defenderChar = defender === session.p1 ? session.p1Char : session.p2Char;
+    const defenderChar = defender === session.p1 ? session.p2Char : session.p1Char;
 
     await sock.sendMessage(jid, { text: `⏰ *TIME IS UP!* @${defender.split('@')[0]} failed to defend in time!`, mentions: [defender] });
 
@@ -803,10 +803,10 @@ module.exports = [
             } else {
                 if (isSingle) {
                     session.livesSP--;
-                    resultLabel = `❌ *INCORRECT GUESS BY @${senderNumber}!* Correct word was *${correctWord}*.\n\n❤️ *Remaining Hearts:* \`${session.livesSP}/3\``;
+                    resultLabel = `❌ *INCORRECT GUESS BY @${senderNumber}!* Correct word was *${correctWord}*.\n\n👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Remaining Hearts:* \`${session.livesSP}/3\``;
                     if (session.livesSP <= 0) {
                         await sock.sendMessage(jid, { text: resultLabel });
-                        const results = `📊 *ANAGRAM GAME OVER!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n3. *Player:* @${session.player.split('@')[0]}\n🎯 *Final Score:* \`${session.score}/10\``;
+                        const results = `📊 *ANAGRAM GAME OVER!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Final Score:* \`${session.score}/10\``;
                         delete global.anagramSessions[sessionKey];
                         return await sock.sendMessage(jid, { text: results, mentions: [session.player] });
                     }
@@ -1090,21 +1090,57 @@ module.exports = [
             const ans = args.trim().toLowerCase();
             
             // Reconstruct options block for semantic verification
-            const prompt = `Question: "${session.currentQuestion}"\nOptions:\n${session.currentOptions.join('\n')}\nUser answer: "${ans.toUpperCase()}". Is this the correct option for this question? Respond strictly with YES or NO.`;
-            const verification = await queryLLM(prompt, 0.1);
-            const isCorrect = verification ? verification.trim().toUpperCase().includes("YES") : false;
+            const prompt = `
+            You are the charismatic, suspenseful host of the "Who Wants to Be a Millionaire" trivia game.
+            Question: "${session.currentQuestion}"
+            Options:
+            ${session.currentOptions.join('\n')}
+            User Chose Option: "${ans.toUpperCase()}"
 
-            if (isCorrect) {
+            Determine if their choice is correct. Respond strictly with a JSON object in this exact format (no other text or markdown):
+            {
+              "isCorrect": true, // or false
+              "correctOption": "C", // the correct letter option (A, B, C, or D)
+              "explanation": "A suspenseful, brief (1-2 sentences) game-show host response explaining the context of the answer."
+            }
+            `;
+
+            const verification = await queryLLM(prompt, 0.2);
+            let resultData = { isCorrect: false, correctOption: '', explanation: '' };
+            try {
+                const cleanJson = verification.replace(/```json/g, '').replace(/```/g, '').trim();
+                resultData = JSON.parse(cleanJson);
+            } catch (e) {
+                // Fallback basic check in case JSON parse fails
+                const isYes = verification ? verification.trim().toUpperCase().includes("YES") : false;
+                resultData = {
+                    isCorrect: isYes,
+                    correctOption: '?',
+                    explanation: 'The system has logged your answer.'
+                };
+            }
+
+            if (resultData.isCorrect) {
                 const values = [0, 5000, 10000, 20000, 50000, 100000, 150000, 250000, 350000, 500000, 750000, 1000000, 1250000, 1500000, 2000000, 5000000];
                 session.money = values[session.step];
-                await sock.sendMessage(jid, { text: `✅ *CORRECT!* You have won *₦${session.money.toLocaleString()} WAT*! 🎉` }, { quoted: msg });
+                const feedbackText = 
+                    `✅ *CORRECT!* \n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `🎙️ *Host:* _"${resultData.explanation}"_\n\n` +
+                    `💰 *You have won:* \`₦${session.money.toLocaleString()} WAT\`! 🎉`;
+                
+                await sock.sendMessage(jid, { text: feedbackText }, { quoted: msg });
                 session.step++;
                 session.eliminatedOptions = [];
-                await delay(2000);
+                await delay(3000);
                 await askNextMillionaireQuestion(sock, jid, sessionKey);
             } else {
                 delete global.millionaireSessions[sessionKey];
-                await sock.sendMessage(jid, { text: `❌ *INCORRECT!* Game Over. You leave with *₦${session.money.toLocaleString()} WAT*.` }, { quoted: msg });
+                const feedbackText = 
+                    `❌ *INCORRECT!* \n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `🎙️ *Host:* _"${resultData.explanation}"_\n\n` +
+                    `💀 *GAME OVER:* You leave with \`₦${session.money.toLocaleString()} WAT\`.`;
+                
+                await sock.sendMessage(jid, { text: feedbackText }, { quoted: msg });
             }
         }
     },
@@ -1366,6 +1402,7 @@ module.exports = [
                 const prompt = await sock.sendMessage(jid, { text: card, mentions: [session.p2] }, { quoted: msg });
                 session.lastQuestionMsgId = prompt.key.id;
             } 
+            
             else if (session.status === 'p2_choosing' && senderJid === session.p2) {
                 session.p2Char = chosenChar;
                 session.status = 'fighting';
@@ -1408,6 +1445,10 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `❌ *Technique Denied:* \`"${attackMove}"\` does not exist in ${attackerChar}'s canonical arsenal. Try another move!` }, { quoted: msg });
             }
 
+            // Explicitly synchronize attacker and defender attributes for referee resolution
+            session.attacker = senderJid;
+            session.defender = senderJid === session.p1 ? session.p2 : session.p1;
+
             session.status = 'defending';
             session.lastAttack = attackMove;
 
@@ -1448,7 +1489,7 @@ module.exports = [
             const attackMove = session.lastAttack;
 
             const attackerChar = attacker === session.p1 ? session.p1Char : session.p2Char;
-            const defenderChar = defender === session.p1 ? session.p1Char : session.p2Char;
+            const defenderChar = defender === session.p1 ? session.p2Char : session.p1Char;
 
             await sock.sendMessage(jid, { text: "🔮 `Resolving attack/defense matrix...`" }, { quoted: msg });
 
