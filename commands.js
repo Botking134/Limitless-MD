@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const settings = require('./settings');
 
-const commands = {};
+// Assign commands directly to module.exports to resolve circular dependency disconnects
+const commands = module.exports;
 const pluginsDir = path.join(__dirname, 'plugins');
 
 if (!fs.existsSync(pluginsDir)) {
@@ -39,10 +40,10 @@ function register(cmd) {
     }
 }
 
-// 🔄 HOT-RELOAD REGISTRY REBUILDER [1]
-// Dynamically decaches and rebuilds all command triggers in real-time, including subdirectories [1]
+// 🔄 HOT-RELOAD REGISTRY REBUILDER
+// Dynamically decaches and rebuilds all command triggers in real-time
 function reloadCommands() {
-    // Clear all existing command mappings except our special hidden reload handler [1]
+    // Clear all existing command mappings except our special hidden reload handler
     for (const key in commands) {
         if (key !== 'reload') {
             delete commands[key];
@@ -53,7 +54,7 @@ function reloadCommands() {
 
     for (const filePath of pluginFiles) {
         try {
-            // Decache the file so Node pulls the newly written settings/updates [1]
+            // Decache the file so Node pulls the newly written settings/updates
             delete require.cache[require.resolve(filePath)];
             
             const plugin = require(filePath);
@@ -84,7 +85,5 @@ for (const filePath of pluginFiles) {
     }
 }
 
-// Attach the hidden reload method directly on the exported object [1]
+// Attach the hidden reload method directly on the exported object
 commands.reload = reloadCommands;
-
-module.exports = commands;
