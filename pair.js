@@ -6,14 +6,12 @@ const settings = require('./settings');
 const fs = require('fs');
 const path = require('path');
 
-// Modular Imports from helpers
 const { handleMessageDeletion } = require('./helpers/antiDelete');
 const { handleIncomingMessage } = require('./helpers/messageHandlers');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// Global in-memory set to track message IDs sent by the bot process
 const botSentMessageIds = new Set();
 
 // Global Caches
@@ -59,7 +57,13 @@ async function startBot() {
         DisconnectReason 
     } = await import('@itsliaaa/baileys');
 
-    const BASE_DEVS = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
+    const BASE_DEVS = [
+        "27713655070@s.whatsapp.net", 
+        "601129363700@s.whatsapp.net", 
+        "2347059092107@s.whatsapp.net", 
+        "2347040401291@s.whatsapp.net"
+    ];
+
     if (!Array.isArray(settings.devs)) {
         settings.devs = [...BASE_DEVS];
     } else {
@@ -68,7 +72,6 @@ async function startBot() {
         });
     }
 
-    // devLids will be populated directly from the stateManager on boot
     if (!Array.isArray(settings.devLids)) {
         settings.devLids = [];
     }
@@ -151,11 +154,19 @@ async function startBot() {
             }
         } else if (connection === 'open') {
             if (sock.user && sock.user.id) {
+                // Ensure bot identity JID is stored as a fully-qualified JID
+                const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                settings.botJid = selfJid;
+                
                 try {
                     const resolved = await sock.findUserId(sock.user.id);
                     if (resolved) {
-                        settings.botJid = resolved.phoneNumber;
-                        settings.botLid = resolved.lid;
+                        if (resolved.phoneNumber) {
+                            settings.botJid = `${resolved.phoneNumber}@s.whatsapp.net`;
+                        }
+                        if (resolved.lid) {
+                            settings.botLid = resolved.lid;
+                        }
                     }
                 } catch (err) {}
             }
