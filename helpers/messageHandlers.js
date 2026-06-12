@@ -15,11 +15,30 @@ const devOnlyCommands = ['upgrade', 'adddev', 'deldev'];
 
 global.lidCache = global.lidCache || {};
 
-async function getPhoneJid(sock, jid) {
+// Enhanced JID Resolver supporting fast in-memory group metadata scans
+async function getPhoneJid(sock, jid, groupJid = null) {
     if (!jid) return '';
     let clean = jid.split(':')[0].split('@')[0];
+    
     if (jid.endsWith('@lid')) {
         if (global.lidCache[jid]) return global.lidCache[jid];
+        
+        // Quick Scan: Try to resolve instantly using the group participants cache
+        if (groupJid) {
+            try {
+                const metadata = await sock.groupMetadata(groupJid);
+                const participant = metadata?.participants?.find(
+                    p => p.lid === jid || p.id.split(':')[0] === jid.split(':')[0]
+                );
+                if (participant && participant.id.endsWith('@s.whatsapp.net')) {
+                    const resolvedJid = participant.id.split(':')[0] + '@s.whatsapp.net';
+                    global.lidCache[jid] = resolvedJid;
+                    return resolvedJid;
+                }
+            } catch (e) {}
+        }
+
+        // Fallback: Query the network
         try {
             const resolved = await sock.findUserId(jid);
             if (resolved && resolved.phoneNumber) {
@@ -30,6 +49,45 @@ async function getPhoneJid(sock, jid) {
         } catch (e) {}
     }
     return `${clean}@s.whatsapp.net`;
+}
+
+// Unified Security Policy Enforcer
+async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
+    if (!policy || policy === 'off') return;
+
+    if (policy === 'delete') {
+        try {
+            await sock.sendMessage(jid, { delete: msg.key });
+            await sock.sendMessage(jid, { text: `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`, mentions: [senderJid] });
+        } catch (e) {}
+    } 
+    else if (policy === 'warn') {
+        try {
+            await sock.sendMessage(jid, { delete: msg.key });
+            const warnKey = `${jid}_${senderNumber}`;
+            settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
+            const count = settings.warns[warnKey];
+            
+            if (count >= 5) {
+                await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                await sock.sendMessage(jid, { text: `👋 @${senderNumber} kicked. Warnings exceeded for violating ${violationReason} rules.`, mentions: [senderJid] });
+                settings.warns[warnKey] = 0;
+            } else {
+                await sock.sendMessage(jid, { text: `⚠️ @${senderNumber} ${violationReason} is not allowed here! (${count}/5)`, mentions: [senderJid] });
+            }
+            const { saveSettings } = require('./settingsSaver');
+            const { saveState } = require('../stateManager');
+            saveSettings();
+            saveState();
+        } catch (e) {}
+    } 
+    else if (policy === 'kick') {
+        try {
+            await sock.sendMessage(jid, { delete: msg.key });
+            await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+            await sock.sendMessage(jid, { text: `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`, mentions: [senderJid] });
+        } catch (e) {}
+    }
 }
 
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
@@ -46,10 +104,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const senderNumber = senderJid.split('@')[0]; 
         const isGroup = jid.endsWith('@g.us');
         
-        // Asynchronously resolve phone JID in the background if the raw sender is an LID
+        // Resolve phone JID if the sender is using an LID
         let senderPhoneJid = '';
         if (senderJid.endsWith('@lid')) {
-            senderPhoneJid = await getPhoneJid(sock, senderJid);
+            senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
         }
 
         // Establish the bot's identity using fully-qualified JIDs
@@ -157,6 +215,50 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                        (senderPhoneJid && Array.isArray(settings.sudo) && settings.sudo.includes(senderPhoneJid));
         
         const isAuthorized = isOwner || isSudo;
+
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+        const quotedMsgId = contextInfo?.stanzaId;
+        const mentionedJids = contextInfo?.mentionedJid || [];
+
+        // ============================================================================
+        // GROUP SECURITY INTERCEPTORS (Antilink, Antibot, Antitag, Antigm)
+        // ============================================================================
+        if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
+            
+            // 1. Antilink Protection
+            const antilinkPolicy = settings.antilink?.[jid] || 'off';
+            const hasLink = /(https?:\/\/)?(www\.)?(chat\.whatsapp\.com\/[a-zA-Z0-9]+|wa\.me\/[0-9]+)/i.test(body) || /https?:\/\/[^\s]+/i.test(body);
+            if (hasLink && antilinkPolicy !== 'off') {
+                await applySecurityPolicy(sock, msg, antilinkPolicy, senderJid, senderNumber, jid, "Antilink");
+                return; 
+            }
+
+            // 2. Antibot Protection
+            const antibotPolicy = settings.antibot?.[jid] || 'off';
+            const isBotSender = msg.key.id.startsWith('BAE5') || msg.key.id.startsWith('3EB0') || msg.key.id.length === 12;
+            if (isBotSender && antibotPolicy !== 'off') {
+                await applySecurityPolicy(sock, msg, antibotPolicy, senderJid, senderNumber, jid, "Antibot");
+                return;
+            }
+
+            // 3. Antitag Protection
+            const antitagPolicy = settings.antitag?.[jid] || 'off';
+            const isTaggingLarge = mentionedJids.length >= 5;
+            const isTaggingEveryone = body.includes('@everyone') || body.includes('@here') || isTaggingLarge;
+            if (isTaggingEveryone && antitagPolicy === 'on') {
+                await applySecurityPolicy(sock, msg, 'delete', senderJid, senderNumber, jid, "Antitag");
+                return;
+            }
+
+            // 4. Anti-Group-Mention Protection (antigm)
+            const antigmPolicy = settings.antigm?.[jid] || 'off';
+            const isGroupMention = mentionedJids.includes(jid);
+            if (isGroupMention && antigmPolicy !== 'off') {
+                await applySecurityPolicy(sock, msg, antigmPolicy, senderJid, senderNumber, jid, "Anti-Group-Mention");
+                return;
+            }
+        }
 
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
         if (isGroup && isGroupStatus && !msg.key.fromMe && !isAuthorized && !isDev) {
@@ -292,11 +394,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-        const quotedMsgId = contextInfo?.stanzaId;
-        const mentionedJids = contextInfo?.mentionedJid || [];
-
         // Dev Mention Auto-Reaction Interceptor
         const devJids = new Set([...(settings.devs || [])]);
         const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
@@ -369,10 +466,18 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // Chat Interceptors Execution Flow...
         if (quotedMsgId && activeKey && global.triviaSessions && global.triviaSessions[activeKey]) {
             const session = global.triviaSessions[activeKey];
-            if (session.lastQuestionMsgId === quotedMsgId) {
+            
+            // 1. Route replies to category selection prompts
+            if (session.status === 'awaiting_category' && session.lastQuestionMsgId === quotedMsgId) {
+                await commands[`${settings.prefix}quiz_cat`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                return;
+            }
+            
+            // 2. Route answers to active trivia questions
+            if (session.status === 'playing' && session.lastQuestionMsgId === quotedMsgId) {
                 const ans = trimmedMessage.toLowerCase().trim();
                 if (['a', 'b', 'c', 'd'].includes(ans)) {
-                    await commands[`${settings.prefix}trivia_ans`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
+                    await commands[`${settings.prefix}quiz_ans`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
                     return; 
                 }
             }
@@ -818,4 +923,4 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     }
 }
 
-module.exports = { handleIncomingMessage };
+module.exports = { handleIncomingMessage, getPhoneJid };
