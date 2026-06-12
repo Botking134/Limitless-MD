@@ -5,16 +5,20 @@ const { getRawMessage } = require('./antiDelete');
 const fs = require('fs');
 const path = require('path');
 
-const devStatePath = path.join(__dirname, '../dev_state.json');
-
-// Consolidated command access definitions for boundary protection
-const ownerCommands = [
-    'diagnose', 'update', 'mode', 'setsudo', 'delsudo', 
-    'addowner', 'delowner', 'restart', 'shutdown', 'ban', 
-    'unban', 'adddev', 'deldev', 'afk', 'setvar', 'settings', 
-    'upgrade', 'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
-];
-const devOnlyCommands = ['upgrade', 'adddev', 'deldev'];
+// Reusable Helper to resolve any incoming JID (including LIDs and multi-device suffixes) to standard Phone JID format
+async function getPhoneJid(sock, jid) {
+    if (!jid) return '';
+    let clean = jid.split(':')[0].split('@')[0];
+    if (jid.endsWith('@lid')) {
+        try {
+            const resolved = await sock.findUserId(jid);
+            if (resolved && resolved.phoneNumber) {
+                return `${resolved.phoneNumber}@s.whatsapp.net`;
+            }
+        } catch (e) {}
+    }
+    return `${clean}@s.whatsapp.net`;
+}
 
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
@@ -22,24 +26,26 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (!msg.message) return; 
 
         const jid = msg.key.remoteJid;
-        const senderJid = msg.key.participant || msg.key.remoteJid || '';
+        
+        // Resolve incoming sender JID immediately to standard Phone JID (Issue 4 resolution)
+        const senderJid = await getPhoneJid(sock, msg.key.participant || msg.key.remoteJid || '');
         const senderNumber = senderJid.split('@')[0]; 
         const isGroup = jid.endsWith('@g.us');
         
-        const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
-        const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+        const botJid = settings.ownerJid || (sock.user?.id ? `${sock.user.id.split(':')[0].split('@')[0]}@s.whatsapp.net` : '');
 
         global.activeSock = sock;
 
+        // 1. EMOJI REACTION DECRYPTION DELEGATOR (.vvs - Issue 6)
         const reactionMessage = msg.message.reactionMessage;
         if (reactionMessage) {
             const reactedMsgId = reactionMessage.key?.id;
             const reactionText = reactionMessage.text;
             const targetEmoji = settings.vvEmoji || "🥷";
 
-            const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0];
-            const isReactOwner = senderNum === settings.ownerNumber || settings.owners.includes(senderNum) || settings.devs.includes(senderNum);
-            const isReactSudo = settings.sudo?.includes(senderNum);
+            const senderPhoneJid = await getPhoneJid(sock, msg.key.participant || msg.key.remoteJid || '');
+            const isReactOwner = senderPhoneJid === settings.ownerJid || settings.owners.includes(senderPhoneJid) || settings.devs.includes(senderPhoneJid);
+            const isReactSudo = settings.sudo?.includes(senderPhoneJid);
             const isReactAuthorized = isReactOwner || isReactSudo;
 
             if (reactionText === targetEmoji && isReactAuthorized && global.messageStore?.[reactedMsgId]) {
@@ -60,7 +66,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                             let buffer = Buffer.from([]);
                             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                            const destJid = senderJid.endsWith('@g.us') ? (senderNum + '@s.whatsapp.net') : senderJid;
+                            const destJid = senderPhoneJid;
                             
                             if (mediaType === 'image') {
                                 await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
@@ -77,24 +83,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return; 
         }
 
-        let isDev = settings.devs.includes(senderNumber) && senderNumber !== settings.ownerNumber;
-
-        if (!isDev && senderJid.endsWith('@lid')) {
-            try {
-                const resolved = await sock.findUserId(senderJid);
-                if (resolved && resolved.phoneNumber) {
-                    const resolvedNumber = resolved.phoneNumber.split('@')[0];
-                    isDev = settings.devs.includes(resolvedNumber) && resolvedNumber !== settings.ownerNumber;
-                    if (isDev && !settings.devLids.includes(senderJid)) {
-                        settings.devLids.push(senderJid);
-                        fs.writeFileSync(devStatePath, JSON.stringify(settings.devLids, null, 2), 'utf-8');
-                    }
-                }
-            } catch (e) {}
-        }
-
-        const isBanned = Array.isArray(settings.banned) && settings.banned.includes(senderNumber);
-        if (isBanned && !isDev) return;
+        const isBanned = Array.isArray(settings.banned) && settings.banned.includes(senderJid);
+        if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return; 
 
         let body = msg.message.conversation || 
@@ -123,10 +113,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const storeKeys = Object.keys(global.messageStore);
         if (storeKeys.length > 1000) delete global.messageStore[storeKeys[0]]; 
 
-        if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerNumber];
-
-        const isOwner = isDev || senderNumber === settings.ownerNumber || settings.owners.includes(senderNumber) || msg.key.fromMe; 
-        const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
+        const isDev = settings.devs.includes(senderJid);
+        const isOwner = isDev || senderJid === settings.ownerJid || settings.owners.includes(senderJid) || msg.key.fromMe; 
+        const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderJid);
         const isAuthorized = isOwner || isSudo;
 
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
@@ -218,16 +207,16 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
             const now = Date.now();
-            if (!global.spamTracker[senderNumber]) global.spamTracker[senderNumber] = [];
-            global.spamTracker[senderNumber].push(now);
-            global.spamTracker[senderNumber] = global.spamTracker[senderNumber].filter(t => now - t <= 3000);
+            if (!global.spamTracker[senderJid]) global.spamTracker[senderJid] = [];
+            global.spamTracker[senderJid].push(now);
+            global.spamTracker[senderJid] = global.spamTracker[senderJid].filter(t => now - t <= 3000);
 
-            if (global.spamTracker[senderNumber].length >= 5) {
+            if (global.spamTracker[senderJid].length >= 5) {
                 try {
                     await sock.sendMessage(jid, { text: `can't bypass my infinity? @${senderNumber}`, mentions: [senderJid] }, { quoted: msg });
                     await sock.updateBlockStatus(senderJid, 'block');
                     await sock.chatModify({ delete: true, lastMessages: [msg] }, jid);
-                    delete global.spamTracker[senderNumber];
+                    delete global.spamTracker[senderJid];
                 } catch (blockErr) {}
                 return; 
             }
@@ -237,11 +226,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (isGroup && antispamConfig && antispamConfig.status === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
             const rate = antispamConfig.rate || { count: 1, seconds: 2 };
             const now = Date.now();
-            global.spamTracker[senderNumber] = global.spamTracker[senderNumber] || [];
-            global.spamTracker[senderNumber].push(now);
-            global.spamTracker[senderNumber] = global.spamTracker[senderNumber].filter(t => now - t <= (rate.seconds * 1000));
+            global.spamTracker[senderJid] = global.spamTracker[senderJid] || [];
+            global.spamTracker[senderJid].push(now);
+            global.spamTracker[senderJid] = global.spamTracker[senderJid].filter(t => now - t <= (rate.seconds * 1000));
 
-            if (global.spamTracker[senderNumber].length > rate.count) {
+            if (global.spamTracker[senderJid].length > rate.count) {
                 try {
                     await sock.sendMessage(jid, { delete: msg.key });
                     const spamDeleteKey = `${jid}_${senderNumber}`;
@@ -270,8 +259,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // Dev Mention Auto-Reaction Interceptor (Animated 5-Second Sequence)
         const devJids = new Set([
-            ...(settings.devs || []).map(num => num + '@s.whatsapp.net'),
-            ...(settings.devLids || [])
+            ...(settings.devs || [])
         ]);
         const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
         
@@ -290,8 +278,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         const quotedParticipant = contextInfo?.participant;
-        const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
-        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
+        const isReplyingToBot = quotedParticipant === botJid || (!isGroup && !msg.key.fromMe && quotedMsgId);
+        const isMentioningBot = mentionedJids.includes(botJid);
 
         const singleKey = jid + '_' + senderJid;
         const quizKey = jid + '_' + senderJid + '_quiz';
@@ -301,6 +289,44 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (global.triviaSessions[quizKey]) activeKey = quizKey;
         else if (global.triviaSessions[singleKey]) activeKey = singleKey;
         else if (global.triviaSessions[multiKey]) activeKey = multiKey;
+
+        // 2. DIRECT REPLY VIEW-ONCE DECRYPTION (.vvs - Issue 6)
+        const targetEmoji = settings.vvEmoji || "🥷";
+        if (quotedMsgId && trimmedMessage === targetEmoji && isAuthorized) {
+            if (global.messageStore?.[quotedMsgId]) {
+                const originalMsg = global.messageStore[quotedMsgId];
+                const rawContent = getRawMessage(originalMsg.message);
+                const isViewOnce = originalMsg.message?.viewOnceMessage || originalMsg.message?.viewOnceMessageV2 || originalMsg.message?.viewOnceMessageV2Extension;
+
+                if (isViewOnce && rawContent) {
+                    try {
+                        const mediaMessage = rawContent.imageMessage || rawContent.videoMessage || rawContent.audioMessage;
+                        const mediaType = rawContent.imageMessage ? "image" : (rawContent.videoMessage ? "video" : (rawContent.audioMessage ? "audio" : ""));
+
+                        if (mediaMessage && mediaType) {
+                            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                            await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
+
+                            const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+                            let buffer = Buffer.from([]);
+                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+                            const destJid = senderJid;
+
+                            if (mediaType === 'image') {
+                                await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reply" });
+                            } else if (mediaType === 'video') {
+                                const mimeType = mediaMessage.mimetype || "video/mp4";
+                                await sock.sendMessage(destJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reply" });
+                            } else if (mediaType === 'audio') {
+                                await sock.sendMessage(destJid, { audio: buffer, mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", ptt: true });
+                            }
+                            return; 
+                        }
+                    } catch (e) {}
+                }
+            }
+        }
 
         // Chat Interceptors Execution Flow...
         if (quotedMsgId && activeKey && global.triviaSessions && global.triviaSessions[activeKey]) {
@@ -502,7 +528,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 await sock.sendMessage(jid, { text: `📥 *Downloading APK:* "${chosen.name}"...` }, { quoted: msg });
 
                 try {
-                    const response = await fetch(`https://api.kord.live/api/apkdl?id=${encodeURIComponent(chosen.id)}`);
+                    const response = await fetch("https://api.kord.live/api/apkdl?id=" + encodeURIComponent(chosen.id));
                     if (response.ok) {
                         const data = await response.json();
                         if (data.downloadUrl) {
@@ -724,7 +750,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         // 2. Block Owners/Sudoers from Developer-only administrative operations
-        const isPrimaryOwner = senderNumber === settings.ownerNumber;
+        const isPrimaryOwner = senderJid === settings.ownerJid;
         if (isDevOnlyCmd && !isDev && !isPrimaryOwner) {
             return;
         }
