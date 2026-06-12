@@ -2,7 +2,6 @@
 const settings = require('../settings'); 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
 
-const KLIPY_API_KEY = settings.klipyApiKey;
 const GROQ_API_KEY = settings.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -37,6 +36,14 @@ function getRawMessage(message) {
     return message;
 }
 
+function normalizeToJid(input) {
+    if (!input) return '';
+    if (input.endsWith('@s.whatsapp.net')) return input;
+    if (input.endsWith('@lid')) return input;
+    const raw = input.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    return raw ? `${raw}@s.whatsapp.net` : '';
+}
+
 function parseTarget(msg, args) {
     const rawMsg = getRawMessage(msg.message);
     const contextInfo = rawMsg?.contextInfo || 
@@ -51,26 +58,19 @@ function parseTarget(msg, args) {
     let target = '';
 
     if (quotedParticipant) {
-        target = quotedParticipant.split('@')[0].split(':')[0];
+        target = normalizeToJid(quotedParticipant);
     } else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
         const botJid = settings.botJid || '';
         const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
         const selectedJid = filteredMention || contextInfo.mentionedJid[0];
-        target = selectedJid.split('@')[0].split(':')[0];
+        target = normalizeToJid(selectedJid);
     } else if (args) {
-        target = args.replace(/[^0-9]/g, '');
+        const cleanDigits = args.replace(/[^0-9]/g, '');
+        if (cleanDigits.length >= 7) {
+            target = `${cleanDigits}@s.whatsapp.net`;
+        }
     }
     return target;
-}
-
-function toSans(text) {
-    return text.split('').map(char => {
-        const code = char.charCodeAt(0);
-        if (code >= 65 && code <= 90) return String.fromCodePoint(code - 65 + 0x1D5A0);
-        if (code >= 97 && code <= 122) return String.fromCodePoint(code - 97 + 0x1D5BA);
-        if (code >= 48 && code <= 57) return String.fromCodePoint(code - 48 + 0x1D7E2);
-        return char;
-    }).join('');
 }
 
 function getDeviceTypeFromId(id) {
@@ -85,6 +85,157 @@ function getDeviceTypeFromId(id) {
 function extractEmojis(text) {
     const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F000}-\u{1F02B}\u{1F0A0}-\u{1F0B0}\u{1F100}-\u{1F1FF}\u{1F200}-\u{1F2FF}\u{1F300}-\u{1F5FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}]/gu;
     return text.match(emojiRegex) || [];
+}
+
+// Giphy CDN ID Extractor
+function getGiphyDirectUrl(url) {
+    if (!url) return '';
+    const parts = url.split('/');
+    const lastPart = parts[parts.length - 1] || parts[parts.length - 2] || '';
+    const segmentParts = lastPart.split('-');
+    const id = segmentParts[segmentParts.length - 1];
+    return `https://media.giphy.com/media/${id}/giphy.mp4`;
+}
+
+// Media Assets Lists
+const assets = {
+    slap: [
+        "https://giphy.com/gifs/Gf3AUz3eBNbTW",
+        "https://giphy.com/gifs/super-slap-terrell-wade-empire-4R6EMXhNPz5WsJFEta",
+        "https://giphy.com/gifs/funimation-slap-xUNd9HZq1itMkiK652",
+        "https://giphy.com/gifs/iQiyiOfficial-funny-anime-spyxfamily-WvzGVdiVRNq8qtWPKu"
+    ],
+    punch: [
+        "https://giphy.com/gifs/anime-bhola-serioussaitama-56lLsVkQMEmlEfOyGC",
+        "https://giphy.com/gifs/super-saiyan-XKO2OnnJnmqxW",
+        "https://giphy.com/gifs/Edgerunners-anime-cyberpunk-edgerunners-NY3tXwOBUwQYq7lbXx",
+        "https://giphy.com/gifs/punch-yep-OpvUphysvKumQ",
+        "https://giphy.com/gifs/attack-on-titan-badass-11HeubLHnQJSAU",
+        "https://giphy.com/gifs/iQiyiOfficial-anime-anya-spy-x-family-NuiEoMDbstN0J2KAiH",
+        "https://giphy.com/gifs/jujutsu-kaisen-jjk-3-00V9zBPthegYnOxmFq"
+    ],
+    hifive: [
+        "https://giphy.com/gifs/witch-hat-atelier-impact-frame-meme-hwdlx08M5DJdAcr1nh",
+        "https://giphy.com/gifs/pokemon-high-five-x58AS8I9DBRgA"
+    ],
+    kill: [
+        "https://giphy.com/gifs/pokemon-high-five-x58AS8I9DBRgA",
+        "https://giphy.com/gifs/mortal-kombat-3lIgOk4Gjfptu",
+        "https://giphy.com/gifs/midway-mortal-kombat-3-trilogy-LxfSL6Ong0NDG",
+        "https://giphy.com/gifs/deviantart-mk-ermac-NQQoLnrWExPbi",
+        "https://giphy.com/gifs/90s-mortal-kombat-video-games-Mkrv6hMDj7kcM",
+        "https://giphy.com/gifs/jujutsu-kaisen-3-episode-51-rMSjN5eXy8238yChf5",
+        "https://giphy.com/gifs/xbox-game-xbox-series-x-s-thGRsuBVXvJaxb3fKz",
+        "https://giphy.com/gifs/manga-fight-cosmic-garou-vs-satima-ptmWoT5ZoeStn3PP5v"
+    ],
+    dap: [
+        "https://giphy.com/gifs/happy-nice-congrats-WSMCmFSCmtnuOWgqvr",
+        "https://giphy.com/gifs/hamlet-tiger-woods-big-dog-lets-go-to-work-HlLg2GcPOmOuVvEENM",
+        "https://giphy.com/gifs/dap-ayee-splinter-cell-XNTgP3fNsSpyKE4NaS",
+        "https://giphy.com/gifs/Bovada-bro-dap-up-UNPnqHRo3VVJaYvWPo",
+        "https://giphy.com/gifs/fah-faaaah-faaah-pwrMzlfl5R0KkvG33q"
+    ],
+    kiss: [
+        "https://giphy.com/gifs/kiss-kawaii-QGc8RgRvMonFm",
+        "https://giphy.com/gifs/sora-haru-zkppEMFvRX5FC",
+        "https://giphy.com/gifs/kiss-anime-love-jR22gdcPiOLaE",
+        "https://giphy.com/gifs/anime-couple-11rWoZNpAKw8w",
+        "https://giphy.com/gifs/otp-taiga-ryuuji-gTLfgIRwAiWOc"
+    ],
+    hug: [
+        "https://giphy.com/gifs/hug-QFPoctlgZ5s0E",
+        "https://giphy.com/gifs/hug-svXXBgduBsJ1u"
+    ],
+    kik: [
+        "https://giphy.com/gifs/spiritridingfree-LXvU6blUNRuzR7ROLU",
+        "https://giphy.com/gifs/taiwanese-animation-nmatv-harlem-shake-ZJzuJJJJCqNPO",
+        "https://giphy.com/gifs/adultswim-anime-kick-lazarus-7dnvXm1zNQVNjRWFi1",
+        "https://giphy.com/gifs/fighting-mugen-KmG26GNmdWOUE"
+    ],
+    bite: [
+        "https://giphy.com/gifs/AGoodDoctorBTC-big-bite-shark-eating-watermelon-bvCa9hlxOfUmcLMckl",
+        "https://giphy.com/gifs/bite-OqQOwXiCyJAmA",
+        "https://giphy.com/gifs/funimation-vanitas-no-carte-the-case-study-of-karte-b6mpA0JrIUsFSdhG9q",
+        "https://giphy.com/gifs/funimation-vanitas-no-carte-the-case-study-of-karte-lrMUMn9lnpaJDsvP0u"
+    ],
+    poke: [
+        "https://giphy.com/gifs/Playgigaverse-meme-poke-poking-2CBBBmBlkw5GlJl8kH",
+        "https://giphy.com/gifs/jCENc3aA4fLJm",
+        "https://giphy.com/gifs/jujutsu-kaisen-jjk-gojo-iNPNqI81MvDQ4D4n6D",
+        "https://giphy.com/gifs/touch-poke-windpress-YxfHVKacUyjBtWS2SH",
+        "https://giphy.com/gifs/michael-jackson-mj-king-of-pop-lGkUyj3IrEcvu"
+    ],
+    dance: [
+        "https://giphy.com/gifs/dope-moon-walk-micheal-jackson-pnyjo9W76V116",
+        "https://giphy.com/gifs/michael-jackson-dancing-DH9skMDA3Vf0s",
+        "https://giphy.com/gifs/dancing-black-moonwalk-DuoLKerazS0r61ffGo",
+        "https://giphy.com/gifs/michael-jackson-gif-king-of-pop-ibE2G1af8aMZG",
+        "https://giphy.com/gifs/michael-jackson-king-of-pop-mjfam-oz8jiKqcBTKnu",
+        "https://giphy.com/gifs/michael-jackson-gif-12cpBxBl4WqlHO",
+        "https://giphy.com/gifs/street-dancing-funny-meme-biggroove-rIiSZgZfNbwjdBBmfw"
+    ],
+    aura: [
+        "https://giphy.com/gifs/escanor-lionsin-lionsinofpride-LURDTf4W7Er0KVbuH7",
+        "https://giphy.com/gifs/naruto-dance-naeuto-5SPjgRi9ABVEg2pxmx",
+        "https://giphy.com/gifs/itachi-edit-moon-red-S7GacQl21noDYivnaM",
+        "https://giphy.com/gifs/jinwoo-sololeveling-sungjinwoo-ggaDSurtR6YN9MsW07",
+        "https://giphy.com/gifs/sololeveling-sungjinwoo-jinwoosung-E82h6xe6foRoo8iM68",
+        "https://giphy.com/gifs/goku-ultra-instinct-1gVUhlXhETaRRxzeHO",
+        "https://giphy.com/gifs/goku-dragonballdaima-daimagoku-Cm9hlV215X8ZhLabYQ",
+        "https://giphy.com/gifs/goku-super-dragon-ball-heroes-mastered-ultra-instint-x02HlyLWjAUdrOUa8h",
+        "https://giphy.com/gifs/dragonball-mangaedit-gokuvsmoro-9VZc2R0ni6GC6jAMVn",
+        "https://giphy.com/gifs/beast-gohan-truebeast-JfV56bRI3Ggk2WOiIj",
+        "https://giphy.com/gifs/hypergoku7-aura-farmer-piccolo-tower-C7KYexAn5wAqkzTAhW",
+        "https://giphy.com/gifs/michael-jackson-mj-king-of-pop-lGkUyj3IrEcvu"
+    ],
+    lol: [
+        "https://giphy.com/gifs/naruto-shippuden-laugh-zHVDvEgSqIclW",
+        "https://giphy.com/gifs/anime-laugh-crying-gqIthR70IxgagboMTo",
+        "https://giphy.com/gifs/ZTl9Apm9F5434r7dTQ",
+        "https://giphy.com/gifs/senku-rCmMQAWw2TSNSFYvMX",
+        "https://giphy.com/gifs/anime-laugh-gachiakuta-39usF2pQcL6Pw7JDxD",
+        "https://giphy.com/gifs/B1JKtacZXunqU"
+    ]
+};
+
+async function executeAction(sock, msg, category, verb, args) {
+    const jid = msg.key.remoteJid;
+    const isGroup = jid.endsWith('@g.us');
+    const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+    const senderNumber = senderJid.split('@')[0];
+
+    const targetJid = parseTarget(msg, args);
+    const targetNumber = targetJid ? targetJid.split('@')[0] : '';
+
+    let captionText = "";
+    let finalMentions = [senderJid];
+
+    if (targetJid && targetJid !== senderJid) {
+        captionText = `✨ @${senderNumber} ${verb} @${targetNumber}`;
+        finalMentions.push(targetJid);
+    } else {
+        captionText = `✨ @${senderNumber} ${verb} everyone`;
+        if (isGroup) {
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants.map(p => p.id);
+                finalMentions = [...finalMentions, ...participants];
+            } catch (e) {}
+        }
+    }
+
+    const list = assets[category] || [];
+    const randomUrl = list[Math.floor(Math.random() * list.length)];
+    const mediaUrl = getGiphyDirectUrl(randomUrl);
+
+    if (mediaUrl) {
+        await sock.sendMessage(jid, { 
+            video: { url: mediaUrl }, 
+            gifPlayback: true, 
+            caption: captionText, 
+            mentions: finalMentions 
+        }, { quoted: msg });
+    }
 }
 
 const bankaiData = [
@@ -135,79 +286,6 @@ const famousSpeeches = [
     { character: "Satoru Gojo", speech: "Don't worry, I'm the strongest." },
     { character: "Sosuke Aizen", speech: "No one stands on the top of the world from the beginning. Not you, not me, not even Gods." }
 ];
-
-async function executeAction(sock, msg, action, verb) {
-    const jid = msg.key.remoteJid;
-    const isGroup = jid.endsWith('@g.us');
-    const senderJid = msg.key.participant || msg.key.remoteJid || '';
-    const senderNum = senderJid.split('@')[0].split(':')[0];
-
-    const rawMsg = getRawMessage(msg.message);
-    const contextInfo = rawMsg?.contextInfo;
-    const repliedJid = contextInfo?.participant;
-    const mentions = contextInfo?.mentionedJid || [];
-    
-    let targetJid = repliedJid || (mentions.length > 0 ? mentions[0] : '');
-    let targetNum = targetJid ? targetJid.split('@')[0].split(':')[0] : '';
-
-    let captionText = "";
-    let finalMentions = [];
-
-    if (targetNum && targetNum !== senderNum) {
-        captionText = `✨ @${senderNum} ${verb} @${targetNum}`;
-        finalMentions = [`${senderNum}@s.whatsapp.net`, `${targetNum}@s.whatsapp.net`];
-    } else {
-        if (isGroup) {
-            captionText = `✨ @${senderNum} ${verb} everybody!`;
-            finalMentions = [`${senderNum}@s.whatsapp.net`];
-        } else {
-            captionText = `✨ @${senderNum} ${verb} themselves!`;
-            finalMentions = [`${senderNum}@s.whatsapp.net`];
-        }
-    }
-
-    try {
-        const searchQuery = `anime ${action}`;
-        const res = await fetch(`https://api.klipy.co/v1/gifs/search?api_key=${KLIPY_API_KEY}&q=${encodeURIComponent(searchQuery)}&limit=15`);
-        if (!res.ok) throw new Error("Klipy lookup failed");
-
-        const data = await res.json();
-        const results = data.data || [];
-
-        if (results.length > 0) {
-            const chosenGif = results[Math.floor(Math.random() * results.length)];
-            const mp4Url = chosenGif.images?.original?.mp4 || chosenGif.images?.downsized?.mp4 || chosenGif.mp4;
-            const gifUrl = chosenGif.images?.original?.url || chosenGif.gif;
-            const mediaUrl = mp4Url || gifUrl;
-
-            if (mediaUrl) {
-                return await sock.sendMessage(jid, { 
-                    video: { url: mediaUrl }, 
-                    gifPlayback: true, 
-                    caption: captionText, 
-                    mentions: finalMentions 
-                }, { quoted: msg });
-            }
-        }
-        throw new Error("Empty collection retrieved from Klipy");
-
-    } catch (err) {
-        try {
-            const fallbackRes = await fetch(`https://api.waifu.pics/sfw/${action === 'kick' ? 'kick' : action}`);
-            if (fallbackRes.ok) {
-                const fallbackData = await fallbackRes.json();
-                return await sock.sendMessage(jid, { 
-                    video: { url: fallbackData.url }, 
-                    gifPlayback: true, 
-                    caption: captionText, 
-                    mentions: finalMentions 
-                }, { quoted: msg });
-            }
-        } catch (fallbackErr) {}
-
-        await sock.sendMessage(jid, { text: `${captionText}`, mentions: finalMentions }, { quoted: msg });
-    }
-}
 
 module.exports = [
     // 1. BANKAI COMMAND
@@ -285,8 +363,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const targetNumber = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
-            const targetJid = targetNumber + '@s.whatsapp.net';
+            const targetJid = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '');
+            const targetNumber = targetJid.split('@')[0];
             await sock.sendMessage(jid, { text: `👿 @${targetNumber}: \n${insultData[Math.floor(Math.random() * insultData.length)]}`, mentions: [targetJid] }, { quoted: msg });
         }
     },
@@ -297,8 +375,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const targetNumber = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
-            const targetJid = targetNumber + '@s.whatsapp.net';
+            const targetJid = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '');
+            const targetNumber = targetJid.split('@')[0];
             await sock.sendMessage(jid, { text: `🔥 @${targetNumber}: \n${roastData[Math.floor(Math.random() * roastData.length)]}`, mentions: [targetJid] }, { quoted: msg });
         }
     },
@@ -333,7 +411,7 @@ module.exports = [
                 let verdict = percentage >= 80 ? "💍 Soulmates!" : (percentage >= 50 ? "💒 Match!" : "🏃💨 Mismatch.");
 
                 const shipCaption = `💞 *SHIP* 💞\n👩‍❤️‍👨 @${t1Num} x @${t2Num} — *${percentage}%*\n📢 *Verdict:* ${verdict}`;
-                await sock.sendMessage(jid, { text: shipCaption, mentions: [`${t1Num}@s.whatsapp.net`, `${t2Num}@s.whatsapp.net`] }, { quoted: msg });
+                await sock.sendMessage(jid, { text: shipCaption, mentions: [target1, target2] }, { quoted: msg });
             } catch (err) {}
         }
     },
@@ -348,14 +426,13 @@ module.exports = [
             if (!isGroup) return;
 
             try {
-                const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                const senderNum = senderJid.split('@')[0].split(':')[0];
+                const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+                const senderNum = senderJid.split('@')[0];
 
-                const targetNum = parseTarget(msg, args);
-                if (!targetNum || targetNum === senderNum) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
+                const targetJid = parseTarget(msg, args);
+                if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-                const targetJid = targetNum + '@s.whatsapp.net';
-                const senderJidArg = senderNum + '@s.whatsapp.net';
+                const targetNum = targetJid.split('@')[0];
 
                 const text = `👰🤵 *HOLY MATRIMONY PROPOSAL* 👰🤵\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👉 @${targetNum}, do you accept @${senderNum} as your lawfully wedded partner?`;
 
@@ -366,14 +443,14 @@ module.exports = [
                         { buttonId: `${settings.prefix}wed_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: "💔 I Don't" }, type: 1 }
                     ],
                     headerType: 1,
-                    mentions: [targetJid, `${senderNum}@s.whatsapp.net`]
+                    mentions: [targetJid, senderJid]
                 };
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
             } catch (err) {}
         }
     },
 
-    // 9. WED PROPOSAL ANSWER HANDLER (MD-Normalization)
+    // 9. WED PROPOSAL ANSWER HANDLER
     {
         name: 'wed_ans',
         isPrefixless: false,
@@ -386,10 +463,10 @@ module.exports = [
             const targetNum = parts[1]?.trim();
             const senderNum = parts[2]?.trim();
 
-            const clickerJid = msg.key.participant || msg.key.remoteJid || '';
-            const clickerNum = clickerJid.split('@')[0].split(':')[0];
+            const clickerJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const clickerNum = clickerJid.split('@')[0];
 
-            if (clickerNum !== targetNum) return; // Strict MD target check
+            if (clickerNum !== targetNum) return; 
 
             const targetJid = targetNum + '@s.whatsapp.net';
             const senderJid = senderNum + '@s.whatsapp.net';
@@ -412,13 +489,13 @@ module.exports = [
             if (!isGroup) return;
 
             try {
-                const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                const senderNum = senderJid.split('@')[0].split(':')[0];
+                const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+                const senderNum = senderJid.split('@')[0];
 
-                const targetNum = parseTarget(msg, args);
-                if (!targetNum || targetNum === senderNum) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
+                const targetJid = parseTarget(msg, args);
+                if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-                const targetJid = targetNum + '@s.whatsapp.net';
+                const targetNum = targetJid.split('@')[0];
                 const heartMsg = proposalMessages[Math.floor(Math.random() * proposalMessages.length)];
 
                 const text = `🌹 *A CONFESSION* 🌹\n\n💖 *To:* @${targetNum}\n📝 _"${heartMsg}"_\n\n💍 *WILL YOU MARRY ME?* @${targetNum} 💍`;
@@ -437,7 +514,7 @@ module.exports = [
         }
     },
 
-    // 11. PROPOSE ANSWER HANDLER (MD-Normalization)
+    // 11. PROPOSE ANSWER HANDLER
     {
         name: 'prop_ans',
         isPrefixless: false,
@@ -450,10 +527,10 @@ module.exports = [
             const targetNum = parts[1]?.trim();
             const senderNum = parts[2]?.trim();
 
-            const clickerJid = msg.key.participant || msg.key.remoteJid || '';
-            const clickerNum = clickerJid.split('@')[0].split(':')[0];
+            const clickerJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const clickerNum = clickerJid.split('@')[0];
 
-            if (clickerNum !== targetNum) return; // Strict MD target check
+            if (clickerNum !== targetNum) return; 
 
             const targetJid = targetNum + '@s.whatsapp.net';
             const senderJid = senderNum + '@s.whatsapp.net';
@@ -476,13 +553,13 @@ module.exports = [
             if (!isGroup) return;
 
             try {
-                const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                const senderNum = senderJid.split('@')[0].split(':')[0];
+                const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+                const senderNum = senderJid.split('@')[0];
 
-                const targetNum = parseTarget(msg, args);
-                if (!targetNum || targetNum === senderNum) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
+                const targetJid = parseTarget(msg, args);
+                if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-                const targetJid = targetNum + '@s.whatsapp.net';
+                const targetNum = targetJid.split('@')[0];
                 const heartMsg = askoutMessages[Math.floor(Math.random() * askoutMessages.length)];
 
                 const text = `💌 *A CONFESSION* 💌\n\n💖 *To:* @${targetNum}\n📝 _"${heartMsg}"_\n\n👉 *WILL YOU GO OUT WITH ME?* @${targetNum} 👈`;
@@ -501,7 +578,7 @@ module.exports = [
         }
     },
 
-    // 13. ASKOUT ANSWER HANDLER (MD-Normalization)
+    // 13. ASKOUT ANSWER HANDLER
     {
         name: 'ask_ans',
         isPrefixless: false,
@@ -514,10 +591,10 @@ module.exports = [
             const targetNum = parts[1]?.trim();
             const senderNum = parts[2]?.trim();
 
-            const clickerJid = msg.key.participant || msg.key.remoteJid || '';
-            const clickerNum = clickerJid.split('@')[0].split(':')[0];
+            const clickerJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const clickerNum = clickerJid.split('@')[0];
 
-            if (clickerNum !== targetNum) return; // Strict MD target check
+            if (clickerNum !== targetNum) return; 
 
             const targetJid = targetNum + '@s.whatsapp.net';
             const senderJid = senderNum + '@s.whatsapp.net';
@@ -644,13 +721,13 @@ module.exports = [
             if (!isGroup) return;
 
             try {
-                const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                const senderNum = senderJid.split('@')[0].split(':')[0];
+                const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+                const senderNum = senderJid.split('@')[0];
 
-                const targetNum = parseTarget(msg, args);
-                if (!targetNum || targetNum === senderNum) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
+                const targetJid = parseTarget(msg, args);
+                if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-                const targetJid = targetNum + '@s.whatsapp.net';
+                const targetNum = targetJid.split('@')[0];
 
                 const text = 
                     `🚨 *ARREST WARRANT* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -662,7 +739,7 @@ module.exports = [
                     text: text,
                     buttons: [{ buttonId: `${settings.prefix}jail_ans ${targetNum}`, buttonText: { displayText: 'Send to Jail ⛓️' }, type: 1 }],
                     headerType: 1,
-                    mentions: [targetJid, `${senderNum}@s.whatsapp.net`]
+                    mentions: [targetJid, senderJid]
                 };
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
             } catch (err) {}
@@ -677,7 +754,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!args) return;
 
-            const targetNum = args.trim().split(' ')[0].split('@')[0].split(':')[0];
+            const targetNum = args.trim().split(' ')[0].split('@')[0];
             const targetJid = targetNum + '@s.whatsapp.net';
 
             try {
@@ -722,18 +799,104 @@ module.exports = [
         }
     },
 
-    // 19. ANIME ACTIONS
-    { name: 'slap', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "slap", "slapped"); } },
-    { name: 'kill', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "kill", "killed"); } },
-    { name: 'kiss', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "kiss", "kissed"); } },
-    { name: 'hug', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "hug", "hugged"); } },
-    { name: 'kik', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "kick", "kicked"); } },
-    { name: 'punch', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "punch", "punched"); } },
-    { name: 'hifive', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "highfive", "highfived"); } },
-    { name: 'bite', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "bite", "bit"); } },
-    { name: 'poke', isPrefixless: false, execute: async (sock, msg) => { await executeAction(sock, msg, "poke", "poked"); } },
+    // 19. RECONSTRUCTED INTERACTION COMMANDS
+    { name: 'slap', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "slap", "slapped", args); } },
+    { name: 'punch', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "punch", "punched", args); } },
+    { name: 'hifive', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "hifive", "highfived", args); } },
+    { name: 'kill', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "kill", "killed", args); } },
+    { name: 'dap', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "dap", "dapped", args); } },
+    { name: 'kiss', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "kiss", "kissed", args); } },
+    { name: 'hug', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "hug", "hugged", args); } },
+    { name: 'kik', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "kik", "kicked", args); } },
+    { name: 'bite', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "bite", "bit", args); } },
+    { name: 'poke', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "poke", "poked", args); } },
 
-    // 20. USER DETAIL DIAGNOSTICS
+    // 20. SOLO COMMAND: DANCE
+    {
+        name: 'dance',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const senderNumber = senderJid.split('@')[0];
+
+            const list = assets.dance;
+            const randomUrl = list[Math.floor(Math.random() * list.length)];
+            const mediaUrl = getGiphyDirectUrl(randomUrl);
+
+            if (mediaUrl) {
+                await sock.sendMessage(jid, { 
+                    video: { url: mediaUrl }, 
+                    gifPlayback: true, 
+                    caption: `✨ @${senderNumber} is dancing`, 
+                    mentions: [senderJid] 
+                }, { quoted: msg });
+            }
+        }
+    },
+
+    // 21. SOLO COMMAND: AURA
+    {
+        name: 'aura',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const senderNumber = senderJid.split('@')[0];
+
+            const list = assets.aura;
+            const randomUrl = list[Math.floor(Math.random() * list.length)];
+            const mediaUrl = getGiphyDirectUrl(randomUrl);
+
+            if (mediaUrl) {
+                await sock.sendMessage(jid, { 
+                    video: { url: mediaUrl }, 
+                    gifPlayback: true, 
+                    caption: `✨ @${senderNumber} is aura farming`, 
+                    mentions: [senderJid] 
+                }, { quoted: msg });
+            }
+        }
+    },
+
+    // 22. REACTION DUAL-ROUTE COMMAND: LOL
+    {
+        name: 'lol',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const senderNumber = senderJid.split('@')[0];
+
+            const targetJid = parseTarget(msg, args);
+            const targetNumber = targetJid ? targetJid.split('@')[0] : '';
+
+            let captionText = "";
+            let finalMentions = [senderJid];
+
+            if (targetJid && targetJid !== senderJid) {
+                captionText = `✨ @${senderNumber} is laughing at @${targetNumber}`;
+                finalMentions.push(targetJid);
+            } else {
+                captionText = `✨ @${senderNumber} is laughing`;
+            }
+
+            const list = assets.lol;
+            const randomUrl = list[Math.floor(Math.random() * list.length)];
+            const mediaUrl = getGiphyDirectUrl(randomUrl);
+
+            if (mediaUrl) {
+                await sock.sendMessage(jid, { 
+                    video: { url: mediaUrl }, 
+                    gifPlayback: true, 
+                    caption: captionText, 
+                    mentions: finalMentions 
+                }, { quoted: msg });
+            }
+        }
+    },
+
+    // 23. USER DETAIL DIAGNOSTICS
     {
         name: 'info',
         isPrefixless: false,
@@ -769,7 +932,7 @@ module.exports = [
         }
     },
 
-    // 21. LIE DETECTOR
+    // 24. LIE DETECTOR
     {
         name: 'liedetector',
         isPrefixless: false,
@@ -796,7 +959,7 @@ module.exports = [
         }
     },
 
-    // 22. RIZZ LINES
+    // 25. RIZZ LINES
     {
         name: 'rizz',
         isPrefixless: false,
@@ -806,7 +969,7 @@ module.exports = [
         }
     },
 
-    // 23. ANIME MONOLOGUES
+    // 26. ANIME MONOLOGUES
     {
         name: 'speech',
         isPrefixless: false,
@@ -825,7 +988,7 @@ module.exports = [
         }
     },
 
-    // 24. EMOJIMIX GENERATOR
+    // 27. EMOJIMIX GENERATOR
     {
         name: 'emojimix',
         isPrefixless: false,
@@ -887,5 +1050,12 @@ module.exports.forEach(cmd => {
     if (cmd.name === 'dom-exp') aliases.push({ ...cmd, name: 'domain-expansion' });
     if (cmd.name === 'hollow-purple') aliases.push({ ...cmd, name: 'purple-tech' });
     if (cmd.name === 'emojimix') aliases.push({ ...cmd, name: 'emix' });
+    if (cmd.name === 'lol') {
+        aliases.push({ ...cmd, name: 'laugh' });
+        aliases.push({ ...cmd, name: 'xd' });
+    }
+    if (cmd.name === 'aura') {
+        aliases.push({ ...cmd, name: 'farm' });
+    }
 });
 module.exports.push(...aliases);
