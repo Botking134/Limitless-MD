@@ -343,18 +343,25 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return; 
 
-            if (!Array.isArray(settings.sudo)) settings.sudo = [];
-
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user (@user), or type their number." }, { quoted: msg });
             }
 
-            if (settings.sudo.includes(targetJid)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already in the sudo list.`, mentions: [targetJid] }, { quoted: msg });
+            if (targetJid.endsWith('@lid')) {
+                if (!Array.isArray(settings.sudoLids)) settings.sudoLids = [];
+                if (settings.sudoLids.includes(targetJid)) {
+                    return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already in the sudo LID list.`, mentions: [targetJid] }, { quoted: msg });
+                }
+                settings.sudoLids.push(targetJid);
+            } else {
+                if (!Array.isArray(settings.sudo)) settings.sudo = [];
+                if (settings.sudo.includes(targetJid)) {
+                    return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already in the sudo list.`, mentions: [targetJid] }, { quoted: msg });
+                }
+                settings.sudo.push(targetJid);
             }
 
-            settings.sudo.push(targetJid);
             await sock.sendMessage(jid, { 
                 text: `👑 Added @${targetJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
                 mentions: [targetJid]
@@ -371,18 +378,28 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!Array.isArray(settings.sudo)) settings.sudo = [];
-
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (!settings.sudo.includes(targetJid)) {
+            let exists = false;
+            if (targetJid.endsWith('@lid')) {
+                if (Array.isArray(settings.sudoLids) && settings.sudoLids.includes(targetJid)) {
+                    settings.sudoLids = settings.sudoLids.filter(num => num !== targetJid);
+                    exists = true;
+                }
+            } else {
+                if (Array.isArray(settings.sudo) && settings.sudo.includes(targetJid)) {
+                    settings.sudo = settings.sudo.filter(num => num !== targetJid);
+                    exists = true;
+                }
+            }
+
+            if (!exists) {
                 return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not in the sudo list.`, mentions: [targetJid] }, { quoted: msg });
             }
 
-            settings.sudo = settings.sudo.filter(num => num !== targetJid);
             await sock.sendMessage(jid, { 
                 text: `👋 Removed @${targetJid.split('@')[0]} from the sudo list.`,
                 mentions: [targetJid]
@@ -399,18 +416,25 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
-
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (settings.owners.includes(targetJid)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already registered as an owner.`, mentions: [targetJid] }, { quoted: msg });
+            if (targetJid.endsWith('@lid')) {
+                if (!Array.isArray(settings.ownerLids)) settings.ownerLids = [];
+                if (settings.ownerLids.includes(targetJid) || targetJid === settings.ownerLid) {
+                    return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already registered as an owner LID.`, mentions: [targetJid] }, { quoted: msg });
+                }
+                settings.ownerLids.push(targetJid);
+            } else {
+                if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
+                if (settings.owners.includes(targetJid)) {
+                    return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already registered as an owner.`, mentions: [targetJid] }, { quoted: msg });
+                }
+                settings.owners.push(targetJid);
             }
 
-            settings.owners.push(targetJid);
             await sock.sendMessage(jid, { 
                 text: `👑 Added @${targetJid.split('@')[0]} as a Bot Owner.\n_They now possess full system administrative capabilities._`,
                 mentions: [targetJid]
@@ -427,22 +451,33 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
-
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (targetJid === settings.ownerJid) {
+            if (targetJid === settings.ownerJid || targetJid === settings.ownerLid) {
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove the primary Bot Owner." }, { quoted: msg });
             }
 
-            if (!settings.owners.includes(targetJid)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not a secondary owner.`, mentions: [targetJid] }, { quoted: msg });
+            let exists = false;
+            if (targetJid.endsWith('@lid')) {
+                if (Array.isArray(settings.ownerLids) && settings.ownerLids.includes(targetJid)) {
+                    settings.ownerLids = settings.ownerLids.filter(num => num !== targetJid);
+                    exists = true;
+                }
+            } else {
+                if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
+                if (settings.owners.includes(targetJid)) {
+                    settings.owners = settings.owners.filter(num => num !== targetJid);
+                    exists = true;
+                }
             }
 
-            settings.owners = settings.owners.filter(num => num !== targetJid);
+            if (!exists) {
+                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not a registered owner.`, mentions: [targetJid] }, { quoted: msg });
+            }
+
             await sock.sendMessage(jid, { 
                 text: `👋 Removed @${targetJid.split('@')[0]} from the secondary owners list.`,
                 mentions: [targetJid]
@@ -490,7 +525,7 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (targetJid === settings.ownerJid) {
+            if (targetJid === settings.ownerJid || targetJid === settings.ownerLid) {
                 return await sock.sendMessage(jid, { text: "❌ You cannot blacklist Satoru Gojo's creator." }, { quoted: msg });
             }
 
@@ -528,7 +563,7 @@ module.exports = [
 
             settings.banned = settings.banned.filter(num => num !== targetJid);
             await sock.sendMessage(jid, { 
-                text: ``✅ Restored access for @${targetJid.split('@')[0]}.`,
+                text: `✅ Restored access for @${targetJid.split('@')[0]}.`,
                 mentions: [targetJid]
             }, { quoted: msg });
             saveSettings(); 
@@ -548,11 +583,20 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
             }
 
-            if (settings.devs.includes(targetJid)) {
-                return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer." }, { quoted: msg });
+            if (targetJid.endsWith('@lid')) {
+                if (!Array.isArray(settings.devLids)) settings.devLids = [];
+                if (settings.devLids.includes(targetJid)) {
+                    return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer LID." }, { quoted: msg });
+                }
+                settings.devLids.push(targetJid);
+            } else {
+                if (!Array.isArray(settings.devs)) settings.devs = [];
+                if (settings.devs.includes(targetJid)) {
+                    return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer." }, { quoted: msg });
+                }
+                settings.devs.push(targetJid);
             }
 
-            settings.devs.push(targetJid);
             await sock.sendMessage(jid, { 
                 text: `👑 Developer registered successfully: @${targetJid.split('@')[0]}`, 
                 mentions: [targetJid] 
@@ -583,11 +627,23 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove a base core developer." }, { quoted: msg });
             }
 
-            if (!settings.devs.includes(targetJid)) {
+            let exists = false;
+            if (targetJid.endsWith('@lid')) {
+                if (Array.isArray(settings.devLids) && settings.devLids.includes(targetJid)) {
+                    settings.devLids = settings.devLids.filter(num => num !== targetJid);
+                    exists = true;
+                }
+            } else {
+                if (Array.isArray(settings.devs) && settings.devs.includes(targetJid)) {
+                    settings.devs = settings.devs.filter(num => num !== targetJid);
+                    exists = true;
+                }
+            }
+
+            if (!exists) {
                 return await sock.sendMessage(jid, { text: "❌ Target is not a registered developer." }, { quoted: msg });
             }
 
-            settings.devs = settings.devs.filter(num => num !== targetJid);
             await sock.sendMessage(jid, { 
                 text: `👋 Removed developer privileges for: @${targetJid.split('@')[0]}`, 
                 mentions: [targetJid] 
@@ -678,7 +734,7 @@ module.exports = [
             commandsList.reload();
 
             await sock.sendMessage(jid, {
-                text: ``✅ *Variable Configured Successfully!*\n\n` +
+                text: `✅ *Variable Configured Successfully!*\n\n` +
                       `• *Key:* \`${mappedKey}\`\n` +
                       `• *Value:* \`${finalValue}\`\n\n` +
                       `_Bot settings.js file has been updated, and command registries have been hot-reloaded successfully._`
@@ -694,7 +750,9 @@ module.exports = [
             if (!isOwner) return; 
 
             const ownersList = (settings.owners || []).length > 0 ? settings.owners.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+            const ownersLidsList = (settings.ownerLids || []).length > 0 ? settings.ownerLids.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
             const sudoList = (settings.sudo || []).length > 0 ? settings.sudo.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+            const sudoLidsList = (settings.sudoLids || []).length > 0 ? settings.sudoLids.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
             const bannedList = (settings.banned || []).length > 0 ? settings.banned.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
 
             const antilinkCount = Object.keys(settings.antilink || {}).filter(k => settings.antilink[k] !== 'off').length;
@@ -714,8 +772,10 @@ module.exports = [
                 `🎨 *Sticker Author:* \`${settings.author}\`\n` +
                 `❄️ *Automated React:* \`${settings.autoReact}\`\n\n` +
                 
-                `👥 *Secondary Owners:* ${ownersList}\n` +
-                `🛡️ *Sudo Users:* ${sudoList}\n` +
+                `👥 *Secondary Owners (Phone):* ${ownersList}\n` +
+                `👥 *Secondary Owners (LID):* ${ownersLidsList}\n` +
+                `🛡️ *Sudo Users (Phone):* ${sudoList}\n` +
+                `🛡️ *Sudo Users (LID):* ${sudoLidsList}\n` +
                 `🚫 *Banned Users:* ${bannedList}\n\n` +
                 
                 `🛡️ *Active Group Protections:*\n` +
@@ -725,7 +785,9 @@ module.exports = [
 
             const allMentions = [
                 ...(settings.owners || []),
+                ...(settings.ownerLids || []),
                 ...(settings.sudo || []),
+                ...(settings.sudoLids || []),
                 ...(settings.banned || [])
             ];
 
@@ -1072,27 +1134,35 @@ module.exports = [
             if (!isOwner) return;
 
             const secondaries = settings.owners || [];
+            const secondariesLids = settings.ownerLids || [];
             const sudos = settings.sudo || [];
+            const sudosLids = settings.sudoLids || [];
 
             let list = `👑 *LIMITLESS OWNER & SUDO REGISTER* 👑\n` +
                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                        `👤 *Primary Creator JID:*\n` +
                        `• @${settings.ownerNumber}\n\n`;
 
-            if (secondaries.length > 0) {
+            if (secondaries.length > 0 || secondariesLids.length > 0) {
                 list += `👑 *Secondary Owners:*\n`;
                 secondaries.forEach((num) => {
                     list += `• @${num.split('@')[0]}\n`;
+                });
+                secondariesLids.forEach((lid) => {
+                    list += `• @${lid.split('@')[0]} (LID)\n`;
                 });
                 list += `\n`;
             } else {
                 list += `👑 *Secondary Owners:* _None_\n\n`;
             }
 
-            if (sudos.length > 0) {
+            if (sudos.length > 0 || sudosLids.length > 0) {
                 list += `🛡️ *Registered Sudoers:*\n`;
                 sudos.forEach((num) => {
                     list += `• @${num.split('@')[0]}\n`;
+                });
+                sudosLids.forEach((lid) => {
+                    list += `• @${lid.split('@')[0]} (LID)\n`;
                 });
                 list += `\n`;
             } else {
@@ -1102,7 +1172,9 @@ module.exports = [
             const mentionsList = [
                 settings.ownerJid,
                 ...secondaries,
-                ...sudos
+                ...secondariesLids,
+                ...sudos,
+                ...sudosLids
             ];
 
             await sock.sendMessage(jid, { text: list, mentions: mentionsList }, { quoted: msg });
