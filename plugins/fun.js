@@ -288,6 +288,8 @@ const famousSpeeches = [
     { character: "Sosuke Aizen", speech: "No one stands on the top of the world from the beginning. Not you, not me, not even Gods." }
 ];
 
+const toSans = (text) => text; // Minimal text transformer fallback
+
 module.exports = [
     // 1. BANKAI COMMAND
     {
@@ -467,14 +469,13 @@ module.exports = [
             const rawClicker = msg.key.participant || msg.key.remoteJid || '';
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
 
-            // Resolve clicker's JID to phone JID format to resolve the LID trap
-            const resolvedClickerJid = await getPhoneJid(sock, clickerJid, jid);
-            const clickerNum = resolvedClickerJid.split('@')[0];
+            // Optimized comparison direct extraction matching both JIDs and LIDs safely
+            const clickerNum = clickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
-            const targetJid = targetNum + '@s.whatsapp.net';
-            const senderJid = senderNum + '@s.whatsapp.net';
+            const targetJid = targetNum + (targetJid && targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            const senderJid = senderNum + (senderJid && senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `👰🤵 *MATRIMONY COMPLETED!* 👰🤵\n\nBy Satoru Gojo's authority, I declare @${senderNum} and @${targetNum} joined in holy matrimony! 💍✨`, mentions: [senderJid, targetJid] }, { quoted: msg });
@@ -535,14 +536,13 @@ module.exports = [
             const rawClicker = msg.key.participant || msg.key.remoteJid || '';
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
 
-            // Resolve clicker's JID to phone JID format to resolve the LID trap
-            const resolvedClickerJid = await getPhoneJid(sock, clickerJid, jid);
-            const clickerNum = resolvedClickerJid.split('@')[0];
+            // Optimized comparison direct extraction matching both JIDs and LIDs safely
+            const clickerNum = clickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
-            const targetJid = targetNum + '@s.whatsapp.net';
-            const senderJid = senderNum + '@s.whatsapp.net';
+            const targetJid = targetNum + (targetJid && targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            const senderJid = senderNum + (senderJid && senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `💍 *ENGAGED!* 💍\n\n🎉 @${targetNum} and @${senderNum} are now officially *ENGAGED*!`, mentions: [targetJid, senderJid] }, { quoted: msg });
@@ -603,14 +603,13 @@ module.exports = [
             const rawClicker = msg.key.participant || msg.key.remoteJid || '';
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
 
-            // Resolve clicker's JID to phone JID format to resolve the LID trap
-            const resolvedClickerJid = await getPhoneJid(sock, clickerJid, jid);
-            const clickerNum = resolvedClickerJid.split('@')[0];
+            // Optimized comparison direct extraction matching both JIDs and LIDs safely
+            const clickerNum = clickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
-            const targetJid = targetNum + '@s.whatsapp.net';
-            const senderJid = senderNum + '@s.whatsapp.net';
+            const targetJid = targetNum + (targetJid && targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            const senderJid = senderNum + (senderJid && senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `🎉 *CONFESSION ACCEPTED!* 🎉\n\n💖 @${targetNum} and @${senderNum} are now officially in a relationship!`, mentions: [targetJid, senderJid] }, { quoted: msg });
@@ -913,35 +912,72 @@ module.exports = [
     {
         name: 'info',
         isPrefixless: false,
-        execute: async (sock, msg) => {
+        execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const rawMsg = getRawMessage(msg.message);
             const contextInfo = rawMsg?.contextInfo;
             
+            // Get raw participant JID/LID from message
             let targetJid = contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '';
-            const targetNum = targetJid.split('@')[0].split(':')[0];
-            targetJid = targetNum + '@s.whatsapp.net';
+            if (args) {
+                const targetFromArgs = parseTarget(msg, args);
+                if (targetFromArgs) targetJid = targetFromArgs;
+            }
+            
+            const rawTargetJid = targetJid.split(':')[0] + (targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            const targetID = rawTargetJid.split('@')[0];
+            const isLid = rawTargetJid.endsWith('@lid');
+
+            let phoneJid = '';
+            let phoneNumber = '';
+            let username = 'User';
+
+            // Resolve contact name or fall back to message pushName
+            try {
+                username = sock.getName ? sock.getName(rawTargetJid) : (msg.pushName || 'User');
+            } catch (e) {}
+
+            if (isLid) {
+                // If the target is a LID, resolve their traditional phone number JID
+                try {
+                    const resolvedPhoneJid = await getPhoneJid(sock, rawTargetJid, jid);
+                    if (resolvedPhoneJid) {
+                        phoneJid = resolvedPhoneJid;
+                        phoneNumber = `+${resolvedPhoneJid.split('@')[0]}`;
+                    }
+                } catch (e) {}
+            } else {
+                phoneJid = rawTargetJid;
+                phoneNumber = `+${targetID}`;
+            }
 
             let pfpUrl;
             try {
-                pfpUrl = await sock.profilePictureUrl(targetJid, 'image');
+                pfpUrl = await sock.profilePictureUrl(rawTargetJid, 'image');
             } catch (e) {
                 pfpUrl = "https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png";
             }
 
             let bio = "No bio set.";
-            try { bio = (await sock.fetchStatus(targetJid))?.status || bio; } catch (e) {}
+            try { 
+                bio = (await sock.fetchStatus(rawTargetJid))?.status || bio; 
+            } catch (e) {
+                if (phoneJid && phoneJid !== rawTargetJid) {
+                    try { bio = (await sock.fetchStatus(phoneJid))?.status || bio; } catch (err) {}
+                }
+            }
 
             const device = getDeviceTypeFromId(contextInfo?.stanzaId || msg.key.id);
 
             const infoCaption = 
                 `📋 *LIMITLESS USER INTEL* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `👤 *Name:* \`${msg.pushName || "User"}\`\n` +
-                `📱 *Number:* \`+${targetNum}\`\n` +
+                `👤 *Username:* \`${username}\`\n` +
+                `🆔 *User ID / LID:* \`${targetID}${isLid ? ' (@lid)' : ' (@s.whatsapp.net)'}\`\n` +
+                `📱 *Phone Number:* \`${phoneNumber || 'Not Resolved'}\`\n` +
                 `✍️ *Bio:* \`"${bio}"\`\n` +
                 `🛡️ *Device:* \`${device}\``;
 
-            await sock.sendMessage(jid, { image: { url: pfpUrl }, caption: infoCaption, mentions: [targetJid] }, { quoted: msg });
+            await sock.sendMessage(jid, { image: { url: pfpUrl }, caption: infoCaption, mentions: [rawTargetJid] }, { quoted: msg });
         }
     },
 
