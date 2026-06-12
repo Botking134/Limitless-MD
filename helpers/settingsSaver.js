@@ -16,6 +16,7 @@ function saveSettings() {
             author: settings.author,
             isPublic: settings.isPublic,
             ownerNumber: settings.ownerNumber,
+            ownerJid: settings.ownerJid || `${settings.ownerNumber}@s.whatsapp.net`,
             owners: settings.owners || [],
             sudo: settings.sudo || [],
             banned: settings.banned || [],
