@@ -111,16 +111,19 @@ function parseTarget(msg, args) {
     const quotedParticipant = contextInfo?.participant;
 
     if (quotedParticipant) {
-        target = quotedParticipant.split('@')[0].split(':')[0];
+        target = quotedParticipant.split(':')[0] + (quotedParticipant.includes('@lid') ? '@lid' : '@s.whatsapp.net');
     } 
     else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
         const botJid = settings.botJid || '';
         const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
         const selectedJid = filteredMention || contextInfo.mentionedJid[0];
-        target = selectedJid.split('@')[0].split(':')[0];
+        target = selectedJid.split(':')[0] + (selectedJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
     } 
     else if (args) {
-        target = args.replace(/[^0-9]/g, '');
+        const cleanDigits = args.replace(/[^0-9]/g, '');
+        if (cleanDigits.length >= 7) {
+            target = `${cleanDigits}@s.whatsapp.net`;
+        }
     }
 
     return target;
@@ -342,19 +345,19 @@ module.exports = [
 
             if (!Array.isArray(settings.sudo)) settings.sudo = [];
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user (@user), or type their number." }, { quoted: msg });
             }
 
-            if (settings.sudo.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is already in the sudo list.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
+            if (settings.sudo.includes(targetJid)) {
+                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already in the sudo list.`, mentions: [targetJid] }, { quoted: msg });
             }
 
-            settings.sudo.push(targetNumber);
+            settings.sudo.push(targetJid);
             await sock.sendMessage(jid, { 
-                text: `👑 Added @${targetNumber} to the sudo list.\n_They can now use the bot in Private mode._`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
+                text: `👑 Added @${targetJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
+                mentions: [targetJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -370,19 +373,19 @@ module.exports = [
 
             if (!Array.isArray(settings.sudo)) settings.sudo = [];
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (!settings.sudo.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is not in the sudo list.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
+            if (!settings.sudo.includes(targetJid)) {
+                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not in the sudo list.`, mentions: [targetJid] }, { quoted: msg });
             }
 
-            settings.sudo = settings.sudo.filter(num => num !== targetNumber);
+            settings.sudo = settings.sudo.filter(num => num !== targetJid);
             await sock.sendMessage(jid, { 
-                text: `👋 Removed @${targetNumber} from the sudo list.`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
+                text: `👋 Removed @${targetJid.split('@')[0]} from the sudo list.`,
+                mentions: [targetJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -396,21 +399,21 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerNumber];
+            if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (settings.owners.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is already registered as an owner.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
+            if (settings.owners.includes(targetJid)) {
+                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already registered as an owner.`, mentions: [targetJid] }, { quoted: msg });
             }
 
-            settings.owners.push(targetNumber);
+            settings.owners.push(targetJid);
             await sock.sendMessage(jid, { 
-                text: `👑 Added @${targetNumber} as a Bot Owner.\n_They now possess full system administrative capabilities._`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
+                text: `👑 Added @${targetJid.split('@')[0]} as a Bot Owner.\n_They now possess full system administrative capabilities._`,
+                mentions: [targetJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -424,25 +427,25 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerNumber];
+            if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (targetNumber === settings.ownerNumber) {
+            if (targetJid === settings.ownerJid) {
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove the primary Bot Owner." }, { quoted: msg });
             }
 
-            if (!settings.owners.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is not a secondary owner.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
+            if (!settings.owners.includes(targetJid)) {
+                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not a secondary owner.`, mentions: [targetJid] }, { quoted: msg });
             }
 
-            settings.owners = settings.owners.filter(num => num !== targetNumber);
+            settings.owners = settings.owners.filter(num => num !== targetJid);
             await sock.sendMessage(jid, { 
-                text: `👋 Removed @${targetNumber} from the secondary owners list.`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
+                text: `👋 Removed @${targetJid.split('@')[0]} from the secondary owners list.`,
+                mentions: [targetJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -482,23 +485,23 @@ module.exports = [
 
             if (!Array.isArray(settings.banned)) settings.banned = [];
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (targetNumber === settings.ownerNumber) {
+            if (targetJid === settings.ownerJid) {
                 return await sock.sendMessage(jid, { text: "❌ You cannot blacklist Satoru Gojo's creator." }, { quoted: msg });
             }
 
-            if (settings.banned.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is already blacklisted.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
+            if (settings.banned.includes(targetJid)) {
+                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already blacklisted.`, mentions: [targetJid] }, { quoted: msg });
             }
             
-            settings.banned.push(targetNumber);
+            settings.banned.push(targetJid);
             await sock.sendMessage(jid, { 
-                text: `🚫 Blacklisted @${targetNumber}.\n_They can no longer interact with any Satoru Gojo systems._`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
+                text: `🚫 Blacklisted @${targetJid.split('@')[0]}.\n_They can no longer interact with any Satoru Gojo systems._`,
+                mentions: [targetJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -514,19 +517,19 @@ module.exports = [
 
             if (!Array.isArray(settings.banned)) settings.banned = [];
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (!settings.banned.includes(targetNumber)) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetNumber} is not on the blacklist.`, mentions: [`${targetNumber}@s.whatsapp.net`] }, { quoted: msg });
+            if (!settings.banned.includes(targetJid)) {
+                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not on the blacklist.`, mentions: [targetJid] }, { quoted: msg });
             }
 
-            settings.banned = settings.banned.filter(num => num !== targetNumber);
+            settings.banned = settings.banned.filter(num => num !== targetJid);
             await sock.sendMessage(jid, { 
-                text: `✅ Restored access for @${targetNumber}.`,
-                mentions: [`${targetNumber}@s.whatsapp.net`]
+                text: ``✅ Restored access for @${targetJid.split('@')[0]}.`,
+                mentions: [targetJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -540,19 +543,19 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isDev) return;
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
             }
 
-            if (settings.devs.includes(targetNumber)) {
+            if (settings.devs.includes(targetJid)) {
                 return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer." }, { quoted: msg });
             }
 
-            settings.devs.push(targetNumber);
+            settings.devs.push(targetJid);
             await sock.sendMessage(jid, { 
-                text: `👑 Developer registered successfully: @${targetNumber}`, 
-                mentions: [`${targetNumber}@s.whatsapp.net`] 
+                text: `👑 Developer registered successfully: @${targetJid.split('@')[0]}`, 
+                mentions: [targetJid] 
             }, { quoted: msg });
             saveState(); 
         }
@@ -565,24 +568,29 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isDev) return;
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) {
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
             }
 
-            const baseDevs = ["27713655070", "601129363700", "2347059092107", "2347040401291"];
-            if (baseDevs.includes(targetNumber)) {
+            const baseDevs = [
+                "27713655070@s.whatsapp.net", 
+                "601129363700@s.whatsapp.net", 
+                "2347059092107@s.whatsapp.net", 
+                "2347040401291@s.whatsapp.net"
+            ];
+            if (baseDevs.includes(targetJid)) {
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove a base core developer." }, { quoted: msg });
             }
 
-            if (!settings.devs.includes(targetNumber)) {
+            if (!settings.devs.includes(targetJid)) {
                 return await sock.sendMessage(jid, { text: "❌ Target is not a registered developer." }, { quoted: msg });
             }
 
-            settings.devs = settings.devs.filter(num => num !== targetNumber);
+            settings.devs = settings.devs.filter(num => num !== targetJid);
             await sock.sendMessage(jid, { 
-                text: `👋 Removed developer privileges for: @${targetNumber}`, 
-                mentions: [`${targetNumber}@s.whatsapp.net`] 
+                text: `👋 Removed developer privileges for: @${targetJid.split('@')[0]}`, 
+                mentions: [targetJid] 
             }, { quoted: msg });
             saveState(); 
         }
@@ -597,15 +605,16 @@ module.exports = [
 
             if (!settings.afk) settings.afk = {};
 
-            const isAlreadyAfk = settings.afk[senderNumber];
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const isAlreadyAfk = settings.afk[senderJid];
 
             if (isAlreadyAfk) {
-                delete settings.afk[senderNumber];
+                delete settings.afk[senderJid];
                 await sock.sendMessage(jid, { 
                     text: `👋 *Welcome Back!* AFK mode has been deactivated.` 
                 }, { quoted: msg });
             } else {
-                settings.afk[senderNumber] = {
+                settings.afk[senderJid] = {
                     time: Date.now(),
                     reason: args || "Infinite Void meditation"
                 };
@@ -669,7 +678,7 @@ module.exports = [
             commandsList.reload();
 
             await sock.sendMessage(jid, {
-                text: `✅ *Variable Configured Successfully!*\n\n` +
+                text: ``✅ *Variable Configured Successfully!*\n\n` +
                       `• *Key:* \`${mappedKey}\`\n` +
                       `• *Value:* \`${finalValue}\`\n\n` +
                       `_Bot settings.js file has been updated, and command registries have been hot-reloaded successfully._`
@@ -684,9 +693,9 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return; 
 
-            const ownersList = (settings.owners || []).length > 0 ? settings.owners.map(n => `@${n}`).join(', ') : '_None_';
-            const sudoList = (settings.sudo || []).length > 0 ? settings.sudo.map(n => `@${n}`).join(', ') : '_None_';
-            const bannedList = (settings.banned || []).length > 0 ? settings.banned.map(n => `@${n}`).join(', ') : '_None_';
+            const ownersList = (settings.owners || []).length > 0 ? settings.owners.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+            const sudoList = (settings.sudo || []).length > 0 ? settings.sudo.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+            const bannedList = (settings.banned || []).length > 0 ? settings.banned.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
 
             const antilinkCount = Object.keys(settings.antilink || {}).filter(k => settings.antilink[k] !== 'off').length;
             const antitagCount = Object.keys(settings.antitag || {}).filter(k => settings.antitag[k] !== 'off').length;
@@ -715,9 +724,9 @@ module.exports = [
                 `• *Antibot Groups:* \`${antibotCount}\` chat(s)\n\n`;
 
             const allMentions = [
-                ...(settings.owners || []).map(num => `${num}@s.whatsapp.net`),
-                ...(settings.sudo || []).map(num => `${num}@s.whatsapp.net`),
-                ...(settings.banned || []).map(num => `${num}@s.whatsapp.net`)
+                ...(settings.owners || []),
+                ...(settings.sudo || []),
+                ...(settings.banned || [])
             ];
 
             await sock.sendMessage(jid, {
@@ -1073,7 +1082,7 @@ module.exports = [
             if (secondaries.length > 0) {
                 list += `👑 *Secondary Owners:*\n`;
                 secondaries.forEach((num) => {
-                    list += `• @${num}\n`;
+                    list += `• @${num.split('@')[0]}\n`;
                 });
                 list += `\n`;
             } else {
@@ -1083,7 +1092,7 @@ module.exports = [
             if (sudos.length > 0) {
                 list += `🛡️ *Registered Sudoers:*\n`;
                 sudos.forEach((num) => {
-                    list += `• @${num}\n`;
+                    list += `• @${num.split('@')[0]}\n`;
                 });
                 list += `\n`;
             } else {
@@ -1091,9 +1100,9 @@ module.exports = [
             }
 
             const mentionsList = [
-                `${settings.ownerNumber}@s.whatsapp.net`,
-                ...secondaries.map(num => `${num}@s.whatsapp.net`),
-                ...sudos.map(num => `${num}@s.whatsapp.net`)
+                settings.ownerJid,
+                ...secondaries,
+                ...sudos
             ];
 
             await sock.sendMessage(jid, { text: list, mentions: mentionsList }, { quoted: msg });
