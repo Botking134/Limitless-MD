@@ -31,14 +31,14 @@ async function resolveToPhoneJid(sock, jid) {
     return `${num}@s.whatsapp.net`;
 }
 
-// Developer Identity Immunity Verification Helper
+// Developer Identity Immunity Verification Helper using full JIDs
 function isDeveloper(jid) {
     if (!jid) return false;
     const normalized = normalizeToJid(jid);
     return settings.devs.includes(normalized);
 }
 
-// Restructured Group Command Permission Gate
+// Restructured Group Command Permission Gate using full JIDs
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
@@ -51,7 +51,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
-    // 2. Bot Status Check: Normalize both JIDs to standard formats (Issue 3 resolution)
+    // 2. Bot Status Check: Normalize both JIDs to standard formats
     const botJid = normalizeToJid(sock.user.id);
     const botParticipant = participants.find(p => normalizeToJid(p.id) === botJid);
     const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
@@ -67,7 +67,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return true; 
     }
 
-    // 4. Developer Bypass: Core Developers bypass sender-admin checks if bot is admin (Issue 5 resolution)
+    // 4. Developer Bypass: Core Developers bypass sender-admin checks if bot is admin
     if (isDev) {
         return true;
     }
@@ -83,9 +83,8 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
-// Reusable Helper to parse target user from message (Issue 2 prioritization)
+// Reusable Helper to parse target user from message using JIDs
 function parseTargetUser(msg, args) {
-    // If raw argument number is typed, prioritize it directly to prevent reply conflicts
     if (args) {
         const cleanDigits = args.replace(/[^0-9]/g, '');
         if (cleanDigits.length >= 7) {
@@ -98,9 +97,9 @@ function parseTargetUser(msg, args) {
     const mentions = contextInfo?.mentionedJid || [];
 
     if (mentions.length > 0) {
-        return mentions[0];
+        return normalizeToJid(mentions[0]);
     } else if (contextInfo?.participant) {
-        return contextInfo.participant;
+        return normalizeToJid(contextInfo.participant);
     }
     
     return '';
@@ -529,9 +528,9 @@ module.exports = [
             const quoted = msg.message.extendedTextMessage?.contextInfo;
             if (!quoted || !quoted.stanzaId) return await sock.sendMessage(jid, { text: "❌ Please reply to the message you want to warn." }, { quoted: msg });
 
-            const targetJid = quoted.participant;
+            const targetJid = normalizeToJid(quoted.participant);
             const targetNumber = targetJid.split('@')[0];
-            const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+            const botJid = settings.botJid || (sock.user.id.split(':')[0] + '@s.whatsapp.net');
 
             if (isDeveloper(targetJid)) {
                 return await sock.sendMessage(jid, { text: "🛡️ *Immunity Triggered:* Cannot restrict a Core Developer of this domain." }, { quoted: msg });
@@ -831,7 +830,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            constisGroup = jid.endsWith('@g.us');
+            const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delwelcome');
