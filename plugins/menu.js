@@ -172,8 +172,6 @@ _║ ⊱ aza_
 _║ ⊱ time_
 _║ ⊱ weather_
 _║ ⊱ device_
-_║ ⊱ livescore_
-_║ ⊱ football_
 _║ ⊱ ss_
 _║ ⊱ calc_
 _║ ⊱ trt_
@@ -535,8 +533,6 @@ module.exports = [
 • *${settings.prefix}time* — Regional timezone clock calculator.
 • *${settings.prefix}weather* — Tropospheric coordinates weather forecast.
 • *${settings.prefix}device* — Client hardware OS signature scanner.
-• *${settings.prefix}livescore* — Real-time ESPN sports scoreboard.
-• *${settings.prefix}football* — ESPN global soccer news wire.
 • *${settings.prefix}ss <url>* — Render high-speed website screenshot.
 • *${settings.prefix}calc <expr>* — Secure mathematical expression evaluator.
 • *${settings.prefix}trt <route> <text>* — Dynamic Google translation translator.
