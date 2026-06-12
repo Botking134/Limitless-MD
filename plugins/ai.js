@@ -4,12 +4,12 @@ const { saveSettings } = require('../helpers/settingsSaver');
 const { saveState } = require('../stateManager');
 const commands = require('../commands'); 
 
-// Obfuscated API key configuration
+// Obfuscated backup API key configuration
 const s1 = "gsk_";
 const s2 = "tPB0xMyZ2oijloaBNcDs";
 const s3 = "WGdyb3FY5iC2p9hwRE";
 const s4 = "SIJXAV3t53LZg9";
-const GROQ_API_KEY = s1 + s2 + s3 + s4;
+const GROQ_API_KEY_FALLBACK = s1 + s2 + s3 + s4;
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -17,11 +17,12 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     try {
+        const apiKey = settings.groqApiKey || GROQ_API_KEY_FALLBACK;
         const response = await fetch(GROQ_BASE_URL, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROQ_API_KEY}`
+                "Authorization": `Bearer ${apiKey}`
             },
             body: JSON.stringify({ model: model, messages: messages, temperature: 0.7 })
         });
@@ -242,7 +243,6 @@ module.exports = [
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = quoted ? getRawMessage(quoted) : getRawMessage(msg.message);
             
-            // Fixed extraction parameter to resolve both raw and parent wrapper envelopes (Issue 5 resolution)
             const imageMessage = rawContent?.imageMessage || (rawContent?.mimetype?.startsWith('image/') ? rawContent : null);
 
             if (!imageMessage) {
@@ -308,9 +308,9 @@ module.exports = [
     {
         name: 'lizzy',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner && !isSudo && !isDev) return;
 
             if (!Array.isArray(settings.lizzyChats)) settings.lizzyChats = [];
 
@@ -392,9 +392,9 @@ module.exports = [
     {
         name: 'chatbot',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
+            if (!isOwner && !isSudo && !isDev) return;
 
             if (!Array.isArray(settings.chatbotChats)) settings.chatbotChats = [];
 
@@ -402,7 +402,6 @@ module.exports = [
             if (action === 'on') {
                 if (!settings.chatbotChats.includes(jid)) settings.chatbotChats.push(jid);
                 
-                // Animated Connecting Handshake (Ping2 style - Issue 6)
                 const loadingMsg = await sock.sendMessage(jid, { text: "▮▮▮▮▮▮🔑 Establishing Connection..." }, { quoted: msg });
                 const frames = [
                     "▮▮▮▮▮▮▮🔑 Synchronizing system mainframe...", 
@@ -477,7 +476,7 @@ module.exports = [
         }
     },
 
-    // 11. FRIDAY INTEGRATED MODULE (Strictly Voice Notes - Issue 6)
+    // 11. FRIDAY INTEGRATED MODULE (Strictly Voice Notes)
     {
         name: 'friday',
         isPrefixless: false,
@@ -568,7 +567,7 @@ module.exports = [
                     global.aiMemory[jid].friday.shift();
                 }
 
-                // Strictly synthesize Groq text response into an Irish voice note (PTT: true)
+                // Strictly synthesize Groq text response into an Irish voice note
                 const audioBuffer = await synthesizeFridayVoice(responseText);
                 if (audioBuffer) {
                     await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true }, { quoted: msg });
