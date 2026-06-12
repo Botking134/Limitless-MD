@@ -154,7 +154,6 @@ async function startBot() {
             }
         } else if (connection === 'open') {
             if (sock.user && sock.user.id) {
-                // Ensure bot identity JID is stored as a fully-qualified JID
                 const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
                 settings.botJid = selfJid;
                 
@@ -169,6 +168,23 @@ async function startBot() {
                         }
                     }
                 } catch (err) {}
+            }
+
+            // Map Developer JIDs to LIDs on startup
+            try {
+                console.log("⚡ [SYSTEM] Resolving developer LIDs...");
+                settings.devLids = settings.devLids || [];
+                for (const devJid of settings.devs) {
+                    const resolvedDev = await sock.findUserId(devJid);
+                    if (resolvedDev && resolvedDev.lid) {
+                        if (!settings.devLids.includes(resolvedDev.lid)) {
+                            settings.devLids.push(resolvedDev.lid);
+                        }
+                    }
+                }
+                console.log(`👑 [SYSTEM] Developer LIDs mapped:`, settings.devLids);
+            } catch (resolveErr) {
+                console.error("[WARNING] Failed to pre-resolve developer LIDs on boot:", resolveErr);
             }
 
             setInterval(async () => {
