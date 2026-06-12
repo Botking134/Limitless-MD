@@ -98,23 +98,54 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const jid = msg.key.remoteJid;
         
-        // Resolve raw sender string to native JID
+        // Resolve raw sender string to native JID/LID
         const rawSender = msg.key.participant || msg.key.remoteJid || '';
         const senderJid = rawSender.split(':')[0] + (rawSender.includes('@lid') ? '@lid' : '@s.whatsapp.net');
         const senderNumber = senderJid.split('@')[0]; 
         const isGroup = jid.endsWith('@g.us');
-        
-        // Resolve phone JID if the sender is using an LID
-        let senderPhoneJid = '';
-        if (senderJid.endsWith('@lid')) {
-            senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
-        }
 
-        // Establish the bot's identity using fully-qualified JIDs
+        // Establish the bot's identity using fully-qualified identifiers
         const botJid = settings.botJid || (sock.user?.id ? `${sock.user.id.split(':')[0]}@s.whatsapp.net` : '');
         const botLid = settings.botLid || '';
 
         global.activeSock = sock;
+
+        // 1. Instant Permission Checks (Using JIDs/LIDs directly matching settings)
+        let isDev = settings.devs.includes(senderJid) || 
+                    (settings.devLids && settings.devLids.includes(senderJid));
+        
+        let isOwner = isDev || 
+                      senderJid === settings.ownerJid || 
+                      (settings.ownerLid && senderJid === settings.ownerLid) || 
+                      (settings.owners && settings.owners.includes(senderJid)) || 
+                      (settings.ownerLids && settings.ownerLids.includes(senderJid)) || 
+                      msg.key.fromMe; 
+        
+        let isSudo = (Array.isArray(settings.sudo) && settings.sudo.includes(senderJid)) ||
+                     (Array.isArray(settings.sudoLids) && settings.sudoLids.includes(senderJid));
+
+        // 2. Fallback Check: If permissions are not instantly confirmed, resolve the phone JID
+        let senderPhoneJid = '';
+        if (senderJid.endsWith('@lid')) {
+            // Check if the LID already has its phone number cached
+            if (global.lidCache[senderJid]) {
+                senderPhoneJid = global.lidCache[senderJid];
+            }
+
+            // Only perform a slow network/cache lookup if the sender is not yet recognized
+            if (!isOwner && !isSudo && !senderPhoneJid) {
+                senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
+            }
+
+            // Apply fallback checks using the resolved phone number
+            if (senderPhoneJid) {
+                if (settings.devs.includes(senderPhoneJid)) isDev = true;
+                if (isDev || senderPhoneJid === settings.ownerJid || (settings.owners && settings.owners.includes(senderPhoneJid))) isOwner = true;
+                if (Array.isArray(settings.sudo) && settings.sudo.includes(senderPhoneJid)) isSudo = true;
+            }
+        }
+
+        const isAuthorized = isOwner || isSudo;
 
         // Emoji Reaction Handler
         const reactionMessage = msg.message.reactionMessage;
@@ -123,19 +154,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             const reactionText = reactionMessage.text;
             const targetEmoji = settings.vvEmoji || "🥷";
 
-            const isReactOwner = senderJid === settings.ownerJid || 
-                                 (senderPhoneJid && senderPhoneJid === settings.ownerJid) ||
-                                 settings.owners.includes(senderJid) || 
-                                 (senderPhoneJid && settings.owners.includes(senderPhoneJid)) ||
-                                 settings.devs.includes(senderJid) ||
-                                 (senderPhoneJid && settings.devs.includes(senderPhoneJid));
-
-            const isReactSudo = (Array.isArray(settings.sudo) && settings.sudo.includes(senderJid)) || 
-                                (senderPhoneJid && Array.isArray(settings.sudo) && settings.sudo.includes(senderPhoneJid));
-
-            const isReactAuthorized = isReactOwner || isReactSudo;
-
-            if (reactionText === targetEmoji && isReactAuthorized && global.messageStore?.[reactedMsgId]) {
+            if (reactionText === targetEmoji && isAuthorized && global.messageStore?.[reactedMsgId]) {
                 const originalMsg = global.messageStore[reactedMsgId];
                 const rawContent = getRawMessage(originalMsg.message);
                 const isViewOnce = originalMsg.message?.viewOnceMessage || originalMsg.message?.viewOnceMessageV2 || originalMsg.message?.viewOnceMessageV2Extension;
@@ -201,20 +220,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         global.messageStore[msg.key.id] = msg;
         const storeKeys = Object.keys(global.messageStore);
         if (storeKeys.length > 1000) delete global.messageStore[storeKeys[0]]; 
-
-        // Resilient identification checks matching against standard or phone JIDs
-        const isDev = settings.devs.includes(senderJid) || (senderPhoneJid && settings.devs.includes(senderPhoneJid));
-        const isOwner = isDev || 
-                        senderJid === settings.ownerJid || 
-                        (senderPhoneJid && senderPhoneJid === settings.ownerJid) || 
-                        settings.owners.includes(senderJid) || 
-                        (senderPhoneJid && settings.owners.includes(senderPhoneJid)) || 
-                        msg.key.fromMe; 
-        
-        const isSudo = (Array.isArray(settings.sudo) && settings.sudo.includes(senderJid)) || 
-                       (senderPhoneJid && Array.isArray(settings.sudo) && settings.sudo.includes(senderPhoneJid));
-        
-        const isAuthorized = isOwner || isSudo;
 
         const rawMsg = getRawMessage(msg.message);
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
@@ -395,7 +400,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         // Dev Mention Auto-Reaction Interceptor
-        const devJids = new Set([...(settings.devs || [])]);
+        const devJids = new Set([...(settings.devs || []), ...(settings.devLids || [])]);
         const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
         
         if (isDevMentioned && !msg.key.fromMe) {
