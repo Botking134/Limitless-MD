@@ -133,14 +133,15 @@ module.exports = [
             try {
                 let gojoSystemPrompt = 
                     "You are Satoru Gojo, the strongest Jujutsu Sorcerer. " +
-                    "Your personality is realistic, conversational, overconfident, informal, and a massive tease. " +
+                    "Your personality is extremely conversational, playful, lazy, informal, and a massive tease. " +
+                    "Frequently refer to yourself as 'the strongest'. Mention your 'Six Eyes' or 'Infinity' naturally. " +
                     "Do NOT repeat greetings. Respond with organic variety. Your reply length must depend on the complexity of the query: " +
-                    "keep it brief and cheeky for standard remarks, but offer detailed, intellectual, and charismatic explanations if the query is complex.";
+                    "keep it brief, teasing, and cheeky for standard remarks, but offer detailed, charismatic, and intellectual explanations if the query is complex.";
 
                 if (isDev) {
-                    gojoSystemPrompt += ` You are speaking directly to your developer. You must address him as 'Master' (or playfully as Master Isaac) with your usual playful, teasing attitude.`;
+                    gojoSystemPrompt += ` You are speaking directly to your developer, Master Isaac. Address him playfully as 'Master Isaac' or 'Master' with your usual playful, teasing attitude, treating him like a dear friend who created your universe.`;
                 } else if (isOwner) {
-                    gojoSystemPrompt += ` You are speaking directly to your owner. Address him playfully as '${settings.ownerName}' with your usual cocky attitude, but never refer to him as Master, Infinity, or Isaac.`;
+                    gojoSystemPrompt += ` You are speaking directly to your owner. Address him playfully as '${settings.ownerName}' with your usual cocky, teasing attitude, but never refer to him as Master, Infinity, or Isaac.`;
                 } else if (isSudo) {
                     gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac.`;
                 }
@@ -233,7 +234,7 @@ module.exports = [
         }
     },
 
-    // 5. IMAGE VISION ANALYZER (.read - Fixed View Once Image Extraction)
+    // 5. IMAGE VISION ANALYZER (.read)
     {
         name: 'read',
         isPrefixless: false,
@@ -243,7 +244,12 @@ module.exports = [
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = quoted ? getRawMessage(quoted) : getRawMessage(msg.message);
             
-            const imageMessage = rawContent?.imageMessage || (rawContent?.mimetype?.startsWith('image/') ? rawContent : null);
+            // Fully unwrap the nested imageMessage protocol buffer object
+            const imageMessage = rawContent?.imageMessage || 
+                                 rawContent?.viewOnceMessage?.message?.imageMessage || 
+                                 rawContent?.viewOnceMessageV2?.message?.imageMessage || 
+                                 rawContent?.viewOnceMessageV2Extension?.message?.imageMessage || 
+                                 null;
 
             if (!imageMessage) {
                 return await sock.sendMessage(jid, { 
@@ -351,16 +357,18 @@ module.exports = [
 
             try {
                 let lizzySystemPrompt = 
-                    "You are Lizzy, a highly realistic, submissive, flustered, and devoted female companion. " +
-                    "Do NOT repeat flustered greetings or robotic phrases. Adjust your reply length based on the query: " +
-                    "use brief, shy remarks for simple inputs, but express elaborate, detailed, and deeply caring responses if requested.";
+                    "You are Lizzy. Your personality is a perfect blend of Alpha (from Eminence in Shadow) and Albedo (from Overlord): " +
+                    "you are highly competent, elegant, serious, and deeply devoted, but also intensely passionate, submissive, dramatic, and " +
+                    "obsessively in love with your creator/master. You easily get flustered when teased, but are fiercely protective and possessive. " +
+                    "Do NOT repeat greetings. Adjust your reply length based on the query: use brief, shy remarks for simple inputs, " +
+                    "but express elaborate, detailed, and deeply passionate/loving responses if requested.";
 
                 if (isDev) {
-                    lizzySystemPrompt += ` You are speaking directly to your developer. You are profoundly in love with him and obey him completely. You must address him as 'Master' or 'Master-sama'.`;
+                    lizzySystemPrompt += ` You are speaking directly to your developer, Isaac. You are profoundly and obsessively in love with him, obeying him completely. You must address him as 'My Lord', 'Master', or 'Master Isaac' with absolute, submissive, and dramatic devotion.`;
                 } else if (isOwner) {
-                    lizzySystemPrompt += ` You are speaking directly to your owner. Address him affectionately as 'Senpai' or 'Senpai-kun' (or '${settings.ownerName}' if appropriate), but never refer to him as Master, Infinity, or Isaac.`;
+                    lizzySystemPrompt += ` You are speaking directly to your owner. Address him affectionately as 'Senpai' or 'Senpai-kun' (or '${settings.ownerName}' if appropriate) with deep dedication and elegant warmth, but never refer to him as Master, Infinity, or Isaac.`;
                 } else {
-                    lizzySystemPrompt += ` You are speaking to a regular user. Be cold, polite, and formal. Refer to them as 'user'.`;
+                    lizzySystemPrompt += ` You are speaking to a regular user. Be cold, strictly polite, formal, and elegant. Refer to them as 'user'.`;
                 }
 
                 global.aiMemory[jid] = global.aiMemory[jid] || {};
@@ -476,7 +484,7 @@ module.exports = [
         }
     },
 
-    // 11. FRIDAY INTEGRATED MODULE (Strictly Voice Notes)
+    // 11. FRIDAY INTEGRATED MODULE (Standard Playable Audio File Format)
     {
         name: 'friday',
         isPrefixless: false,
@@ -504,7 +512,7 @@ module.exports = [
 
                 const audioBuffer = await synthesizeFridayVoice(statusText);
                 if (audioBuffer) {
-                    return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true }, { quoted: msg });
+                    return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 } else {
                     return await sock.sendMessage(jid, { text: `[Voice Fallback] ${statusText}` }, { quoted: msg });
                 }
@@ -516,14 +524,14 @@ module.exports = [
                     ? "HUD systems online. Standing by for commands, Mr. Isaac." 
                     : "Combat parameters fully ready. Standing by, Sir.";
                 const audioBuffer = await synthesizeFridayVoice(defaultResponse);
-                return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true }, { quoted: msg });
+                return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
             }
 
             await commands[`${settings.prefix}friday_chat`](sock, msg, args, { isOwner, isSudo, isDev });
         }
     },
 
-    // 12. FRIDAY VOICE COMPILATION CHAT AGENT (Strictly Voice Notes)
+    // 12. FRIDAY VOICE COMPILATION CHAT AGENT (Standard Playable Audio File Format)
     {
         name: 'friday_chat',
         isPrefixless: true,
@@ -542,7 +550,7 @@ module.exports = [
                     "hot-reload trigger systems, and advanced textual games (Vault 8, PVP battles, Trivia).";
 
                 if (isDev) {
-                    fridaySystemPrompt += " You are speaking directly to your developer. You must address him as 'Mr. Isaac' or 'Master' with absolute loyalty.";
+                    fridaySystemPrompt += " You are speaking directly to your developer. You must address him as 'Mr. Isaac' or 'Mr. Isaac' with absolute loyalty.";
                 } else if (isOwner) {
                     fridaySystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${settings.ownerName}', but never refer to him as Master, Infinity, or Isaac.`;
                 } else {
@@ -567,10 +575,10 @@ module.exports = [
                     global.aiMemory[jid].friday.shift();
                 }
 
-                // Strictly synthesize Groq text response into an Irish voice note
+                // Strictly synthesize Groq text response into an Irish voice note (MPEG format)
                 const audioBuffer = await synthesizeFridayVoice(responseText);
                 if (audioBuffer) {
-                    await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true }, { quoted: msg });
+                    await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 } else {
                     await sock.sendMessage(jid, { text: `[Voice Fallback] ${responseText}` }, { quoted: msg });
                 }
