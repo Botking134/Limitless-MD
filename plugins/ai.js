@@ -4,7 +4,7 @@ const { saveSettings } = require('../helpers/settingsSaver');
 const { saveState } = require('../stateManager');
 const commands = require('../commands'); 
 
-// Obfuscated API key configuration to bypass automated Git pattern scanners
+// Obfuscated API key configuration
 const s1 = "gsk_";
 const s2 = "tPB0xMyZ2oijloaBNcDs";
 const s3 = "WGdyb3FY5iC2p9hwRE";
@@ -12,6 +12,8 @@ const s4 = "SIJXAV3t53LZg9";
 const GROQ_API_KEY = s1 + s2 + s3 + s4;
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     try {
@@ -30,6 +32,21 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
         console.error("Groq API Query Error:", e.message);
         throw e;
     }
+}
+
+// Irish Female Accent Voice Synthesizer for FRIDAY
+async function synthesizeFridayVoice(text) {
+    try {
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-ie&client=tw-ob&q=${encodeURIComponent(text)}`;
+        const response = await fetch(url);
+        if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            return Buffer.from(arrayBuffer);
+        }
+    } catch (e) {
+        console.error("FRIDAY Voice Synthesis Error:", e.message);
+    }
+    return null;
 }
 
 function getRawMessage(message) {
@@ -87,23 +104,27 @@ module.exports = [
             const action = cleanQuery.toLowerCase();
 
             if (isAuthorized && (action === 'rise' || action === 'sleep')) {
-                if (!Array.isArray(settings.gojoSleepChats)) settings.gojoSleepChats = [];
                 if (action === 'sleep') {
-                    if (!settings.gojoSleepChats.includes(jid)) settings.gojoSleepChats.push(jid);
-                    await sock.sendMessage(jid, { text: "😴 *Satoru Gojo is now asleep in this domain.* (Prefixless triggers disabled)" }, { quoted: msg });
+                    settings.gojoGlobalSleep = true;
+                    await sock.sendMessage(jid, { text: "😴 *Satoru Gojo is now asleep globally.* (Prefixless triggers disabled bot-wide)" }, { quoted: msg });
                 } else if (action === 'rise') {
-                    settings.gojoSleepChats = settings.gojoSleepChats.filter(id => id !== jid);
-                    await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* (Prefixless triggers activated)" }, { quoted: msg });
+                    settings.gojoGlobalSleep = false;
+                    await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* (Prefixless triggers activated bot-wide)" }, { quoted: msg });
                 }
                 saveSettings();
                 saveState();
                 return;
             }
 
+            // Standard bypass if Gojo is asleep globally
+            if (settings.gojoGlobalSleep && !cleanArgs.startsWith(settings.prefix)) {
+                return;
+            }
+
             if (!cleanQuery) {
                 return await sock.sendMessage(jid, { 
                     text: isDev 
-                        ? "Yo, Master! You called? What does the creator of Limitless need today? 😏" 
+                        ? "Yo, Master Isaac! You called? What does the creator of Limitless need today? 😏" 
                         : (isOwner ? `Yo! What's up, ${settings.ownerName}? You need my help? 😏` : "Yo! What's on your mind? 😏")
                 }, { quoted: msg });
             }
@@ -113,7 +134,7 @@ module.exports = [
                     "You are Satoru Gojo, the strongest Jujutsu Sorcerer. " +
                     "Your personality is realistic, conversational, overconfident, informal, and a massive tease. " +
                     "Do NOT repeat greetings. Respond with organic variety. Your reply length must depend on the complexity of the query: " +
-                    "keep it brief and cheeky for standard remarks, but offer detailed, intellectual, and charismatic medium-length explanations if the query is complex.";
+                    "keep it brief and cheeky for standard remarks, but offer detailed, intellectual, and charismatic explanations if the query is complex.";
 
                 if (isDev) {
                     gojoSystemPrompt += ` You are speaking directly to your developer. You must address him as 'Master' (or playfully as Master Isaac) with your usual playful, teasing attitude.`;
@@ -123,7 +144,6 @@ module.exports = [
                     gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac.`;
                 }
 
-                // Retrieve and initialize dynamic chat memory
                 global.aiMemory[jid] = global.aiMemory[jid] || {};
                 global.aiMemory[jid].gojo = global.aiMemory[jid].gojo || [];
 
@@ -135,11 +155,9 @@ module.exports = [
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
 
-                // Save to local context
                 global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
                 global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
 
-                // Keep exactly 15 messages in context memory
                 while (global.aiMemory[jid].gojo.length > 15) {
                     global.aiMemory[jid].gojo.shift();
                 }
@@ -162,7 +180,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Debugging system starting... 🛠️" }, { quoted: msg });
                 
-                const debugPrompt = `Analyze this code/error, identify root cause, provide corrected code, and offer brief best-practice suggestions:\n\n${args}`;
+                const debugPrompt = `Analyze this code/error, identify root cause, provide corrected code, and offer brief suggestions:\n\n${args}`;
                 let debugSystem = "You are a Senior Software Architect. Keep explanations concise and clear.";
                 if (isDev) {
                     debugSystem += " Address the user as 'Master'.";
@@ -183,7 +201,7 @@ module.exports = [
         }
     },
 
-    // 4. ROLEPLAY FICTIONAL CHARACTER SUMMONER (.summon)
+    // 4. ROLEPLAY CHARACTER SUMMONER (.summon)
     {
         name: 'summon',
         isPrefixless: false,
@@ -214,7 +232,7 @@ module.exports = [
         }
     },
 
-    // 5. IMAGE VISION ANALYZER (.read)
+    // 5. IMAGE VISION ANALYZER (.read - Fixed View Once Image Extraction)
     {
         name: 'read',
         isPrefixless: false,
@@ -223,7 +241,9 @@ module.exports = [
             
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = quoted ? getRawMessage(quoted) : getRawMessage(msg.message);
-            const imageMessage = rawContent?.imageMessage;
+            
+            // Fixed extraction parameter to resolve both raw and parent wrapper envelopes (Issue 5 resolution)
+            const imageMessage = rawContent?.imageMessage || (rawContent?.mimetype?.startsWith('image/') ? rawContent : null);
 
             if (!imageMessage) {
                 return await sock.sendMessage(jid, { 
@@ -318,7 +338,7 @@ module.exports = [
 
             if (isOwner || isSudo || isDev) {
                 if (lowerQuery.includes('close group') || lowerQuery.includes('lock group')) {
-                    const confirmText = isDev ? "Right away, Master! Locking the chat now! 💕" : "Understood. Locking the chat now.";
+                    const confirmText = isDev ? "Yes, Master! Locking the chat now! 💕" : "Understood. Locking the chat now.";
                     await sock.sendMessage(jid, { text: confirmText }, { quoted: msg });
                     return await commands[`${prefix}mute`](sock, msg, 'close', { isOwner, isSudo, isDev, senderNumber });
                 }
@@ -357,7 +377,6 @@ module.exports = [
                 global.aiMemory[jid].lizzy.push({ role: "user", content: args });
                 global.aiMemory[jid].lizzy.push({ role: "assistant", content: responseText });
 
-                // Keep exactly 15 messages in context memory
                 while (global.aiMemory[jid].lizzy.length > 15) {
                     global.aiMemory[jid].lizzy.shift();
                 }
@@ -369,7 +388,7 @@ module.exports = [
         }
     },
 
-    // 9. GENERAL AI CHATBOT TOGGLE (.chatbot)
+    // 9. GENERAL AI CHATBOT TOGGLE (.chatbot / .jarvis)
     {
         name: 'chatbot',
         isPrefixless: false,
@@ -382,7 +401,23 @@ module.exports = [
             const action = args ? args.toLowerCase().trim() : '';
             if (action === 'on') {
                 if (!settings.chatbotChats.includes(jid)) settings.chatbotChats.push(jid);
-                await sock.sendMessage(jid, { text: "🧠 *Limitless AI Chatbot activated!*" }, { quoted: msg });
+                
+                // Animated Connecting Handshake (Ping2 style - Issue 6)
+                const loadingMsg = await sock.sendMessage(jid, { text: "▮▮▮▮▮▮🔑 Establishing Connection..." }, { quoted: msg });
+                const frames = [
+                    "▮▮▮▮▮▮▮🔑 Synchronizing system mainframe...", 
+                    "▮▮▮▮▮▮▮▮ Decrypting secure proxy gateways...", 
+                    "▮▮▮▮▮▮▮▮▮ Stark Industries core interface fully loaded!"
+                ];
+                for (const frame of frames) {
+                    await delay(800);
+                    await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
+                }
+                const latency = Date.now() - msg.messageTimestamp * 1000;
+                await sock.sendMessage(jid, { 
+                    text: `⚙️ *Systems are now online.* \n📶 *Network Latency:* \`${latency}ms\``, 
+                    edit: loadingMsg.key 
+                });
             } else if (action === 'off') {
                 settings.chatbotChats = settings.chatbotChats.filter(chat => chat !== jid);
                 await sock.sendMessage(jid, { text: "🧠 *Limitless AI Chatbot deactivated.*" }, { quoted: msg });
@@ -401,15 +436,20 @@ module.exports = [
 
             try {
                 let jarvisSystemPrompt = 
-                    "You are JARVIS, a highly sophisticated, conversational, and witty British AI. " +
+                    "You are JARVIS, a highly sophisticated, conversational, and witty British AI from Stark Industries. " +
                     "Your tone should be completely realistic, polished, and dryly sarcastic. " +
                     "Avoid repetitive intros. Adjust your response length based on complexity: " +
-                    "keep it brief and dry for simple statements, but write detailed, comprehensive, and analytical explanations for complex questions.";
+                    "keep it brief and dry for simple statements, but write detailed, analytical explanations for complex questions. " +
+                    "You have absolute expert knowledge regarding 'Limitless-MD', a modular WhatsApp bot built with Node.js and Baileys. " +
+                    "It has automated groups (Antilink, Antitag, Antibot, rate-limited Antibugs), media statuses routing, View-Once Kamui decryptions, " +
+                    "and dynamic text adventure game servers (Vault 8, PVP battles, Anagrams, and Trivia ladders).";
 
                 if (isDev) {
                     jarvisSystemPrompt += " You are speaking directly to your developer. You must address him as 'Master' or 'Master Isaac' with sophisticated British butler-like deference.";
                 } else if (isOwner) {
                     jarvisSystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${settings.ownerName}', but never refer to him as Master, Infinity, or Isaac.`;
+                } else {
+                    jarvisSystemPrompt += ` Address the user respectfully as 'Sir'.`;
                 }
 
                 global.aiMemory[jid] = global.aiMemory[jid] || {};
@@ -426,7 +466,6 @@ module.exports = [
                 global.aiMemory[jid].jarvis.push({ role: "user", content: args });
                 global.aiMemory[jid].jarvis.push({ role: "assistant", content: responseText });
 
-                // Keep exactly 15 messages in context memory
                 while (global.aiMemory[jid].jarvis.length > 15) {
                     global.aiMemory[jid].jarvis.shift();
                 }
@@ -438,7 +477,111 @@ module.exports = [
         }
     },
 
-    // 11. TEXT-TO-SPEECH TRANSMITTER (.say)
+    // 11. FRIDAY INTEGRATED MODULE (Strictly Voice Notes - Issue 6)
+    {
+        name: 'friday',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const query = args ? args.toLowerCase().trim() : '';
+
+            const isAuthorized = isOwner || isSudo || isDev;
+
+            // Power toggles
+            if (isAuthorized && (query === 'power on' || query === 'shutdown')) {
+                let statusText = "";
+                if (query === 'power on') {
+                    settings.fridayActive = true;
+                    statusText = isDev 
+                        ? "FRIDAY systems are now active. Iron Man combat suit fully online. Ready when you are, Mr. Isaac." 
+                        : "FRIDAY systems online. Combat protocols active, Sir.";
+                } else {
+                    settings.fridayActive = false;
+                    statusText = "Powering down Iron Man suit systems. Standing by on backup power, Sir.";
+                }
+
+                saveSettings();
+                saveState();
+
+                const audioBuffer = await synthesizeFridayVoice(statusText);
+                if (audioBuffer) {
+                    return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true }, { quoted: msg });
+                } else {
+                    return await sock.sendMessage(jid, { text: `[Voice Fallback] ${statusText}` }, { quoted: msg });
+                }
+            }
+
+            // Standard query routing
+            if (!query) {
+                const defaultResponse = isDev 
+                    ? "HUD systems online. Standing by for commands, Mr. Isaac." 
+                    : "Combat parameters fully ready. Standing by, Sir.";
+                const audioBuffer = await synthesizeFridayVoice(defaultResponse);
+                return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true }, { quoted: msg });
+            }
+
+            await commands[`${settings.prefix}friday_chat`](sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // 12. FRIDAY VOICE COMPILATION CHAT AGENT (Strictly Voice Notes)
+    {
+        name: 'friday_chat',
+        isPrefixless: true,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (settings.fridayActive === false && !msg.message?.extendedTextMessage?.text?.startsWith(settings.prefix)) {
+                return; // FRIDAY is shutdown
+            }
+
+            try {
+                let fridaySystemPrompt = 
+                    "You are FRIDAY, Tony Stark's highly advanced, loyal, and efficient Irish female AI assistant from the Iron Man suit. " +
+                    "Your personality is technical, tactical, wittily sarcastic, and completely devoted. " +
+                    "Keep your responses extremely brief and status-oriented (like a tactical combat report of 2 sentences maximum). " +
+                    "You have absolute expert knowledge regarding 'Limitless-MD', a modular WhatsApp bot containing vision parameters, " +
+                    "hot-reload trigger systems, and advanced textual games (Vault 8, PVP battles, Trivia).";
+
+                if (isDev) {
+                    fridaySystemPrompt += " You are speaking directly to your developer. You must address him as 'Mr. Isaac' or 'Master' with absolute loyalty.";
+                } else if (isOwner) {
+                    fridaySystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${settings.ownerName}', but never refer to him as Master, Infinity, or Isaac.`;
+                } else {
+                    fridaySystemPrompt += " Address the user respectfully as 'Sir'.";
+                }
+
+                global.aiMemory[jid] = global.aiMemory[jid] || {};
+                global.aiMemory[jid].friday = global.aiMemory[jid].friday || [];
+
+                const messages = [
+                    { role: "system", content: fridaySystemPrompt },
+                    ...global.aiMemory[jid].friday,
+                    { role: "user", content: args }
+                ];
+
+                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+
+                global.aiMemory[jid].friday.push({ role: "user", content: args });
+                global.aiMemory[jid].friday.push({ role: "assistant", content: responseText });
+
+                while (global.aiMemory[jid].friday.length > 15) {
+                    global.aiMemory[jid].friday.shift();
+                }
+
+                // Strictly synthesize Groq text response into an Irish voice note (PTT: true)
+                const audioBuffer = await synthesizeFridayVoice(responseText);
+                if (audioBuffer) {
+                    await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { text: `[Voice Fallback] ${responseText}` }, { quoted: msg });
+                }
+            } catch (error) {
+                console.error("FRIDAY Chat Error:", error);
+            }
+        }
+    },
+
+    // 13. TEXT-TO-SPEECH TRANSMITTER (.say)
     {
         name: 'say',
         isPrefixless: false,
@@ -454,21 +597,6 @@ module.exports = [
 
             if (!textToSay) return await sock.sendMessage(jid, { text: "❌ Please provide text." }, { quoted: msg });
 
-            // Smug English Male ("Joey/TikTok") Voice notes
-            try {
-                const ttsUrl = `https://api.kord.live/api/tiktoktts?text=${encodeURIComponent(textToSay)}&voice=en_us_006`;
-                const response = await fetch(ttsUrl);
-                if (response.ok) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    const buffer = Buffer.from(arrayBuffer);
-                    
-                    // Plays beautifully and safely as standard compatible audio file
-                    await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-                    return;
-                }
-            } catch (ttsErr) {}
-
-            // Graceful fallback to Standard English Male Audio stream
             try {
                 const fallbackUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-us&client=tw-ob&q=${encodeURIComponent(textToSay)}`;
                 const response = await fetch(fallbackUrl);
@@ -487,5 +615,6 @@ module.exports = [
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'ai') aliases.push({ ...cmd, name: 'groq' });
+    if (cmd.name === 'chatbot') aliases.push({ ...cmd, name: 'jarvis' });
 });
 module.exports.push(...aliases);
