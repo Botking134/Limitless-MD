@@ -26,6 +26,7 @@ if (!settings.antiviewonce || typeof settings.antiviewonce !== 'object') {
 global.forwardSessions = global.forwardSessions || {};
 global.azaSessions = global.azaSessions || {};
 
+// Enhanced Unwrapper to seamlessly handle and unpack both personal and Group Status envelopes (Issue 5 / Status additions)
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -33,33 +34,29 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    if (message.groupStatusMessageV2?.message) return getRawMessage(message.groupStatusMessageV2.message);
     return message;
 }
 
+// Normalized JID Parser (Issue 2 Prioritization)
 function parseTarget(msg, args) {
-    const rawMsg = getRawMessage(msg.message);
-    const contextInfo = rawMsg?.contextInfo || 
-                        rawMsg?.extendedTextMessage?.contextInfo || 
-                        rawMsg?.imageMessage?.contextInfo || 
-                        rawMsg?.videoMessage?.contextInfo || 
-                        rawMsg?.stickerMessage?.contextInfo || 
-                        rawMsg?.audioMessage?.contextInfo || 
-                        rawMsg?.documentMessage?.contextInfo;
-
-    const quotedParticipant = contextInfo?.participant;
-    let target = '';
-
-    if (quotedParticipant) {
-        target = quotedParticipant.split('@')[0].split(':')[0];
-    } else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
-        const botJid = settings.botJid || '';
-        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
-        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
-        target = selectedJid.split('@')[0].split(':')[0];
-    } else if (args) {
-        target = args.replace(/[^0-9]/g, '');
+    if (args) {
+        const cleanDigits = args.replace(/[^0-9]/g, '');
+        if (cleanDigits.length >= 7) {
+            return `${cleanDigits}@s.whatsapp.net`;
+        }
     }
-    return target;
+
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo;
+    const mentions = contextInfo?.mentionedJid || [];
+
+    if (mentions.length > 0) {
+        return mentions[0];
+    } else if (contextInfo?.participant) {
+        return contextInfo.participant;
+    }
+    return '';
 }
 
 function getDeviceTypeFromId(id) {
@@ -125,7 +122,7 @@ module.exports = [
             if (!isOwner && !isDev) return;
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
             
             if (!quoted || !quoted.imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
@@ -151,8 +148,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.remoteJid || msg.key.remoteJid;
-            const targetNumber = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
-            const targetJid = targetNumber + '@s.whatsapp.net';
+            const targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
+            const targetNumber = targetJid.split('@')[0];
 
             let country = "Unknown Region";
             let carrier = "Cellular Network Operator";
@@ -202,8 +199,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const targetNumber = parseTarget(msg, args) || (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
-            const targetJid = targetNumber + '@s.whatsapp.net';
+            const targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
 
             try {
                 const profileUrl = await sock.profilePictureUrl(targetJid, 'image');
@@ -235,17 +231,17 @@ module.exports = [
         }
     },
 
-    // 5. SAVE STATUS UPDATE
+    // 5. SAVE STATUS UPDATE (Seamless support for Personal and Group Status updates)
     {
         name: 'save',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
             
-            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Reply to media status." }, { quoted: msg });
+            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Reply directly to a status update." }, { quoted: msg });
 
             const rawContent = getRawMessage(quoted);
             try {
@@ -278,7 +274,7 @@ module.exports = [
             if (!isOwner && !isDev) return;
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
             
             if (!quoted) return await sock.sendMessage(jid, { text: "❌ Reply to status media." }, { quoted: msg });
@@ -322,10 +318,10 @@ module.exports = [
             if (!isOwner && !isDev) return;
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo;
 
             if (contextInfo && contextInfo.stanzaId && !args) {
-                const prompt = await sock.sendMessage(jid, { text: "💬 Reply directly to this prompt with target country phone number." }, { quoted: msg });
+                const prompt = await sock.sendMessage(jid, { text: "💬 Reply directly to this prompt with target country phone number JID." }, { quoted: msg });
                 global.forwardSessions[prompt.key.id] = {
                     msgToForward: contextInfo.quotedMessage,
                     originalMsgKey: contextInfo.stanzaId,
@@ -338,11 +334,11 @@ module.exports = [
                 const spaceIdx = args.indexOf(' ');
                 if (spaceIdx === -1) return;
 
-                const targetNumber = args.slice(0, spaceIdx).replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                const targetJid = args.slice(0, spaceIdx).replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                 const textToSend = args.slice(spaceIdx + 1).trim();
 
                 try {
-                    await sock.sendMessage(targetNumber, { text: textToSend });
+                    await sock.sendMessage(targetJid, { text: textToSend });
                 } catch (e) {}
                 return;
             }
@@ -470,7 +466,7 @@ module.exports = [
         }
     },
 
-    // 13. ADVANCED ANTIDELETE CONTROLLER
+    // 13. ADVANCED ANTIDELETE CONTROLLER (Standardized Standard JIDs - Issue 6)
     {
         name: 'antidelete',
         isPrefixless: false,
@@ -535,9 +531,8 @@ module.exports = [
 
             if (target === 'user') {
                 settings.antidelete.logDestination = 'user';
-                // Split multi-device JID properly on save to prevent lookup mismatch
                 const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                settings.antidelete.logUserJid = senderJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+                settings.antidelete.logUserJid = senderJid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                 await sock.sendMessage(jid, { text: "✅ Anti-Delete log redirected to *your personal DM*." }, { quoted: msg });
             } else if (target === 'bot') {
                 settings.antidelete.logDestination = 'bot';
@@ -549,7 +544,7 @@ module.exports = [
         }
     },
 
-    // 15. AUTOMATIC VIEW ONCE DECRYPT MODULE
+    // 15. AUTOMATIC VIEW ONCE DECRYPT MODULE (Standardized Phone JIDs - Issue 6)
     {
         name: 'antiviewonce',
         isPrefixless: false,
@@ -568,9 +563,8 @@ module.exports = [
             if (action === 'log') {
                 if (subAction === 'user') {
                     settings.antiviewonce.logDestination = 'user';
-                    // Split multi-device JID properly on save to prevent lookup mismatch
                     const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                    settings.antiviewonce.logUserJid = senderJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+                    settings.antiviewonce.logUserJid = senderJid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                     await sock.sendMessage(jid, { text: "✅ Anti-ViewOnce logs redirected to *your personal DM*." }, { quoted: msg });
                 } else if (subAction === 'bot') {
                     settings.antiviewonce.logDestination = 'bot';
@@ -718,11 +712,11 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) return;
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) return;
 
             try {
-                await sock.updateBlockStatus(targetNumber + '@s.whatsapp.net', 'block');
+                await sock.updateBlockStatus(targetJid, 'block');
             } catch (e) {}
         }
     },
@@ -735,11 +729,11 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            const targetNumber = parseTarget(msg, args);
-            if (!targetNumber) return;
+            const targetJid = parseTarget(msg, args);
+            if (!targetJid) return;
 
             try {
-                await sock.updateBlockStatus(targetNumber + '@s.whatsapp.net', 'unblock');
+                await sock.updateBlockStatus(targetJid, 'unblock');
             } catch (e) {}
         }
     },
@@ -879,7 +873,7 @@ module.exports = [
             let label = "Your";
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo;
             if (contextInfo && contextInfo.stanzaId) {
                 targetMsgId = contextInfo.stanzaId;
                 label = "Target's";
@@ -994,7 +988,7 @@ module.exports = [
             let targetUrl = args ? args.trim() : '';
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
 
             if (!targetUrl && quoted) {
@@ -1072,7 +1066,7 @@ module.exports = [
                 }
 
                 const rawMsg = getRawMessage(msg.message);
-                const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+                const contextInfo = rawMsg?.contextInfo;
                 const quoted = contextInfo?.quotedMessage;
 
                 if (!textToTranslate.trim() && quoted) {
@@ -1132,7 +1126,7 @@ module.exports = [
             const textContent = parts.slice(1).join(' ').trim();
             
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
 
             if (quoted) {
@@ -1186,6 +1180,7 @@ module.exports = [
 
 const aliases = [];
 module.exports.forEach(cmd => {
+    if (cmd.name === 'save') aliases.push({ ...cmd, name: 'status' });
     if (cmd.name === 'sticker') aliases.push({ ...cmd, name: 's' });
     if (cmd.name === 'take') aliases.push({ ...cmd, name: 'steal' });
     if (cmd.name === 'tourl') aliases.push({ ...cmd, name: 'url' });
