@@ -1,19 +1,31 @@
-// helpers/messageHandler.js
+// helpers/messageHandlers.js
 const commands = require('../commands');
 const settings = require('../settings');
 const { getRawMessage } = require('./antiDelete');
 const fs = require('fs');
 const path = require('path');
 
-// Reusable Helper to resolve any incoming JID (including LIDs and multi-device suffixes) to standard Phone JID format
+const ownerCommands = [
+    'diagnose', 'update', 'mode', 'setsudo', 'delsudo', 
+    'addowner', 'delowner', 'restart', 'shutdown', 'ban', 
+    'unban', 'adddev', 'deldev', 'afk', 'setvar', 'settings', 
+    'upgrade', 'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
+];
+const devOnlyCommands = ['upgrade', 'adddev', 'deldev'];
+
+global.lidCache = global.lidCache || {};
+
 async function getPhoneJid(sock, jid) {
     if (!jid) return '';
     let clean = jid.split(':')[0].split('@')[0];
     if (jid.endsWith('@lid')) {
+        if (global.lidCache[jid]) return global.lidCache[jid];
         try {
             const resolved = await sock.findUserId(jid);
             if (resolved && resolved.phoneNumber) {
-                return `${resolved.phoneNumber}@s.whatsapp.net`;
+                const phoneJid = `${resolved.phoneNumber}@s.whatsapp.net`;
+                global.lidCache[jid] = phoneJid;
+                return phoneJid;
             }
         } catch (e) {}
     }
@@ -22,30 +34,47 @@ async function getPhoneJid(sock, jid) {
 
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
+        if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
         const msg = chatUpdate.messages[0];
-        if (!msg.message) return; 
+        if (!msg || !msg.message) return; 
 
         const jid = msg.key.remoteJid;
         
-        // Resolve incoming sender JID immediately to standard Phone JID (Issue 4 resolution)
-        const senderJid = await getPhoneJid(sock, msg.key.participant || msg.key.remoteJid || '');
+        // Resolve raw sender string to native JID
+        const rawSender = msg.key.participant || msg.key.remoteJid || '';
+        const senderJid = rawSender.split(':')[0] + (rawSender.includes('@lid') ? '@lid' : '@s.whatsapp.net');
         const senderNumber = senderJid.split('@')[0]; 
         const isGroup = jid.endsWith('@g.us');
         
-        const botJid = settings.ownerJid || (sock.user?.id ? `${sock.user.id.split(':')[0].split('@')[0]}@s.whatsapp.net` : '');
+        // Asynchronously resolve phone JID in the background if the raw sender is an LID
+        let senderPhoneJid = '';
+        if (senderJid.endsWith('@lid')) {
+            senderPhoneJid = await getPhoneJid(sock, senderJid);
+        }
+
+        // Establish the bot's identity using fully-qualified JIDs
+        const botJid = settings.botJid || (sock.user?.id ? `${sock.user.id.split(':')[0]}@s.whatsapp.net` : '');
+        const botLid = settings.botLid || '';
 
         global.activeSock = sock;
 
-        // 1. EMOJI REACTION DECRYPTION DELEGATOR (.vvs - Issue 6)
+        // Emoji Reaction Handler
         const reactionMessage = msg.message.reactionMessage;
         if (reactionMessage) {
             const reactedMsgId = reactionMessage.key?.id;
             const reactionText = reactionMessage.text;
             const targetEmoji = settings.vvEmoji || "🥷";
 
-            const senderPhoneJid = await getPhoneJid(sock, msg.key.participant || msg.key.remoteJid || '');
-            const isReactOwner = senderPhoneJid === settings.ownerJid || settings.owners.includes(senderPhoneJid) || settings.devs.includes(senderPhoneJid);
-            const isReactSudo = settings.sudo?.includes(senderPhoneJid);
+            const isReactOwner = senderJid === settings.ownerJid || 
+                                 (senderPhoneJid && senderPhoneJid === settings.ownerJid) ||
+                                 settings.owners.includes(senderJid) || 
+                                 (senderPhoneJid && settings.owners.includes(senderPhoneJid)) ||
+                                 settings.devs.includes(senderJid) ||
+                                 (senderPhoneJid && settings.devs.includes(senderPhoneJid));
+
+            const isReactSudo = (Array.isArray(settings.sudo) && settings.sudo.includes(senderJid)) || 
+                                (senderPhoneJid && Array.isArray(settings.sudo) && settings.sudo.includes(senderPhoneJid));
+
             const isReactAuthorized = isReactOwner || isReactSudo;
 
             if (reactionText === targetEmoji && isReactAuthorized && global.messageStore?.[reactedMsgId]) {
@@ -66,7 +95,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                             let buffer = Buffer.from([]);
                             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                            const destJid = senderPhoneJid;
+                            const destJid = senderJid;
                             
                             if (mediaType === 'image') {
                                 await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
@@ -83,7 +112,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return; 
         }
 
-        const isBanned = Array.isArray(settings.banned) && settings.banned.includes(senderJid);
+        // Banned status checks using both standard and phone formats
+        const isBanned = (Array.isArray(settings.banned) && settings.banned.includes(senderJid)) || 
+                         (senderPhoneJid && Array.isArray(settings.banned) && settings.banned.includes(senderPhoneJid));
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return; 
 
@@ -113,9 +144,18 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const storeKeys = Object.keys(global.messageStore);
         if (storeKeys.length > 1000) delete global.messageStore[storeKeys[0]]; 
 
-        const isDev = settings.devs.includes(senderJid);
-        const isOwner = isDev || senderJid === settings.ownerJid || settings.owners.includes(senderJid) || msg.key.fromMe; 
-        const isSudo = Array.isArray(settings.sudo) && settings.sudo.includes(senderJid);
+        // Resilient identification checks matching against standard or phone JIDs
+        const isDev = settings.devs.includes(senderJid) || (senderPhoneJid && settings.devs.includes(senderPhoneJid));
+        const isOwner = isDev || 
+                        senderJid === settings.ownerJid || 
+                        (senderPhoneJid && senderPhoneJid === settings.ownerJid) || 
+                        settings.owners.includes(senderJid) || 
+                        (senderPhoneJid && settings.owners.includes(senderPhoneJid)) || 
+                        msg.key.fromMe; 
+        
+        const isSudo = (Array.isArray(settings.sudo) && settings.sudo.includes(senderJid)) || 
+                       (senderPhoneJid && Array.isArray(settings.sudo) && settings.sudo.includes(senderPhoneJid));
+        
         const isAuthorized = isOwner || isSudo;
 
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
@@ -257,10 +297,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // Dev Mention Auto-Reaction Interceptor (Animated 5-Second Sequence)
-        const devJids = new Set([
-            ...(settings.devs || [])
-        ]);
+        // Dev Mention Auto-Reaction Interceptor
+        const devJids = new Set([...(settings.devs || [])]);
         const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
         
         if (isDevMentioned && !msg.key.fromMe) {
@@ -278,8 +316,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         const quotedParticipant = contextInfo?.participant;
-        const isReplyingToBot = quotedParticipant === botJid || (!isGroup && !msg.key.fromMe && quotedMsgId);
-        const isMentioningBot = mentionedJids.includes(botJid);
+        const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
+        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
 
         const singleKey = jid + '_' + senderJid;
         const quizKey = jid + '_' + senderJid + '_quiz';
@@ -290,7 +328,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         else if (global.triviaSessions[singleKey]) activeKey = singleKey;
         else if (global.triviaSessions[multiKey]) activeKey = multiKey;
 
-        // 2. DIRECT REPLY VIEW-ONCE DECRYPTION (.vvs - Issue 6)
+        // Decryption of View Once media by reaction
         const targetEmoji = settings.vvEmoji || "🥷";
         if (quotedMsgId && trimmedMessage === targetEmoji && isAuthorized) {
             if (global.messageStore?.[quotedMsgId]) {
@@ -666,10 +704,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         let command;
         let args;
-
         let identifiedAgent = null;
 
-        // Substring name call detection in any position (Issue 6 word boundaries)
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
         const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
         const isJarvisCalled = /\bjarvis\b|\bchatbot\b/i.test(lowerMessage);
@@ -750,18 +786,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // Boundary protections for Sudoers and Owners
         const cleanCmd = command.startsWith(settings.prefix) ? command.slice(settings.prefix.length) : command;
         const isOwnerCmd = ownerCommands.includes(cleanCmd);
         const isDevOnlyCmd = devOnlyCommands.includes(cleanCmd);
 
-        // 1. Block Sudo users from executing Owner-only files/commands
         if (isOwnerCmd && isSudo && !isOwner && !isDev) {
             return;
         }
 
-        // 2. Block Owners/Sudoers from Developer-only administrative operations
-        const isPrimaryOwner = senderJid === settings.ownerJid;
+        const isPrimaryOwner = senderJid === settings.ownerJid || (senderPhoneJid && senderPhoneJid === settings.ownerJid);
         if (isDevOnlyCmd && !isDev && !isPrimaryOwner) {
             return;
         }
