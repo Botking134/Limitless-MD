@@ -26,7 +26,6 @@ if (!settings.antiviewonce || typeof settings.antiviewonce !== 'object') {
 global.forwardSessions = global.forwardSessions || {};
 global.azaSessions = global.azaSessions || {};
 
-// Enhanced Unwrapper to seamlessly handle and unpack both personal and Group Status envelopes (Issue 5 / Status additions)
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -38,7 +37,7 @@ function getRawMessage(message) {
     return message;
 }
 
-// Normalized JID Parser (Issue 2 Prioritization)
+// Standardized JID Parser
 function parseTarget(msg, args) {
     if (args) {
         const cleanDigits = args.replace(/[^0-9]/g, '');
@@ -52,9 +51,10 @@ function parseTarget(msg, args) {
     const mentions = contextInfo?.mentionedJid || [];
 
     if (mentions.length > 0) {
-        return mentions[0];
+        return mentions[0].split(':')[0] + (mentions[0].includes('@lid') ? '@lid' : '@s.whatsapp.net');
     } else if (contextInfo?.participant) {
-        return contextInfo.participant;
+        const part = contextInfo.participant;
+        return part.split(':')[0] + (part.includes('@lid') ? '@lid' : '@s.whatsapp.net');
     }
     return '';
 }
@@ -133,7 +133,7 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                const botJid = sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net');
                 await sock.updateProfilePicture(botJid, buffer);
                 await sock.sendMessage(jid, { text: "✅ Bot profile picture has been updated!" }, { quoted: msg });
             } catch (error) {
@@ -231,7 +231,7 @@ module.exports = [
         }
     },
 
-    // 5. SAVE STATUS UPDATE (Seamless support for Personal and Group Status updates)
+    // 5. SAVE STATUS UPDATE
     {
         name: 'save',
         isPrefixless: false,
@@ -466,7 +466,7 @@ module.exports = [
         }
     },
 
-    // 13. ADVANCED ANTIDELETE CONTROLLER (Standardized Standard JIDs - Issue 6)
+    // 13. ADVANCED ANTIDELETE CONTROLLER
     {
         name: 'antidelete',
         isPrefixless: false,
@@ -532,7 +532,7 @@ module.exports = [
             if (target === 'user') {
                 settings.antidelete.logDestination = 'user';
                 const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                settings.antidelete.logUserJid = senderJid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                settings.antidelete.logUserJid = senderJid.split(':')[0] + (senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
                 await sock.sendMessage(jid, { text: "✅ Anti-Delete log redirected to *your personal DM*." }, { quoted: msg });
             } else if (target === 'bot') {
                 settings.antidelete.logDestination = 'bot';
@@ -544,7 +544,7 @@ module.exports = [
         }
     },
 
-    // 15. AUTOMATIC VIEW ONCE DECRYPT MODULE (Standardized Phone JIDs - Issue 6)
+    // 15. AUTOMATIC VIEW ONCE DECRYPT MODULE
     {
         name: 'antiviewonce',
         isPrefixless: false,
@@ -564,7 +564,7 @@ module.exports = [
                 if (subAction === 'user') {
                     settings.antiviewonce.logDestination = 'user';
                     const senderJid = msg.key.participant || msg.key.remoteJid || '';
-                    settings.antiviewonce.logUserJid = senderJid.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                    settings.antiviewonce.logUserJid = senderJid.split(':')[0] + (senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
                     await sock.sendMessage(jid, { text: "✅ Anti-ViewOnce logs redirected to *your personal DM*." }, { quoted: msg });
                 } else if (subAction === 'bot') {
                     settings.antiviewonce.logDestination = 'bot';
