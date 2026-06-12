@@ -10,6 +10,13 @@ module.exports = {
     "isPublic": false,
     "ownerNumber": process.env.OWNER_NUMBER || "601129363700",
     "ownerJid": "601129363700@s.whatsapp.net",
+    
+    // LID config additions for permission handling
+    "ownerLid": "",
+    "ownerLids": [],
+    "sudoLids": [],
+    "devLids": [],
+
     "owners": [],
     "sudo": [
         "27713655070@s.whatsapp.net"
@@ -33,7 +40,7 @@ module.exports = {
     "geminiApiKey": process.env.GEMINI_API_KEY || "YOUR_KEY_HERE",
     "groqApiKey": process.env.GROQ_API_KEY || "",
     "githubToken": process.env.GITHUB_TOKEN || "",
-    "klipyApiKey": process.env.KLIPY_API_KEY || "EJp0obDxHHa1J9l8as9wyBl0HLiLhbxeBT4wmAgJhzJt2R6pB00iHkOZXylY9pT8",
+    "klipyApiKey": process.env.KLIPY_API_KEY || "YOUR_KEY_HERE",
     // Persistent parameters
     "vvEmoji": "🥷",
     "antipm": "off",
