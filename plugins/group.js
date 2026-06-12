@@ -31,14 +31,14 @@ async function resolveToPhoneJid(sock, jid) {
     return `${num}@s.whatsapp.net`;
 }
 
-// Developer Identity Immunity Verification Helper using full JIDs
+// Developer Identity Immunity Verification Helper using JIDs and LIDs
 function isDeveloper(jid) {
     if (!jid) return false;
     const normalized = normalizeToJid(jid);
-    return settings.devs.includes(normalized);
+    return settings.devs.includes(normalized) || (settings.devLids && settings.devLids.includes(normalized));
 }
 
-// Restructured Group Command Permission Gate using full JIDs
+// Restructured Group Command Permission Gate supporting JIDs and LIDs
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
@@ -51,7 +51,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
-    // 2. Bot Status Check: Normalize both JIDs to standard formats
+    // 2. Bot Status Check: Normalize JIDs to standard formats
     const botJid = normalizeToJid(sock.user.id);
     const botParticipant = participants.find(p => normalizeToJid(p.id) === botJid);
     const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
@@ -62,7 +62,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     }
 
     // 3. Non-Admin Command Exemptions
-    const exemptCommands = ['tag', 'poll', 'togcstatus', 'getgcpp', 'gcjid', 'listonline', 'msgs', 'join', 'left', 'togcjid'];
+    const exemptCommands = ['tag', 'htag', 'poll', 'togcstatus', 'getgcpp', 'gcjid', 'listonline', 'msgs', 'join', 'left', 'togcjid'];
     if (exemptCommands.includes(commandName.toLowerCase())) {
         return true; 
     }
@@ -73,7 +73,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     }
 
     // 5. Owners and Sudoers: Both the bot AND the sender must be administrators
-    let sender = participants.find(p => normalizeToJid(p.id) === senderJid);
+    let sender = participants.find(p => normalizeToJid(p.id) === senderJid || (p.lid && p.lid === senderJid));
     const isSenderAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
     if (!isSenderAdmin) {
         await sock.sendMessage(jid, { text: "❌ You must be an administrator in this group to run this command!" }, { quoted: msg });
@@ -126,6 +126,14 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
+}
+
+// Check if target is owner (checks both JIDs and LIDs)
+function isOwnerTarget(target) {
+    return target === settings.ownerJid || 
+           (settings.ownerLid && target === settings.ownerLid) || 
+           (settings.ownerLids && settings.ownerLids.includes(target)) ||
+           (settings.owners && settings.owners.includes(target));
 }
 
 module.exports = [
@@ -216,8 +224,8 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "🛡️ *Immunity Triggered:* Cannot restrict a Core Developer of this domain." }, { quoted: msg });
             }
 
-            if (target === settings.ownerJid) {
-                return await sock.sendMessage(jid, { text: "❌ Cannot kick the primary owner." }, { quoted: msg });
+            if (isOwnerTarget(target)) {
+                return await sock.sendMessage(jid, { text: "❌ Cannot kick a registered system owner." }, { quoted: msg });
             }
 
             await sock.groupParticipantsUpdate(jid, [target], "remove");
@@ -264,8 +272,8 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "🛡️ *Immunity Triggered:* Cannot restrict a Core Developer of this domain." }, { quoted: msg });
             }
 
-            if (target === settings.ownerJid) {
-                return await sock.sendMessage(jid, { text: "❌ Cannot demote the primary owner." }, { quoted: msg });
+            if (isOwnerTarget(target)) {
+                return await sock.sendMessage(jid, { text: "❌ Cannot demote a registered system owner." }, { quoted: msg });
             }
 
             await sock.groupParticipantsUpdate(jid, [target], "demote");
@@ -292,21 +300,18 @@ module.exports = [
             const admins = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin');
             const members = participants.filter(p => p.admin === null || p.admin === undefined);
 
-            let text = `🔮 *${settings.botName.toUpperCase()} SUMMON* 🔮\n`;
-            text += `📢 *Note:* _"${messageText}"_\n\n`;
-
-            text += `👑 *Group Admins:*\n`;
+            let text = `📢 *Note:* _"${messageText}"_\n\n`;
+            
+            text += `             ⟬ ＡＤＭＩＮＳ⟭\n`;
             for (let i = 0; i < admins.length; i += 2) {
-                const a1 = admins[i] ? `@${admins[i].id.split('@')[0]}` : '';
-                const a2 = admins[i + 1] ? `     @${admins[i + 1].id.split('@')[0]}` : '';
+                const a1 = admins[i] ? `➣@${admins[i].id.split('@')[0]}` : '';
+                const a2 = admins[i + 1] ? `                      ➣@${admins[i + 1].id.split('@')[0]}` : '';
                 text += `${a1}${a2}\n`;
             }
 
-            text += `\n👥 *Members:*\n`;
-            for (let i = 0; i < members.length; i += 2) {
-                const m1 = members[i] ? `@${members[i].id.split('@')[0]}` : '';
-                const m2 = members[i + 1] ? `     @${members[i + 1].id.split('@')[0]}` : '';
-                text += `${m1}${m2}\n`;
+            text += `\n           ☲ＭＥＭＢＥＲＳ☲\n`;
+            for (let i = 0; i < members.length; i++) {
+                text += `➥@${members[i].id.split('@')[0]}\n`;
             }
 
             const allJids = participants.map(p => p.id);
@@ -536,7 +541,7 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "🛡️ *Immunity Triggered:* Cannot restrict a Core Developer of this domain." }, { quoted: msg });
             }
 
-            if (targetJid === settings.ownerJid) return await sock.sendMessage(jid, { text: "❌ You cannot warn the owner." }, { quoted: msg });
+            if (isOwnerTarget(targetJid)) return await sock.sendMessage(jid, { text: "❌ You cannot warn a registered system owner." }, { quoted: msg });
 
             try { await sock.sendMessage(jid, { delete: { remoteJid: jid, id: quoted.stanzaId, fromMe: targetJid === botJid, participant: targetJid } }); } catch (e) {}
 
@@ -564,7 +569,6 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'togcstatus');
             if (!isAuthorized) return;
@@ -1054,7 +1058,7 @@ module.exports = [
                 const targets = participants.filter(p => {
                     const normId = normalizeToJid(p.id);
                     return normId !== botJid && 
-                           normId !== settings.ownerJid && 
+                           !isOwnerTarget(normId) && 
                            !isDeveloper(normId) &&
                            p.admin !== 'superadmin' && p.admin !== 'admin';
                 }).map(p => p.id);
@@ -1116,7 +1120,7 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "🛡️ *Immunity Triggered:* Cannot restrict a Core Developer of this domain." }, { quoted: msg });
             }
 
-            const cleanTargets = (target && target !== settings.ownerJid) ? [target] : [];
+            const cleanTargets = (target && !isOwnerTarget(target)) ? [target] : [];
 
             const durationString = args ? args.replace(/@[^ ]+/g, '').trim().split(' ')[0] : '';
             if (durationString.toLowerCase() === 'cancel' || durationString.toLowerCase() === 'stop') {
@@ -1525,6 +1529,101 @@ module.exports = [
                 await new Promise(resolve => setTimeout(resolve, 1000)); 
             }
         }
+    },
+
+    // 36. GHOST TAG WITH AUTO-DELETE (htag)
+    {
+        name: 'htag',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'htag');
+            if (!isAuthorized) return;
+
+            const groupMetadata = await sock.groupMetadata(jid);
+            const participants = groupMetadata.participants.map(p => p.id);
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            let targetQuotedMsg = msg; 
+            let quotedText = '';
+            
+            if (quoted && quoted.stanzaId) {
+                targetQuotedMsg = {
+                    key: { remoteJid: jid, id: quoted.stanzaId, participant: quoted.participant },
+                    message: quoted.quotedMessage || {}
+                };
+                const qMsg = quoted.quotedMessage;
+                quotedText = qMsg?.conversation || qMsg?.extendedTextMessage?.text || qMsg?.imageMessage?.caption || qMsg?.videoMessage?.caption || '';
+            }
+
+            const messageText = args ? args : (quotedText ? quotedText : "🤞 *Summoned by Satoru Gojo.*");
+
+            await sock.sendMessage(jid, {
+                text: messageText,
+                mentions: participants
+            }, { quoted: targetQuotedMsg });
+
+            try {
+                await sock.sendMessage(jid, { delete: msg.key });
+            } catch (err) {}
+        }
+    },
+
+    // 37. JOIN NEW GROUP
+    {
+        name: 'join',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isAuthorized = isDev || isOwner || isSudo;
+            if (!isAuthorized) return;
+
+            if (!args) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a valid WhatsApp group invite link." }, { quoted: msg });
+            }
+            
+            const match = args.match(/chat.whatsapp.com\/([a-zA-Z0-9]{15,25})/);
+            if (!match) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid invite link format." }, { quoted: msg });
+            }
+
+            try {
+                const code = match[1];
+                const joinedJid = await sock.groupAcceptInvite(code);
+                await sock.sendMessage(jid, { text: `✅ Joined group successfully! JID: \`${joinedJid}\`` }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to join group: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 38. EXIT CURRENT GROUP
+    {
+        name: 'exit',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isAuthorized = isDev || isOwner || isSudo;
+            if (!isAuthorized) return;
+
+            const targetJid = args ? args.trim() : jid;
+            if (!targetJid.endsWith('@g.us')) {
+                return await sock.sendMessage(jid, { text: "❌ Please run this in a group, or specify a valid group JID." }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(targetJid, { text: "👋 Deactivating Infinite Void. Leaving group!" });
+                await sock.groupLeave(targetJid);
+                if (targetJid !== jid) {
+                    await sock.sendMessage(jid, { text: "✅ Successfully left group." }, { quoted: msg });
+                }
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to leave group: ${e.message}` }, { quoted: msg });
+            }
+        }
     }
 ];
 
@@ -1542,6 +1641,12 @@ module.exports.forEach(cmd => {
         aliases.push({ ...cmd, name: 'close' });
         aliases.push({ ...cmd, name: 'lock' });
         aliases.push({ ...cmd, name: 'unlock' });
+    }
+    if (cmd.name === 'htag') {
+        aliases.push({ ...cmd, name: 'ghost' });
+    }
+    if (cmd.name === 'exit') {
+        aliases.push({ ...cmd, name: 'leave' });
     }
 });
 module.exports.push(...aliases);
