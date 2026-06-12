@@ -5,7 +5,7 @@ const settings = require('./settings');
 
 const statePath = path.join(__dirname, 'state.json');
 
-// Standardized Core Developer JIDs
+// Standardized Core Developer JIDs as full JIDs
 const BASE_DEVS = [
     "27713655070@s.whatsapp.net", 
     "601129363700@s.whatsapp.net", 
@@ -16,13 +16,12 @@ const BASE_DEVS = [
 function normalizeToJid(input) {
     if (!input) return '';
     if (input.endsWith('@s.whatsapp.net')) return input;
-    if (input.endsWith('@lid')) return input; // LIDs handled natively as identifiers
+    if (input.endsWith('@lid')) return input; 
     const raw = input.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
 function loadState() {
-    // Initialize default memory arrays
     settings.devs = [...BASE_DEVS];
     settings.devLids = settings.devLids || [];
 
@@ -34,15 +33,12 @@ function loadState() {
         if (fs.existsSync(statePath)) {
             const data = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
             
-            // Merge loaded state smartly to prevent overwriting manual settings.js updates
             for (const key in data) {
                 if (data[key] !== undefined) {
                     if (Array.isArray(data[key]) && Array.isArray(settings[key])) {
-                        // Merge unique array configurations
                         const merged = [...new Set([...settings[key], ...data[key]])];
                         settings[key] = merged;
                     } else {
-                        // Skip overriding if settings.js has a fresh manual value but state.json is empty
                         if (settings[key] !== undefined && settings[key] !== "" && (data[key] === undefined || data[key] === "")) {
                             continue;
                         }
@@ -52,7 +48,7 @@ function loadState() {
             }
         }
 
-        // Standardize list arrays to use full phone JIDs on runtime boot
+        // Standardize list arrays to use full JIDs on boot
         if (Array.isArray(settings.owners)) {
             settings.owners = settings.owners.map(normalizeToJid).filter(Boolean);
         } else {
@@ -75,14 +71,14 @@ function loadState() {
             settings.devs = settings.devs.map(normalizeToJid).filter(Boolean);
         }
 
-        // Maintain core developer immunity
+        // Ensure baseline developers are always included
         BASE_DEVS.forEach(num => {
             if (!settings.devs.includes(num)) {
                 settings.devs.push(num);
             }
         });
 
-        console.log("📂 [STATE] Standardized and loaded configuration state.");
+        console.log("📂 [STATE] Standardized and loaded configuration state using full JIDs.");
     } catch (err) {
         console.error("❌ [STATE] Failed to load state:", err.message);
     }
@@ -93,11 +89,11 @@ function saveState() {
         const stateData = {
             sessionId: settings.sessionId || "",
             isPublic: settings.isPublic,
-            ownerJid: settings.ownerJid,
-            owners: settings.owners,
-            sudo: settings.sudo,
-            banned: settings.banned,
-            devs: settings.devs,
+            ownerJid: normalizeToJid(settings.ownerJid || settings.ownerNumber),
+            owners: (settings.owners || []).map(normalizeToJid).filter(Boolean),
+            sudo: (settings.sudo || []).map(normalizeToJid).filter(Boolean),
+            banned: (settings.banned || []).map(normalizeToJid).filter(Boolean),
+            devs: (settings.devs || []).map(normalizeToJid).filter(Boolean),
             devLids: settings.devLids || [],
             autoReact: settings.autoReact,
             antilink: settings.antilink,
@@ -116,4 +112,4 @@ function saveState() {
     }
 }
 
-module.exports = { loadState, saveState };
+module.exports = { loadState, saveState, normalizeToJid };
