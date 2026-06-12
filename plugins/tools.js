@@ -148,7 +148,17 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.remoteJid || msg.key.remoteJid;
-            const targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
+            let targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
+
+            // Resolve LID to standard phone-number JID first to preserve tracking metrics
+            if (targetJid.endsWith('@lid')) {
+                const { getPhoneJid } = require('../helpers/messageHandlers');
+                const resolvedPhoneJid = await getPhoneJid(sock, targetJid, jid);
+                if (resolvedPhoneJid) {
+                    targetJid = resolvedPhoneJid;
+                }
+            }
+
             const targetNumber = targetJid.split('@')[0];
 
             let country = "Unknown Region";
@@ -387,7 +397,7 @@ module.exports = [
                 settings.presence.autotyping.all = true;
             } else if (target === 'off all' || target === 'offall') {
                 settings.presence.autotyping.all = false;
-                settings.presence.autotyping.chats = [];
+                settings.presence.auttyping.chats = [];
             }
             saveSettings();
             saveState();
@@ -458,7 +468,7 @@ module.exports = [
             } else if (target === 'all') {
                 settings.presence.autoread.all = true;
             } else if (target === 'off all' || target === 'offall') {
-                settings.presence.autoread.all = false;
+                settings.presence.alwaysonline.all = false;
                 settings.presence.autoread.chats = [];
             }
             saveSettings();
@@ -890,96 +900,7 @@ module.exports = [
         }
     },
 
-    // 29. REAL-TIME ESPN SOCCER SCOREBOARD
-    {
-        name: 'livescore',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            try {
-                const response = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard');
-                if (!response.ok) throw new Error();
-
-                const data = await response.json();
-                const events = data.events || [];
-
-                if (events.length === 0) return await sock.sendMessage(jid, { text: "🏟️ *No active live matches found.*" }, { quoted: msg });
-
-                if (args) {
-                    const query = args.toLowerCase().trim();
-                    const match = events.find(e => e.name.toLowerCase().includes(query));
-
-                    if (!match) return await sock.sendMessage(jid, { text: `❌ No active match found for: *"${args}"*` }, { quoted: msg });
-
-                    const comp = match.competitions?.[0] || {};
-                    const status = match.status?.type?.detail || 'Ongoing';
-                    const hTeam = comp.competitors?.[0] || {};
-                    const aTeam = comp.competitors?.[1] || {};
-
-                    const singleCard = 
-                        `🏟️ *LIVE SOCCER MATCH SCOREBOARD* 🏟\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `⚔️ *Match:* \`${match.name}\`\n` +
-                        `⏰ *Game Clock:* \`${status}\`\n\n` +
-                        `🏠 *Home:* *${hTeam.team?.displayName}* — \`${hTeam.score}\`\n` +
-                        `🚀 *Away:* *${aTeam.team?.displayName}* — \`${aTeam.score}\``;
-
-                    return await sock.sendMessage(jid, { text: singleCard }, { quoted: msg });
-                }
-
-                let scoreboardText = `🏟️ *GLOBAL SOCCER SCORES SUMMARY* 🏟\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                events.slice(0, 5).forEach((event, idx) => {
-                    const comp = event.competitions?.[0] || {};
-                    const status = event.status?.type?.detail || 'Live';
-                    const home = comp.competitors?.[0]?.team?.displayName || 'Home';
-                    const homeScore = comp.competitors?.[0]?.score || '0';
-                    const away = comp.competitors?.[1]?.team?.displayName || 'Away';
-                    const awayScore = comp.competitors?.[1]?.score || '0';
-
-                    scoreboardText += `${idx + 1}. *${home}* \`${homeScore}\` vs \`${awayScore}\` *${away}*\n   ⏱️ *Clock:* \`${status}\`\n\n`;
-                });
-
-                await sock.sendMessage(jid, { text: scoreboardText }, { quoted: msg });
-            } catch (error) {}
-        }
-    },
-
-    // 30. ESPN GLOBAL FOOTBALL NEWS SCANNER
-    {
-        name: 'football',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            try {
-                const response = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/news');
-                if (!response.ok) throw new Error();
-
-                const data = await response.json();
-                const articles = data.articles || [];
-
-                if (articles.length === 0) return await sock.sendMessage(jid, { text: "⚽ *No football news articles currently reported.*" }, { quoted: msg });
-
-                let filtered = articles;
-                let headerLabel = "GLOBAL FOOTBALL NEWS";
-
-                if (args) {
-                    const query = args.toLowerCase().trim();
-                    filtered = articles.filter(art => art.headline.toLowerCase().includes(query) || art.description.toLowerCase().includes(query));
-                    headerLabel = `${args.toUpperCase()} WIRE UPDATES`;
-                }
-
-                if (filtered.length === 0) return await sock.sendMessage(jid, { text: `⚽ No articles matching *"${args}"* found.` }, { quoted: msg });
-
-                let newsCard = `⚽ *ESPN FOOTBALL: ${headerLabel}* ⚽\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                filtered.slice(0, 3).forEach((art, idx) => {
-                    newsCard += `🔥 *${idx + 1}. ${art.headline}*\n💬 _${art.description || ''}_\n\n`;
-                });
-
-                await sock.sendMessage(jid, { text: newsCard }, { quoted: msg });
-            } catch (error) {}
-        }
-    },
-
-    // 31. SCREENSHOT WEBSITE TOOL
+    // 29. SCREENSHOT WEBSITE TOOL
     {
         name: 'ss',
         isPrefixless: false,
@@ -1006,7 +927,7 @@ module.exports = [
         }
     },
 
-    // 32. SAFE EVALUATION CALCULATOR
+    // 30. SAFE EVALUATION CALCULATOR
     {
         name: 'calculator',
         isPrefixless: false,
@@ -1028,7 +949,7 @@ module.exports = [
         }
     },
 
-    // 33. GOOGLE TRANSLATION UTILITY (.trt / .translate)
+    // 31. GOOGLE TRANSLATION UTILITY (.trt / .translate)
     {
         name: 'trt',
         isPrefixless: false,
@@ -1102,7 +1023,7 @@ module.exports = [
         }
     },
 
-    // 34. MULTI-MEDIA LOOPER SPAMMER (.spam)
+    // 32. MULTI-MEDIA LOOPER SPAMMER (.spam)
     {
         name: 'spam',
         isPrefixless: false,
