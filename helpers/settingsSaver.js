@@ -1,9 +1,8 @@
-// settingsSaver.js & helpers/settingsSaver.js
+// helpers/settingsSaver.js
 const fs = require('fs');
 const path = require('path');
-const settings = require('./settings');
+const settings = require('../settings');
 
-// Standardizes an input to a fully-formed JID
 function normalizeToJid(input) {
     if (!input) return '';
     if (input.endsWith('@s.whatsapp.net')) return input;
@@ -14,7 +13,6 @@ function normalizeToJid(input) {
 
 function saveSettings() {
     try {
-        // This resolves to the correct root settings.js file in both locations
         const filePath = __dirname.endsWith('helpers') 
             ? path.join(__dirname, '../settings.js') 
             : path.join(__dirname, 'settings.js');
@@ -29,6 +27,13 @@ function saveSettings() {
             isPublic: settings.isPublic,
             ownerNumber: settings.ownerNumber,
             ownerJid: normalizeToJid(settings.ownerJid || settings.ownerNumber),
+            
+            // Preservation of LID arrays in physical configuration
+            ownerLid: settings.ownerLid || "",
+            ownerLids: settings.ownerLids || [],
+            sudoLids: settings.sudoLids || [],
+            devLids: settings.devLids || [],
+
             owners: (settings.owners || []).map(normalizeToJid).filter(Boolean),
             sudo: (settings.sudo || []).map(normalizeToJid).filter(Boolean),
             banned: (settings.banned || []).map(normalizeToJid).filter(Boolean),
@@ -52,7 +57,7 @@ function saveSettings() {
 
         const fileContent = `// settings.js\n\nmodule.exports = ${JSON.stringify(configToSave, null, 4)};\n`;
         fs.writeFileSync(filePath, fileContent, 'utf-8');
-        console.log("💾 [SETTINGS] Physical settings.js updated successfully.");
+        console.log("💾 [SETTINGS] Physical settings.js updated successfully (LID parameters preserved).");
     } catch (err) {
         console.error("❌ [SETTINGS] Failed to save settings:", err.message);
     }
