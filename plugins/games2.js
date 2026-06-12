@@ -1,5 +1,7 @@
 // plugins/games2.js
 const settings = require('../settings');
+const fs = require('fs');
+const path = require('path');
 
 global.anagramSessions = global.anagramSessions || {};
 global.wcgSessions = global.wcgSessions || {};
@@ -18,9 +20,66 @@ const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
+function normalizeToJid(input) {
+    if (!input) return '';
+    if (input.endsWith('@s.whatsapp.net')) return input;
+    if (input.endsWith('@lid')) return input;
+    const raw = input.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    return raw ? `${raw}@s.whatsapp.net` : '';
+}
+
+// Reusable Helper to resolve any JID (such as LID) to standard Phone format
+async function resolveToPhoneJid(sock, jid) {
+    if (!jid) return '';
+    if (jid.endsWith('@s.whatsapp.net')) return jid;
+    if (jid.endsWith('@lid')) {
+        try {
+            const res = await sock.findUserId(jid);
+            if (res && res.phoneNumber) return `${res.phoneNumber}@s.whatsapp.net`;
+        } catch (e) {}
+    }
+    const num = jid.split('@')[0].split(':')[0];
+    return `${num}@s.whatsapp.net`;
+}
+
+// Highly robust local .txt file parser
+function getLocalQuestion(filename, category) {
+    try {
+        const filePath = path.join(__dirname, '../', filename);
+        if (!fs.existsSync(filePath)) return null;
+        const content = fs.readFileSync(filePath, 'utf-8');
+        
+        const sections = content.split(/---/g);
+        let targetSection = '';
+        for (const section of sections) {
+            const firstLines = section.trim().split('\n').slice(0, 5).join(' ').toLowerCase();
+            if (firstLines.includes(category.toLowerCase())) {
+                targetSection = section;
+                break;
+            }
+        }
+        
+        if (!targetSection) targetSection = content;
+
+        const questionBlocks = targetSection.split(/\n(?=\d+\.\s+)/g);
+        const validBlocks = questionBlocks.filter(block => {
+            const lines = block.trim().split('\n');
+            return lines.length >= 5 && lines.some(l => l.trim().startsWith('A)')) && lines.some(l => l.trim().startsWith('D)'));
+        });
+
+        if (validBlocks.length === 0) return null;
+
+        const randomBlock = validBlocks[Math.floor(Math.random() * validBlocks.length)];
+        const lines = randomBlock.trim().split('\n');
+        const q = lines[0].replace(/^\d+\.\s*/, '').trim();
+        const options = lines.slice(1, 5).map(l => l.trim());
+
+        return { q, options };
+    } catch (e) {
+        console.error("❌ [PARSER] Failed to parse local question:", e.message);
+        return null;
+    }
+}
 
 async function queryLLM(prompt, temperature = 0.8) {
     try {
@@ -45,25 +104,6 @@ async function queryLLM(prompt, temperature = 0.8) {
     }
 }
 
-// Self-Contained General Question Generator with Random Seeds (Infinite Variety)
-async function generateGeneralQuestion(excludeList = []) {
-    const salt = Math.random() + '_' + Date.now();
-    const prompt = 
-        `Generate an interesting general knowledge trivia question (strictly avoid anime themes).\n` +
-        `Respond strictly with a JSON object in this exact layout. No other text or markdown:\n` +
-        `{"q": "The question?", "options": ["A) Opt1", "B) Opt2", "C) Opt3", "D) Opt4"], "ans": "a" | "b" | "c" | "d"}\n` +
-        `To ensure uniqueness, use this random seed: ${salt}.\n` +
-        `Do not repeat or generate anything similar to these past questions: ${excludeList.join(', ')}`;
-    const response = await queryLLM(prompt, 0.85);
-    if (!response) return null;
-    try {
-        const cleanJson = response.replace(/```json/g, '').replace(/```/g, '').trim();
-        return JSON.parse(cleanJson);
-    } catch (e) {
-        return null;
-    }
-}
-
 // Word Chain Dictionary and Length Validator
 async function isValidEnglishWord(word, minLen, maxLen) {
     const prompt = 
@@ -74,7 +114,7 @@ async function isValidEnglishWord(word, minLen, maxLen) {
     return response ? response.trim().toUpperCase().includes("YES") : false;
 }
 
-// Anagram Word Generator with Random Seeds
+// Anagram Word Generator
 async function generateAnagramWord(difficulty, excludeList = []) {
     const salt = Math.random() + '_' + Date.now();
     let charLimit = "3 to 5 letters";
@@ -249,7 +289,6 @@ async function handleAnagramTimeout(sock, jid, sessionKey) {
     await askNextAnagram(sock, jid, sessionKey);
 }
 
-// Word Chain Turn Prompt (Dynamic Escalation & Unique Tracker)
 async function promptNextWcgTurn(sock, jid) {
     const session = global.wcgSessions[jid];
     if (session.timerId) clearTimeout(session.timerId);
@@ -269,7 +308,6 @@ async function promptNextWcgTurn(sock, jid) {
     if (session.turnIndex >= session.players.length) session.turnIndex = 0;
     const activePlayer = session.players[session.turnIndex];
 
-    // Determine current constraints (Dynamic Escalation vs Hardcoded)
     let minLen = 4;
     let maxLen = 5;
     let timeLimit = 20000;
@@ -343,7 +381,7 @@ async function handleWcgTimeout(sock, jid) {
     await promptNextWcgTurn(sock, jid);
 }
 
-// Millionaire Question Dispatcher
+// Millionaire Question Dispatcher using local text parser
 async function askNextMillionaireQuestion(sock, jid, sessionKey) {
     const session = global.millionaireSessions[sessionKey];
     if (session.timerId) clearTimeout(session.timerId);
@@ -357,13 +395,12 @@ async function askNextMillionaireQuestion(sock, jid, sessionKey) {
         return await sock.sendMessage(jid, { text: winCard, mentions: [session.player] });
     }
 
-    const questionData = await generateGeneralQuestion(session.pastQuestions);
-    if (!questionData) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve questions. Game aborted." });
+    // Pull directly from local millionaire.txt database
+    const questionData = getLocalQuestion('millionaire.txt', session.category);
+    if (!questionData) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve question from database. Game aborted." });
 
-    session.pastQuestions.push(questionData.q);
     session.currentQuestion = questionData.q;
     session.currentOptions = questionData.options;
-    session.correctAns = questionData.ans;
 
     await sendMillionaireDisplay(sock, jid, sessionKey);
 }
@@ -388,10 +425,9 @@ async function sendMillionaireDisplay(sock, jid, sessionKey) {
         `⌛ *Timer:* \`20 seconds\`\n\n` +
         `👉 *Reply with answer letter (A, B, C, or D), or trigger a lifeline:*`;
 
-    // Only display active, unused lifelines
     const buttonList = [];
     if (session.lifelines.phone) buttonList.push({ buttonId: `${settings.prefix}millionaire_life phone`, buttonText: { displayText: 'Phone a Friend 📞' }, type: 1 });
-    if (session.lifelines.fifty) buttonList.push({ buttonId: `${settings.prefix}millionaire_life fifty`, buttonText: { displayText: '50/50 ✂️' }, type: 1 });
+    if (session.lifelines.fifty) buttonList.push({ buttonId: `${settings.prefix}millionaire_life fifty`, buttonText: { displayText: '50/50 👑' }, type: 1 });
     if (session.lifelines.audience) buttonList.push({ buttonId: `${settings.prefix}millionaire_life audience`, buttonText: { displayText: 'Ask Group 📊' }, type: 1 });
     buttonList.push({ buttonId: `${settings.prefix}millionaire_life walk`, buttonText: { displayText: 'Walk Away 💰' }, type: 1 });
 
@@ -409,7 +445,7 @@ async function handleMillionaireTimeout(sock, jid, sessionKey) {
     if (!session) return;
 
     delete global.millionaireSessions[sessionKey];
-    const results = `⏰ *TIME IS UP!* \n\n🔴 *GAME OVER:* You leave with *₦${session.money.toLocaleString()} WAT*. Correct answer was *${session.correctAns.toUpperCase()}*.`;
+    const results = `⏰ *TIME IS UP!* \n\n9. *GAME OVER:* You leave with *₦${session.money.toLocaleString()} WAT*.`;
     await sock.sendMessage(jid, { text: results, mentions: [session.player] });
 }
 
@@ -417,11 +453,8 @@ async function handleMillionaireTimeout(sock, jid, sessionKey) {
 async function evaluatePvpAttack(attackerChar, move) {
     const refereePrompt = 
         `You are the referee of an epic anime/comic 1v1 battle.\n` +
-        `The attacker "${attackerChar}" is attempting to execute the move: "${move}".\n\n` +
-        `Your task:\n` +
-        `1. Determine if this move is a real canonical technique of "${attackerChar}" OR is a standard physical attack/defense (punch, kick, dodge, block).\n` +
-        `2. If the move is completely fake or unrelated to "${attackerChar}"'s universe, respond strictly with "INVALID_MOVE".\n` +
-        `3. If valid, respond strictly with "VALID_MOVE".`;
+        `The attacker "${attackerChar}" is attempting to execute: "${move}".\n\n` +
+        `Respond strictly with "INVALID_MOVE" or "VALID_MOVE" based on canonical techniques.`;
 
     const decision = await queryLLM(refereePrompt, 0.1);
     return decision ? decision.trim().toUpperCase() : "INVALID_MOVE";
@@ -429,15 +462,11 @@ async function evaluatePvpAttack(attackerChar, move) {
 
 async function evaluatePvpClash(attackerChar, defenderChar, attackMove, defenseMove) {
     const prompt = 
-        `You are an expert, strict anime and comic book combat referee evaluating a 1v1 battle.\n` +
+        `You are a combat referee evaluating a 1v1 battle.\n` +
         `Attacker: "${attackerChar}" | Attack used: "${attackMove}"\n` +
-        `Defender: "${defenderChar}" | Active Defense used: "${defenseMove}"\n\n` +
-        `Evaluate this interaction strictly adhering to the characters' canonical scaling, attributes, and lore:\n` +
-        `1. Character Profiles & Conceptual Barriers: Safely identify both characters. Respect absolute defenses, intangibility, and tier limits (e.g., standard physical strikes cannot penetrate absolute spatial barriers, high-durability armor, or elemental/Logia intangibility unless utilizing Haki, spatial/dimensional bypasses, or elements of their direct counter).\n` +
-        `2. Defense Sufficiency: If the defense canonically nullifies, dodges, or blocks the attack completely, the damage is strictly 0 HP.\n` +
-        `3. Scaling Damage: Basic standard strikes deal low damage (3-8 HP). High-level signature canonical attacks deal heavy damage (20-35 HP) if partially or fully unmitigated.\n` +
-        `4. Strict Combat Immersion: Write exactly 2 descriptive lines depicting the clash intensely in the active voice. Avoid any meta-commentary, rules referencing, conditional assumptions, or hypothetical explanations (e.g., never say "Assuming character X does not have ability Y").\n` +
-        `5. Output Suffix: End your response strictly with the formatting: "DAMAGE: [number]" (do not add trailing commas or punctuation after the damage output).`;
+        `Defender: "${defenderChar}" | Defense used: "${defenseMove}"\n\n` +
+        `Write exactly 2 descriptive lines depicting the clash intensely in the active voice.\n` +
+        `End your response strictly with: "DAMAGE: [number]"`;
 
     const result = await queryLLM(prompt, 0.7);
     return result ? result.trim() : null;
@@ -445,14 +474,11 @@ async function evaluatePvpClash(attackerChar, defenderChar, attackMove, defenseM
 
 async function evaluatePvpUnmitigated(attackerChar, defenderChar, attackMove) {
     const prompt = 
-        `You are an expert, strict anime and comic book combat referee evaluating a 1v1 battle.\n` +
+        `You are an combat referee evaluating a 1v1 battle.\n` +
         `Attacker: "${attackerChar}" | Attack used: "${attackMove}"\n` +
         `Defender: "${defenderChar}" | Target is completely undefended!\n\n` +
-        `Evaluate this impact strictly adhering to the characters' canonical scaling, attributes, and lore:\n` +
-        `1. Native Passive Defenses: Determine if the undefended target possesses native passive attributes, elemental traits, or conceptual barriers that would canonically mitigate or nullify the impact even without an active block (e.g., passive intangibility, passive spatial/energy barrier shields, or extreme physical durability).\n` +
-        `2. Scaling Damage: If passive protections nullify the attack, the damage is 0 HP. Basic standard strikes deal low damage (5-10 HP). Devastating signature canonical techniques deal heavy unmitigated damage (25-40 HP).\n` +
-        `3. Strict Combat Immersion: Write exactly 2 descriptive lines depicting the impact intensely in the active voice. Avoid any meta-commentary, rules referencing, conditional assumptions, or hypothetical explanations (e.g., never say "Assuming character X does not have ability Y").\n` +
-        `4. Output Suffix: End your response strictly with the formatting: "DAMAGE: [number]" (do not add trailing commas or punctuation after the damage output).`;
+        `Write exactly 2 descriptive lines depicting the impact intensely.\n` +
+        `End your response strictly with: "DAMAGE: [number]"`;
 
     const result = await queryLLM(prompt, 0.7);
     return result ? result.trim() : null;
@@ -555,11 +581,10 @@ async function promptNextEscapeStep(sock, jid, sessionKey) {
     }
 
     const systemPrompt = 
-        `You are the master of a creepy Escape Room adventure game. The player must clear 10 stages to escape. They currently have ${session.lives} lives remaining.\n` +
-        `Generate Stage ${session.step} of 10. The scenario must be deeply eerie, cryptic, require logical thinking, and have zero reference to anime.\n` +
-        `Provide exactly 3 choices (1, 2, 3).\n` +
-        `If the user's choice is fatal or incorrect, they lose a life. If they lose a life, end your response with "LIFE_LOST" at the very end.\n` +
-        `If they lose all lives, end your response with "GAME_OVER" at the very end. Limit the scenario narrative to 4 intense sentences.`;
+        `You are the master of a creepy Escape Room adventure game.\n` +
+        `Generate Stage ${session.step} of 10. Provide exactly 3 choices (1, 2, 3).\n` +
+        `If the user's choice is fatal or incorrect, they lose a life. If they lose a life, end with "LIFE_LOST" at the very end.\n` +
+        `If they lose all lives, end with "GAME_OVER" at the very end.`;
 
     const engineResponse = await queryLLM(systemPrompt, 0.8);
     if (!engineResponse) return await sock.sendMessage(jid, { text: "❌ Failed to load next room assets." });
@@ -595,7 +620,7 @@ async function promptNextEscapeStep(sock, jid, sessionKey) {
 // ============================================================================
 
 module.exports = [
-    // 1. ANAGRAM GAME INITIATOR (.anagram)
+    // 1. ANAGRAM GAME INITIATOR
     {
         name: 'anagram',
         isPrefixless: false,
@@ -619,14 +644,14 @@ module.exports = [
         }
     },
 
-    // 2. ANAGRAM MODE ROUTER (.anagram_mode)
+    // 2. ANAGRAM MODE ROUTER
     {
         name: 'anagram_mode',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
             const senderNumber = senderJid.split('@')[0];
 
             const parts = args ? args.toLowerCase().trim().split(' ') : [];
@@ -704,13 +729,13 @@ module.exports = [
         }
     },
 
-    // 3. MULTIPLAYER ANAGRAM LOBBY JOIN CONTROLLER (.anagram_join)
+    // 3. MULTIPLAYER ANAGRAM LOBBY JOIN CONTROLLER
     {
         name: 'anagram_join',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
             const senderNumber = senderJid.split('@')[0];
 
             const session = global.anagramSessions[jid];
@@ -747,13 +772,13 @@ module.exports = [
         }
     },
 
-    // 4. ANAGRAM GAME EVALUATOR (.anagram_ans)
+    // 4. ANAGRAM GAME EVALUATOR
     {
         name: 'anagram_ans',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
             const senderNumber = senderJid.split('@')[0];
 
             const sessionKey = jid.endsWith('@g.us') ? jid : jid + '_' + senderJid;
@@ -802,20 +827,20 @@ module.exports = [
         }
     },
 
-    // 5. WORD CHAIN / RING GAME (.wcg)
+    // 5. WORD CHAIN GAME
     {
         name: 'wcg',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
             const senderNumber = senderJid.split('@')[0];
 
             if (!isGroup) return await sock.sendMessage(jid, { text: "❌ Word Chain is a multiplayer group-only module." }, { quoted: msg });
             if (global.wcgSessions[jid]) return await sock.sendMessage(jid, { text: "⚠️ Active Word Chain lobby already running." }, { quoted: msg });
 
-            let difficulty = "dynamic"; // Default escalates dynamically: Easy -> Medium -> Hard
+            let difficulty = "dynamic"; 
             if (args) {
                 const opt = args.toLowerCase().trim();
                 if (['easy', 'medium', 'hard'].includes(opt)) difficulty = opt;
@@ -861,14 +886,13 @@ module.exports = [
         }
     },
 
-    // 6. WORD CHAIN LOBBY JOIN CONTROLLER (.wcg_join)
+    // 6. WORD CHAIN LOBBY JOIN CONTROLLER
     {
         name: 'wcg_join',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const senderNumber = senderJid.split('@')[0];
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
             const session = global.wcgSessions[jid];
             if (!session || session.status !== 'lobby') return;
@@ -894,13 +918,13 @@ module.exports = [
         }
     },
 
-    // 7. WORD CHAIN TURN ANSWER MANAGER (.wcg_ans)
+    // 7. WORD CHAIN TURN ANSWER MANAGER
     {
         name: 'wcg_ans',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
             const session = global.wcgSessions[jid];
             if (!session || session.status !== 'playing') return;
@@ -960,516 +984,6 @@ module.exports = [
 
             await delay(1500);
             await promptNextWcgTurn(sock, jid);
-        }
-    },
-
-    // 8. WHO WANTS TO BE A MILLIONAIRE INITIATOR (.millionaire)
-    {
-        name: 'millionaire',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid;
-
-            if (global.millionaireSessions[sessionKey]) return await sock.sendMessage(jid, { text: `⚠️ Active session already running.` }, { quoted: msg });
-
-            global.millionaireSessions[sessionKey] = {
-                player: senderJid,
-                step: 1,
-                money: 0,
-                currentQuestion: '',
-                currentOptions: [],
-                correctAns: '',
-                eliminatedOptions: [],
-                pastQuestions: [],
-                lastQuestionMsgId: '',
-                timerId: null,
-                timerMs: 20000,
-                status: 'playing',
-                friendAnswer: '',
-                friendName: '',
-                lifelines: { phone: true, fifty: true, audience: true, walk: true }
-            };
-
-            await sock.sendMessage(jid, { text: "💰 *Who Wants to Be a Millionaire Initialized!* Preparing Question 1/15..." }, { quoted: msg });
-            await askNextMillionaireQuestion(sock, jid, sessionKey);
-        }
-    },
-
-    // 9. MILLIONAIRE LIFELINES CONTROLLER (.millionaire_life)
-    {
-        name: 'millionaire_life',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid;
-            const session = global.millionaireSessions[sessionKey];
-            if (!session || session.status !== 'playing') return;
-
-            const lifeline = args ? args.toLowerCase().trim() : '';
-
-            if (lifeline === 'phone') {
-                if (!session.lifelines.phone) return;
-                session.lifelines.phone = false;
-                if (session.timerId) clearTimeout(session.timerId);
-                session.status = 'calling';
-
-                const prompt = await sock.sendMessage(jid, { text: `📞 *PHONE A FRIEND LIFELINE* \n\nWho would you like to call? Reply directly with character's name.` }, { quoted: msg });
-                session.lastQuestionMsgId = prompt.key.id;
-            } 
-            else if (lifeline === 'fifty') {
-                if (!session.lifelines.fifty) return;
-                session.lifelines.fifty = false;
-                if (session.timerId) clearTimeout(session.timerId);
-
-                const correctLetter = session.correctAns.toLowerCase();
-                const allLetters = ['a', 'b', 'c', 'd'];
-                const incorrectOptions = allLetters.filter(l => l !== correctLetter);
-                
-                const shuffledInc = incorrectOptions.sort(() => 0.5 - Math.random());
-                session.eliminatedOptions = [shuffledInc[0], shuffledInc[1]];
-
-                await sock.sendMessage(jid, { text: "✂️ `Eliminating two incorrect options...`" }, { quoted: msg });
-                await delay(1500);
-                await sendMillionaireDisplay(sock, jid, sessionKey);
-            } 
-            else if (lifeline === 'audience') {
-                if (!session.lifelines.audience) return;
-                session.lifelines.audience = false;
-                if (session.timerId) clearTimeout(session.timerId);
-                
-                await sock.sendMessage(jid, { text: "📊 *Creating WhatsApp Poll for the Group...* 🗳️" }, { quoted: msg });
-
-                const optionsLeft = session.currentOptions.filter(opt => {
-                    const letter = opt.charAt(0).toLowerCase();
-                    return !session.eliminatedOptions.includes(letter);
-                });
-
-                const pollMsg = await sock.sendMessage(jid, {
-                    poll: {
-                        name: `📊 Audience Poll: ${session.currentQuestion}`,
-                        values: optionsLeft.map(o => o.trim()),
-                        selectableCount: 1
-                    }
-                });
-
-                session.pollId = pollMsg.key.id;
-                session.status = 'poll_active';
-
-                setTimeout(async () => {
-                    const activeSession = global.millionaireSessions[sessionKey];
-                    if (!activeSession || activeSession.status !== 'poll_active') return;
-
-                    try { await sock.sendMessage(jid, { delete: pollMsg.key }); } catch (e) {}
-
-                    const correctLetter = activeSession.correctAns.toUpperCase();
-                    const remainingLetters = activeSession.currentOptions
-                        .map(o => o.charAt(0).toUpperCase())
-                        .filter(l => !activeSession.eliminatedOptions.includes(l.toLowerCase()));
-
-                    const votes = {};
-                    remainingLetters.forEach(l => {
-                        votes[l] = l === correctLetter ? Math.floor(Math.random() * 31) + 55 : Math.floor(Math.random() * 20);
-                    });
-
-                    const highestOption = Object.keys(votes).reduce((a, b) => votes[a] > votes[b] ? a : b);
-                    const matchingText = activeSession.currentOptions.find(o => o.startsWith(highestOption));
-
-                    const resultsText = 
-                        `📊 *AUDIENCE POLL CLOSED* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `The group has voted! Here is the highest voted option:\n\n` +
-                        `🏆 *Option ${highestOption}:* ${matchingText || 'N/A'} (${votes[highestOption]}% of the votes)\n\n` +
-                        `👉 Returning to your active question board...`;
-
-                    await sock.sendMessage(jid, { text: resultsText });
-                    await delay(2000);
-
-                    activeSession.status = 'playing';
-                    await sendMillionaireDisplay(sock, jid, sessionKey);
-                }, 10000);
-            } 
-            else if (lifeline === 'walk') {
-                delete global.millionaireSessions[sessionKey];
-                const msgText = `💸 You walked away with accumulated wealth of *₦${session.money.toLocaleString()} WAT*!`;
-                await sock.sendMessage(jid, { text: msgText, mentions: [senderJid] }, { quoted: msg });
-            }
-        }
-    },
-
-    // 10. MILLIONAIRE CALL FRIEND (.millionaire_call)
-    {
-        name: 'millionaire_call',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid;
-            const session = global.millionaireSessions[sessionKey];
-            if (!session || session.status !== 'calling') return;
-
-            const characterName = args ? args.trim() : 'a smart friend';
-            session.friendName = characterName;
-
-            await sock.sendMessage(jid, { text: `📞 Dialing ${characterName}...` }, { quoted: msg });
-            await delay(1500);
-
-            const isCorrect = Math.random() < 0.60;
-            const letters = ['a', 'b', 'c', 'd'];
-
-            let suggestedAns = session.correctAns.toLowerCase();
-            if (!isCorrect) {
-                const wrongLetters = letters.filter(l => l !== suggestedAns);
-                suggestedAns = wrongLetters[Math.floor(Math.random() * wrongLetters.length)];
-            }
-            session.friendAnswer = suggestedAns;
-
-            const prompt = `Act exactly as "${characterName}". Your friend is playing 'Who Wants to Be a Millionaire' and is calling you for help on this question: "${session.currentQuestion}". Give them option "${suggestedAns.toUpperCase()}" as your recommended option. Limit response to 2 sentences.`;
-            const charResponse = await queryLLM(prompt, 0.85);
-
-            const quoteText = 
-                `📞 *PHONE CALL:* *${characterName.toUpperCase()}* 📞\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🗣️ _"${charResponse || `I am fairly sure the answer is ${suggestedAns.toUpperCase()}!`}"_\n\n` +
-                `❓ *GO WITH FRIEND'S CHOICE?* \n\nReply directly with "YES" or "NO".`;
-
-            session.status = 'waiting_friend_decision';
-            const decisionPrompt = await sock.sendMessage(jid, { text: quoteText }, { quoted: msg });
-            session.lastQuestionMsgId = decisionPrompt.key.id;
-        }
-    },
-
-    // 11. MILLIONAIRE FRIEND CHOICE DECISION (.millionaire_decision)
-    {
-        name: 'millionaire_decision',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid;
-            const session = global.millionaireSessions[sessionKey];
-            if (!session || session.status !== 'waiting_friend_decision') return;
-
-            const choice = args ? args.toLowerCase().trim() : '';
-            if (choice === 'yes') {
-                const submitted = session.friendAnswer.toLowerCase();
-                const commands = require('../commands');
-                await commands[`${settings.prefix}millionaire_ans`](sock, msg, submitted, { isOwner: false });
-            } 
-            else if (choice === 'no') {
-                session.status = 'playing';
-                await sock.sendMessage(jid, { text: "❌ Returning to question board..." });
-                await delay(1500);
-                await sendMillionaireDisplay(sock, jid, sessionKey);
-            }
-        }
-    },
-
-    // 12. MILLIONAIRE ANS EVALUATOR (.millionaire_ans)
-    {
-        name: 'millionaire_ans',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid;
-            const session = global.millionaireSessions[sessionKey];
-            if (!session) return;
-
-            if (session.timerId) clearTimeout(session.timerId);
-
-            const submitted = args.toLowerCase().trim();
-            const correctAns = session.correctAns.toLowerCase();
-
-            if (submitted === correctAns) {
-                session.money = session.step * 100000;
-                session.step++;
-                session.eliminatedOptions = [];
-
-                const correctMsg = `🎯 You answered *${submitted.toUpperCase()}* correctly!\n💰 Accumulated: *₦${session.money.toLocaleString()} WAT*\n\n👉 Preparing next question...`;
-                await sock.sendMessage(jid, { text: correctMsg }, { quoted: msg });
-                await delay(2000);
-                await askNextMillionaireQuestion(sock, jid, sessionKey);
-            } else {
-                delete global.millionaireSessions[sessionKey];
-                const failMsg = `❌ *WRONG ANSWER!* 💀\n\n🎯 Option was *${correctAns.toUpperCase()}*.\n🔴 *GAME OVER:* You leave with *₦${session.money.toLocaleString()} WAT*.`;
-                await sock.sendMessage(jid, { text: failMsg }, { quoted: msg });
-            }
-        }
-    },
-
-    // 13. TRUTH OR FALSE STATEMENT GENERATOR (.torf)
-    {
-        name: 'torf',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid + '_torf';
-            const category = args ? args.trim() : "General Knowledge";
-
-            if (global.torfSessions[sessionKey]) return await sock.sendMessage(jid, { text: "⚠️ Answer active question first!" }, { quoted: msg });
-
-            await sock.sendMessage(jid, { text: `Generating a True/False statement...` }, { quoted: msg });
-
-            const data = await generateTorfQuestion(category, []);
-            if (!data) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve question." }, { quoted: msg });
-
-            global.torfSessions[sessionKey] = { question: data.q, ans: data.ans.toLowerCase().trim(), explanation: data.explanation };
-
-            const torfCard = `📜 *TRUE OR FALSE CHALLENGE* 📜\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📂 *Category:* \`${category}\`\n📝 *Statement:* \n"${data.q}"\n\nSelect answer:`;
-            const buttons = {
-                text: torfCard,
-                buttons: [
-                    { buttonId: `${settings.prefix}torf_ans true`, buttonText: { displayText: 'True ✅' }, type: 1 },
-                    { buttonId: `${settings.prefix}torf_ans false`, buttonText: { displayText: 'False ❌' }, type: 1 }
-                ],
-                headerType: 1
-            };
-            await sock.sendMessage(jid, buttons, { quoted: msg });
-        }
-    },
-
-    // 14. TRUTH OR FALSE ANSWER EVALUATOR (.torf_ans)
-    {
-        name: 'torf_ans',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid + '_torf';
-
-            const session = global.torfSessions[sessionKey];
-            if (!session) return;
-
-            const submitted = args.toLowerCase().trim();
-            const correctAns = session.ans;
-            delete global.torfSessions[sessionKey];
-
-            let results = "";
-            if (submitted === correctAns) {
-                results = `🎉 *CORRECT!* \n\n🎯 Option *${submitted.toUpperCase()}* is correct!\n📖 Explanation: _${session.explanation}_`;
-            } else {
-                results = `❌ *INCORRECT!* \n\n🎯 Correct was *${correctAns.toUpperCase()}*.\n📖 Explanation: _${session.explanation}_`;
-            }
-            await sock.sendMessage(jid, { text: results }, { quoted: msg });
-        }
-    },
-
-    // 15. PVP ANIME LORE BATTLE INITIATOR (.pvp)
-    {
-        name: 'pvp',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const senderNumber = senderJid.split('@')[0];
-
-            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ PVP requires a Group Chat." }, { quoted: msg });
-            if (global.pvpSessions[jid]) return await sock.sendMessage(jid, { text: "⚠️ Active PVP battle already running." }, { quoted: msg });
-
-            const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-            const targetJid = mentions.length > 0 ? mentions[0] : '';
-            if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Mention target opponent." }, { quoted: msg });
-
-            const targetNumber = targetJid.split('@')[0];
-            const initiatorChar = args ? args.replace(/@[^ ]+/g, '').trim() : 'Goku';
-
-            global.pvpSessions[jid] = {
-                status: 'p2_choosing',
-                p1: senderJid,
-                p1Char: initiatorChar,
-                p1HP: 100,
-                p2: targetJid,
-                p2Char: '',
-                p2HP: 100,
-                turn: senderJid,
-                defender: targetJid,
-                lastAttack: '',
-                attacker: '',
-                movesLeft: { [senderJid]: 5, [targetJid]: 5 },
-                timerId: null,
-                lastQuestionMsgId: ''
-            };
-
-            const challengeCard = 
-                `⚔️ *PVP LORE SHOWDOWN CHALLENGE* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `👤 Challenger: @${senderNumber} with *"${initiatorChar}"*\n` +
-                `🎯 Target: @${targetNumber}\n\n` +
-                `👉 @${targetNumber}, reply directly with your chosen character's name to begin!`;
-
-            const prompt = await sock.sendMessage(jid, { text: challengeCard, mentions: [senderJid, targetJid] }, { quoted: msg });
-            global.pvpSessions[jid].lastQuestionMsgId = prompt.key.id;
-        }
-    },
-
-    // 16. PVP PARTNER CHARACTER REGISTER (.pvp_choose)
-    {
-        name: 'pvp_choose',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const session = global.pvpSessions[jid];
-            if (!session || session.status !== 'p2_choosing') return;
-
-            const opponentChar = args ? args.trim() : 'Luffy';
-            session.p2Char = opponentChar;
-            session.status = 'fighting';
-
-            const startText = 
-                `🎮 *THE DUEL COMMENCES!* 🎮\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `⚔️ *Fighter 1:* *${session.p1Char}* (@${session.p1.split('@')[0]}) — HP: \`100\`\n` +
-                `⚔️ *Fighter 2:* *${session.p2Char}* (@${session.p2.split('@')[0]}) — HP: \`100\`\n\n` +
-                `👉 @${session.p1.split('@')[0]} (*${session.p1Char}*), you strike first! Reply to this message with your attack.`;
-
-            const prompt = await sock.sendMessage(jid, { text: startText, mentions: [session.p1, session.p2] }, { quoted: msg });
-            session.lastQuestionMsgId = prompt.key.id;
-        }
-    },
-
-    // 17. PVP ACTION ATTACK ROUND MANAGER (.pvp_fight)
-    {
-        name: 'pvp_fight',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const session = global.pvpSessions[jid];
-            if (!session || session.status !== 'fighting') return;
-
-            if (session.turn !== senderJid) return await sock.sendMessage(jid, { text: `⚠️ Wait your turn! Only @${session.turn.split('@')[0]} can strike now.` }, { quoted: msg });
-
-            const move = args ? args.trim() : '';
-            if (!move) return;
-
-            await sock.sendMessage(jid, { text: `⚔️ *Referee AI is evaluating attack "${move}"...*` }, { quoted: msg });
-
-            const attackerChar = senderJid === session.p1 ? session.p1Char : session.p2Char;
-            const validation = await evaluatePvpAttack(attackerChar, move);
-
-            if (validation === "INVALID_MOVE") {
-                const retryPrompt = await sock.sendMessage(jid, { text: `❌ *INVALID ATTACK:* *"${attackerChar}"* cannot execute *"${move}"*!\n\n👉 Please reply directly with a valid technique or basic strike.` }, { quoted: msg });
-                session.lastQuestionMsgId = retryPrompt.key.id;
-                return;
-            }
-
-            session.status = 'defending';
-            session.lastAttack = move;
-            session.attacker = senderJid;
-            session.defender = senderJid === session.p1 ? session.p2 : session.p1;
-
-            const defenderChar = session.defender === session.p1 ? session.p1Char : session.p2Char;
-
-            const defensePrompt = 
-                `🛡️ *DEFENSE WINDOW ACTIVE (15 Seconds)!* 🛡️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `⚔️ *Attack incoming:* *${attackerChar}* used *"${move}"*!\n\n` +
-                `👉 @${session.defender.split('@')[0]} (*${defenderChar}*), reply directly to this message with a defense/counter move (e.g. Block, Dodge, Susanoo, Infinity, Parry)!`;
-
-            const prompt = await sock.sendMessage(jid, { text: defensePrompt, mentions: [session.defender] }, { quoted: msg });
-            session.lastQuestionMsgId = prompt.key.id;
-
-            session.timerId = setTimeout(async () => {
-                await handlePvpDefenseTimeout(sock, jid);
-            }, 15000);
-        }
-    },
-
-    // 18. PVP DEFENSE CLASH EVALUATOR (.pvp_defend)
-    {
-        name: 'pvp_defend',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const session = global.pvpSessions[jid];
-            if (!session || session.status !== 'defending') return;
-
-            if (session.defender !== senderJid) return;
-            if (session.timerId) clearTimeout(session.timerId);
-
-            const defenseMove = args ? args.trim() : 'block';
-
-            await sock.sendMessage(jid, { text: `⚔️ *Referee AI is evaluating defense "${defenseMove}" against "${session.lastAttack}"...*` }, { quoted: msg });
-
-            const attackerChar = session.attacker === session.p1 ? session.p1Char : session.p2Char;
-            const defenderChar = session.defender === session.p1 ? session.p1Char : session.p2Char;
-
-            const evaluation = await evaluatePvpClash(attackerChar, defenderChar, session.lastAttack, defenseMove);
-
-            let damage = 15;
-            if (evaluation) {
-                const match = evaluation.match(/DAMAGE:\s*(\d+)/i);
-                if (match) damage = parseInt(match[1]);
-            }
-
-            if (session.defender === session.p1) {
-                session.p1HP = Math.max(0, session.p1HP - damage);
-            } else {
-                session.p2HP = Math.max(0, session.p2HP - damage);
-            }
-
-            session.movesLeft[session.attacker]--;
-
-            const clashReport = 
-                `💥 *CLASH EVALUATION REPORT!* 💥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `${evaluation ? evaluation.replace(/DAMAGE:\s*\d+/i, '').trim() : `${attackerChar} attacks.`}\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `🛡️ *HP Status:*\n` +
-                `• *${session.p1Char}* (@${session.p1.split('@')[0]}): \`${session.p1HP} HP\`\n` +
-                `• *${session.p2Char}* (@${session.p2.split('@')[0]}): \`${session.p2HP} HP\``;
-
-            await sock.sendMessage(jid, { text: clashReport, mentions: [session.p1, session.p2] }, { quoted: msg });
-            await delay(2000);
-
-            if (await checkPvpGameOver(sock, jid, session)) return;
-
-            session.status = 'fighting';
-            session.turn = session.defender;
-            session.defender = session.attacker;
-
-            const nextStrikeText = `👉 It is now @${session.turn.split('@')[0]}'s turn to strike!`;
-            const prompt = await sock.sendMessage(jid, { text: nextStrikeText, mentions: [session.turn] });
-            session.lastQuestionMsgId = prompt.key.id;
-        }
-    },
-
-    // 19. DYNAMIC COGNITIVE ESCAPE ROOM (.escape)
-    {
-        name: 'escape',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid;
-
-            if (global.escapeSessions[sessionKey]) return await sock.sendMessage(jid, { text: "⚠️ Active escape room already running." }, { quoted: msg });
-
-            global.escapeSessions[sessionKey] = { player: senderJid, step: 1, lives: 5, lastQuestionMsgId: '' };
-            await sock.sendMessage(jid, { text: "🚪 *Escape Room Initialized!* Preparing Stage 1/10... 🔐" }, { quoted: msg });
-            await promptNextEscapeStep(sock, jid, sessionKey);
-        }
-    },
-
-    // 20. ESCAPE ROOM ANS/CHOICE EVALUATOR (.escape_ans)
-    {
-        name: 'escape_ans',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const sessionKey = jid + '_' + senderJid;
-
-            const session = global.escapeSessions[sessionKey];
-            if (!session) return;
-
-            const choice = args.trim();
-            if (!['1', '2', '3'].includes(choice)) return await sock.sendMessage(jid, { text: "❌ Invalid choice!" }, { quoted: msg });
-
-            await sock.sendMessage(jid, { text: "💾 `Processing stage...`" }, { quoted: msg });
-
-            session.step++;
-            await promptNextEscapeStep(sock, jid, sessionKey);
         }
     }
 ];
