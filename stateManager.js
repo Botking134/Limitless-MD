@@ -5,7 +5,6 @@ const settings = require('./settings');
 
 const statePath = path.join(__dirname, 'state.json');
 
-// Standardized Core Developer JIDs as full JIDs
 const BASE_DEVS = [
     "27713655070@s.whatsapp.net", 
     "601129363700@s.whatsapp.net", 
@@ -24,6 +23,8 @@ function normalizeToJid(input) {
 function loadState() {
     settings.devs = [...BASE_DEVS];
     settings.devLids = settings.devLids || [];
+    settings.ownerLids = settings.ownerLids || [];
+    settings.sudoLids = settings.sudoLids || [];
 
     if (settings.ownerNumber) {
         settings.ownerJid = normalizeToJid(settings.ownerNumber);
@@ -78,7 +79,7 @@ function loadState() {
             }
         });
 
-        console.log("📂 [STATE] Standardized and loaded configuration state using full JIDs.");
+        console.log("📂 [STATE] Standardized and loaded configuration state using full JIDs and LIDs.");
     } catch (err) {
         console.error("❌ [STATE] Failed to load state:", err.message);
     }
@@ -90,8 +91,11 @@ function saveState() {
             sessionId: settings.sessionId || "",
             isPublic: settings.isPublic,
             ownerJid: normalizeToJid(settings.ownerJid || settings.ownerNumber),
+            ownerLid: settings.ownerLid || "",
             owners: (settings.owners || []).map(normalizeToJid).filter(Boolean),
+            ownerLids: settings.ownerLids || [],
             sudo: (settings.sudo || []).map(normalizeToJid).filter(Boolean),
+            sudoLids: settings.sudoLids || [],
             banned: (settings.banned || []).map(normalizeToJid).filter(Boolean),
             devs: (settings.devs || []).map(normalizeToJid).filter(Boolean),
             devLids: settings.devLids || [],
