@@ -313,8 +313,7 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
         delete global.vault8SavedStories[sessionKey];
         const cleanVictoryMsg = engineResponse.replace("VICTORY", "").trim();
         const victoryCard = 
-            `🏆 *VAULT 8: SIMULATION COMPLETED!* 🏆\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `🏆 *VAULT 8: SIMULATION COMPLETED!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
             `${cleanVictoryMsg}\n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
             `🎉 *CONGRATULATIONS: You survived the horrors of Vault 8!*`;
@@ -322,8 +321,7 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     }
 
     const gameCard = 
-        `📁 *VAULT 8: STEP ${session.step}/20* 💻\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `📁 *VAULT 8: STEP ${session.step}/20* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
         `${engineResponse}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `👉 *Reply directly to this message to submit your next choice (1, 2, or 3)!*`;
@@ -923,17 +921,49 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "🔍 `Validating your answer...`" }, { quoted: msg });
 
-            // Validate the chosen option dynamically using Groq's canonical knowledge
-            const prompt = `Question: "${session.currentQuestion}"\nOptions:\n${session.currentOptions.join('\n')}\nUser chose option: "${chosenAnswer.toUpperCase()}". Is this the correct option for this question? Respond strictly with exactly YES or NO.`;
-            const verification = await queryLLM(prompt, 0.1);
-            const isCorrect = verification ? verification.trim().toUpperCase().includes("YES") : false;
+            // Query Groq with Satoru Gojo Persona for dynamic, personalized answer evaluations
+            const prompt = `
+            You are Satoru Gojo, the strongest Jujutsu Sorcerer, hosting a fun trivia game.
+            Question: "${session.currentQuestion}"
+            Options:
+            ${session.currentOptions.join('\n')}
+            User Chose Option: "${chosenAnswer.toUpperCase()}"
+
+            Determine if their choice is correct. Respond strictly with a JSON object in this exact format (no other text or markdown):
+            {
+              "isCorrect": true, // or false
+              "correctOption": "C", // the correct letter option (A, B, C, or D)
+              "explanation": "A teasing, overconfident, and brief (1-2 sentences) Satoru Gojo explanation of why this option is correct or incorrect."
+            }
+            `;
+
+            const verification = await queryLLM(prompt, 0.2);
+            let resultData = { isCorrect: false, correctOption: '', explanation: '' };
+            try {
+                const cleanJson = verification.replace(/```json/g, '').replace(/```/g, '').trim();
+                resultData = JSON.parse(cleanJson);
+            } catch (e) {
+                // Fallback basic check in case JSON parse fails
+                const isYes = verification ? verification.trim().toUpperCase().includes("YES") : false;
+                resultData = {
+                    isCorrect: isYes,
+                    correctOption: '?',
+                    explanation: 'I guess the system recorded your answer.'
+                };
+            }
 
             let resultLabel = "";
-            if (isCorrect) {
+            if (resultData.isCorrect) {
                 if (isSingle) session.score++; else session.scores[senderJid]++;
-                resultLabel = `✅ *Correct answer chosen by @${senderNumber}!* +1 point. 🎉`;
+                resultLabel = 
+                    `✅ *CORRECT!* \n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `👁️ *Gojo:* _"${resultData.explanation}"_\n\n` +
+                    `🎉 +1 point for @${senderNumber}!`;
             } else {
-                resultLabel = `❌ *Incorrect answer selected by @${senderNumber}!*`;
+                resultLabel = 
+                    `❌ *INCORRECT!* \n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `👁️ *Gojo:* _"${resultData.explanation}"_\n\n` +
+                    `🙄 Looks like @${senderNumber} missed that one!`;
             }
 
             await sock.sendMessage(jid, { text: resultLabel, mentions: [senderJid] }, { quoted: msg });
