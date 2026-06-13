@@ -15,10 +15,10 @@ const BASE_DEVS = [
 
 global.lidCache = global.lidCache || {};
 
-// Upgraded normalizeToJid stripping device-linking colons first to resolve admin mismatches
+// Upgraded normalizeToJid using a safe RegExp to strip device colons without losing the domain suffix
 function normalizeToJid(input) {
     if (!input) return '';
-    const clean = input.split(':')[0]; // Strips out device colons like :1 or :2 first
+    const clean = input.replace(/:[\d]+@/, '@'); // Safely converts '123:1@lid' into '123@lid'
     if (clean.endsWith('@s.whatsapp.net')) return clean;
     if (clean.endsWith('@lid')) return clean; 
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
