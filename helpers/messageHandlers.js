@@ -67,6 +67,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const senderNumber = senderJid.split('@')[0]; 
         const isGroup = jid.endsWith('@g.us');
 
+        // Declared early at top of scope to prevent Temporal Dead Zone ReferenceErrors
+        let command;
+        let args;
+
         // Establish the bot's identity using fully-qualified identifiers
         const botJid = settings.botJid || (sock.user?.id ? `${sock.user.id.split(':')[0]}@s.whatsapp.net` : '');
         const botLid = settings.botLid || '';
