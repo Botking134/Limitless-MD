@@ -21,7 +21,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function normalizeToJid(input) {
     if (!input) return '';
-    const clean = input.split(':')[0]; // Strips out device colons first
+    const clean = input.replace(/:[\d]+@/, '@'); // Safely converts '123:1@lid' into '123@lid'
     if (clean.endsWith('@s.whatsapp.net')) return clean;
     if (clean.endsWith('@lid')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
@@ -851,7 +851,7 @@ module.exports = [
         }
     },
 
-    // 10. QUIZ CATEGORY SELECT ROUTER (Emoji-Strip & Number Mapping Enabled)
+    // 10. QUIZ CATEGORY SELECT ROUTER (Emoji-Strip & Number Mapping Resolved)
     {
         name: 'quiz_cat',
         isPrefixless: true,
@@ -859,8 +859,9 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-            const sessionKey = jid.endsWith('@g.us') ? jid : jid + '_' + senderJid;
-            const session = global.triviaSessions[sessionKey];
+            // Un-bugged sessionKey resolver for single-player group games
+            const singleKey = jid + '_' + senderJid;
+            const session = global.triviaSessions[singleKey] || global.triviaSessions[jid];
             if (!session || session.status !== 'awaiting_category') return;
 
             if (session.type === 'multi' && session.player !== senderJid) return;
@@ -900,7 +901,7 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: `🚀 *Quiz Category set to: "${matched}"* \n\nPreparing Round 1...` });
             await delay(1500);
-            await askNextQuizQuestion(sock, jid, sessionKey);
+            await askNextQuizQuestion(sock, jid, (session.type === 'single' ? singleKey : jid));
         }
     },
 
@@ -913,8 +914,9 @@ module.exports = [
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
             const senderNumber = senderJid.split('@')[0];
 
-            const sessionKey = jid.endsWith('@g.us') ? jid : jid + '_' + senderJid;
-            const session = global.triviaSessions[sessionKey];
+            // Un-bugged sessionKey resolver for single-player group games
+            const singleKey = jid + '_' + senderJid;
+            const session = global.triviaSessions[singleKey] || global.triviaSessions[jid];
             if (!session || session.status !== 'playing') return;
 
             const isSingle = session.type === 'single';
@@ -979,7 +981,7 @@ module.exports = [
             if (!isSingle) session.turnIndex = (session.turnIndex + 1) % session.players.length;
 
             await delay(1500);
-            await askNextQuizQuestion(sock, jid, sessionKey);
+            await askNextQuizQuestion(sock, jid, (isSingle ? singleKey : jid));
         }
     },
 
