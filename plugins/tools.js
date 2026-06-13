@@ -2,6 +2,7 @@
 const settings = require('../settings');
 const { saveSettings } = require('../helpers/settingsSaver'); 
 const { saveState } = require('../stateManager'); 
+const { getPhoneJid, normalizeToJid } = require('../stateManager');
 const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
@@ -79,7 +80,9 @@ const timezoneMap = {
 };
 
 async function uploadToCloud(buffer, mimeType) {
-    const ext = mimeType.split('/')[1] || 'bin';
+    // Strip out any codec parameters (e.g. converting 'ogg; codecs=opus' into 'ogg')
+    let ext = mimeType.split('/')[1] || 'bin';
+    ext = ext.split(';')[0].trim();
     const filename = `file_${Date.now()}.${ext}`;
 
     try {
@@ -152,7 +155,6 @@ module.exports = [
 
             // Resolve LID to standard phone-number JID first to preserve tracking metrics
             if (targetJid.endsWith('@lid')) {
-                const { getPhoneJid } = require('../helpers/messageHandlers');
                 const resolvedPhoneJid = await getPhoneJid(sock, targetJid, jid);
                 if (resolvedPhoneJid) {
                     targetJid = resolvedPhoneJid;
@@ -241,7 +243,7 @@ module.exports = [
         }
     },
 
-    // 5. SAVE STATUS UPDATE
+    // 5. SAVE STATUS UPDATE (Direct private DM redirection applied)
     {
         name: 'save',
         isPrefixless: false,
@@ -251,27 +253,40 @@ module.exports = [
             const contextInfo = rawMsg?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
             
-            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Reply directly to a status update." }, { quoted: msg });
+            if (!quoted) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply directly to a status update." }, { quoted: msg });
+            }
 
             const rawContent = getRawMessage(quoted);
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
 
+                const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+                // Route saved media straight to the user's private DM, keeping group chats clean
+                const targetDmJid = jid.endsWith('@g.us') ? senderJid : jid;
+
                 if (rawContent.imageMessage) {
                     const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                    await sock.sendMessage(jid, { image: buffer, caption: rawContent.imageMessage.caption || "" });
+                    
+                    await sock.sendMessage(targetDmJid, { image: buffer, caption: rawContent.imageMessage.caption || "Saved status update 👁️" });
+                    await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
                 } else if (rawContent.videoMessage) {
                     const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                    await sock.sendMessage(jid, { video: buffer, mimetype: rawContent.videoMessage.mimetype || "video/mp4", caption: rawContent.videoMessage.caption || "" });
+                    
+                    await sock.sendMessage(targetDmJid, { video: buffer, mimetype: rawContent.videoMessage.mimetype || "video/mp4", caption: rawContent.videoMessage.caption || "Saved status update 👁️" });
+                    await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
                 } else {
                     const text = rawContent.conversation || rawContent.extendedTextMessage?.text || "";
-                    await sock.sendMessage(jid, { text: `📝 *Saved Text:*\n\n${text}` });
+                    await sock.sendMessage(targetDmJid, { text: `📝 *Saved Text Status:*\n\n${text}` });
+                    await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
                 }
-            } catch (error) {}
+            } catch (error) {
+                console.error("Save command error:", error.message);
+            }
         }
     },
 
