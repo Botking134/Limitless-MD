@@ -9,11 +9,13 @@ if (!global.kickallActive) global.kickallActive = {};
 if (!global.groupTimers) global.groupTimers = {};
 if (!global.silencedUsers) global.silencedUsers = {}; 
 
+// Upgraded normalizeToJid stripping device-linking colons first to resolve admin mismatches
 function normalizeToJid(input) {
     if (!input) return '';
-    if (input.endsWith('@s.whatsapp.net')) return input;
-    if (input.endsWith('@lid')) return input;
-    const raw = input.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    const clean = input.split(':')[0]; // Strips out device colons like :1 or :2 first
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean;
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
@@ -1572,13 +1574,13 @@ module.exports = [
         }
     },
 
-    // 37. JOIN NEW GROUP
+    // 37. JOIN NEW GROUP (Strictly Owners & Devs Only)
     {
         name: 'join',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isAuthorized = isDev || isOwner || isSudo;
+            const isAuthorized = isDev || isOwner; // Sudo excluded
             if (!isAuthorized) return;
 
             if (!args) {
@@ -1600,13 +1602,13 @@ module.exports = [
         }
     },
 
-    // 38. EXIT CURRENT GROUP
+    // 38. EXIT CURRENT GROUP (Strictly Owners & Devs Only)
     {
         name: 'exit',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isAuthorized = isDev || isOwner || isSudo;
+            const isAuthorized = isDev || isOwner; // Sudo excluded
             if (!isAuthorized) return;
 
             const targetJid = args ? args.trim() : jid;
@@ -1621,7 +1623,7 @@ module.exports = [
                     await sock.sendMessage(jid, { text: "✅ Successfully left group." }, { quoted: msg });
                 }
             } catch (e) {
-                await sock.sendMessage(jid, { text: `❌ Failed to leave group: ${e.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `❌ Failed to leave group: ${e.message}` }, { jid: msg });
             }
         }
     }
