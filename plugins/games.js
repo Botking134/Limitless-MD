@@ -21,47 +21,50 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function normalizeToJid(input) {
     if (!input) return '';
-    if (input.endsWith('@s.whatsapp.net')) return input;
-    if (input.endsWith('@lid')) return input;
-    const raw = input.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    const clean = input.split(':')[0]; // Strips out device colons first
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean;
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
-// Highly robust local .txt file parser
-function getLocalQuestion(filename, category) {
+// Built-in high-quality fallback questions database to prevent system crashes
+const fallbackQuizQuestions = [
+    {
+        category: "General Knowledge",
+        q: "What is the capital city of France?",
+        options: ["A) London", "B) Berlin", "C) Paris", "D) Madrid"]
+    },
+    {
+        category: "Chemistry",
+        q: "What is the chemical symbol for the element Oxygen?",
+        options: ["A) O", "B) Os", "C) Om", "D) Oc"]
+    },
+    {
+        category: "English",
+        q: "What is the antonym of \"generous\"?",
+        options: ["A) Kind", "B) Stingy", "C) Brave", "D) Honest"]
+    }
+];
+
+// Upgraded high-speed native .js parser with local fallback safety
+function getLocalQuestion(category) {
     try {
-        const filePath = path.join(__dirname, '../', filename);
-        if (!fs.existsSync(filePath)) return null;
-        const content = fs.readFileSync(filePath, 'utf-8');
-        
-        const sections = content.split(/---/g);
-        let targetSection = '';
-        for (const section of sections) {
-            const firstLines = section.trim().split('\n').slice(0, 5).join(' ').toLowerCase();
-            if (firstLines.includes(category.toLowerCase())) {
-                targetSection = section;
-                break;
-            }
+        const dbPath = path.join(__dirname, '../quiz.js');
+        let questions = fallbackQuizQuestions;
+
+        if (fs.existsSync(dbPath)) {
+            // Decache to pull any runtime database updates cleanly
+            delete require.cache[require.resolve(dbPath)];
+            questions = require(dbPath);
         }
-        
-        if (!targetSection) targetSection = content;
 
-        const questionBlocks = targetSection.split(/\n(?=\d+\.\s+)/g);
-        const validBlocks = questionBlocks.filter(block => {
-            const lines = block.trim().split('\n');
-            return lines.length >= 5 && lines.some(l => l.trim().startsWith('A)')) && lines.some(l => l.trim().startsWith('D)'));
-        });
+        const filtered = questions.filter(q => q.category.toLowerCase() === category.toLowerCase());
+        if (filtered.length === 0) return null;
 
-        if (validBlocks.length === 0) return null;
-
-        const randomBlock = validBlocks[Math.floor(Math.random() * validBlocks.length)];
-        const lines = randomBlock.trim().split('\n');
-        const q = lines[0].replace(/^\d+\.\s*/, '').trim();
-        const options = lines.slice(1, 5).map(l => l.trim());
-
-        return { q, options };
+        return filtered[Math.floor(Math.random() * filtered.length)];
     } catch (e) {
-        console.error("❌ [PARSER] Failed to parse local question:", e.message);
+        console.error("❌ [PARSER] Failed to resolve quiz question:", e.message);
         return null;
     }
 }
@@ -184,7 +187,7 @@ async function checkAnswerCorrectness(correctAnswer, userGuess) {
     return response ? response.trim().toUpperCase().includes("YES") : false;
 }
 
-// Core Topic-Specific Quiz Dispatcher using local text parser
+// Core Topic-Specific Quiz Dispatcher reading from native quiz.js DB
 async function askNextQuizQuestion(sock, jid, sessionKey) {
     const session = global.triviaSessions[sessionKey];
     const isSingle = session.type === 'single';
@@ -208,8 +211,7 @@ async function askNextQuizQuestion(sock, jid, sessionKey) {
     let activePlayer = session.player;
     if (!isSingle) activePlayer = session.players[session.turnIndex];
 
-    // Pull directly from local quiz.txt database
-    const questionData = getLocalQuestion('quiz.txt', session.category);
+    const questionData = getLocalQuestion(session.category);
     if (!questionData) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve question from quiz database. Game aborted." });
 
     session.currentQuestion = questionData.q;
@@ -718,7 +720,7 @@ module.exports = [
         }
     },
 
-    // 8. DYNAMIC CATEGORIZED QUIZ INITIATOR
+    // 8. DYNAMIC CATEGORIZED QUIZ INITIATOR (Category Buttons Enabled)
     {
         name: 'quiz',
         isPrefixless: false,
@@ -737,7 +739,6 @@ module.exports = [
                 
                 if (global.triviaSessions[sessionKey]) return await sock.sendMessage(jid, { text: "⚠️ Active Quiz session already running." }, { quoted: msg });
 
-                // Construct initial game parameters
                 const sessionData = {
                     type: subAction,
                     status: 'awaiting_category',
@@ -757,21 +758,18 @@ module.exports = [
                 global.triviaSessions[sessionKey] = sessionData;
 
                 if (subAction === 'single') {
-                    // Send list of categories to reply directly to
-                    const catMenu = 
-                        `📚 *LIMITLESS QUIZ CATEGORIES* 📚\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `• English\n` +
-                        `• Chemistry\n` +
-                        `• General Knowledge\n` +
-                        `• Biology\n` +
-                        `• General Anime\n` +
-                        `• DC\n` +
-                        `• Marvel\n` +
-                        `• All Sports\n\n` +
-                        `👉 *Please reply directly to this message with your desired category!*`;
+                    // Send main popular categories directly in Button form for interactive selection
+                    const buttonMenu = {
+                        text: `📚 *LIMITLESS QUIZ CATEGORIES* 📚\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nChoose your desired category below:`,
+                        buttons: [
+                            { buttonId: `${settings.prefix}quiz_cat General Anime`, buttonText: { displayText: 'General Anime 🏮' }, type: 1 },
+                            { buttonId: `${settings.prefix}quiz_cat Chemistry`, buttonText: { displayText: 'Chemistry 🧪' }, type: 1 },
+                            { buttonId: `${settings.prefix}quiz_cat English`, buttonText: { displayText: 'English 📚' }, type: 1 }
+                        ],
+                        headerType: 1
+                    };
 
-                    const prompt = await sock.sendMessage(jid, { text: catMenu }, { quoted: msg });
+                    const prompt = await sock.sendMessage(jid, buttonMenu, { quoted: msg });
                     global.triviaSessions[sessionKey].lastQuestionMsgId = prompt.key.id;
                 } else {
                     const lobbyButtons = {
@@ -795,20 +793,19 @@ module.exports = [
 
                         // Move to category selection once lobby closes
                         session.status = 'awaiting_category';
-                        const catMenu = 
-                            `👥 *MULTIPLAYER CATEGORY SELECTION* 👥\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                            `• English\n` +
-                            `• Chemistry\n` +
-                            `• General Knowledge\n` +
-                            `• Biology\n` +
-                            `• General Anime\n` +
-                            `• DC\n` +
-                            `• Marvel\n` +
-                            `• All Sports\n\n` +
-                            `👉 @${session.player.split('@')[0]}, reply directly to this message with the desired category!`;
+                        
+                        const buttonMenu = {
+                            text: `👥 *MULTIPLAYER CATEGORY SELECTION* 👥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${session.player.split('@')[0]}, choose a category below:`,
+                            buttons: [
+                                { buttonId: `${settings.prefix}quiz_cat General Anime`, buttonText: { displayText: 'General Anime 🏮' }, type: 1 },
+                                { buttonId: `${settings.prefix}quiz_cat Chemistry`, buttonText: { displayText: 'Chemistry 🧪' }, type: 1 },
+                                { buttonId: `${settings.prefix}quiz_cat English`, buttonText: { displayText: 'English 📚' }, type: 1 }
+                            ],
+                            headerType: 1,
+                            mentions: [session.player]
+                        };
 
-                        const prompt = await sock.sendMessage(jid, { text: catMenu, mentions: [session.player] });
+                        const prompt = await sock.sendMessage(jid, buttonMenu);
                         session.lastQuestionMsgId = prompt.key.id;
                     }, 25000);
                 }
@@ -884,7 +881,7 @@ module.exports = [
 
             const matched = validCategories.find(c => c.toLowerCase() === categoryChoice.toLowerCase());
             if (!matched) {
-                return await sock.sendMessage(jid, { text: "❌ Invalid category. Please reply with a valid category from the list above." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Invalid category. Please select or reply with a valid category." }, { quoted: msg });
             }
 
             session.category = matched;
