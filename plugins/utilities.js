@@ -2,6 +2,7 @@
 const settings = require('../settings'); 
 const { saveSettings } = require('../helpers/settingsSaver'); 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
+const { getPhoneJid, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
 
@@ -276,7 +277,7 @@ module.exports = [
         }
     },
 
-    // 9. CROPPED SQUARE STICKER (.crop - Quiet Processing)
+    // 9. CROPPED SQUARE STICKER (.crop)
     {
         name: 'crop',
         isPrefixless: false,
@@ -303,7 +304,7 @@ module.exports = [
         }
     },
 
-    // 10. METADATA STEALER (.take / .steal - Quiet Processing)
+    // 10. METADATA STEALER (.take / .steal)
     {
         name: 'take',
         isPrefixless: false,
@@ -331,7 +332,7 @@ module.exports = [
         }
     },
 
-    // 11. STICKER COMMAND TRIGGERS (.setcmd - Prefix Strip fix)
+    // 11. STICKER COMMAND TRIGGERS (.setcmd)
     {
         name: 'setcmd',
         isPrefixless: false,
@@ -353,7 +354,6 @@ module.exports = [
             if (!settings.stickerCommands) settings.stickerCommands = {};
 
             let action = args.trim();
-            // Automatically strips leading prefixes to resolve mapping errors (allows standard setting e.g., 'ping' instead of '.ping')
             if (action.startsWith(settings.prefix)) {
                 action = action.slice(settings.prefix.length).trim();
             }
@@ -438,7 +438,7 @@ module.exports = [
         }
     },
 
-    // 14. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url - Quiet Processing)
+    // 14. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url)
     {
         name: 'tourl',
         isPrefixless: false,
@@ -450,19 +450,38 @@ module.exports = [
             let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.stickerMessage || rawContent?.audioMessage || rawContent?.documentMessage;
             let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.stickerMessage ? "sticker" : (rawContent?.audioMessage ? "audio" : "document")));
 
-            if (!mediaMessage) return;
+            if (!mediaMessage) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ *Invalid Context:* Please reply directly to an image, video, sticker, audio, or document file to generate a URL." 
+                }, { quoted: msg });
+            }
+
+            const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Channelling media into direct link...*" }, { quoted: msg });
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                 let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
 
                 const mimeType = mediaMessage.mimetype || "application/octet-stream";
                 const url = await uploadToCloud(buffer, mimeType);
 
-                await sock.sendMessage(jid, { text: `📦 *Limitless Direct URL* 🌐\n\nDirect Link: ${url}` }, { quoted: msg });
-            } catch (error) {}
+                const finalReport = `📦 *DIRECT URL MANIFESTED* 🌐\n` +
+                                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                    `🔗 *Link:* ${url}\n` +
+                                    `⚖️ *Size:* \`${(buffer.length / (1024 * 1024)).toFixed(2)} MB\`\n\n` +
+                                    `_“My six eyes see straight through the data.”_ 🤞`;
+
+                await sock.sendMessage(jid, { text: finalReport, edit: statusMsg.key });
+            } catch (error) {
+                await sock.sendMessage(jid, { 
+                    text: `❌ *Upload Failed:* ${error.message || "Unable to complete cloud stream."}`, 
+                    edit: statusMsg.key 
+                });
+            }
         }
     },
 
@@ -494,7 +513,7 @@ module.exports = [
 
                 const senderJid = msg.key.participant || msg.key.remoteJid;
                 // Silently forward decrypted media straight to DM of Owner/Sudoer who triggered it
-                const targetDmJid = senderJid.endsWith('@g.us') ? (senderNumber + '@s.whatsapp.net') : senderJid;
+                const targetDmJid = senderJid;
                 
                 if (mediaType === 'image') {
                     await sock.sendMessage(targetDmJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image" });
@@ -508,7 +527,7 @@ module.exports = [
         }
     },
 
-    // 16. BOT LATENCY COMPARISON TEST
+    // 16. BOT LATENCY COMPARISON TEST (ping2 Progress Bar Animation Update)
     {
         name: 'ping2',
         isPrefixless: false,
@@ -516,16 +535,19 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const { delay } = await import('@itsliaaa/baileys');
 
-            const loadingMsg = await sock.sendMessage(jid, { text: "▮▮▮▮▮▮🔑" }, { quoted: msg });
+            // Boot-up progress loader unlinked from keys, delaying exactly 0.8s per increment
+            const loadingMsg = await sock.sendMessage(jid, { text: "▮▮" }, { quoted: msg });
             const frames = [
-                "▮▮▮▮▮▮▮🔑", 
-                "▮▮▮▮▮▮▮▮", 
-                "▮▮▮▮▮▮▮▮▮"
+                "▮▮▮", 
+                "▮▮▮▮", 
+                "▮▮▮▮▮",
+                "▮▮▮▮▮▮",
+                "▮▮▮▮▮▮▮"
             ];
 
             for (const frame of frames) {
+                await delay(800);
                 await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
-                await delay(300); 
             }
 
             const msgTime = msg.messageTimestamp * 1000;
@@ -660,6 +682,7 @@ module.exports = [
 
 const aliases = [];
 module.exports.forEach(cmd => {
+    if (cmd.name === 'save') aliases.push({ ...cmd, name: 'status' });
     if (cmd.name === 'sticker') aliases.push({ ...cmd, name: 's' });
     if (cmd.name === 'take') aliases.push({ ...cmd, name: 'steal' });
     if (cmd.name === 'tourl') aliases.push({ ...cmd, name: 'url' });
