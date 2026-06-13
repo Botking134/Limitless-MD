@@ -1,7 +1,7 @@
 // plugins/fun.js
 const settings = require('../settings'); 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
-const { getPhoneJid } = require('../helpers/messageHandlers');
+const { getPhoneJid, normalizeToJid } = require('../stateManager');
 
 const GROQ_API_KEY = settings.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -35,14 +35,6 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
-}
-
-function normalizeToJid(input) {
-    if (!input) return '';
-    if (input.endsWith('@s.whatsapp.net')) return input;
-    if (input.endsWith('@lid')) return input;
-    const raw = input.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-    return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
 function parseTarget(msg, args) {
@@ -474,8 +466,9 @@ module.exports = [
 
             if (clickerNum !== targetNum) return; 
 
-            const targetJid = targetNum + (targetJid && targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-            const senderJid = senderNum + (senderJid && senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            // Resolved initialization bug: extracted domain based on clickerJid's properties
+            const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
+            const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `👰🤵 *MATRIMONY COMPLETED!* 👰🤵\n\nBy Satoru Gojo's authority, I declare @${senderNum} and @${targetNum} joined in holy matrimony! 💍✨`, mentions: [senderJid, targetJid] }, { quoted: msg });
@@ -541,8 +534,9 @@ module.exports = [
 
             if (clickerNum !== targetNum) return; 
 
-            const targetJid = targetNum + (targetJid && targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-            const senderJid = senderNum + (senderJid && senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            // Resolved initialization bug: extracted domain based on clickerJid's properties
+            const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
+            const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `💍 *ENGAGED!* 💍\n\n🎉 @${targetNum} and @${senderNum} are now officially *ENGAGED*!`, mentions: [targetJid, senderJid] }, { quoted: msg });
@@ -608,8 +602,9 @@ module.exports = [
 
             if (clickerNum !== targetNum) return; 
 
-            const targetJid = targetNum + (targetJid && targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-            const senderJid = senderNum + (senderJid && senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            // Resolved initialization bug: extracted domain based on clickerJid's properties
+            const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
+            const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
 
             if (action === 'yes') {
                 await sock.sendMessage(jid, { text: `🎉 *CONFESSION ACCEPTED!* 🎉\n\n💖 @${targetNum} and @${senderNum} are now officially in a relationship!`, mentions: [targetJid, senderJid] }, { quoted: msg });
