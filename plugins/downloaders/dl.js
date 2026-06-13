@@ -34,7 +34,9 @@ async function fetchBuffer(url) {
 }
 
 async function uploadToCloud(buffer, mimeType) {
-    const ext = mimeType.split('/')[1] || 'bin';
+    // Strip out any codec parameters (e.g. converting 'ogg; codecs=opus' into 'ogg')
+    let ext = mimeType.split('/')[1] || 'bin';
+    ext = ext.split(';')[0].trim();
     const filename = `file_${Date.now()}.${ext}`;
 
     try {
