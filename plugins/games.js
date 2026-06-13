@@ -54,7 +54,6 @@ function getLocalQuestion(category) {
         let questions = fallbackQuizQuestions;
 
         if (fs.existsSync(dbPath)) {
-            // Decache to pull any runtime database updates cleanly
             delete require.cache[require.resolve(dbPath)];
             questions = require(dbPath);
         }
@@ -414,7 +413,7 @@ module.exports = [
                 text: `🎮 *TIC-TAC-TOE* 🎮\n\nSelect your game format:`,
                 buttons: [
                     { buttonId: `${settings.prefix}ttt_mode ai`, buttonText: { displayText: 'Play with AI 🤖' }, type: 1 },
-                    { buttonId: `${settings.prefix}ttt_mode multi`, buttonText: { displayText: 'Multiplayer ⚔️' }, type: 1 }
+                    { buttonId: `${settings.prefix}ttt_mode multi`, buttonText: { displayText: 'Multiplayer ⚔️' }, type: 1                }
                 ],
                 headerType: 1
             };
@@ -720,7 +719,7 @@ module.exports = [
         }
     },
 
-    // 8. DYNAMIC CATEGORIZED QUIZ INITIATOR (Category Buttons Enabled)
+    // 8. DYNAMIC CATEGORIZED QUIZ INITIATOR (LID-Safe Numbered Lists & Category triggers)
     {
         name: 'quiz',
         isPrefixless: false,
@@ -757,19 +756,23 @@ module.exports = [
 
                 global.triviaSessions[sessionKey] = sessionData;
 
-                if (subAction === 'single') {
-                    // Send main popular categories directly in Button form for interactive selection
-                    const buttonMenu = {
-                        text: `📚 *LIMITLESS QUIZ CATEGORIES* 📚\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nChoose your desired category below:`,
-                        buttons: [
-                            { buttonId: `${settings.prefix}quiz_cat General Anime`, buttonText: { displayText: 'General Anime 🏮' }, type: 1 },
-                            { buttonId: `${settings.prefix}quiz_cat Chemistry`, buttonText: { displayText: 'Chemistry 🧪' }, type: 1 },
-                            { buttonId: `${settings.prefix}quiz_cat English`, buttonText: { displayText: 'English 📚' }, type: 1 }
-                        ],
-                        headerType: 1
-                    };
+                // Converted Category prompt into a robust, bulletproof numbered list
+                const catMenu = 
+                    `📚 *LIMITLESS QUIZ CATEGORIES* 📚\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `1. General Anime 🏮\n` +
+                    `2. Chemistry 🧪\n` +
+                    `3. English 📚\n` +
+                    `4. Biology 🧬\n` +
+                    `5. General Knowledge 🧠\n` +
+                    `6. DC 🦇\n` +
+                    `7. Marvel 🟥\n` +
+                    `8. All Sports ⚽\n\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `👉 *Please reply directly to this message with the Category Name or Number (1-8) to begin!*`;
 
-                    const prompt = await sock.sendMessage(jid, buttonMenu, { quoted: msg });
+                if (subAction === 'single') {
+                    const prompt = await sock.sendMessage(jid, { text: catMenu }, { quoted: msg });
                     global.triviaSessions[sessionKey].lastQuestionMsgId = prompt.key.id;
                 } else {
                     const lobbyButtons = {
@@ -794,18 +797,7 @@ module.exports = [
                         // Move to category selection once lobby closes
                         session.status = 'awaiting_category';
                         
-                        const buttonMenu = {
-                            text: `👥 *MULTIPLAYER CATEGORY SELECTION* 👥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${session.player.split('@')[0]}, choose a category below:`,
-                            buttons: [
-                                { buttonId: `${settings.prefix}quiz_cat General Anime`, buttonText: { displayText: 'General Anime 🏮' }, type: 1 },
-                                { buttonId: `${settings.prefix}quiz_cat Chemistry`, buttonText: { displayText: 'Chemistry 🧪' }, type: 1 },
-                                { buttonId: `${settings.prefix}quiz_cat English`, buttonText: { displayText: 'English 📚' }, type: 1 }
-                            ],
-                            headerType: 1,
-                            mentions: [session.player]
-                        };
-
-                        const prompt = await sock.sendMessage(jid, buttonMenu);
+                        const prompt = await sock.sendMessage(jid, { text: `👥 *MULTIPLAYER CATEGORY SELECTION* 👥\n\n@${session.player.split('@')[0]}, please choose a category:\n\n${catMenu}`, mentions: [session.player] });
                         session.lastQuestionMsgId = prompt.key.id;
                     }, 25000);
                 }
@@ -859,7 +851,7 @@ module.exports = [
         }
     },
 
-    // 10. QUIZ CATEGORY SELECT ROUTER (Silent Response)
+    // 10. QUIZ CATEGORY SELECT ROUTER (Emoji-Strip & Number Mapping Enabled)
     {
         name: 'quiz_cat',
         isPrefixless: true,
@@ -873,15 +865,33 @@ module.exports = [
 
             if (session.type === 'multi' && session.player !== senderJid) return;
 
-            const categoryChoice = args.trim();
+            const categoryChoice = args.trim().toLowerCase();
+            
+            // Map list index numbers to formal categories directly
+            const categoryIndexMap = {
+                "1": "general anime",
+                "2": "chemistry",
+                "3": "english",
+                "4": "biology",
+                "5": "general knowledge",
+                "6": "dc",
+                "7": "marvel",
+                "8": "all sports"
+            };
+
+            const resolvedChoice = categoryIndexMap[categoryChoice] || categoryChoice;
+
             const validCategories = [
                 'English', 'Chemistry', 'General Knowledge', 'Biology', 
                 'General Anime', 'DC', 'Marvel', 'All Sports'
             ];
 
-            const matched = validCategories.find(c => c.toLowerCase() === categoryChoice.toLowerCase());
+            // Strip out any emojis or formatting to protect clicks
+            const cleanChoice = resolvedChoice.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
+
+            const matched = validCategories.find(c => c.toLowerCase() === cleanChoice || c.toLowerCase().includes(cleanChoice));
             if (!matched) {
-                return await sock.sendMessage(jid, { text: "❌ Invalid category. Please select or reply with a valid category." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Invalid category selection. Please reply with a valid category name or number (1-8)." }, { quoted: msg });
             }
 
             session.category = matched;
