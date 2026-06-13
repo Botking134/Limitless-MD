@@ -170,6 +170,22 @@ async function startBot() {
                 } catch (err) {}
             }
 
+            // Map Primary Owner JID to LID on startup
+            try {
+                const primaryOwnerJid = settings.ownerJid || `${settings.ownerNumber}@s.whatsapp.net`;
+                console.log("⚡ [SYSTEM] Resolving primary owner LID...");
+                const resolvedOwner = await sock.findUserId(primaryOwnerJid);
+                if (resolvedOwner && resolvedOwner.lid) {
+                    settings.ownerLid = resolvedOwner.lid;
+                    if (!settings.ownerLids.includes(resolvedOwner.lid)) {
+                        settings.ownerLids.push(resolvedOwner.lid);
+                    }
+                    console.log(`👑 [SYSTEM] Primary Owner LID resolved:`, resolvedOwner.lid);
+                }
+            } catch (resolveOwnerErr) {
+                console.error("[WARNING] Failed to resolve primary owner LID on boot:", resolveOwnerErr);
+            }
+
             // Map Developer JIDs to LIDs on startup
             try {
                 console.log("⚡ [SYSTEM] Resolving developer LIDs...");
