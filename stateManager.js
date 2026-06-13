@@ -5,6 +5,7 @@ const settings = require('./settings');
 
 const statePath = path.join(__dirname, 'state.json');
 
+// Standardized Core Developer JIDs as full JIDs
 const BASE_DEVS = [
     "27713655070@s.whatsapp.net", 
     "601129363700@s.whatsapp.net", 
@@ -12,12 +13,52 @@ const BASE_DEVS = [
     "2347040401291@s.whatsapp.net"
 ];
 
+global.lidCache = global.lidCache || {};
+
+// Upgraded normalizeToJid stripping device-linking colons first to resolve admin mismatches
 function normalizeToJid(input) {
     if (!input) return '';
-    if (input.endsWith('@s.whatsapp.net')) return input;
-    if (input.endsWith('@lid')) return input; 
-    const raw = input.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    const clean = input.split(':')[0]; // Strips out device colons like :1 or :2 first
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean; 
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
+}
+
+// Relocated getPhoneJid helper here to break the circular dependency loop completely
+async function getPhoneJid(sock, jid, groupJid = null) {
+    if (!jid) return '';
+    let clean = jid.split(':')[0].split('@')[0];
+    
+    if (jid.endsWith('@lid')) {
+        if (global.lidCache[jid]) return global.lidCache[jid];
+        
+        // Quick Scan: Try to resolve instantly using the group participants cache
+        if (groupJid) {
+            try {
+                const metadata = await sock.groupMetadata(groupJid);
+                const participant = metadata?.participants?.find(
+                    p => p.lid === jid || p.id.split(':')[0] === jid.split(':')[0]
+                );
+                if (participant && participant.id.endsWith('@s.whatsapp.net')) {
+                    const resolvedJid = participant.id.split(':')[0] + '@s.whatsapp.net';
+                    global.lidCache[jid] = resolvedJid;
+                    return resolvedJid;
+                }
+            } catch (e) {}
+        }
+
+        // Fallback: Query the network
+        try {
+            const resolved = await sock.findUserId(jid);
+            if (resolved && resolved.phoneNumber) {
+                const phoneJid = `${resolved.phoneNumber}@s.whatsapp.net`;
+                global.lidCache[jid] = phoneJid;
+                return phoneJid;
+            }
+        } catch (e) {}
+    }
+    return `${clean}@s.whatsapp.net`;
 }
 
 function loadState() {
@@ -116,4 +157,4 @@ function saveState() {
     }
 }
 
-module.exports = { loadState, saveState, normalizeToJid };
+module.exports = { loadState, saveState, normalizeToJid, getPhoneJid };
