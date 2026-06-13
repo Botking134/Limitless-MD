@@ -390,9 +390,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         else if (global.triviaSessions[singleKey]) activeKey = singleKey;
         else if (global.triviaSessions[multiKey]) activeKey = multiKey;
 
-        let command;
-        let args;
-
         // ============================================================================
         // INTELLIGENT RELATIONSHIP TEXT-REPLY INTERCEPTOR
         // ============================================================================
@@ -492,9 +489,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (quotedMsgId && activeKey && global.triviaSessions && global.triviaSessions[activeKey]) {
             const session = global.triviaSessions[activeKey];
             
-            // 1. Route replies to category selection prompts
+            // 1. Route replies to category selection prompts (Resolved: calling prefixless commands directly)
             if (session.status === 'awaiting_category' && session.lastQuestionMsgId === quotedMsgId) {
-                await commands[`${settings.prefix}quiz_cat`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
+                await commands['quiz_cat'](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
                 return;
             }
             
@@ -510,7 +507,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const torfSessionKey = jid + '_' + senderJid + '_torf';
         if (quotedMsgId && global.torfSessions && global.torfSessions[torfSessionKey]) {
-            const session = global.torfSessions[torfSessionKey];
+            const session = global.torfSessions[sessionKey];
             if (session.lastQuestionMsgId === quotedMsgId) {
                 const ans = trimmedMessage.toLowerCase().trim();
                 if (['true', 'false', 'yes', 'no'].includes(ans)) {
