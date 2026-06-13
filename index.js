@@ -1,5 +1,6 @@
 // index.js
 
+require('./converter');
 const { loadState } = require('./stateManager');
 loadState(); // Restore persistent sudoers, owners, group modifications, and bans on boot
 
