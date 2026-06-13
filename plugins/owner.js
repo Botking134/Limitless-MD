@@ -1,7 +1,7 @@
 // plugins/owner.js
 const settings = require('../settings'); 
 const { saveSettings } = require('../helpers/settingsSaver');  
-const { saveState } = require('../stateManager'); 
+const { saveState, getPhoneJid } = require('../stateManager'); 
 const { exec } = require('child_process'); 
 const fs = require('fs');
 const path = require('path');
@@ -153,7 +153,7 @@ module.exports = [
                     require(filePath);
                     report += `✅ *${file}*:\n• *Status:* Loaded successfully!\n\n`;
                 } catch (err) {
-                    report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`\`\`${err.message}\`\`\`\n\n`;
+                    report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`\`\`${err.message}\`\`\``;
                 }
             }
 
@@ -383,15 +383,33 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            let exists = false;
+            // Resolve actual Phone JID on startup to prevent LID-checks failure
+            let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                if (Array.isArray(settings.sudoLids) && settings.sudoLids.includes(targetJid)) {
+                targetPhoneJid = await getPhoneJid(sock, targetJid, jid);
+            }
+
+            let exists = false;
+
+            // Purge both LID and Phone JID variants Bidirectionally
+            if (Array.isArray(settings.sudoLids)) {
+                if (settings.sudoLids.includes(targetJid)) {
                     settings.sudoLids = settings.sudoLids.filter(num => num !== targetJid);
                     exists = true;
                 }
-            } else {
-                if (Array.isArray(settings.sudo) && settings.sudo.includes(targetJid)) {
+                if (targetPhoneJid && settings.sudoLids.includes(targetPhoneJid)) {
+                    settings.sudoLids = settings.sudoLids.filter(num => num !== targetPhoneJid);
+                    exists = true;
+                }
+            }
+
+            if (Array.isArray(settings.sudo)) {
+                if (settings.sudo.includes(targetJid)) {
                     settings.sudo = settings.sudo.filter(num => num !== targetJid);
+                    exists = true;
+                }
+                if (targetPhoneJid && settings.sudo.includes(targetPhoneJid)) {
+                    settings.sudo = settings.sudo.filter(num => num !== targetPhoneJid);
                     exists = true;
                 }
             }
@@ -460,16 +478,33 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove the primary Bot Owner." }, { quoted: msg });
             }
 
-            let exists = false;
+            // Resolve actual Phone JID on startup to prevent LID-checks failure
+            let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                if (Array.isArray(settings.ownerLids) && settings.ownerLids.includes(targetJid)) {
+                targetPhoneJid = await getPhoneJid(sock, targetJid, jid);
+            }
+
+            let exists = false;
+
+            // Purge both LID and Phone JID variants Bidirectionally
+            if (Array.isArray(settings.ownerLids)) {
+                if (settings.ownerLids.includes(targetJid)) {
                     settings.ownerLids = settings.ownerLids.filter(num => num !== targetJid);
                     exists = true;
                 }
-            } else {
-                if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
+                if (targetPhoneJid && settings.ownerLids.includes(targetPhoneJid)) {
+                    settings.ownerLids = settings.ownerLids.filter(num => num !== targetPhoneJid);
+                    exists = true;
+                }
+            }
+
+            if (Array.isArray(settings.owners)) {
                 if (settings.owners.includes(targetJid)) {
                     settings.owners = settings.owners.filter(num => num !== targetJid);
+                    exists = true;
+                }
+                if (targetPhoneJid && settings.owners.includes(targetPhoneJid)) {
+                    settings.owners = settings.owners.filter(num => num !== targetPhoneJid);
                     exists = true;
                 }
             }
@@ -586,7 +621,7 @@ module.exports = [
             if (targetJid.endsWith('@lid')) {
                 if (!Array.isArray(settings.devLids)) settings.devLids = [];
                 if (settings.devLids.includes(targetJid)) {
-                    return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer LID." }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer." }, { quoted: msg });
                 }
                 settings.devLids.push(targetJid);
             } else {
@@ -627,15 +662,33 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove a base core developer." }, { quoted: msg });
             }
 
-            let exists = false;
+            // Resolve actual Phone JID on startup to prevent LID-checks failure
+            let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                if (Array.isArray(settings.devLids) && settings.devLids.includes(targetJid)) {
+                targetPhoneJid = await getPhoneJid(sock, targetJid, jid);
+            }
+
+            let exists = false;
+
+            // Purge both LID and Phone JID variants Bidirectionally
+            if (Array.isArray(settings.devLids)) {
+                if (settings.devLids.includes(targetJid)) {
                     settings.devLids = settings.devLids.filter(num => num !== targetJid);
                     exists = true;
                 }
-            } else {
-                if (Array.isArray(settings.devs) && settings.devs.includes(targetJid)) {
+                if (targetPhoneJid && settings.devLids.includes(targetPhoneJid)) {
+                    settings.devLids = settings.devLids.filter(num => num !== targetPhoneJid);
+                    exists = true;
+                }
+            }
+
+            if (Array.isArray(settings.devs)) {
+                if (settings.devs.includes(targetJid)) {
                     settings.devs = settings.devs.filter(num => num !== targetJid);
+                    exists = true;
+                }
+                if (targetPhoneJid && settings.devs.includes(targetPhoneJid)) {
+                    settings.devs = settings.devs.filter(num => num !== targetPhoneJid);
                     exists = true;
                 }
             }
