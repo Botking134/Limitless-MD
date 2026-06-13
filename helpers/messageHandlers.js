@@ -2,6 +2,7 @@
 const commands = require('../commands');
 const settings = require('../settings');
 const { getRawMessage } = require('./antiDelete');
+const { getPhoneJid, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
 
@@ -12,44 +13,6 @@ const ownerCommands = [
     'upgrade', 'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
 ];
 const devOnlyCommands = ['upgrade', 'adddev', 'deldev'];
-
-global.lidCache = global.lidCache || {};
-
-// Enhanced JID Resolver supporting fast in-memory group metadata scans
-async function getPhoneJid(sock, jid, groupJid = null) {
-    if (!jid) return '';
-    let clean = jid.split(':')[0].split('@')[0];
-    
-    if (jid.endsWith('@lid')) {
-        if (global.lidCache[jid]) return global.lidCache[jid];
-        
-        // Quick Scan: Try to resolve instantly using the group participants cache
-        if (groupJid) {
-            try {
-                const metadata = await sock.groupMetadata(groupJid);
-                const participant = metadata?.participants?.find(
-                    p => p.lid === jid || p.id.split(':')[0] === jid.split(':')[0]
-                );
-                if (participant && participant.id.endsWith('@s.whatsapp.net')) {
-                    const resolvedJid = participant.id.split(':')[0] + '@s.whatsapp.net';
-                    global.lidCache[jid] = resolvedJid;
-                    return resolvedJid;
-                }
-            } catch (e) {}
-        }
-
-        // Fallback: Query the network
-        try {
-            const resolved = await sock.findUserId(jid);
-            if (resolved && resolved.phoneNumber) {
-                const phoneJid = `${resolved.phoneNumber}@s.whatsapp.net`;
-                global.lidCache[jid] = phoneJid;
-                return phoneJid;
-            }
-        } catch (e) {}
-    }
-    return `${clean}@s.whatsapp.net`;
-}
 
 // Unified Security Policy Enforcer
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
@@ -98,9 +61,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const jid = msg.key.remoteJid;
         
-        // Resolve raw sender string to native JID/LID
+        // Resolve raw sender string to native JID/LID using clean normalizer
         const rawSender = msg.key.participant || msg.key.remoteJid || '';
-        const senderJid = rawSender.split(':')[0] + (rawSender.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+        const senderJid = normalizeToJid(rawSender);
         const senderNumber = senderJid.split('@')[0]; 
         const isGroup = jid.endsWith('@g.us');
 
@@ -127,17 +90,14 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // 2. Fallback Check: If permissions are not instantly confirmed, resolve the phone JID
         let senderPhoneJid = '';
         if (senderJid.endsWith('@lid')) {
-            // Check if the LID already has its phone number cached
             if (global.lidCache[senderJid]) {
                 senderPhoneJid = global.lidCache[senderJid];
             }
 
-            // Only perform a slow network/cache lookup if the sender is not yet recognized
             if (!isOwner && !isSudo && !senderPhoneJid) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
 
-            // Apply fallback checks using the resolved phone number
             if (senderPhoneJid) {
                 if (settings.devs.includes(senderPhoneJid)) isDev = true;
                 if (isDev || senderPhoneJid === settings.ownerJid || (settings.owners && settings.owners.includes(senderPhoneJid))) isOwner = true;
@@ -172,7 +132,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                             let buffer = Buffer.from([]);
                             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                            const destJid = senderJid;
+                            const destJid = jid.endsWith('@g.us') ? senderJid : jid;
                             
                             if (mediaType === 'image') {
                                 await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
@@ -451,7 +411,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                             let buffer = Buffer.from([]);
                             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                            const destJid = senderJid;
+                            const destJid = jid.endsWith('@g.us') ? senderJid : jid;
 
                             if (mediaType === 'image') {
                                 await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reply" });
@@ -889,7 +849,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             else global.activeAgentContext = null;
 
             const isPublicMode = settings.isPublic ?? false;
-            const isInteractiveResponse = ['prop_ans', 'ask_ans', 'wed_ans', 'v8_btn'].includes(command);
+            
+            // Bypass Private Mode restriction for all interactive and multiplayer lobby join commands
+            const isInteractiveResponse = [
+                'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
+                'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join'
+            ].includes(command);
 
             if (!isPublicMode && !isAuthorized && !isDev && !isInteractiveResponse) {
                 return; 
@@ -928,4 +893,4 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     }
 }
 
-module.exports = { handleIncomingMessage, getPhoneJid };
+module.exports = { handleIncomingMessage };
