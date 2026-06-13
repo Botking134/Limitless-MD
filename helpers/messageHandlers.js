@@ -379,7 +379,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const quotedParticipant = contextInfo?.participant;
         const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
-        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
+        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJid.includes(botLid));
 
         const singleKey = jid + '_' + senderJid;
         const quizKey = jid + '_' + senderJid + '_quiz';
@@ -389,6 +389,66 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (global.triviaSessions[quizKey]) activeKey = quizKey;
         else if (global.triviaSessions[singleKey]) activeKey = singleKey;
         else if (global.triviaSessions[multiKey]) activeKey = multiKey;
+
+        let command;
+        let args;
+
+        // ============================================================================
+        // INTELLIGENT RELATIONSHIP TEXT-REPLY INTERCEPTOR
+        // ============================================================================
+        if (quotedMsgId && global.messageStore?.[quotedMsgId]) {
+            const originalMsg = global.messageStore[quotedMsgId];
+            const originalRaw = getRawMessage(originalMsg.message);
+            const originalText = originalRaw?.conversation || originalRaw?.extendedTextMessage?.text || '';
+            const originalMentions = originalRaw?.contextInfo?.mentionedJid || [];
+            
+            // 1. Intercept manual text replies to Holy Matrimony Cards
+            if (originalText.includes("HOLY MATRIMONY PROPOSAL") && originalMentions.length >= 2) {
+                const targetNum = originalMentions[0].split('@')[0];
+                const senderNum = originalMentions[1].split('@')[0];
+                const lowerAns = trimmedMessage.toLowerCase().trim();
+                
+                if (lowerAns.includes("i do")) {
+                    command = 'wed_ans';
+                    args = `yes ${targetNum} ${senderNum}`;
+                } else if (lowerAns.includes("don't") || lowerAns.includes("dont")) {
+                    command = 'wed_ans';
+                    args = `no ${targetNum} ${senderNum}`;
+                }
+            }
+            
+            // 2. Intercept manual text replies to Proposal Confession Cards
+            else if (originalText.includes("A CONFESSION") && originalMentions.length >= 1) {
+                const targetNum = originalMentions[0].split('@')[0];
+                const senderJidRaw = originalMsg.key.participant || originalMsg.key.remoteJid || '';
+                const senderNum = senderJidRaw.split('@')[0].split(':')[0];
+                const lowerAns = trimmedMessage.toLowerCase().trim();
+                
+                if (lowerAns.includes("yes")) {
+                    command = 'prop_ans';
+                    args = `yes ${targetNum} ${senderNum}`;
+                } else if (lowerAns.includes("no")) {
+                    command = 'prop_ans';
+                    args = `no ${targetNum} ${senderNum}`;
+                }
+            }
+            
+            // 3. Intercept manual text replies to Askout Confession Cards
+            else if (originalText.includes("WILL YOU GO OUT WITH ME?") && originalMentions.length >= 1) {
+                const targetNum = originalMentions[0].split('@')[0];
+                const senderJidRaw = originalMsg.key.participant || originalMsg.key.remoteJid || '';
+                const senderNum = senderJidRaw.split('@')[0].split(':')[0];
+                const lowerAns = trimmedMessage.toLowerCase().trim();
+                
+                if (lowerAns.includes("yes")) {
+                    command = 'ask_ans';
+                    args = `yes ${targetNum} ${senderNum}`;
+                } else if (lowerAns.includes("no")) {
+                    command = 'ask_ans';
+                    args = `no ${targetNum} ${senderNum}`;
+                }
+            }
+        }
 
         // Decryption of View Once media by reaction
         const targetEmoji = settings.vvEmoji || "🥷";
@@ -728,15 +788,19 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             const session = global.pvpSessions[pvpSessionKey];
             if (session.lastQuestionMsgId === quotedMsgId) {
                 const ans = trimmedMessage.trim();
-                if (session.status === 'p2_choosing' && senderJid === session.p2) {
-                    await commands[`${settings.prefix}pvp_choose`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
-                    return;
+                if (session.status === 'lobby' && senderJid !== session.p1) {
+                    // Open lobby accepts direct-reply character entries natively
+                    command = 'pvp_lobby_accept';
+                    args = ans;
+                } else if (session.status === 'p2_choosing' && senderJid === session.p2) {
+                    command = 'pvp_choose';
+                    args = ans;
                 } else if (session.status === 'fighting' && senderJid === session.turn) {
-                    await commands[`${settings.prefix}pvp_fight`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
-                    return;
+                    command = 'pvp_fight';
+                    args = ans;
                 } else if (session.status === 'defending' && senderJid === session.defender) {
-                    await commands[`${settings.prefix}pvp_defend`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
-                    return;
+                    command = 'pvp_defend';
+                    args = ans;
                 }
             }
         }
@@ -772,8 +836,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        let command;
-        let args;
         let identifiedAgent = null;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
@@ -853,7 +915,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             // Bypass Private Mode restriction for all interactive and multiplayer lobby join commands
             const isInteractiveResponse = [
                 'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
-                'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join'
+                'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
+                'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend'
             ].includes(command);
 
             if (!isPublicMode && !isAuthorized && !isDev && !isInteractiveResponse) {
