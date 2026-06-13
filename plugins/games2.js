@@ -22,9 +22,10 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function normalizeToJid(input) {
     if (!input) return '';
-    if (input.endsWith('@s.whatsapp.net')) return input;
-    if (input.endsWith('@lid')) return input;
-    const raw = input.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    const clean = input.split(':')[0]; // Strips out device colons first
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean;
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
@@ -42,41 +43,38 @@ async function resolveToPhoneJid(sock, jid) {
     return `${num}@s.whatsapp.net`;
 }
 
-// Highly robust local .txt file parser
+// Built-in high-quality fallback questions database for Millionaire
+const fallbackMillionaireQuestions = [
+    {
+        category: "General Anime",
+        q: "What is the name of the protagonist in \"One Piece\"?",
+        options: ["A) Roronoa Zoro", "B) Sanji", "C) Monkey D. Luffy", "D) Portgas D. Ace"]
+    },
+    {
+        category: "General Anime",
+        q: "In \"Attack on Titan\", what is the name of the titan that breaks Wall Maria?",
+        options: ["A) Armored Titan", "B) Female Titan", "C) Colossal Titan", "D) Beast Titan"]
+    }
+];
+
+// Highly robust local .js parser with local fallback safety
 function getLocalQuestion(filename, category) {
     try {
-        const filePath = path.join(__dirname, '../', filename);
-        if (!fs.existsSync(filePath)) return null;
-        const content = fs.readFileSync(filePath, 'utf-8');
-        
-        const sections = content.split(/---/g);
-        let targetSection = '';
-        for (const section of sections) {
-            const firstLines = section.trim().split('\n').slice(0, 5).join(' ').toLowerCase();
-            if (firstLines.includes(category.toLowerCase())) {
-                targetSection = section;
-                break;
-            }
+        const dbPath = path.join(__dirname, '../', filename);
+        let questions = fallbackMillionaireQuestions;
+
+        if (fs.existsSync(dbPath)) {
+            delete require.cache[require.resolve(dbPath)];
+            questions = require(dbPath);
         }
-        
-        if (!targetSection) targetSection = content;
 
-        const questionBlocks = targetSection.split(/\n(?=\d+\.\s+)/g);
-        const validBlocks = questionBlocks.filter(block => {
-            const lines = block.trim().split('\n');
-            return lines.length >= 5 && lines.some(l => l.trim().startsWith('A)')) && lines.some(l => l.trim().startsWith('D)'));
-        });
+        const filtered = questions.filter(q => q.category.toLowerCase() === category.toLowerCase());
+        if (filtered.length === 0) return null;
 
-        if (validBlocks.length === 0) return null;
-
-        const randomBlock = validBlocks[Math.floor(Math.random() * validBlocks.length)];
-        const lines = randomBlock.trim().split('\n');
-        const q = lines[0].replace(/^\d+\.\s*/, '').trim();
-        const options = lines.slice(1, 5).map(l => l.trim());
-
-        return { q, options };
+        // Choose a random question from the filtered subset
+        return filtered[Math.floor(Math.random() * filtered.length)];
     } catch (e) {
-        console.error("❌ [PARSER] Failed to parse local question:", e.message);
+        console.error(`❌ [PARSER] Failed to resolve ${filename} question:`, e.message);
         return null;
     }
 }
@@ -166,6 +164,35 @@ async function generateTorfQuestion(category, excludeList = []) {
     }
 }
 
+// Normalized Target JID Parser for direct PvP invites
+function parseTarget(msg, args) {
+    let target = '';
+
+    const contextInfo = msg.message?.extendedTextMessage?.contextInfo || 
+                        msg.message?.imageMessage?.contextInfo || 
+                        msg.message?.videoMessage?.contextInfo;
+
+    const quotedParticipant = contextInfo?.participant;
+
+    if (quotedParticipant) {
+        target = quotedParticipant.split(':')[0] + (quotedParticipant.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+    } 
+    else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+        const botJid = settings.botJid || '';
+        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
+        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
+        target = selectedJid.split(':')[0] + (selectedJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+    } 
+    else if (args) {
+        const cleanDigits = args.replace(/[^0-9]/g, '');
+        if (cleanDigits.length >= 7) {
+            target = `${cleanDigits}@s.whatsapp.net`;
+        }
+    }
+
+    return target;
+}
+
 // ============================================================================
 // IN-GAME PROGRESSION METHODS
 // ============================================================================
@@ -226,11 +253,11 @@ async function askNextAnagram(sock, jid, sessionKey) {
     if (!wordData) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve word data. Game aborted." });
 
     const correctWord = wordData.word.toUpperCase().trim();
-    const scattered = scrambleWord(correctWord);
+    const scrambled = scrambleWord(correctWord);
 
     session.pastWords.push(correctWord);
     session.currentWord = correctWord;
-    session.scrambledWord = scattered;
+    session.scrambledWord = scrambled;
 
     const roundHeader = isSingle
         ? `🔠 *Anagram: Round ${session.currentQuestionIndex}/10 (Hearts: ${session.livesSP}❤️)*`
@@ -243,7 +270,7 @@ async function askNextAnagram(sock, jid, sessionKey) {
         `👤 *Active Turn:* @${activePlayer.split('@')[0]}${livesStr}\n` +
         `⏳ *Timer:* \`${session.timerMs / 1000} seconds\`\n\n` +
         `🧩 *Rearrange this scrambled word:* \n` +
-        `👉    *${scattered}*    \n\n` +
+        `👉    *${scrambled}*    \n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `👉 *Reply directly to this message with your guess!*`;
 
@@ -395,8 +422,7 @@ async function askNextMillionaireQuestion(sock, jid, sessionKey) {
         return await sock.sendMessage(jid, { text: winCard, mentions: [session.player] });
     }
 
-    // Pull directly from local millionaire.txt database
-    const questionData = getLocalQuestion('millionaire.txt', session.category);
+    const questionData = getLocalQuestion('millionaire.js', session.category);
     if (!questionData) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve question from database. Game aborted." });
 
     session.currentQuestion = questionData.q;
@@ -1203,7 +1229,7 @@ module.exports = [
     {
         name: 'millionaire_call',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
             const sessionKey = jid + '_' + senderJid;
@@ -1218,7 +1244,7 @@ module.exports = [
             session.friendJid = friendJid;
 
             const inviteCard = `📞 *WHO WANTS TO BE A MILLIONAIRE: HELP DESK* 📞\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                               `👤 @${senderJid.split('@')[0]} has called you for assistance on this question:\n\n` +
+                               `👤 @${senderNumber} has called you for assistance on this question:\n\n` +
                                `💡 "${session.currentQuestion}"\n\n` +
                                `${session.currentOptions.join('\n')}\n\n` +
                                `👉 *Reply to this message with 'yes' or 'no' if you are ready to help!*`;
@@ -1299,7 +1325,7 @@ module.exports = [
         }
     },
 
-    // 17. PVP LORE BATTLE LOBBY INITIATOR
+    // 17. PVP LORE BATTLE INITIATOR (Lobbies & Direct Invites Redesigned)
     {
         name: 'pvp',
         isPrefixless: false,
@@ -1315,11 +1341,52 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "⚠️ Active battle or lobby already running in this group." }, { quoted: msg });
             }
 
+            const targetJid = parseTarget(msg, args);
+            const parts = args ? args.trim().split(' ') : [];
+            const chosenChar = parts[0] ? parts[0].trim() : '';
+
+            // 1. Direct Challenge Invite Flow (.pvp Gojo @user)
+            if (targetJid && targetJid !== senderJid) {
+                if (!chosenChar || chosenChar.startsWith('@')) {
+                    return await sock.sendMessage(jid, { text: `❌ *Format error:* Please specify your character first.\nUsage: \`${settings.prefix}pvp <your_character> @user\`` }, { quoted: msg });
+                }
+
+                global.pvpSessions[jid] = {
+                    status: 'p2_choosing',
+                    p1: senderJid,
+                    p2: targetJid,
+                    p1Char: chosenChar,
+                    p2Char: '',
+                    p1HP: 100,
+                    p2HP: 100,
+                    turn: '',
+                    defender: '',
+                    lastAttack: '',
+                    movesLeft: { [senderJid]: 5, [targetJid]: 5 },
+                    lastQuestionMsgId: ''
+                };
+
+                const inviteCard = 
+                    `⚔️ *PVP LORE DUEL INVITATION* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `👤 *Challenger:* @${senderNumber} (*${chosenChar}*)\n` +
+                    `👤 *Opponent:* @${targetJid.split('@')[0]}\n\n` +
+                    `👉 @${targetJid.split('@')[0]}, you have been challenged! Reply directly to this message with your chosen character to accept the duel!`;
+
+                const prompt = await sock.sendMessage(jid, { text: inviteCard, mentions: [senderJid, targetJid] }, { quoted: msg });
+                global.pvpSessions[jid].lastQuestionMsgId = prompt.key.id;
+                return;
+            }
+
+            // 2. Open Lobby Flow (.pvp Gojo)
+            if (!chosenChar) {
+                return await sock.sendMessage(jid, { text: `❌ Please specify your chosen anime character to start a duel.\nUsage: \`${settings.prefix}pvp <character_name>\`` }, { quoted: msg });
+            }
+
             global.pvpSessions[jid] = {
                 status: 'lobby',
                 p1: senderJid,
                 p2: '',
-                p1Char: '',
+                p1Char: chosenChar,
                 p2Char: '',
                 p1HP: 100,
                 p2HP: 100,
@@ -1331,53 +1398,52 @@ module.exports = [
             };
 
             const lobbyCard = 
-                `⚔️ *PVP ANIME LORE DUEL LOBBY* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `👤 *Challenger:* @${senderNumber}\n` +
+                `⚔️ *PVP DUEL OPEN LOBBY* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `👤 *Challenger:* @${senderNumber} (*${chosenChar}*)\n` +
                 `🌐 *Status:* Waiting for opponent...\n\n` +
-                `👉 *Tap the join button below to accept the challenge!*`;
+                `👉 *To accept this duel, reply directly to this message with your chosen character!*`;
 
-            const buttons = {
-                text: lobbyCard,
-                buttons: [{ buttonId: `${settings.prefix}pvp_join`, buttonText: { displayText: 'Accept Duel ⚔️' }, type: 1 }],
-                headerType: 1,
-                mentions: [senderJid]
-            };
-
-            const prompt = await sock.sendMessage(jid, buttons, { quoted: msg });
+            const prompt = await sock.sendMessage(jid, { text: lobbyCard, mentions: [senderJid] }, { quoted: msg });
             global.pvpSessions[jid].lastQuestionMsgId = prompt.key.id;
         }
     },
 
-    // 18. PVP LOBBY JOIN CONTROLLER
+    // 18. PVP OPEN LOBBY ACCEPT CONTROLLER
     {
-        name: 'pvp_join',
+        name: 'pvp_lobby_accept',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
             const session = global.pvpSessions[jid];
-
             if (!session || session.status !== 'lobby') return;
-            if (session.p1 === senderJid) return;
+
+            const chosenChar = args.trim();
+            if (!chosenChar) return;
 
             session.p2 = senderJid;
+            session.p2Char = chosenChar;
             session.movesLeft[senderJid] = 5;
-            session.status = 'p1_choosing';
+
+            session.status = 'fighting';
+            session.turn = session.p1;
+            session.defender = session.p2;
 
             const p1Number = session.p1.split('@')[0];
             const p2Number = session.p2.split('@')[0];
 
-            const chooseCard = 
-                `⚔️ *DUEL ESTABLISHED!* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `👥 *Match:* @${p1Number} vs @${p2Number}\n\n` +
-                `👉 @${p1Number}, please reply directly to this message with your chosen anime character (e.g. Satoru Gojo, Naruto)!`;
+            const card = `⚔️ *BATTLE MATRIX INITIALIZED!* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                         `• *${session.p1Char}* (@${p1Number})\n` +
+                         `      *VS* \n` +
+                         `• *${session.p2Char}* (@${p2Number})\n\n` +
+                         `👉 @${p1Number}, you have the initiative! Reply directly to this message with your attack!`;
 
-            const prompt = await sock.sendMessage(jid, { text: chooseCard, mentions: [session.p1, session.p2] }, { quoted: msg });
+            const prompt = await sock.sendMessage(jid, { text: card, mentions: [session.p1, session.p2] }, { quoted: msg });
             session.lastQuestionMsgId = prompt.key.id;
         }
     },
 
-    // 19. PVP CHARACTER CHOICE ROUTER
+    // 19. PVP CHARACTER CHOICE ROUTER (Direct Invites acceptance)
     {
         name: 'pvp_choose',
         isPrefixless: false,
@@ -1390,20 +1456,7 @@ module.exports = [
             const chosenChar = args.trim();
             if (!chosenChar) return;
 
-            if (session.status === 'p1_choosing' && senderJid === session.p1) {
-                session.p1Char = chosenChar;
-                session.status = 'p2_choosing';
-
-                const p2Number = session.p2.split('@')[0];
-                const card = `⚔️ *CHARACTER REGISTERED* ⚔️\n\n` +
-                             `• *Player 1 Character:* \`${chosenChar}\`\n\n` +
-                             `👉 @${p2Number}, now reply directly to this message with your chosen character!`;
-
-                const prompt = await sock.sendMessage(jid, { text: card, mentions: [session.p2] }, { quoted: msg });
-                session.lastQuestionMsgId = prompt.key.id;
-            } 
-            
-            else if (session.status === 'p2_choosing' && senderJid === session.p2) {
+            if (session.status === 'p2_choosing' && senderJid === session.p2) {
                 session.p2Char = chosenChar;
                 session.status = 'fighting';
                 session.turn = session.p1;
