@@ -53,9 +53,19 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
-    // 2. Bot Status Check: Normalize JIDs to standard formats
+    // 2. Bot Status Check: Cross-reference both JIDs and LIDs safely
     const botJid = normalizeToJid(sock.user.id);
-    const botParticipant = participants.find(p => normalizeToJid(p.id) === botJid);
+    const botLid = settings.botLid || '';
+
+    const botParticipant = participants.find(p => {
+        const pId = normalizeToJid(p.id);
+        const pLid = p.lid ? normalizeToJid(p.lid) : '';
+        
+        return pId === botJid || 
+               (botLid && pId === botLid) || 
+               (botLid && pLid === botLid) ||
+               (pLid && pLid === botJid);
+    });
     const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
     if (!isBotAdmin) {
