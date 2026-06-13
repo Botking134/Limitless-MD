@@ -379,7 +379,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const quotedParticipant = contextInfo?.participant;
         const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
-        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJid.includes(botLid));
+        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
 
         const singleKey = jid + '_' + senderJid;
         const quizKey = jid + '_' + senderJid + '_quiz';
@@ -912,11 +912,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
             const isPublicMode = settings.isPublic ?? false;
             
-            // Bypass Private Mode restriction for all interactive and multiplayer lobby join commands
+            // Bypass Private Mode restriction for all interactive, multiplayer lobby join, and Carousel menu category clicks
             const isInteractiveResponse = [
                 'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
                 'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
-                'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend'
+                'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend',
+                'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download', 'menu_fun', 'menu_owner', 'menu_utilities'
             ].includes(command);
 
             if (!isPublicMode && !isAuthorized && !isDev && !isInteractiveResponse) {
