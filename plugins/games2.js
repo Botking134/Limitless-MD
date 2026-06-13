@@ -22,7 +22,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function normalizeToJid(input) {
     if (!input) return '';
-    const clean = input.split(':')[0]; // Strips out device colons first
+    const clean = input.replace(/:[\d]+@/, '@'); // Safely converts '123:1@lid' into '123@lid'
     if (clean.endsWith('@s.whatsapp.net')) return clean;
     if (clean.endsWith('@lid')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
@@ -1085,6 +1085,7 @@ module.exports = [
             }
 
             global.millionaireSessions[sessionKey] = {
+                status: 'playing', // Resolved: initialized status correctly to unblock inputs
                 player: senderJid,
                 step: 1,
                 money: 0,
