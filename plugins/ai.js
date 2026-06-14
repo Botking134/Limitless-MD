@@ -43,8 +43,8 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     }
 }
 
-// Google Gemini Vision API query interface
-async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-1.5-flash") {
+// Google Gemini Vision API query interface using gemini-3.5-flash
+async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-3.5-flash") {
     try {
         const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
@@ -328,7 +328,7 @@ module.exports = [
                     promptQuery += ` Address the user as '${settings.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
                 }
 
-                const responseText = await queryGeminiVision(imageBase64, mimeType, promptQuery, "gemini-1.5-flash"); 
+                const responseText = await queryGeminiVision(imageBase64, mimeType, promptQuery, "gemini-3.5-flash"); 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `❌ Vision processing failed: ${error.message}` }, { quoted: msg });
