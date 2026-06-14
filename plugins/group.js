@@ -8,6 +8,7 @@ if (!global.tkickTimers) global.tkickTimers = {};
 if (!global.kickallActive) global.kickallActive = {};
 if (!global.groupTimers) global.groupTimers = {};
 if (!global.silencedUsers) global.silencedUsers = {}; 
+if (!global.gclogIntervals) global.gclogIntervals = {};
 
 // Upgraded normalizeToJid stripping device-linking colons first to resolve admin mismatches
 function normalizeToJid(input) {
@@ -85,7 +86,11 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     }
 
     // 5. Owners and Sudoers: Both the bot AND the sender must be administrators
-    let sender = participants.find(p => normalizeToJid(p.id) === senderJid || (p.lid && p.lid === senderJid));
+    let sender = participants.find(p => {
+        const pId = normalizeToJid(p.id);
+        const pLid = p.lid ? normalizeToJid(p.lid) : '';
+        return pId === senderJid || (pLid && pLid === senderJid);
+    });
     const isSenderAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
     if (!isSenderAdmin) {
         await sock.sendMessage(jid, { text: "❌ You must be an administrator in this group to run this command!" }, { quoted: msg });
@@ -95,7 +100,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
-// Reusable Helper to parse target user from message using JIDs
+// Reusable Helper to parse target user from message using JIDs (Traverses nested elements)
 function parseTargetUser(msg, args) {
     if (args) {
         const cleanDigits = args.replace(/[^0-9]/g, '');
@@ -105,7 +110,13 @@ function parseTargetUser(msg, args) {
     }
 
     const rawMsg = getRawMessage(msg.message);
-    const contextInfo = rawMsg?.contextInfo;
+    const contextInfo = rawMsg?.contextInfo || 
+                        rawMsg?.extendedTextMessage?.contextInfo || 
+                        rawMsg?.imageMessage?.contextInfo || 
+                        rawMsg?.videoMessage?.contextInfo || 
+                        rawMsg?.stickerMessage?.contextInfo || 
+                        rawMsg?.audioMessage?.contextInfo || 
+                        rawMsg?.documentMessage?.contextInfo;
     const mentions = contextInfo?.mentionedJid || [];
 
     if (mentions.length > 0) {
@@ -146,6 +157,47 @@ function isOwnerTarget(target) {
            (settings.ownerLid && target === settings.ownerLid) || 
            (settings.ownerLids && settings.ownerLids.includes(target)) ||
            (settings.owners && settings.owners.includes(target));
+}
+
+// Helper to compile Satoru Gojo-themed 10-point summaries
+async function triggerSummary(sock, jid) {
+    const logs = settings.conversationLogs?.[jid] || [];
+    if (logs.length === 0) return;
+
+    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+    const s1 = "gsk_";
+    const s2 = "tPB0xMyZ2oijloaBNcDs";
+    const s3 = "WGdyb3FY5iC2p9hwRE";
+    const s4 = "SIJXAV3t53LZg9";
+    const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
+
+    try {
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${GROQ_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: "llama-3.3-70b-versatile",
+                messages: [
+                    { role: "system", content: "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful, cocky, and engaging. Do not include any intro, outro, or conversational filler." },
+                    { role: "user", content: logString }
+                ]
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const responseText = data.choices?.[0]?.message?.content || "Could not generate summary.";
+            await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3-HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
+        }
+        if (settings.conversationLogs) settings.conversationLogs[jid] = [];
+        saveSettings();
+        saveState();
+    } catch (err) {
+        console.error("Auto summary failed:", err);
+    }
 }
 
 module.exports = [
@@ -245,7 +297,7 @@ module.exports = [
         }
     },
 
-    // 3. PROMOTE TO ADMIN
+    // 3. PROMOTE TO ADMIN (Self-targeting Fallback Enabled)
     {
         name: 'promote',
         isPrefixless: false,
@@ -257,7 +309,11 @@ module.exports = [
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'promote');
             if (!isAuthorized) return;
 
-            const target = parseTargetUser(msg, args);
+            let target = parseTargetUser(msg, args);
+            if (!target && isDev) {
+                target = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            }
+
             if (!target) return await sock.sendMessage(jid, { text: "❌ Identify targets to promote." }, { quoted: msg });
 
             await sock.groupParticipantsUpdate(jid, [target], "promote");
@@ -265,7 +321,7 @@ module.exports = [
         }
     },
 
-    // 4. DEMOTE FROM ADMIN (Immunity Enabled)
+    // 4. DEMOTE FROM ADMIN (Immunity and Self-targeting Fallback Enabled)
     {
         name: 'demote',
         isPrefixless: false,
@@ -277,7 +333,11 @@ module.exports = [
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'demote');
             if (!isAuthorized) return;
 
-            const target = parseTargetUser(msg, args);
+            let target = parseTargetUser(msg, args);
+            if (!target && isDev) {
+                target = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            }
+
             if (!target) return await sock.sendMessage(jid, { text: "❌ Identify targets to demote." }, { quoted: msg });
 
             if (isDeveloper(target)) {
@@ -542,7 +602,15 @@ module.exports = [
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'warn');
             if (!isAuthorized) return;
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            const rawMsg = getRawMessage(msg.message);
+            const quoted = rawMsg?.contextInfo || 
+                           rawMsg?.extendedTextMessage?.contextInfo || 
+                           rawMsg?.imageMessage?.contextInfo || 
+                           rawMsg?.videoMessage?.contextInfo || 
+                           rawMsg?.stickerMessage?.contextInfo || 
+                           rawMsg?.audioMessage?.contextInfo || 
+                           rawMsg?.documentMessage?.contextInfo;
+
             if (!quoted || !quoted.stanzaId) return await sock.sendMessage(jid, { text: "❌ Please reply to the message you want to warn." }, { quoted: msg });
 
             const targetJid = normalizeToJid(quoted.participant);
@@ -726,7 +794,7 @@ module.exports = [
             if (!quoted || !quoted.imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
 
             try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const { downloadContentFromMessage } = await import('@itsliaaa/baideys');
                 const stream = await downloadContentFromMessage(quoted.imageMessage, 'image');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
@@ -941,7 +1009,7 @@ module.exports = [
         }
     },
 
-    // 22. CONVERSATION LOGGER & SUMMARIZER
+    // 22. CONVERSATION LOGGER & SUMMARIZER (.gclog)
     {
         name: 'gclog',
         isPrefixless: false,
@@ -954,68 +1022,100 @@ module.exports = [
             if (!isAuthorized) return;
 
             if (!settings.gclogActive) settings.gclogActive = {};
+            if (!settings.conversationLogs) settings.conversationLogs = {};
 
             const action = args ? args.toLowerCase().trim() : '';
 
+            if (!action) {
+                const current = settings.gclogActive[jid] ? 'on' : 'off';
+                const activeStatus = current === 'on' ? "Active 🟢" : "Inactive 💤";
+                const prompt = `📊 *Group Chat Log (GCLOG) Configuration:*\n\n` +
+                               `• *Status:* \`${activeStatus}\`\n\n` +
+                               `Select an option below to configure chat logs:`;
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${settings.prefix}gclog on`, buttonText: { displayText: 'Turn On 🟢' }, type: 1 },
+                        { buttonId: `${settings.prefix}gclog off`, buttonText: { displayText: 'Turn Off 💤' }, type: 1 },
+                        { buttonId: `${settings.prefix}gclog check`, buttonText: { displayText: 'Check Log 📊' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+                try { 
+                    return await sock.sendMessage(jid, buttonMessage, { quoted: msg }); 
+                } catch (e) { 
+                    return await sock.sendMessage(jid, { text: `${prompt}\n\n• \`${settings.prefix}gclog on\`\n• \`${settings.prefix}gclog off\`\n• \`${settings.prefix}gclog check\`` }, { quoted: msg }); 
+                }
+            }
+
             if (action === 'on') {
                 settings.gclogActive[jid] = true;
-                await sock.sendMessage(jid, { text: "🔒 *GCLOG Activated.*" }, { quoted: msg });
+                
+                if (global.gclogIntervals[jid]) clearInterval(global.gclogIntervals[jid]);
+                global.gclogIntervals[jid] = setInterval(async () => {
+                    await triggerSummary(sock, jid);
+                }, 3 * 60 * 60 * 1000); 
+
+                await sock.sendMessage(jid, { text: "🔒 *GCLOG Activated. Chat recordings have commenced. A 10-point summary will be generated every 3 hours.*" }, { quoted: msg });
                 saveSettings();
                 saveState();
                 return;
             }
 
             if (action === 'off') {
+                if (global.gclogIntervals[jid]) {
+                    clearInterval(global.gclogIntervals[jid]);
+                    delete global.gclogIntervals[jid];
+                }
                 settings.gclogActive[jid] = false;
-                await sock.sendMessage(jid, { text: "🔓 *GCLOG Deactivated.*" }, { quoted: msg });
-                if (settings.conversationLogs?.[jid]) delete settings.conversationLogs[jid];
+                if (settings.conversationLogs[jid]) delete settings.conversationLogs[jid];
+                
+                await sock.sendMessage(jid, { text: "🔓 *GCLOG Deactivated and logs cleared.*" }, { quoted: msg });
                 saveSettings();
                 saveState();
                 return;
             }
 
             if (action === 'check') {
-                const active = settings.gclogActive[jid];
-                const logs = settings.conversationLogs?.[jid] || [];
+                const logs = settings.conversationLogs[jid] || [];
+                if (logs.length === 0) return await sock.sendMessage(jid, { text: "📊 No logs found within the current 3-hour window." }, { quoted: msg });
 
-                if (!active) return await sock.sendMessage(jid, { text: "⚠️ Log recorder is offline." }, { quoted: msg });
-                if (logs.length === 0) return await sock.sendMessage(jid, { text: "📊 No logs found." }, { quoted: msg });
-
-                await sock.sendMessage(jid, { text: "⏳ *Summarizing message flow...*" }, { quoted: msg });
-
+                await sock.sendMessage(jid, { text: "⏳ *Summarizing current logs...*" }, { quoted: msg });
                 const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+                
                 const s1 = "gsk_";
                 const s2 = "tPB0xMyZ2oijloaBNcDs";
                 const s3 = "WGdyb3FY5iC2p9hwRE";
                 const s4 = "SIJXAV3t53LZg9";
-                const GROQ_API_KEY = s1 + s2 + s3 + s4;
+                const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
 
-                const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${GROQ_API_KEY}`
-                    },
-                    body: JSON.stringify({
-                        model: "llama-3.3-70b-versatile",
-                        messages: [
-                            { role: "system", content: "You are Satoru Gojo. Summarize this log playfully and cockily. Keep it brief." },
-                            { role: "user", content: logString }
-                        ]
-                    })
-                });
+                try {
+                    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${GROQ_API_KEY}`
+                        },
+                        body: JSON.stringify({
+                            model: "llama-3.3-70b-versatile",
+                            messages: [
+                                { role: "system", content: "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler." },
+                                { role: "user", content: logString }
+                            ]
+                        })
+                    });
 
-                if (!response.ok) throw new Error();
-                const data = await response.json();
-                const responseText = data.choices?.[0]?.message?.content || "Could not generate summary.";
-
-                await sock.sendMessage(jid, { text: `🤞 *LIMITLESS SYSTEM LOG SUMMARY:*\n\n${responseText}` }, { quoted: msg });
-                return;
+                    if (response.ok) {
+                        const data = await response.json();
+                        const responseText = data.choices?.[0]?.message?.content || "Could not generate summary.";
+                        await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}` }, { quoted: msg });
+                    } else {
+                        throw new Error();
+                    }
+                } catch (err) {
+                    await sock.sendMessage(jid, { text: "❌ Summary generation failed." }, { quoted: msg });
+                }
             }
-
-            const activeStatus = settings.gclogActive[jid] ? "Active 🟢" : "Inactive 💤";
-            const prompt = `📊 *Group Chat Log (GCLOG) Configuration:*\n\nStatus: \`${activeStatus}\``;
-            await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
         }
     },
 
@@ -1052,21 +1152,29 @@ module.exports = [
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
             
-            const isAuthorizedMember = isDev || isOwner || isSudo;
-            if (!isAuthorizedMember) return;
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'kickall');
+            if (!isAuthorized) return;
 
             try {
                 const groupMetadata = await sock.groupMetadata(jid);
                 const participants = groupMetadata.participants;
 
+                const text = "🌪️ *Channelling Limitless Void... Exorcising all members from this domain.*";
+                const buttonMessage = {
+                    text: text,
+                    buttons: [
+                        { buttonId: `${settings.prefix}stopkickall`, buttonText: { displayText: 'Stop Exorcism 🛑' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+
+                try {
+                    await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (btnErr) {
+                    await sock.sendMessage(jid, { text: `${text}\n\n💡 _Type:_\n• \`${settings.prefix}stopkickall\` to abort.` }, { quoted: msg });
+                }
+
                 const botJid = normalizeToJid(sock.user.id);
-                const botParticipant = participants.find(p => normalizeToJid(p.id) === botJid);
-                const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
-
-                if (!isBotAdmin) return await sock.sendMessage(jid, { text: "❌ I must be an administrator in this group first!" }, { quoted: msg });
-
-                await sock.sendMessage(jid, { text: "🌪️ *Channelling Limitless Void... Exorcising all members from this domain.*" }, { quoted: msg });
-
                 const targets = participants.filter(p => {
                     const normId = normalizeToJid(p.id);
                     return normId !== botJid && 
@@ -1568,7 +1676,6 @@ module.exports = [
 
             const messageText = args ? args : (quotedText ? quotedText : "🤞 *Summoned by Satoru Gojo.*");
 
-            // Dropping the tag cleanly as a flat, unquoted message as requested
             await sock.sendMessage(jid, {
                 text: messageText,
                 mentions: participants
@@ -1586,7 +1693,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isAuthorized = isDev || isOwner; // Sudo excluded
+            const isAuthorized = isDev || isOwner; 
             if (!isAuthorized) return;
 
             if (!args) {
@@ -1614,7 +1721,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isAuthorized = isDev || isOwner; // Sudo excluded
+            const isAuthorized = isDev || isOwner; 
             if (!isAuthorized) return;
 
             const targetJid = args ? args.trim() : jid;
