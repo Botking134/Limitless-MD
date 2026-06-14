@@ -2,6 +2,7 @@
 const settings = require('../settings');
 const fs = require('fs');
 const path = require('path');
+const { getPhoneJid } = require('../stateManager');
 
 global.gameSessions = global.gameSessions || {};
 global.vault8Sessions = global.vault8Sessions || {};
@@ -9,26 +10,47 @@ global.vault8SavedStories = global.vault8SavedStories || {};
 global.triviaSessions = global.triviaSessions || {};
 global.charadeSessions = global.charadeSessions || {};
 
-// Obfuscated API key configuration
 const s1 = "gsk_";
 const s2 = "tPB0xMyZ2oijloaBNcDs";
 const s3 = "WGdyb3FY5iC2p9hwRE";
 const s4 = "SIJXAV3t53LZg9";
-const GROQ_API_KEY = s1 + s2 + s3 + s4;
+const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
 function normalizeToJid(input) {
     if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@'); // Safely converts '123:1@lid' into '123@lid'
+    const clean = input.replace(/:[\d]+@/, '@'); 
     if (clean.endsWith('@s.whatsapp.net')) return clean;
     if (clean.endsWith('@lid')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
-// Built-in high-quality fallback questions database to prevent system crashes
+async function resolveToPhoneJid(sock, jid) {
+    if (!jid) return '';
+    if (jid.endsWith('@s.whatsapp.net')) return jid;
+    if (jid.endsWith('@lid')) {
+        try {
+            const res = await sock.findUserId(jid);
+            if (res && res.phoneNumber) return `${res.phoneNumber}@s.whatsapp.net`;
+        } catch (e) {}
+    }
+    const num = jid.split('@')[0].split(':')[0];
+    return `${num}@s.whatsapp.net`;
+}
+
 const fallbackQuizQuestions = [
     {
         category: "General Knowledge",
@@ -47,7 +69,6 @@ const fallbackQuizQuestions = [
     }
 ];
 
-// Upgraded high-speed native .js parser with local fallback safety
 function getLocalQuestion(category) {
     try {
         const dbPath = path.join(__dirname, '../quiz.js');
@@ -186,7 +207,6 @@ async function checkAnswerCorrectness(correctAnswer, userGuess) {
     return response ? response.trim().toUpperCase().includes("YES") : false;
 }
 
-// Core Topic-Specific Quiz Dispatcher reading from native quiz.js DB
 async function askNextQuizQuestion(sock, jid, sessionKey) {
     const session = global.triviaSessions[sessionKey];
     const isSingle = session.type === 'single';
@@ -195,20 +215,31 @@ async function askNextQuizQuestion(sock, jid, sessionKey) {
     if (session.currentQuestionIndex > limit) {
         let results = `📊 *QUIZ COMPLETED!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
         if (isSingle) {
-            results += `👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Final Score:* \`${session.score}/10\` points.`;
+            const p1Phone = await resolveToPhoneJid(sock, session.player);
+            results += `👤 *Player:* @${p1Phone.split('@')[0]}\n🎯 *Final Score:* \`${session.score}/10\` points.`;
+            delete global.triviaSessions[sessionKey];
+            return await sock.sendMessage(jid, { text: results, mentions: [p1Phone] });
         } else {
             results += `🏆 *Leaderboard Standings:* \n\n`;
             const sorted = [...session.players].sort((a, b) => session.scores[b] - session.scores[a]);
-            sorted.forEach((pJid, idx) => {
-                results += `${idx + 1}. @${pJid.split('@')[0]} — \`${session.scores[pJid]}/5\` points\n`;
-            });
+            const mentionsList = [];
+            for (let idx = 0; idx < sorted.length; idx++) {
+                const pJid = sorted[idx];
+                const pPhone = await resolveToPhoneJid(sock, pJid);
+                if (pPhone) {
+                    results += `${idx + 1}. @${pPhone.split('@')[0]} — \`${session.scores[pJid]}/5\` points\n`;
+                    mentionsList.push(pPhone);
+                }
+            }
+            delete global.triviaSessions[sessionKey];
+            return await sock.sendMessage(jid, { text: results, mentions: mentionsList });
         }
-        delete global.triviaSessions[sessionKey];
-        return await sock.sendMessage(jid, { text: results, mentions: isSingle ? [session.player] : session.players });
     }
 
     let activePlayer = session.player;
     if (!isSingle) activePlayer = session.players[session.turnIndex];
+
+    const activePhone = await resolveToPhoneJid(sock, activePlayer);
 
     const questionData = getLocalQuestion(session.category);
     if (!questionData) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve question from quiz database. Game aborted." });
@@ -218,7 +249,7 @@ async function askNextQuizQuestion(sock, jid, sessionKey) {
 
     const quizLabel = isSingle 
         ? `📝 *Topic Quiz: Round ${session.currentQuestionIndex}/10*`
-        : `👥 *Quiz Turn: @${activePlayer.split('@')[0]} (${session.currentQuestionIndex}/${limit})*`;
+        : `👥 *Quiz Turn: @${activePhone.split('@')[0]} (${session.currentQuestionIndex}/${limit})*`;
 
     const quizCard = 
         `${quizLabel}\n` +
@@ -229,20 +260,20 @@ async function askNextQuizQuestion(sock, jid, sessionKey) {
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `👉 *Reply directly with your answer letter (A, B, C, or D) to proceed.*`;
 
-    const prompt = await sock.sendMessage(jid, { text: quizCard, mentions: isSingle ? [session.player] : [activePlayer] });
+    const prompt = await sock.sendMessage(jid, { text: quizCard, mentions: [activePhone] });
     session.lastQuestionMsgId = prompt.key.id;
 }
 
-// Core Emoji Charades Dispatcher
 async function askNextCharadePuzzle(sock, jid, sessionKey) {
     const session = global.charadeSessions[sessionKey];
 
     if (session.currentQuestionIndex > 10) {
+        const pPhone = await resolveToPhoneJid(sock, session.player);
         const results = `🏆 *CHARADES CONCLUDED!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `👤 *Player:* @${session.player.split('@')[0]}\n` +
+                        `👤 *Player:* @${pPhone.split('@')[0]}\n` +
                         `🎯 *Final Score:* \`${session.score}/10\` points.`;
         delete global.charadeSessions[sessionKey];
-        return await sock.sendMessage(jid, { text: results, mentions: [session.player] });
+        return await sock.sendMessage(jid, { text: results, mentions: [pPhone] });
     }
 
     const puzzleData = await generateEmojiPuzzle(session.pastPuzzles);
@@ -264,7 +295,6 @@ async function askNextCharadePuzzle(sock, jid, sessionKey) {
     session.lastQuestionMsgId = prompt.key.id;
 }
 
-// Vault 8 Story Progression handler
 async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     const jid = msg.key.remoteJid;
     const session = global.vault8Sessions[sessionKey];
@@ -301,7 +331,7 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
         const failButtons = {
             text: deathCard,
             buttons: [
-                { buttonId: `${settings.prefix}v8_btn retry`, buttonText: { displayText: 'Retry 🔄' }, type: 1 },
+                { buttonId: `${settings.prefix}v8_btn play`, buttonText: { displayText: 'Retry 🔄' }, type: 1 },
                 { buttonId: `${settings.prefix}v8_btn cancel`, buttonText: { displayText: 'Give Up 🛑' }, type: 1 }
             ],
             headerType: 1
@@ -331,10 +361,6 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     session.lastQuestionMsgId = prompt.key.id;
 }
 
-// ============================================================================
-// GAME COMMANDS
-// ============================================================================
-
 module.exports = [
     // 1. TIC-TAC-TOE INITIATOR
     {
@@ -344,20 +370,20 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
 
+            const sessionKey = jid + '_ttt';
+            const activeSession = global.gameSessions[sessionKey];
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const senderPhone = await resolveToPhoneJid(sock, senderJid);
+            const senderNumber = senderPhone.split('@')[0];
+
             if (args && args.toLowerCase().trim() === 'quit') {
-                const sessionKey = jid + '_ttt';
-                if (!global.gameSessions[sessionKey]) return await sock.sendMessage(jid, { text: "❌ No active Tic-Tac-Toe session is running." }, { quoted: msg });
+                if (!activeSession) return await sock.sendMessage(jid, { text: "❌ No active Tic-Tac-Toe session is running." }, { quoted: msg });
                 delete global.gameSessions[sessionKey];
                 return await sock.sendMessage(jid, { text: "🛑 Tic-Tac-Toe session abandoned." }, { quoted: msg });
             }
 
             const inputVal = parseInt(args);
             if (!isNaN(inputVal)) {
-                const sessionKey = jid + '_ttt';
-                const activeSession = global.gameSessions[sessionKey];
-                const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-                const senderNumber = senderJid.split('@')[0];
-
                 if (!activeSession) return await sock.sendMessage(jid, { text: `❌ No active session is running.` }, { quoted: msg });
                 if (activeSession.turn !== senderJid) return await sock.sendMessage(jid, { text: "⏳ Wait your turn!" }, { quoted: msg });
 
@@ -375,7 +401,7 @@ module.exports = [
                     if (winner === 'tie') {
                         return await sock.sendMessage(jid, { text: `🤝 *IT'S A TIE!* \n\n${finalBoard}` }, { quoted: msg });
                     } else {
-                        return await sock.sendMessage(jid, { text: `🏆 *VICTORY!* \n\n🎉 @${senderNumber} won the match!\n\n${finalBoard}`, mentions: [senderJid] }, { quoted: msg });
+                        return await sock.sendMessage(jid, { text: `🏆 *VICTORY!* \n\n🎉 @${senderNumber} won the match!\n\n${finalBoard}`, mentions: [senderPhone] }, { quoted: msg });
                     }
                 }
 
@@ -400,10 +426,11 @@ module.exports = [
                     activeSession.lastQuestionMsgId = prompt.key.id;
                 } else {
                     activeSession.turn = activeSession.player1 === senderJid ? activeSession.player2 : activeSession.player1;
-                    const nextTurnNumber = activeSession.turn.split('@')[0];
+                    const nextTurnPhone = await resolveToPhoneJid(sock, activeSession.turn);
+                    const nextTurnNumber = nextTurnPhone.split('@')[0];
                     const finalBoard = renderCoolTttBoard(activeSession.board);
 
-                    const prompt = await sock.sendMessage(jid, { text: `🎮 *TIC-TAC-TOE* 🎮\n\n${finalBoard}\n\n👉 It is now @${nextTurnNumber}'s turn! Reply directly with a position number (1-9).`, mentions: [activeSession.turn] }, { quoted: msg });
+                    const prompt = await sock.sendMessage(jid, { text: `🎮 *TIC-TAC-TOE* 🎮\n\n${finalBoard}\n\n👉 It is now @${nextTurnNumber}'s turn! Reply directly with a position number (1-9).`, mentions: [nextTurnPhone] }, { quoted: msg });
                     activeSession.lastQuestionMsgId = prompt.key.id;
                 }
                 return;
@@ -429,14 +456,15 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const senderNumber = senderJid.split('@')[0];
+            const senderPhone = await resolveToPhoneJid(sock, senderJid);
+            const senderNumber = senderPhone.split('@')[0];
             const mode = args ? args.toLowerCase().trim() : '';
 
             if (mode === 'ai') {
                 const sessionKey = jid + '_ttt';
                 const initialBoard = renderCoolTttBoard([' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ']);
                 
-                const prompt = await sock.sendMessage(jid, { text: `🎮 *TIC-TAC-TOE: GOJO CHALLENGE* 🎮\n\n👤 *Player:* @${senderNumber} (❌)\n🤖 *AI:* Gojo (⭕)\n\n${initialBoard}\n\n👉 It is your turn! Reply directly with a position number (1-9).`, mentions: [senderJid] }, { quoted: msg });
+                const prompt = await sock.sendMessage(jid, { text: `🎮 *TIC-TAC-TOE: GOJO CHALLENGE* 🎮\n\n👤 *Player:* @${senderNumber} (❌)\n🤖 *AI:* Gojo (⭕)\n\n${initialBoard}\n\n👉 It is your turn! Reply directly with a position number (1-9).`, mentions: [senderPhone] }, { quoted: msg });
                 
                 global.gameSessions[sessionKey] = {
                     board: [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '],
@@ -464,7 +492,7 @@ module.exports = [
                     text: `⚔️ *TIC-TAC-TOE DUEL LOBBY* ⚔️\n\n👤 *Player 1:* @${senderNumber}\n🌐 *Status:* Searching for Player 2...\n\n👉 Tap join to enter!`,
                     buttons: [{ buttonId: `${settings.prefix}ttt_join`, buttonText: { displayText: 'Join Duel ⚔️' }, type: 1 }],
                     headerType: 1,
-                    mentions: [senderJid]
+                    mentions: [senderPhone]
                 };
                 await sock.sendMessage(jid, searchButtons, { quoted: msg });
             }
@@ -478,7 +506,8 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const senderNumber = senderJid.split('@')[0];
+            const senderPhone = await resolveToPhoneJid(sock, senderJid);
+            const senderNumber = senderPhone.split('@')[0];
 
             const sessionKey = jid + '_ttt';
             const session = global.gameSessions[sessionKey];
@@ -488,10 +517,11 @@ module.exports = [
             session.player2 = senderJid;
             session.symbols[senderJid] = '⭕';
 
-            const player1Number = session.player1.split('@')[0];
+            const player1Phone = await resolveToPhoneJid(sock, session.player1);
+            const player1Number = player1Phone.split('@')[0];
             const initialBoard = renderCoolTttBoard([' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ']);
 
-            const prompt = await sock.sendMessage(jid, { text: `🎮 *TIC-TAC-TOE DUEL STARTED* 🎮\n\n❌ @${player1Number} vs ⭕ @${senderNumber}\n\n${initialBoard}\n\n👉 It is @${player1Number}'s turn! Reply directly with a position number (1-9).`, mentions: [session.player1, senderJid] }, { quoted: msg });
+            const prompt = await sock.sendMessage(jid, { text: `🎮 *TIC-TAC-TOE DUEL STARTED* 🎮\n\n❌ @${player1Number} vs ⭕ @${senderNumber}\n\n${initialBoard}\n\n👉 It is @${player1Number}'s turn! Reply directly with a position number (1-9).`, mentions: [player1Phone, senderPhone] }, { quoted: msg });
             session.lastQuestionMsgId = prompt.key.id;
         }
     },
@@ -616,7 +646,6 @@ module.exports = [
                 }
 
                 await delay(800);
-                const hasSaved = !!global.vault8SavedStories[sessionKey];
                 const bannerText = 
                     `🖥️ *VAULT 8 SECURE INTEL PORTAL* 🖥️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `⚠️ *WARNING:* You are entering a restricted psychological text adventure game. Scenarios are highly dangerous. *Any wrong decision will result in your death.*\n\n` +
@@ -719,7 +748,7 @@ module.exports = [
         }
     },
 
-    // 8. DYNAMIC CATEGORIZED QUIZ INITIATOR (LID-Safe Numbered Lists & Category triggers)
+    // 8. DYNAMIC CATEGORIZED QUIZ INITIATOR
     {
         name: 'quiz',
         isPrefixless: false,
@@ -727,6 +756,8 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            const senderPhone = await resolveToPhoneJid(sock, senderJid);
+            const senderNumber = senderPhone.split('@')[0];
 
             const parts = args ? args.toLowerCase().trim().split(' ') : [];
             const subAction = parts[0] || '';
@@ -756,7 +787,6 @@ module.exports = [
 
                 global.triviaSessions[sessionKey] = sessionData;
 
-                // Converted Category prompt into a robust, bulletproof numbered list
                 const catMenu = 
                     `📚 *LIMITLESS QUIZ CATEGORIES* 📚\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -776,10 +806,10 @@ module.exports = [
                     global.triviaSessions[sessionKey].lastQuestionMsgId = prompt.key.id;
                 } else {
                     const lobbyButtons = {
-                        text: `👥 *QUIZ MULTIPLAYER LOBBY* 👥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n• Players Joined: \`1/10\`\n👤 @${senderJid.split('@')[0]}\n\n👉 Tap Join to enter!`,
+                        text: `👥 *QUIZ MULTIPLAYER LOBBY* 👥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n• Players Joined: \`1/10\`\n👤 @${senderNumber}\n\n👉 Tap Join to enter!`,
                         buttons: [{ buttonId: `${settings.prefix}quiz_join`, buttonText: { displayText: 'Join Lobby 👥' }, type: 1 }],
                         headerType: 1,
-                        mentions: [senderJid]
+                        mentions: [senderPhone]
                     };
 
                     const lobbyMsg = await sock.sendMessage(jid, lobbyButtons, { quoted: msg });
@@ -794,17 +824,16 @@ module.exports = [
                             return await sock.sendMessage(jid, { text: "🛑 *Lobby Disbanded: Minimum 2 players required.*" });
                         }
 
-                        // Move to category selection once lobby closes
                         session.status = 'awaiting_category';
                         
-                        const prompt = await sock.sendMessage(jid, { text: `👥 *MULTIPLAYER CATEGORY SELECTION* 👥\n\n@${session.player.split('@')[0]}, please choose a category:\n\n${catMenu}`, mentions: [session.player] });
+                        const p1Phone = await resolveToPhoneJid(sock, session.player);
+                        const prompt = await sock.sendMessage(jid, { text: `👥 *MULTIPLAYER CATEGORY SELECTION* 👥\n\n@${p1Phone.split('@')[0]}, please choose a category:\n\n${catMenu}`, mentions: [p1Phone] });
                         session.lastQuestionMsgId = prompt.key.id;
                     }, 25000);
                 }
                 return;
             }
 
-            // Default prompt if no mode is supplied
             const buttons = {
                 text: `📚 *LIMITLESS QUIZ WORLD* 📚\n\nSelect your game format to proceed:`,
                 buttons: [
@@ -835,13 +864,20 @@ module.exports = [
             session.scores[senderJid] = 0;
 
             const joinedCount = session.players.length;
-            const listPlayers = session.players.map(p => `👤 @${p.split('@')[0]}`).join('\n');
+
+            const phonePlayers = [];
+            for (const p of session.players) {
+                const phone = await resolveToPhoneJid(sock, p);
+                if (phone) phonePlayers.push(phone);
+            }
+
+            const listPlayers = phonePlayers.map(p => `👤 @${p.split('@')[0]}`).join('\n');
 
             const lobbyButtons = {
                 text: `👥 *QUIZ MULTIPLAYER LOBBY* 👥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n• Players: \`${joinedCount}/10\`\n${listPlayers}\n\n👉 Tap Join to enter!`,
                 buttons: [{ buttonId: `${settings.prefix}quiz_join`, buttonText: { displayText: 'Join Lobby 👥' }, type: 1 }],
                 headerType: 1,
-                mentions: session.players
+                mentions: phonePlayers
             };
 
             try { await sock.sendMessage(jid, { delete: { remoteJid: jid, id: session.lobbyMsgId, fromMe: true } }); } catch (e) {}
@@ -851,7 +887,7 @@ module.exports = [
         }
     },
 
-    // 10. QUIZ CATEGORY SELECT ROUTER (Emoji-Strip & Number Mapping Resolved)
+    // 10. QUIZ CATEGORY SELECT ROUTER
     {
         name: 'quiz_cat',
         isPrefixless: true,
@@ -859,7 +895,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-            // Un-bugged sessionKey resolver for single-player group games
             const singleKey = jid + '_' + senderJid;
             const session = global.triviaSessions[singleKey] || global.triviaSessions[jid];
             if (!session || session.status !== 'awaiting_category') return;
@@ -868,7 +903,6 @@ module.exports = [
 
             const categoryChoice = args.trim().toLowerCase();
             
-            // Map list index numbers to formal categories directly
             const categoryIndexMap = {
                 "1": "general anime",
                 "2": "chemistry",
@@ -887,7 +921,6 @@ module.exports = [
                 'General Anime', 'DC', 'Marvel', 'All Sports'
             ];
 
-            // Strip out any emojis or formatting to protect clicks
             const cleanChoice = resolvedChoice.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
 
             const matched = validCategories.find(c => c.toLowerCase() === cleanChoice || c.toLowerCase().includes(cleanChoice));
@@ -912,9 +945,9 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const senderNumber = senderJid.split('@')[0];
+            const senderPhone = await resolveToPhoneJid(sock, senderJid);
+            const senderNumber = senderPhone.split('@')[0];
 
-            // Un-bugged sessionKey resolver for single-player group games
             const singleKey = jid + '_' + senderJid;
             const session = global.triviaSessions[singleKey] || global.triviaSessions[jid];
             if (!session || session.status !== 'playing') return;
@@ -930,7 +963,6 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "🔍 `Validating your answer...`" }, { quoted: msg });
 
-            // Query Groq with Satoru Gojo Persona for dynamic, personalized answer evaluations
             const prompt = `
             You are Satoru Gojo, the strongest Jujutsu Sorcerer, hosting a fun trivia game.
             Question: "${session.currentQuestion}"
@@ -952,7 +984,6 @@ module.exports = [
                 const cleanJson = verification.replace(/```json/g, '').replace(/```/g, '').trim();
                 resultData = JSON.parse(cleanJson);
             } catch (e) {
-                // Fallback basic check in case JSON parse fails
                 const isYes = verification ? verification.trim().toUpperCase().includes("YES") : false;
                 resultData = {
                     isCorrect: isYes,
@@ -975,7 +1006,7 @@ module.exports = [
                     `🙄 Looks like @${senderNumber} missed that one!`;
             }
 
-            await sock.sendMessage(jid, { text: resultLabel, mentions: [senderJid] }, { quoted: msg });
+            await sock.sendMessage(jid, { text: resultLabel, mentions: [senderPhone] }, { quoted: msg });
 
             session.currentQuestionIndex++;
             if (!isSingle) session.turnIndex = (session.turnIndex + 1) % session.players.length;
@@ -1022,7 +1053,8 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const senderNumber = senderJid.split('@')[0];
+            const senderPhone = await resolveToPhoneJid(sock, senderJid);
+            const senderNumber = senderPhone.split('@')[0];
             const sessionKey = jid + '_' + senderJid;
 
             const session = global.charadeSessions[sessionKey];
@@ -1038,12 +1070,12 @@ module.exports = [
             let feedback = "";
             if (isCorrect) {
                 session.score++;
-                feedback = `✅ *CORRECT!* \n\n🧩 *Puzzle:* ${session.currentEmojiCombo}\n📝 *Correct phrase:* \`"${session.currentCorrectAnswer}"\`\n\n🎉 +1 point!`;
+                feedback = `✅ *CORRECT GUESS BY @${senderNumber}!* \n\n🧩 *Puzzle:* ${session.currentEmojiCombo}\n📝 *Correct phrase:* \`"${session.currentCorrectAnswer}"\`\n\n🎉 +1 point!`;
             } else {
-                feedback = `❌ *INCORRECT!* \n\n🧩 *Puzzle:* ${session.currentEmojiCombo}\n📝 *Correct phrase:* \`"${session.currentCorrectAnswer}"\``;
+                feedback = `❌ *INCORRECT GUESS BY @${senderNumber}!* \n\n🧩 *Puzzle:* ${session.currentEmojiCombo}\n📝 *Correct phrase:* \`"${session.currentCorrectAnswer}"\``;
             }
 
-            await sock.sendMessage(jid, { text: feedback, mentions: [senderJid] }, { quoted: msg });
+            await sock.sendMessage(jid, { text: feedback, mentions: [senderPhone] }, { quoted: msg });
 
             session.currentQuestionIndex++;
             await delay(1500);
@@ -1060,7 +1092,7 @@ module.exports = [
             const prefix = settings.prefix || '⚡';
 
             const portalText = 
-                `🎮 *INFINITE ARCADE LOBBY* 🎮\n` +
+                `幕 *INFINITE ARCADE LOBBY* 幕\n` +
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `Welcome to Satoru Gojo's game domain! Select an active game category below to begin:\n\n` +
                 `📚 *1. QUIZ* — Complete topic-focused challenges.\n` +
