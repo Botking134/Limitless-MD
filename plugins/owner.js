@@ -348,23 +348,37 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user (@user), or type their number." }, { quoted: msg });
             }
 
+            // Resolve actual Phone JID dynamically to prevent LID-checks failure on clickable mentions
+            let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                if (!Array.isArray(settings.sudoLids)) settings.sudoLids = [];
-                if (settings.sudoLids.includes(targetJid)) {
-                    return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already in the sudo LID list.`, mentions: [targetJid] }, { quoted: msg });
-                }
-                settings.sudoLids.push(targetJid);
-            } else {
-                if (!Array.isArray(settings.sudo)) settings.sudo = [];
-                if (settings.sudo.includes(targetJid)) {
-                    return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already in the sudo list.`, mentions: [targetJid] }, { quoted: msg });
-                }
-                settings.sudo.push(targetJid);
+                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
             }
 
+            // Dual-Register both LID and JID lists to ensure seamless permissions and clickable mentions
+            if (targetJid.endsWith('@lid')) {
+                if (!Array.isArray(settings.sudoLids)) settings.sudoLids = [];
+                if (!settings.sudoLids.includes(targetJid)) {
+                    settings.sudoLids.push(targetJid);
+                }
+            } else {
+                if (!Array.isArray(settings.sudo)) settings.sudo = [];
+                if (!settings.sudo.includes(targetJid)) {
+                    settings.sudo.push(targetJid);
+                }
+            }
+
+            if (targetPhoneJid) {
+                if (!Array.isArray(settings.sudo)) settings.sudo = [];
+                if (!settings.sudo.includes(targetPhoneJid)) {
+                    settings.sudo.push(targetPhoneJid);
+                }
+            }
+
+            const displayJid = targetPhoneJid || targetJid;
+
             await sock.sendMessage(jid, { 
-                text: `👑 Added @${targetJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
-                mentions: [targetJid]
+                text: `👑 Added @${displayJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
+                mentions: [displayJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -383,15 +397,13 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            // Resolve actual Phone JID on startup to prevent LID-checks failure
             let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                targetPhoneJid = await getPhoneJid(sock, targetJid, jid);
+                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
             }
 
             let exists = false;
 
-            // Purge both LID and Phone JID variants Bidirectionally
             if (Array.isArray(settings.sudoLids)) {
                 if (settings.sudoLids.includes(targetJid)) {
                     settings.sudoLids = settings.sudoLids.filter(num => num !== targetJid);
@@ -418,9 +430,11 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not in the sudo list.`, mentions: [targetJid] }, { quoted: msg });
             }
 
+            const displayJid = targetPhoneJid || targetJid;
+
             await sock.sendMessage(jid, { 
-                text: `👋 Removed @${targetJid.split('@')[0]} from the sudo list.`,
-                mentions: [targetJid]
+                text: `👋 Removed @${displayJid.split('@')[0]} from the sudo list.`,
+                mentions: [displayJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -439,23 +453,35 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
+            let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                if (!Array.isArray(settings.ownerLids)) settings.ownerLids = [];
-                if (settings.ownerLids.includes(targetJid) || targetJid === settings.ownerLid) {
-                    return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already registered as an owner LID.`, mentions: [targetJid] }, { quoted: msg });
-                }
-                settings.ownerLids.push(targetJid);
-            } else {
-                if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
-                if (settings.owners.includes(targetJid)) {
-                    return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already registered as an owner.`, mentions: [targetJid] }, { quoted: msg });
-                }
-                settings.owners.push(targetJid);
+                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
             }
 
+            if (targetJid.endsWith('@lid')) {
+                if (!Array.isArray(settings.ownerLids)) settings.ownerLids = [];
+                if (!settings.ownerLids.includes(targetJid)) {
+                    settings.ownerLids.push(targetJid);
+                }
+            } else {
+                if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
+                if (!settings.owners.includes(targetJid)) {
+                    settings.owners.push(targetJid);
+                }
+            }
+
+            if (targetPhoneJid) {
+                if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
+                if (!settings.owners.includes(targetPhoneJid)) {
+                    settings.owners.push(targetPhoneJid);
+                }
+            }
+
+            const displayJid = targetPhoneJid || targetJid;
+
             await sock.sendMessage(jid, { 
-                text: `👑 Added @${targetJid.split('@')[0]} as a Bot Owner.\n_They now possess full system administrative capabilities._`,
-                mentions: [targetJid]
+                text: `👑 Added @${displayJid.split('@')[0]} as a Bot Owner.\n_They now possess full system administrative capabilities._`,
+                mentions: [displayJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -478,15 +504,13 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove the primary Bot Owner." }, { quoted: msg });
             }
 
-            // Resolve actual Phone JID on startup to prevent LID-checks failure
             let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                targetPhoneJid = await getPhoneJid(sock, targetJid, jid);
+                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
             }
 
             let exists = false;
 
-            // Purge both LID and Phone JID variants Bidirectionally
             if (Array.isArray(settings.ownerLids)) {
                 if (settings.ownerLids.includes(targetJid)) {
                     settings.ownerLids = settings.ownerLids.filter(num => num !== targetJid);
@@ -513,9 +537,11 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not a registered owner.`, mentions: [targetJid] }, { quoted: msg });
             }
 
+            const displayJid = targetPhoneJid || targetJid;
+
             await sock.sendMessage(jid, { 
-                text: `👋 Removed @${targetJid.split('@')[0]} from the secondary owners list.`,
-                mentions: [targetJid]
+                text: `👋 Removed @${displayJid.split('@')[0]} from the secondary owners list.`,
+                mentions: [displayJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -564,14 +590,23 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot blacklist Satoru Gojo's creator." }, { quoted: msg });
             }
 
-            if (settings.banned.includes(targetJid)) {
+            let targetPhoneJid = '';
+            if (targetJid.endsWith('@lid')) {
+                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
+            }
+
+            if (settings.banned.includes(targetJid) || (targetPhoneJid && settings.banned.includes(targetPhoneJid))) {
                 return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already blacklisted.`, mentions: [targetJid] }, { quoted: msg });
             }
             
             settings.banned.push(targetJid);
+            if (targetPhoneJid) settings.banned.push(targetPhoneJid);
+
+            const displayJid = targetPhoneJid || targetJid;
+
             await sock.sendMessage(jid, { 
-                text: `🚫 Blacklisted @${targetJid.split('@')[0]}.\n_They can no longer interact with any Satoru Gojo systems._`,
-                mentions: [targetJid]
+                text: `🚫 Blacklisted @${displayJid.split('@')[0]}.\n_They can no longer interact with any Satoru Gojo systems._`,
+                mentions: [displayJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -592,14 +627,30 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (!settings.banned.includes(targetJid)) {
+            let targetPhoneJid = '';
+            if (targetJid.endsWith('@lid')) {
+                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
+            }
+
+            let exists = false;
+            if (settings.banned.includes(targetJid)) {
+                settings.banned = settings.banned.filter(num => num !== targetJid);
+                exists = true;
+            }
+            if (targetPhoneJid && settings.banned.includes(targetPhoneJid)) {
+                settings.banned = settings.banned.filter(num => num !== targetPhoneJid);
+                exists = true;
+            }
+
+            if (!exists) {
                 return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not on the blacklist.`, mentions: [targetJid] }, { quoted: msg });
             }
 
-            settings.banned = settings.banned.filter(num => num !== targetJid);
+            const displayJid = targetPhoneJid || targetJid;
+
             await sock.sendMessage(jid, { 
-                text: `✅ Restored access for @${targetJid.split('@')[0]}.`,
-                mentions: [targetJid]
+                text: `✅ Restored access for @${displayJid.split('@')[0]}.`,
+                mentions: [displayJid]
             }, { quoted: msg });
             saveSettings(); 
             saveState(); 
@@ -618,23 +669,35 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
             }
 
+            let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                if (!Array.isArray(settings.devLids)) settings.devLids = [];
-                if (settings.devLids.includes(targetJid)) {
-                    return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer." }, { quoted: msg });
-                }
-                settings.devLids.push(targetJid);
-            } else {
-                if (!Array.isArray(settings.devs)) settings.devs = [];
-                if (settings.devs.includes(targetJid)) {
-                    return await sock.sendMessage(jid, { text: "❌ Target is already registered as a developer." }, { quoted: msg });
-                }
-                settings.devs.push(targetJid);
+                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
             }
 
+            if (targetJid.endsWith('@lid')) {
+                if (!Array.isArray(settings.devLids)) settings.devLids = [];
+                if (!settings.devLids.includes(targetJid)) {
+                    settings.devLids.push(targetJid);
+                }
+            } else {
+                if (!Array.isArray(settings.devs)) settings.devs = [];
+                if (!settings.devs.includes(targetJid)) {
+                    settings.devs.push(targetJid);
+                }
+            }
+
+            if (targetPhoneJid) {
+                if (!Array.isArray(settings.devs)) settings.devs = [];
+                if (!settings.devs.includes(targetPhoneJid)) {
+                    settings.devs.push(targetPhoneJid);
+                }
+            }
+
+            const displayJid = targetPhoneJid || targetJid;
+
             await sock.sendMessage(jid, { 
-                text: `👑 Developer registered successfully: @${targetJid.split('@')[0]}`, 
-                mentions: [targetJid] 
+                text: `👑 Developer registered successfully: @${displayJid.split('@')[0]}`, 
+                mentions: [displayJid] 
             }, { quoted: msg });
             saveState(); 
         }
@@ -662,15 +725,13 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove a base core developer." }, { quoted: msg });
             }
 
-            // Resolve actual Phone JID on startup to prevent LID-checks failure
             let targetPhoneJid = '';
             if (targetJid.endsWith('@lid')) {
-                targetPhoneJid = await getPhoneJid(sock, targetJid, jid);
+                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
             }
 
             let exists = false;
 
-            // Purge both LID and Phone JID variants Bidirectionally
             if (Array.isArray(settings.devLids)) {
                 if (settings.devLids.includes(targetJid)) {
                     settings.devLids = settings.devLids.filter(num => num !== targetJid);
@@ -697,9 +758,11 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Target is not a registered developer." }, { quoted: msg });
             }
 
+            const displayJid = targetPhoneJid || targetJid;
+
             await sock.sendMessage(jid, { 
-                text: `👋 Removed developer privileges for: @${targetJid.split('@')[0]}`, 
-                mentions: [targetJid] 
+                text: `👋 Removed developer privileges for: @${displayJid.split('@')[0]}`, 
+                mentions: [displayJid] 
             }, { quoted: msg });
             saveState(); 
         }
