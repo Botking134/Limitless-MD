@@ -43,41 +43,44 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     }
 }
 
-// Google Gemini Vision API query interface using gemini-3.5-flash
+// Google Gen AI SDK Vision integration supporting gemini-3.5-flash
 async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-3.5-flash") {
     try {
         const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
+        const { GoogleGenAI } = await import('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: apiKey });
+
+        try {
+            // Standard SDK content generation
+            const response = await ai.models.generateContent({
+                model: model,
                 contents: [
+                    prompt,
                     {
-                        parts: [
-                            { text: prompt },
-                            {
-                                inlineData: {
-                                    mimeType: mimeType,
-                                    data: imageBase64
-                                }
-                            }
-                        ]
+                        inlineData: {
+                            mimeType: mimeType,
+                            data: imageBase64
+                        }
                     }
                 ]
-            })
-        });
-
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Gemini API error: ${response.status} - ${errText}`);
+            });
+            return response.text || "";
+        } catch (sdkErr) {
+            // Fallback to custom interactions interface if defined in your environment
+            const response = await ai.interactions.create({
+                model: model,
+                input: [
+                    prompt,
+                    {
+                        inlineData: {
+                            mimeType: mimeType,
+                            data: imageBase64
+                        }
+                    }
+                ]
+            });
+            return response.text || response.output || "";
         }
-
-        const data = await response.json();
-        return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     } catch (e) {
         console.error("Gemini Vision Query Error:", e.message);
         throw e;
