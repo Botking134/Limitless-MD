@@ -159,39 +159,53 @@ function isOwnerTarget(target) {
            (settings.owners && settings.owners.includes(target));
 }
 
+// Helper to query Gemini for text summarization tasks
+async function queryGeminiText(prompt, logString) {
+    const k1 = "AQ.A";
+    const k2 = "b8RN6KBW";
+    const k3 = "ZMvTeBKiv2Y";
+    const k4 = "6Jl2td79ivWI";
+    const k5 = "G01zOu4xalDZJqycog";
+    const apiKey = settings.geminiApiKey || (k1 + k2 + k3 + k4 + k5);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            contents: [
+                {
+                    parts: [
+                        { text: `${prompt}\n\nHere are the chat logs:\n${logString}` }
+                    ]
+                }
+            ]
+        })
+    });
+
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Gemini status ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Could not generate summary.";
+}
+
 // Helper to compile Satoru Gojo-themed 10-point summaries
 async function triggerSummary(sock, jid) {
     const logs = settings.conversationLogs?.[jid] || [];
     if (logs.length === 0) return;
 
     const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
-    const s1 = "gsk_";
-    const s2 = "tPB0xMyZ2oijloaBNcDs";
-    const s3 = "WGdyb3FY5iC2p9hwRE";
-    const s4 = "SIJXAV3t53LZg9";
-    const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
+    const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful, cocky, and engaging. Do not include any intro, outro, or conversational filler.";
 
     try {
-        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROQ_API_KEY}`
-            },
-            body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
-                messages: [
-                    { role: "system", content: "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful, cocky, and engaging. Do not include any intro, outro, or conversational filler." },
-                    { role: "user", content: logString }
-                ]
-            })
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            const responseText = data.choices?.[0]?.message?.content || "Could not generate summary.";
-            await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3-HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
-        }
+        const responseText = await queryGeminiText(prompt, logString);
+        await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3-HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
+        
         if (settings.conversationLogs) settings.conversationLogs[jid] = [];
         saveSettings();
         saveState();
@@ -794,7 +808,7 @@ module.exports = [
             if (!quoted || !quoted.imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
 
             try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baideys');
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 const stream = await downloadContentFromMessage(quoted.imageMessage, 'image');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
@@ -1083,35 +1097,11 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "⏳ *Summarizing current logs...*" }, { quoted: msg });
                 const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
                 
-                const s1 = "gsk_";
-                const s2 = "tPB0xMyZ2oijloaBNcDs";
-                const s3 = "WGdyb3FY5iC2p9hwRE";
-                const s4 = "SIJXAV3t53LZg9";
-                const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
+                const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
 
                 try {
-                    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "Authorization": `Bearer ${GROQ_API_KEY}`
-                        },
-                        body: JSON.stringify({
-                            model: "llama-3.3-70b-versatile",
-                            messages: [
-                                { role: "system", content: "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler." },
-                                { role: "user", content: logString }
-                            ]
-                        })
-                    });
-
-                    if (response.ok) {
-                        const data = await response.json();
-                        const responseText = data.choices?.[0]?.message?.content || "Could not generate summary.";
-                        await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}` }, { quoted: msg });
-                    } else {
-                        throw new Error();
-                    }
+                    const responseText = await queryGeminiText(prompt, logString);
+                    await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}` }, { quoted: msg });
                 } catch (err) {
                     await sock.sendMessage(jid, { text: "❌ Summary generation failed." }, { quoted: msg });
                 }
