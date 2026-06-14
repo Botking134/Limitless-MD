@@ -5,6 +5,7 @@ const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const { getPhoneJid, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 
 const notesPath = path.join(__dirname, '../notes.json');
 
@@ -62,7 +63,7 @@ module.exports = [
                 const start = Date.now();
 
                 const loadingMsg = await sock.sendMessage(jid, { text: "[□□□□□□]" }, { quoted: msg });
-                const frames = ["[□□□□□□]", "[■□□□□□]", "[■■□□□□]", "[■■■□□□]", "[■■■■□□]", "[■■■■■□]", "[■■■■■■]"];
+                const frames = [" [□□□□□□]", "[■□□□□□]", "[■■□□□□]", "[■■■□□□]", "[■■■■□□]", "[■■■■■□]", "[■■■■■■]"];
                 
                 for (let cycle = 0; cycle < 2; cycle++) {
                     for (const frame of frames) {
@@ -123,16 +124,24 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-            if (!quoted || !quoted.stanzaId) return;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+
+            if (!contextInfo || !contextInfo.stanzaId) return;
 
             try {
                 const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
                 const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
 
-                const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
+                const isFromMe = contextInfo.participant === botJid || (botLid && contextInfo.participant === botLid);
 
-                const quotedKey = { remoteJid: jid, id: quoted.stanzaId, fromMe: isFromMe, participant: quoted.participant };
+                const quotedKey = { remoteJid: jid, id: contextInfo.stanzaId, fromMe: isFromMe, participant: contextInfo.participant };
                 await sock.sendMessage(jid, { delete: quotedKey });
                 try { await sock.sendMessage(jid, { delete: msg.key }); } catch (err) {}
             } catch (error) {}
@@ -145,8 +154,16 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-            if (!quoted || !quoted.stanzaId || !args) return;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+
+            if (!contextInfo || !contextInfo.stanzaId || !args) return;
 
             const durationMs = parseDuration(args.trim());
             if (!durationMs) return;
@@ -157,9 +174,9 @@ module.exports = [
                     try {
                         const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
                         const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
-                        const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
+                        const isFromMe = contextInfo.participant === botJid || (botLid && contextInfo.participant === botLid);
 
-                        const quotedKey = { remoteJid: jid, id: quoted.stanzaId, fromMe: isFromMe, participant: quoted.participant };
+                        const quotedKey = { remoteJid: jid, id: contextInfo.stanzaId, fromMe: isFromMe, participant: contextInfo.participant };
                         await sock.sendMessage(jid, { delete: quotedKey });
                         try { await sock.sendMessage(jid, { delete: countdownMsg.key }); } catch (e) {}
                     } catch (err) {}
@@ -227,7 +244,15 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
             if (!quoted) return;
 
             const rawContent = getRawMessage(quoted);
@@ -251,15 +276,23 @@ module.exports = [
         }
     },
 
-    // 8. STANDARD STICKER CONVERTER
+    // 8. STANDARD STICKER CONVERTER (Compressed to Prevent size Bloating)
     {
         name: 'sticker',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             let mediaContent = getRawMessage(quoted || msg.message);
-            
             let mediaMessage = mediaContent?.imageMessage || mediaContent?.videoMessage || mediaContent?.stickerMessage;
             let mediaType = mediaContent?.imageMessage ? "image" : (mediaContent?.videoMessage ? "video" : (mediaContent?.stickerMessage ? "sticker" : ""));
 
@@ -271,7 +304,15 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const sticker = new Sticker(buffer, { pack: settings.packName, author: settings.author, type: StickerTypes.FULL, quality: 75 });
+                // Lowered standard image quality to 45 and animated video stickers to 35 to prevent large sizes (under 100KB-150KB)
+                const targetQuality = mediaType === "video" ? 35 : 45;
+
+                const sticker = new Sticker(buffer, { 
+                    pack: settings.packName, 
+                    author: settings.author, 
+                    type: StickerTypes.FULL, 
+                    quality: targetQuality 
+                });
                 await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
             } catch (error) {}
         }
@@ -283,9 +324,17 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const isMedia = msg.message.imageMessage || msg.message.videoMessage || quoted?.imageMessage || quoted?.videoMessage || quoted?.stickerMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
 
+            const isMedia = msg.message.imageMessage || msg.message.videoMessage || quoted?.imageMessage || quoted?.videoMessage || quoted?.stickerMessage;
             if (!isMedia) return;
 
             try {
@@ -298,7 +347,14 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const sticker = new Sticker(buffer, { pack: settings.packName, author: settings.author, type: StickerTypes.CROPPED, quality: 75 });
+                const targetQuality = mediaType === "video" ? 35 : 45;
+
+                const sticker = new Sticker(buffer, { 
+                    pack: settings.packName, 
+                    author: settings.author, 
+                    type: StickerTypes.CROPPED, 
+                    quality: targetQuality 
+                });
                 await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
             } catch (error) {}
         }
@@ -310,7 +366,16 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             const rawContent = getRawMessage(quoted);
             const isSticker = rawContent?.stickerMessage;
 
@@ -326,7 +391,13 @@ module.exports = [
                 const packName = parts[0] ? parts[0].trim() : settings.packName;
                 const publisher = parts[1] ? parts[1].trim() : settings.author;
 
-                const sticker = new Sticker(buffer, { pack: packName, author: publisher, type: StickerTypes.FULL, quality: 100 });
+                // Lowered metadata copy quality to 45 to prevent ballooning file sizes
+                const sticker = new Sticker(buffer, { 
+                    pack: packName, 
+                    author: publisher, 
+                    type: StickerTypes.FULL, 
+                    quality: 45 
+                });
                 await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
             } catch (error) {}
         }
@@ -340,7 +411,15 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo) return;
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
             const rawContent = getRawMessage(quoted);
             const isSticker = rawContent?.stickerMessage;
 
@@ -391,7 +470,15 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo) return;
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
             const rawContent = getRawMessage(quoted);
             const isSticker = rawContent?.stickerMessage;
 
@@ -413,7 +500,16 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
             const rawContent = getRawMessage(quoted || msg.message);
             const isMedia = rawContent?.imageMessage || rawContent?.videoMessage;
 
@@ -438,25 +534,31 @@ module.exports = [
         }
     },
 
-    // 14. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url)
+    // 14. COMPRESS IMAGES AND VIDEOS UTILITY
     {
-        name: 'tourl',
+        name: 'compress',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const rawContent = getRawMessage(quoted || msg.message);
-            
-            let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.stickerMessage || rawContent?.audioMessage || rawContent?.documentMessage;
-            let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.stickerMessage ? "sticker" : (rawContent?.audioMessage ? "audio" : "document")));
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
+            const mediaContent = getRawMessage(quoted || msg.message);
+            let mediaMessage = mediaContent?.imageMessage || mediaContent?.videoMessage;
+            let mediaType = mediaContent?.imageMessage ? "image" : (mediaContent?.videoMessage ? "video" : "");
 
             if (!mediaMessage) {
-                return await sock.sendMessage(jid, { 
-                    text: "❌ *Invalid Context:* Please reply directly to an image, video, sticker, audio, or document file to generate a URL." 
-                }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Please reply directly to an image or video to compress." }, { quoted: msg });
             }
 
-            const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Channelling media into direct link...*" }, { quoted: msg });
+            const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Compressing media stream...*" }, { quoted: msg });
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -466,216 +568,126 @@ module.exports = [
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                const mimeType = mediaMessage.mimetype || "application/octet-stream";
-                const url = await uploadToCloud(buffer, mimeType);
+                if (mediaType === "image") {
+                    const sharp = require('sharp');
+                    // Downscale to 1080p and drop JPEG quality to 50% for standard mobile compression
+                    const compressed = await sharp(buffer)
+                        .resize({ width: 1080, withoutEnlargement: true })
+                        .jpeg({ quality: 50 })
+                        .toBuffer();
 
-                const finalReport = `📦 *DIRECT URL MANIFESTED* 🌐\n` +
-                                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                    `🔗 *Link:* ${url}\n` +
-                                    `⚖️ *Size:* \`${(buffer.length / (1024 * 1024)).toFixed(2)} MB\`\n\n` +
-                                    `_“My six eyes see straight through the data.”_ 🤞`;
+                    await sock.sendMessage(jid, { image: compressed, caption: "📉 *Image compressed successfully!*" }, { quoted: msg });
+                    try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                } 
+                else if (mediaType === "video") {
+                    const tmpInput = path.join(__dirname, `../tmp_in_${Date.now()}.mp4`);
+                    const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp4`);
+                    fs.writeFileSync(tmpInput, buffer);
 
-                await sock.sendMessage(jid, { text: finalReport, edit: statusMsg.key });
+                    // Re-encode utilizing libx264 with an optimized CRF (Constant Rate Factor) scale 28/30
+                    const cmd = `ffmpeg -i "${tmpInput}" -vcodec libx264 -crf 30 -preset superfast -filter:v "scale='min(1280,iw)':-2" -acodec copy "${tmpOutput}" -y`;
+                    exec(cmd, async (err) => {
+                        if (err) {
+                            await sock.sendMessage(jid, { text: "❌ Video compression failed. Make sure FFMPEG is installed on the host.", edit: statusMsg.key });
+                        } else {
+                            const compressedBuffer = fs.readFileSync(tmpOutput);
+                            await sock.sendMessage(jid, { video: compressedBuffer, mimetype: "video/mp4", caption: "📉 *Video compressed successfully!*" }, { quoted: msg });
+                            try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                            try { fs.unlinkSync(tmpOutput); } catch (e) {}
+                        }
+                        try { fs.unlinkSync(tmpInput); } catch (e) {}
+                    });
+                }
             } catch (error) {
-                await sock.sendMessage(jid, { 
-                    text: `❌ *Upload Failed:* ${error.message || "Unable to complete cloud stream."}`, 
-                    edit: statusMsg.key 
-                });
+                await sock.sendMessage(jid, { text: `❌ Compression failed: ${error.message}`, edit: statusMsg.key });
             }
         }
     },
 
-    // 15. PREFIXLESS SILENT KAMUI DM DECODER (Only Owner & Sudo)
+    // 15. REPOSITORY DATA EXPORTER (.repo / .sc / .script)
     {
-        name: 'kamui',
-        isPrefixless: true,
-        execute: async (sock, msg, args, { isOwner, isSudo, senderNumber }) => {
-            const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) return; 
-
-            // Strict authorization check before processing prefixless kamui
-            if (!isOwner && !isSudo) return; 
-
-            const rawContent = getRawMessage(quoted);
-            let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
-            let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.audioMessage ? "audio" : ""));
-            
-            if (!mediaMessage) return; 
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
-
-                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                const senderJid = msg.key.participant || msg.key.remoteJid;
-                // Silently forward decrypted media straight to DM of Owner/Sudoer who triggered it
-                const targetDmJid = senderJid;
-                
-                if (mediaType === 'image') {
-                    await sock.sendMessage(targetDmJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image" });
-                } else if (mediaType === 'video') {
-                    const mimeType = mediaMessage.mimetype || "video/mp4";
-                    await sock.sendMessage(targetDmJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video" });
-                } else if (mediaType === 'audio') {
-                    await sock.sendMessage(targetDmJid, { audio: buffer, mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", ptt: true });
-                }
-            } catch (e) {}
-        }
-    },
-
-    // 16. BOT LATENCY COMPARISON TEST (ping2 Progress Bar Animation Update)
-    {
-        name: 'ping2',
+        name: 'repo',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const { delay } = await import('@itsliaaa/baileys');
-
-            // Boot-up progress loader unlinked from keys, delaying exactly 0.8s per increment
-            const loadingMsg = await sock.sendMessage(jid, { text: "▮▮" }, { quoted: msg });
-            const frames = [
-                "▮▮▮", 
-                "▮▮▮▮", 
-                "▮▮▮▮▮",
-                "▮▮▮▮▮▮",
-                "▮▮▮▮▮▮▮"
+            const repoImages = [
+                "https://iili.io/C3yej7s.jpg" // Satoru Gojo branding card
             ];
+            const randomImg = repoImages[Math.floor(Math.random() * repoImages.length)];
+            
+            const repoMsg = 
+                `🔮 *LIMITLESS MD SYSTEM REPORT* 🔮\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `*"Throughout Heaven and Earth, I alone am the honoured one."* 🤞\n\n` +
+                `The ultimate Jujutsu-engineered WhatsApp automation engine is fully open-source. Tap into the Infinite Void and deploy our spatial commands directly to your server:\n\n` +
+                `📂 *REPOSITORY SYSTEM INTEL:*\n` +
+                `• 🤖 *Engine Name:* \`Limitless-MD\`\n` +
+                `• 🎖️ *Structure:* \`Baileys WebSocket Multi-Device\`\n` +
+                `• 👤 *Author:* \`Infinity\`\n` +
+                `• 🟢 *System Status:* \`Fully Operational\`\n\n` +
+                `🔗 *ACCESS SOUL SOCIETY ARCHIVES:*\n` +
+                `👉 https://github.com/Botking134/Limitless.MD\n\n` +
+                `⭐ _\"Fork and star the repository to expand your domain and manifest more cursed energy!\"_`;
 
-            for (const frame of frames) {
-                await delay(800);
-                await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
+            await sock.sendMessage(jid, { image: { url: randomImg }, caption: repoMsg }, { quoted: msg });
+        }
+    },
+
+    // 16. AUTO REPOSITORY DOWNLOAD COMPILER (.gitclone)
+    {
+        name: 'gitclone',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a public GitHub repository URL or shorthand. Example: `Botking134/Limitless.MD`" }, { quoted: msg });
+
+            let repoQuery = args.trim();
+            let owner = "";
+            let repo = "";
+
+            const regexFull = /github\.com\/([a-zA-Z0-9\-]+)\/([a-zA-Z0-9\-\._]+)/i;
+            const matchFull = repoQuery.match(regexFull);
+
+            if (matchFull) {
+                owner = matchFull[1];
+                repo = matchFull[2].replace(/\.git$/i, '');
+            } else {
+                const parts = repoQuery.split('/');
+                if (parts.length === 2) {
+                    owner = parts[0].trim();
+                    repo = parts[1].trim();
+                }
             }
 
-            const msgTime = msg.messageTimestamp * 1000;
-            await sock.sendMessage(jid, { text: `Latency: \`${Date.now() - msgTime}ms\``, edit: loadingMsg.key });
-        }
-    },
-
-    // 17. NOTES DASHBOARD
-    {
-        name: 'notes',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo && !isDev) return;
-
-            const notes = readNotes();
-            if (!args) {
-                const count = Object.keys(notes).length;
-                return await sock.sendMessage(jid, { text: `📝 *Notes Saved:* \`${count}\`` }, { quoted: msg });
+            if (!owner || !repo) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid GitHub repository format. Use: `username/repo-name`" }, { quoted: msg });
             }
 
-            const targetKey = args.toLowerCase().trim();
-            if (notes[targetKey]) {
-                return await sock.sendMessage(jid, { text: notes[targetKey].content }, { quoted: msg });
+            const statusMsg = await sock.sendMessage(jid, { text: `📥 Fetching repository archive for *${owner}/${repo}...*` }, { quoted: msg });
+
+            try {
+                // Utilizing the zipball API dynamically retrieves whichever default branch is active (main or master)
+                const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
+                const res = await fetch(zipUrl);
+                if (!res.ok) throw new Error();
+
+                const arrayBuffer = await res.arrayBuffer();
+                const buffer = Buffer.from(arrayBuffer);
+
+                await sock.sendMessage(jid, {
+                    document: buffer,
+                    mimetype: "application/zip",
+                    fileName: `${repo}-source.zip`,
+                    caption: `📦 *REPOSITORY ARCHIVE READY* 📦\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                             `• *Repository:* \`${owner}/${repo}\`\n` +
+                             `• *Branch:* \`Default\`\n\n` +
+                             `_Downloaded directly from GitHub secure servers._ 🤞`
+                }, { quoted: msg });
+
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed to download archive. Make sure the repository is public and exists.`, edit: statusMsg.key });
             }
-        }
-    },
-
-    // 18. ADD NOTE
-    {
-        name: 'addnote',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo && !isDev) return;
-            if (!args) return;
-
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) return;
-
-            const content = quoted.conversation || quoted.extendedTextMessage?.text || quoted.imageMessage?.caption || quoted.videoMessage?.caption || '';
-            if (!content) return;
-
-            const notes = readNotes();
-            const noteKey = args.toLowerCase().trim();
-
-            notes[noteKey] = { name: args.trim(), content, savedAt: Date.now() };
-            saveNotes(notes);
-            await sock.sendMessage(jid, { text: `✅ Successfully saved note: *${args.trim()}*` }, { quoted: msg });
-        }
-    },
-
-    // 19. DELETE NOTE
-    {
-        name: 'delnote',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo && !isDev) return;
-            if (!args) return;
-
-            const notes = readNotes();
-            const noteKey = args.toLowerCase().trim();
-
-            if (!notes[noteKey]) return;
-
-            delete notes[noteKey];
-            saveNotes(notes);
-            await sock.sendMessage(jid, { text: `✅ Successfully deleted note: *${args.trim()}*` }, { quoted: msg });
-        }
-    },
-
-    // 20. GET NOTES LIST
-    {
-        name: 'getnotes',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo && !isDev) return;
-
-            const notes = readNotes();
-            const keys = Object.keys(notes);
-
-            if (keys.length === 0) return await sock.sendMessage(jid, { text: "📝 No notes registered." }, { quoted: msg });
-
-            let list = `📋 *ACTIVE NOTES DATABASE:*\n\n`;
-            keys.forEach((key, idx) => list += `${idx + 1}. *${notes[key].name}*\n`);
-            await sock.sendMessage(jid, { text: list }, { quoted: msg });
-        }
-    },
-
-    // 21. GET NOTE SUB-COMMAND
-    {
-        name: 'getnote',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo && !isDev) return;
-            if (!args) return;
-
-            const notes = readNotes();
-            const targetKey = args.toLowerCase().trim();
-
-            if (notes[targetKey]) {
-                await sock.sendMessage(jid, { text: notes[targetKey].content }, { quoted: msg });
-            }
-        }
-    },
-
-    // 22. CONFIGURE VIEW ONCE DECRYPT REACTION EMOJI (Strictly Owner-Only)
-    {
-        name: 'vvs',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return; // Strict Owner-Only permission gate
-
-            if (!args) {
-                const current = settings.vvEmoji || '🥷';
-                return await sock.sendMessage(jid, { text: `❌ Please provide an emoji. (Current: ${current})` }, { quoted: msg });
-            }
-
-            const emoji = args.trim();
-            settings.vvEmoji = emoji;
-            saveSettings();
-            saveState();
-
-            await sock.sendMessage(jid, { text: `✅ View Once Decryption reaction emoji configured to: ${emoji}` }, { quoted: msg });
         }
     }
 ];
@@ -693,6 +705,10 @@ module.exports.forEach(cmd => {
     if (cmd.name === 'tdelete') {
         aliases.push({ ...cmd, name: 'tdel' });
         aliases.push({ ...cmd, name: 'tdlt' });
+    }
+    if (cmd.name === 'repo') {
+        aliases.push({ ...cmd, name: 'sc' });
+        aliases.push({ ...cmd, name: 'script' });
     }
 });
 module.exports.push(...aliases);
