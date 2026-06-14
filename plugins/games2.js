@@ -10,26 +10,34 @@ global.torfSessions = global.torfSessions || {};
 global.pvpSessions = global.pvpSessions || {};
 global.escapeSessions = global.escapeSessions || {};
 
-// Obfuscated API key configuration
 const s1 = "gsk_";
 const s2 = "tPB0xMyZ2oijloaBNcDs";
 const s3 = "WGdyb3FY5iC2p9hwRE";
 const s4 = "SIJXAV3t53LZg9";
-const GROQ_API_KEY = s1 + s2 + s3 + s4;
+const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
 function normalizeToJid(input) {
     if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@'); // Safely converts '123:1@lid' into '123@lid'
+    const clean = input.replace(/:[\d]+@/, '@'); 
     if (clean.endsWith('@s.whatsapp.net')) return clean;
     if (clean.endsWith('@lid')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
-// Reusable Helper to resolve any JID (such as LID) to standard Phone format
 async function resolveToPhoneJid(sock, jid) {
     if (!jid) return '';
     if (jid.endsWith('@s.whatsapp.net')) return jid;
@@ -43,7 +51,6 @@ async function resolveToPhoneJid(sock, jid) {
     return `${num}@s.whatsapp.net`;
 }
 
-// Built-in high-quality fallback questions database for Millionaire
 const fallbackMillionaireQuestions = [
     {
         category: "General Anime",
@@ -57,7 +64,6 @@ const fallbackMillionaireQuestions = [
     }
 ];
 
-// Highly robust local .js parser with local fallback safety
 function getLocalQuestion(filename, category) {
     try {
         const dbPath = path.join(__dirname, '../', filename);
@@ -71,7 +77,6 @@ function getLocalQuestion(filename, category) {
         const filtered = questions.filter(q => q.category.toLowerCase() === category.toLowerCase());
         if (filtered.length === 0) return null;
 
-        // Choose a random question from the filtered subset
         return filtered[Math.floor(Math.random() * filtered.length)];
     } catch (e) {
         console.error(`❌ [PARSER] Failed to resolve ${filename} question:`, e.message);
@@ -102,7 +107,6 @@ async function queryLLM(prompt, temperature = 0.8) {
     }
 }
 
-// Word Chain Dictionary and Length Validator
 async function isValidEnglishWord(word, minLen, maxLen) {
     const prompt = 
         `System: Is the word "${word.toUpperCase()}" a real, valid dictionary-proven English word?\n` +
@@ -112,7 +116,6 @@ async function isValidEnglishWord(word, minLen, maxLen) {
     return response ? response.trim().toUpperCase().includes("YES") : false;
 }
 
-// Anagram Word Generator
 async function generateAnagramWord(difficulty, excludeList = []) {
     const salt = Math.random() + '_' + Date.now();
     let charLimit = "3 to 5 letters";
@@ -164,33 +167,32 @@ async function generateTorfQuestion(category, excludeList = []) {
     }
 }
 
-// Normalized Target JID Parser for direct PvP invites
+// Standardized JID Parser (Upgraded recursive unwrapping)
 function parseTarget(msg, args) {
-    let target = '';
-
-    const contextInfo = msg.message?.extendedTextMessage?.contextInfo || 
-                        msg.message?.imageMessage?.contextInfo || 
-                        msg.message?.videoMessage?.contextInfo;
-
-    const quotedParticipant = contextInfo?.participant;
-
-    if (quotedParticipant) {
-        target = quotedParticipant.split(':')[0] + (quotedParticipant.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-    } 
-    else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
-        const botJid = settings.botJid || '';
-        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
-        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
-        target = selectedJid.split(':')[0] + (selectedJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-    } 
-    else if (args) {
+    if (args) {
         const cleanDigits = args.replace(/[^0-9]/g, '');
         if (cleanDigits.length >= 7) {
-            target = `${cleanDigits}@s.whatsapp.net`;
+            return `${cleanDigits}@s.whatsapp.net`;
         }
     }
 
-    return target;
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo || 
+                        rawMsg?.extendedTextMessage?.contextInfo || 
+                        rawMsg?.imageMessage?.contextInfo || 
+                        rawMsg?.videoMessage?.contextInfo || 
+                        rawMsg?.stickerMessage?.contextInfo || 
+                        rawMsg?.audioMessage?.contextInfo || 
+                        rawMsg?.documentMessage?.contextInfo;
+    const mentions = contextInfo?.mentionedJid || [];
+
+    if (mentions.length > 0) {
+        return mentions[0].split(':')[0] + (mentions[0].includes('@lid') ? '@lid' : '@s.whatsapp.net');
+    } else if (contextInfo?.participant) {
+        const part = contextInfo.participant;
+        return part.split(':')[0] + (part.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+    }
+    return '';
 }
 
 // ============================================================================
@@ -521,7 +523,9 @@ async function handlePvpDefenseTimeout(sock, jid) {
     const attackerChar = attacker === session.p1 ? session.p1Char : session.p2Char;
     const defenderChar = defender === session.p1 ? session.p2Char : session.p1Char;
 
-    await sock.sendMessage(jid, { text: `⏰ *TIME IS UP!* @${defender.split('@')[0]} failed to defend in time!`, mentions: [defender] });
+    const defenderPhone = await resolveToPhoneJid(sock, defender);
+
+    await sock.sendMessage(jid, { text: `⏰ *TIME IS UP!* @${defenderPhone.split('@')[0]} failed to defend in time!`, mentions: [defenderPhone] });
 
     const evaluation = await evaluatePvpUnmitigated(attackerChar, defenderChar, attackMove);
 
@@ -539,15 +543,18 @@ async function handlePvpDefenseTimeout(sock, jid) {
 
     session.movesLeft[attacker]--;
 
+    const p1Phone = await resolveToPhoneJid(sock, session.p1);
+    const p2Phone = await resolveToPhoneJid(sock, session.p2);
+
     const report = 
         `💥 *DIRECT IMPACT REPORT!* 💥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
         `${evaluation ? evaluation.replace(/DAMAGE:\s*\d+/i, '').trim() : `No defense was activated.`}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `🛡️ *HP Status:*\n` +
-        `• *${session.p1Char}* (@${session.p1.split('@')[0]}): \`${session.p1HP} HP\`\n` +
-        `• *${session.p2Char}* (@${session.p2.split('@')[0]}): \`${session.p2HP} HP\``;
+        `• *${session.p1Char}* (@${p1Phone.split('@')[0]}): \`${session.p1HP} HP\`\n` +
+        `• *${session.p2Char}* (@${p2Phone.split('@')[0]}): \`${session.p2HP} HP\``;
 
-    await sock.sendMessage(jid, { text: report, mentions: [session.p1, session.p2] });
+    await sock.sendMessage(jid, { text: report, mentions: [p1Phone, p2Phone] });
     await delay(2000);
 
     if (await checkPvpGameOver(sock, jid, session)) return;
@@ -556,28 +563,35 @@ async function handlePvpDefenseTimeout(sock, jid) {
     session.turn = defender;
     session.defender = attacker;
 
-    const nextStrikeText = `👉 It is now @${session.turn.split('@')[0]}'s turn to strike!`;
-    const prompt = await sock.sendMessage(jid, { text: nextStrikeText, mentions: [session.turn] });
+    const turnPhone = await resolveToPhoneJid(sock, session.turn);
+    const nextStrikeText = `👉 It is now @${turnPhone.split('@')[0]}'s turn to strike!`;
+    const prompt = await sock.sendMessage(jid, { text: nextStrikeText, mentions: [turnPhone] });
     session.lastQuestionMsgId = prompt.key.id;
 }
 
 async function checkPvpGameOver(sock, jid, session) {
+    const p1Phone = await resolveToPhoneJid(sock, session.p1);
+    const p2Phone = await resolveToPhoneJid(sock, session.p2);
+
     if (session.p1HP <= 0 || session.p2HP <= 0) {
         const winner = session.p1HP <= 0 ? session.p2 : session.p1;
+        const winPhone = session.p1HP <= 0 ? p2Phone : p1Phone;
         const winChar = session.p1HP <= 0 ? session.p2Char : session.p1Char;
-        const victoryText = `🏆 *BATTLE RESOLVED: KNOCKOUT!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winner.split('@')[0]} (*${winChar}*) wins the duel!`;
+        const victoryText = `🏆 *BATTLE RESOLVED: KNOCKOUT!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winPhone.split('@')[0]} (*${winChar}*) wins the duel!`;
         delete global.pvpSessions[jid];
-        await sock.sendMessage(jid, { text: victoryText, mentions: [winner] });
+        await sock.sendMessage(jid, { text: victoryText, mentions: [winPhone] });
         return true;
     }
 
     if (session.movesLeft[session.p1] === 0 && session.movesLeft[session.p2] === 0) {
         let winner = session.p1;
+        let winPhone = p1Phone;
         let winChar = session.p1Char;
         let tie = false;
 
         if (session.p2HP > session.p1HP) {
             winner = session.p2;
+            winPhone = p2Phone;
             winChar = session.p2Char;
         } else if (session.p1HP === session.p2HP) {
             tie = true;
@@ -587,9 +601,9 @@ async function checkPvpGameOver(sock, jid, session) {
             delete global.pvpSessions[jid];
             await sock.sendMessage(jid, { text: "🤝 *BATTLE ENDED: IT'S A TIE!* 🤝" });
         } else {
-            const victoryText = `🏆 *BATTLE RESOLVED: TIME UP!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winner.split('@')[0]} (*${winChar}*) wins the match on health advantage!`;
+            const victoryText = `🏆 *BATTLE RESOLVED: TIME UP!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winPhone.split('@')[0]} (*${winChar}*) wins the match on health advantage!`;
             delete global.pvpSessions[jid];
-            await sock.sendMessage(jid, { text: victoryText, mentions: [winner] });
+            await sock.sendMessage(jid, { text: victoryText, mentions: [winPhone] });
         }
         return true;
     }
@@ -831,7 +845,7 @@ module.exports = [
                     session.livesSP--;
                     resultLabel = `❌ *INCORRECT GUESS BY @${senderNumber}!* Correct word was *${correctWord}*.\n\n👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Remaining Hearts:* \`${session.livesSP}/3\``;
                     if (session.livesSP <= 0) {
-                        await sock.sendMessage(jid, { text: resultLabel });
+                        await sock.sendMessage(jid, { text: resultMsg });
                         const results = `📊 *ANAGRAM GAME OVER!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Final Score:* \`${session.score}/10\``;
                         delete global.anagramSessions[sessionKey];
                         return await sock.sendMessage(jid, { text: results, mentions: [session.player] });
@@ -1085,7 +1099,7 @@ module.exports = [
             }
 
             global.millionaireSessions[sessionKey] = {
-                status: 'playing', // Resolved: initialized status correctly to unblock inputs
+                status: 'playing', 
                 player: senderJid,
                 step: 1,
                 money: 0,
@@ -1116,7 +1130,6 @@ module.exports = [
 
             const ans = args.trim().toLowerCase();
             
-            // Reconstruct options block for semantic verification
             const prompt = `
             You are the charismatic, suspenseful host of the "Who Wants to Be a Millionaire" trivia game.
             Question: "${session.currentQuestion}"
@@ -1138,7 +1151,6 @@ module.exports = [
                 const cleanJson = verification.replace(/```json/g, '').replace(/```/g, '').trim();
                 resultData = JSON.parse(cleanJson);
             } catch (e) {
-                // Fallback basic check in case JSON parse fails
                 const isYes = verification ? verification.trim().toUpperCase().includes("YES") : false;
                 resultData = {
                     isCorrect: isYes,
@@ -1189,10 +1201,9 @@ module.exports = [
                 if (!session.lifelines.fifty) return;
                 session.lifelines.fifty = false;
 
-                // Eliminate two incorrect letters
                 const wrongOptions = ['a', 'b', 'c', 'd'].filter(opt => {
                     const line = session.currentOptions.find(o => o.toLowerCase().startsWith(opt));
-                    return line && !line.includes("correct"); // semantic safeguard
+                    return line && !line.includes("correct"); 
                 });
 
                 const shuffled = wrongOptions.sort(() => 0.5 - Math.random());
@@ -1323,267 +1334,6 @@ module.exports = [
             session.step++;
             await delay(1000);
             await promptNextEscapeStep(sock, jid, sessionKey);
-        }
-    },
-
-    // 17. PVP LORE BATTLE INITIATOR (Lobbies & Direct Invites Redesigned)
-    {
-        name: 'pvp',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ PVP battles require an active Group Chat." }, { quoted: msg });
-
-            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const senderNumber = senderJid.split('@')[0];
-
-            if (global.pvpSessions[jid]) {
-                return await sock.sendMessage(jid, { text: "⚠️ Active battle or lobby already running in this group." }, { quoted: msg });
-            }
-
-            const targetJid = parseTarget(msg, args);
-            const parts = args ? args.trim().split(' ') : [];
-            const chosenChar = parts[0] ? parts[0].trim() : '';
-
-            // 1. Direct Challenge Invite Flow (.pvp Gojo @user)
-            if (targetJid && targetJid !== senderJid) {
-                if (!chosenChar || chosenChar.startsWith('@')) {
-                    return await sock.sendMessage(jid, { text: `❌ *Format error:* Please specify your character first.\nUsage: \`${settings.prefix}pvp <your_character> @user\`` }, { quoted: msg });
-                }
-
-                global.pvpSessions[jid] = {
-                    status: 'p2_choosing',
-                    p1: senderJid,
-                    p2: targetJid,
-                    p1Char: chosenChar,
-                    p2Char: '',
-                    p1HP: 100,
-                    p2HP: 100,
-                    turn: '',
-                    defender: '',
-                    lastAttack: '',
-                    movesLeft: { [senderJid]: 5, [targetJid]: 5 },
-                    lastQuestionMsgId: ''
-                };
-
-                const inviteCard = 
-                    `⚔️ *PVP LORE DUEL INVITATION* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `👤 *Challenger:* @${senderNumber} (*${chosenChar}*)\n` +
-                    `👤 *Opponent:* @${targetJid.split('@')[0]}\n\n` +
-                    `👉 @${targetJid.split('@')[0]}, you have been challenged! Reply directly to this message with your chosen character to accept the duel!`;
-
-                const prompt = await sock.sendMessage(jid, { text: inviteCard, mentions: [senderJid, targetJid] }, { quoted: msg });
-                global.pvpSessions[jid].lastQuestionMsgId = prompt.key.id;
-                return;
-            }
-
-            // 2. Open Lobby Flow (.pvp Gojo)
-            if (!chosenChar) {
-                return await sock.sendMessage(jid, { text: `❌ Please specify your chosen anime character to start a duel.\nUsage: \`${settings.prefix}pvp <character_name>\`` }, { quoted: msg });
-            }
-
-            global.pvpSessions[jid] = {
-                status: 'lobby',
-                p1: senderJid,
-                p2: '',
-                p1Char: chosenChar,
-                p2Char: '',
-                p1HP: 100,
-                p2HP: 100,
-                turn: '',
-                defender: '',
-                lastAttack: '',
-                movesLeft: { [senderJid]: 5 },
-                lastQuestionMsgId: ''
-            };
-
-            const lobbyCard = 
-                `⚔️ *PVP DUEL OPEN LOBBY* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `👤 *Challenger:* @${senderNumber} (*${chosenChar}*)\n` +
-                `🌐 *Status:* Waiting for opponent...\n\n` +
-                `👉 *To accept this duel, reply directly to this message with your chosen character!*`;
-
-            const prompt = await sock.sendMessage(jid, { text: lobbyCard, mentions: [senderJid] }, { quoted: msg });
-            global.pvpSessions[jid].lastQuestionMsgId = prompt.key.id;
-        }
-    },
-
-    // 18. PVP OPEN LOBBY ACCEPT CONTROLLER
-    {
-        name: 'pvp_lobby_accept',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const session = global.pvpSessions[jid];
-            if (!session || session.status !== 'lobby') return;
-
-            const chosenChar = args.trim();
-            if (!chosenChar) return;
-
-            session.p2 = senderJid;
-            session.p2Char = chosenChar;
-            session.movesLeft[senderJid] = 5;
-
-            session.status = 'fighting';
-            session.turn = session.p1;
-            session.defender = session.p2;
-
-            const p1Number = session.p1.split('@')[0];
-            const p2Number = session.p2.split('@')[0];
-
-            const card = `⚔️ *BATTLE MATRIX INITIALIZED!* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                         `• *${session.p1Char}* (@${p1Number})\n` +
-                         `      *VS* \n` +
-                         `• *${session.p2Char}* (@${p2Number})\n\n` +
-                         `👉 @${p1Number}, you have the initiative! Reply directly to this message with your attack!`;
-
-            const prompt = await sock.sendMessage(jid, { text: card, mentions: [session.p1, session.p2] }, { quoted: msg });
-            session.lastQuestionMsgId = prompt.key.id;
-        }
-    },
-
-    // 19. PVP CHARACTER CHOICE ROUTER (Direct Invites acceptance)
-    {
-        name: 'pvp_choose',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const session = global.pvpSessions[jid];
-            if (!session) return;
-
-            const chosenChar = args.trim();
-            if (!chosenChar) return;
-
-            if (session.status === 'p2_choosing' && senderJid === session.p2) {
-                session.p2Char = chosenChar;
-                session.status = 'fighting';
-                session.turn = session.p1;
-                session.defender = session.p2;
-
-                const p1Number = session.p1.split('@')[0];
-                const card = `⚔️ *BATTLE MATRIX INITIALIZED!* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                             `• *${session.p1Char}* (@${p1Number})\n` +
-                             `      *VS* \n` +
-                             `• *${session.p2Char}* (@${session.p2.split('@')[0]})\n\n` +
-                             `👉 @${p1Number}, you have the initiative! Reply directly to this message with your attack!`;
-
-                const prompt = await sock.sendMessage(jid, { text: card, mentions: [session.p1, session.p2] }, { quoted: msg });
-                session.lastQuestionMsgId = prompt.key.id;
-            }
-        }
-    },
-
-    // 20. PVP attack/strike evaluator
-    {
-        name: 'pvp_fight',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const session = global.pvpSessions[jid];
-            if (!session || session.status !== 'fighting' || session.turn !== senderJid) return;
-
-            const attackMove = args.trim();
-            if (!attackMove) return;
-
-            const attackerChar = senderJid === session.p1 ? session.p1Char : session.p2Char;
-            const defenderChar = senderJid === session.p1 ? session.p2Char : session.p1Char;
-
-            await sock.sendMessage(jid, { text: "🔮 `Verifying technique viability...`" }, { quoted: msg });
-
-            const isMoveValid = await evaluatePvpAttack(attackerChar, attackMove);
-            if (isMoveValid === "INVALID_MOVE") {
-                return await sock.sendMessage(jid, { text: `❌ *Technique Denied:* \`"${attackMove}"\` does not exist in ${attackerChar}'s canonical arsenal. Try another move!` }, { quoted: msg });
-            }
-
-            // Explicitly synchronize attacker and defender attributes for referee resolution
-            session.attacker = senderJid;
-            session.defender = senderJid === session.p1 ? session.p2 : session.p1;
-
-            session.status = 'defending';
-            session.lastAttack = attackMove;
-
-            const defenderNumber = session.defender.split('@')[0];
-            const defenseCard = 
-                `⚡ *INCOMING ATTACK STRIKE!* ⚡\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `👤 *Attacker:* *${attackerChar}*\n` +
-                `💥 *Attack used:* \`${attackMove}\`\n\n` +
-                `👉 @${defenderNumber} (*${defenderChar}*), you are in immediate danger! Reply to this message with your defense/parry within 15 seconds!`;
-
-            const prompt = await sock.sendMessage(jid, { text: defenseCard, mentions: [session.defender] }, { quoted: msg });
-            session.lastQuestionMsgId = prompt.key.id;
-
-            if (session.timerId) clearTimeout(session.timerId);
-            session.timerId = setTimeout(async () => {
-                await handlePvpDefenseTimeout(sock, jid);
-            }, 15000);
-        }
-    },
-
-    // 21. PVP block/defense evaluator
-    {
-        name: 'pvp_defend',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const session = global.pvpSessions[jid];
-            if (!session || session.status !== 'defending' || session.defender !== senderJid) return;
-
-            if (session.timerId) clearTimeout(session.timerId);
-
-            const defenseMove = args.trim();
-            if (!defenseMove) return;
-
-            const attacker = session.turn;
-            const defender = session.defender;
-            const attackMove = session.lastAttack;
-
-            const attackerChar = attacker === session.p1 ? session.p1Char : session.p2Char;
-            const defenderChar = defender === session.p1 ? session.p2Char : session.p1Char;
-
-            await sock.sendMessage(jid, { text: "🔮 `Resolving attack/defense matrix...`" }, { quoted: msg });
-
-            const clashResult = await evaluatePvpClash(attackerChar, defenderChar, attackMove, defenseMove);
-
-            let damage = 15;
-            if (clashResult) {
-                const match = clashResult.match(/DAMAGE:\s*(\d+)/i);
-                if (match) damage = parseInt(match[1]);
-            }
-
-            if (defender === session.p1) {
-                session.p1HP = Math.max(0, session.p1HP - damage);
-            } else {
-                session.p2HP = Math.max(0, session.p2HP - damage);
-            }
-
-            session.movesLeft[attacker]--;
-
-            const report = 
-                `⚔️ *COMBAT CLASH RESOLVED!* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `${clashResult ? clashResult.replace(/DAMAGE:\s*\d+/i, '').trim() : `Technique clashed!`}\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `🛡️ *HP Status:*\n` +
-                `• *${session.p1Char}* (@${session.p1.split('@')[0]}): \`${session.p1HP} HP\` (\`${session.movesLeft[session.p1]}\` strikes left)\n` +
-                `• *${session.p2Char}* (@${session.p2.split('@')[0]}): \`${session.p2HP} HP\` (\`${session.movesLeft[session.p2]}\` strikes left)`;
-
-            await sock.sendMessage(jid, { text: report, mentions: [session.p1, session.p2] }, { quoted: msg });
-            await delay(2000);
-
-            if (await checkPvpGameOver(sock, jid, session)) return;
-
-            // Swap Turns
-            session.status = 'fighting';
-            session.turn = defender;
-            session.defender = attacker;
-
-            const nextStrikeText = `👉 It is now @${session.turn.split('@')[0]}'s turn to strike!`;
-            const prompt = await sock.sendMessage(jid, { text: nextStrikeText, mentions: [session.turn] });
-            session.lastQuestionMsgId = prompt.key.id;
         }
     }
 ];
