@@ -13,10 +13,10 @@ const GROQ_API_KEY_FALLBACK = s1 + s2 + s3 + s4;
 
 // Obfuscated backup Gemini API key configuration
 const k1 = "AQ.A";
-const k2 = "b8RN6KBW";
-const k3 = "ZMvTeBKiv2Y";
-const k4 = "6Jl2td79ivWI";
-const k5 = "G01zOu4xalDZJqycog";
+const k2 = "b8RN6KZl";
+const k3 = "dboFt4nmErCs";
+const k4 = "Rlvdo3tle5ZJa";
+const k5 = "F6FdUBRk1x63EWYA";
 const GEMINI_API_KEY_FALLBACK = k1 + k2 + k3 + k4 + k5;
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
