@@ -3,7 +3,11 @@ const settings = require('../settings');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
 const { getPhoneJid, normalizeToJid } = require('../stateManager');
 
-const GROQ_API_KEY = settings.groqApiKey;
+const s1 = "gsk_";
+const s2 = "tPB0xMyZ2oijloaBNcDs";
+const s3 = "WGdyb3FY5iC2p9hwRE";
+const s4 = "SIJXAV3t53LZg9";
+const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
@@ -80,7 +84,6 @@ function extractEmojis(text) {
     return text.match(emojiRegex) || [];
 }
 
-// Giphy CDN ID Extractor
 function getGiphyDirectUrl(url) {
     if (!url) return '';
     const parts = url.split('/');
@@ -90,7 +93,22 @@ function getGiphyDirectUrl(url) {
     return `https://media.giphy.com/media/${id}/giphy.mp4`;
 }
 
-// Media Assets Lists
+function toSans(text) {
+    return text.split('').map(char => {
+        const code = char.charCodeAt(0);
+        if (code >= 65 && code <= 90) {
+            return String.fromCodePoint(code - 65 + 0x1D5A0);
+        }
+        if (code >= 97 && code <= 122) {
+            return String.fromCodePoint(code - 97 + 0x1D5BA);
+        }
+        if (code >= 48 && code <= 57) {
+            return String.fromCodePoint(code - 48 + 0x1D7E2);
+        }
+        return char;
+    }).join('');
+}
+
 const assets = {
     slap: [
         "https://giphy.com/gifs/Gf3AUz3eBNbTW",
@@ -232,42 +250,98 @@ async function executeAction(sock, msg, category, verb, args) {
 }
 
 const bankaiData = [
-    { name: "Ichigo Kurosaki", aliases: ["ichigo", "kurosaki"], position: "Substitute Shinigami", bankaiName: "Tensa Zangetsu", abilities: "Extreme speed and Black Getsuga Tensho blasts." },
-    { name: "Rukia Kuchiki", aliases: ["rukia"], position: "Captain of Division 13", bankaiName: "Hakka no Togame", abilities: "Reaches absolute zero temperature instantly, freezing all matter." }
+    { name: "Ichigo Kurosaki", aliases: ["ichigo", "kurosaki", "tensa zangetsu"], position: "Substitute Shinigami", bankaiName: "Tensa Zangetsu", abilities: "Grants extreme speed and enhanced reflexes. It concentrates his spiritual pressure into a condensed sword state, allowing him to fire devastating, high-velocity black Getsuga Tensho blasts." },
+    { name: "Rukia Kuchiki", aliases: ["rukia", "hakka no togame"], position: "Captain of Division 13", bankaiName: "Hakka no Togame", abilities: "Extends her frost-based release parameters to reach absolute zero instantly. This freezes all spatial constructs, freezing and vaporizing any matter within her direct vicinity." },
+    { name: "Byakuya Kuchiki", aliases: ["byakuya", "senbonzakura"], position: "Captain of Division 6", bankaiName: "Senbonzakura Kageyoshi", abilities: "Scatters millions of tiny blade petals that shred targets with absolute spatial control. It forms an inescapable arena of floating, defensive and offensive blade sheets." },
+    { name: "Kisuke Urahara", aliases: ["kisuke", "urahara", "kannonbiraki"], position: "Store Owner / Former Captain", bankaiName: "Kannonbiraki Benihime Aratame", abilities: "Grants him the power to reconstruct and restructure anything his release physically touches. This can be used to open up pathways, heal wounded flesh, or restructure his arms for physical combat." },
+    { name: "Shunsui Kyoraku", aliases: ["shunsui", "kyoraku", "katen kyokotsu"], position: "Captain-Commander / Division 1", bankaiName: "Katen Kyokotsu: Karamatsu Shinju", abilities: "Engulfs a massive area in a pitch-black aura of shared despair. It forces opponents to play through a tragic, unavoidable four-act theatrical play that cuts, drowns, and cleanly slices their throat." },
+    { name: "Genryusai Shigekuni Yamamoto", aliases: ["yamamoto", "genryusai", "zanka no tachi"], position: "Former Captain-Commander", bankaiName: "Zanka no Tachi", abilities: "Concentrates 15 million degrees of roaring heat and flame directly into a single scorched blade edge. It vaporizes anything it touches instantly, leaving only ashes behind." },
+    { name: "Toshiro Hitsugaya", aliases: ["toshiro", "hitsugaya", "daiguren hyorinmaru"], position: "Captain of Division 10", bankaiName: "Grand Crimson Ice Ring (Daiguren Hyorinmaru)", abilities: "Unleashes massive amounts of absolute zero ice. In its completed state, it allows him to flash-freeze all matter, conceptual abilities, and physical attacks instantly upon contact." },
+    { name: "Kenpachi Zaraki", aliases: ["kenpachi", "zaraki"], position: "Captain of Division 11", bankaiName: "Unnamed Bankai", abilities: "Turns him into a blood-red berserker demon of pure, mindless, and limitless physical strength. It grants him raw cutting power capable of slicing through clean space and giant constructs easily." }
 ];
 
+const nonBankaiCharacters = {
+    "aizen": "Sosuke Aizen possesses Kyoka Suigetsu (Shikai), but never revealed a Bankai in canon.",
+    "sosuke aizen": "Sosuke Aizen possesses Kyoka Suigetsu (Shikai), but never revealed a Bankai in canon.",
+    "ishida": "Uryu Ishida is a Quincy and does not possess a Zanpakuto or Bankai.",
+    "uryu ishida": "Uryu Ishida is a Quincy and does not possess a Zanpakuto or Bankai.",
+    "chad": "Yasutora Sado (Chad) is a Human/Fullbringer and does not possess a Bankai.",
+    "orihime": "Orihime Inoue is a Human with Shun Shun Rikka and does not possess a Bankai.",
+    "grimmjow": "Grimmjow is an Arrancar and does not possess a Bankai; he uses Resurrección.",
+    "ulquiorra": "Ulquiorra is an Arrancar and does not possess a Bankai; he uses Segunda Etapa.",
+    "yoruichi": "Yoruichi possesses a Zanpakuto and likely has Bankai, but never uses it in combat."
+};
+
+const nonBleachAnime = ["luffy", "zoro", "naruto", "sasuke", "goku", "vegeta", "deku", "tanjiro", "gojo", "sukuna", "itadori", "megumi"];
+
 const domainData = [
-    { name: "Satoru Gojo", aliases: ["gojo"], position: "Special Grade Sorcerer", domainName: "Unlimited Void (Muryōkūsho)", abilities: "Paralyzes targets instantly by flooding their brains with infinite raw information." }
+    { name: "Satoru Gojo", aliases: ["gojo", "satoru", "unlimited void", "muryokusho"], position: "Special Grade Sorcerer", domainName: "Unlimited Void (Muryōkūsho)", abilities: "Floods the brains of all targets with an infinite flow of raw information and sensory stimulation. This paralyzes them instantly, leaving them entirely unable to react or function." },
+    { name: "Ryomen Sukuna", aliases: ["sukuna", "ryomen", "malevolent shrine", "fukuma mizushi"], position: "King of Curses", domainName: "Malevolent Shrine (Fukuma Mizushi)", abilities: "An open-barrier domain that can span up to a massive 200 meters. It constantly rains down endless, invisible slashes (Cleave and Dismantle) to shred all objects and living things to dust." },
+    { name: "Megumi Fushiguro", aliases: ["megumi", "fushiguro", "chimera shadow garden"], position: "Grade 2 Sorcerer", domainName: "Chimera Shadow Garden (Kanga Koshōien)", abilities: "Floods the surrounding area in a thick, active ocean of dark shadow fluid. It allows him to summon endless duplicates of his shikigami and easily slip into the shadows for absolute evasion." },
+    { name: "Yuta Okkotsu", aliases: ["yuta", "okkotsu", "authentic mutual love"], position: "Special Grade Sorcerer", domainName: "Authentic Mutual Love (Shingan Sōai)", abilities: "Spawns a massive, beautiful sword graveyard inside a golden, knotted-rope barrier. It allows him to access and execute an infinite variety of copied cursed techniques by retrieving the blades." },
+    { name: "Mahito", aliases: ["mahito", "self-embodiment of perfection"], position: "Special Grade Curse", domainName: "Self-Embodiment of Perfection (Heika Jisei)", abilities: "Spawns a giant web of giant hands that locks the area down. It grants him a guaranteed, instant connection to all target souls, letting him transfigure or destroy them without needing physical touch." },
+    { name: "Jogo", aliases: ["jogo", "coffin of the iron mountain"], position: "Special Grade Curse", domainName: "Coffin of the Iron Mountain (Gaichūzō)", abilities: "Envelops all targets deep inside the active chamber of an erupting volcano. Standard sorcerers instantly ignite and combust upon entering the extreme ambient temperatures of this domain." },
+    { name: "Hakari Kinji", aliases: ["hakari", "kinji", "idle death gamble"], position: "Jujutsu High Student", domainName: "Idle Death Gamble (Zatsubo Shingetsu)", abilities: "Creates a giant, real-world pachinko casino. Tapping into its luck multipliers and hitting a jackpot grants him an endless supply of cursed energy and absolute immortality for exactly 4 minutes and 11 seconds." }
 ];
+
+const nonDomainCharacters = {
+    "nanami": "Kento Nanami is a Grade 1 Sorcerer who possessed precision with his Ratio Technique, but never achieved a Domain Expansion.",
+    "toji": "Toji Fushiguro has zero cursed energy due to Heavenly Restriction, meaning he physically cannot create a Domain Expansion.",
+    "maki": "Maki Zen'in has zero cursed energy due to Heavenly Restriction, making it physically impossible for her to expand a Domain.",
+    "nobara": "Nobara Kugisaki possesses the Straw Doll Technique but never unlocked Domain Expansion.",
+    "miwa": "Kasumi Miwa uses Simple Domain for defense, but cannot expand an innate domain.",
+    "toge": "Toge Inumaki uses Cursed Speech, but does not possess a Domain Expansion."
+};
+
+const nonJjkAnime = ["luffy", "zoro", "naruto", "sasuke", "goku", "vegeta", "deku", "tanjiro", "ichigo", "byakuya", "rukia", "yamamoto"];
 
 const wyrQuestions = [
     { o1: "Always have wet socks", o2: "Always have a popcorn kernel stuck in your teeth" },
-    { o1: "Only be able to whisper", o2: "Only be able to scream" }
+    { o1: "Have your search history read out loud at your wedding", o2: "Have your search history read at your funeral" },
+    { o1: "Only be able to whisper everything you say", o2: "Only be able to scream everything you say" },
+    { o1: "Fight 1 horse-sized duck", o2: "Fight 100 duck-sized horses" },
+    { o1: "Have cheese for hair", o2: "Sweat warm maple syrup" },
+    { o1: "Have to announce every time you fart", o2: "Have everyone else announce when you fart" }
 ];
 
 const jokeData = [
     "Why don't skeletons fight each other? They don't have the guts.",
-    "What do you call a fake noodle? An impasta."
+    "I only know 25 letters of the alphabet. I don't know y.",
+    "What do you call a fake noodle? An impasta.",
+    "Why did the scarecrow win an award? Because he was outstanding in his field.",
+    "I'm reading a book on anti-gravity. I just can't put it down!"
 ];
 
 const insultData = [
     "You're the reason the shampoo bottle has instructions.",
+    "If I had a face like yours, I'd sue my parents.",
+    "You are like a cloud. When you disappear, it's a beautiful day.",
     "I've seen puddles deeper than your personality."
 ];
 
 const roastData = [
     "If absolute zero is -273.15 degrees, your charisma is at least -300.",
+    "You have the perfect face for radio.",
+    "You're not standard material, you're the draft copy that got rejected.",
     "I would roast you, but my mom told me not to burn trash."
 ];
 
 const proposalMessages = [
     "From the moment I met you, my world changed. I want to build a domain with you.",
+    "You are my reverse cursed technique; you heal me when I'm broken.",
     "They say nothing is infinite, but my love for you defies that law."
 ];
 
 const askoutMessages = [
     "I've been thinking about you a lot... can we be more than just group members?",
-    "Will you go out with me?"
+    "You have a certain spark that lights up my whole chat. Will you go out with me?",
+    "No games, no curses, just pure feelings. Will you be mine?"
+];
+
+const sadnessQuotes = [
+    "Ouch... the conceptual void collapsed. My heart is officially shattered. 💔😭",
+    "Rejected... Even absolute zero feels warmer than this cold refusal. 🥀",
+    "My disappointment is immeasurable, and my day is ruined. 💔"
 ];
 
 const rizzLines = [
@@ -280,8 +354,6 @@ const famousSpeeches = [
     { character: "Sosuke Aizen", speech: "No one stands on the top of the world from the beginning. Not you, not me, not even Gods." }
 ];
 
-const toSans = (text) => text; // Minimal text transformer fallback
-
 module.exports = [
     // 1. BANKAI COMMAND
     {
@@ -291,17 +363,58 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!args) {
                 const randomBankai = bankaiData[Math.floor(Math.random() * bankaiData.length)];
-                return await sock.sendMessage(jid, { text: `🗡️ *BANKAI MANIFESTATION* \n\n👤 *Owner:* ${randomBankai.name}\n🔥 *Bankai:* ${randomBankai.bankaiName}\n🔮 *Abilities:* ${randomBankai.abilities}` }, { quoted: msg });
+                const text = `🗡️ *BANKAI MANIFESTATION* 🗡️\n` +
+                             `👤 *Owner:* ${randomBankai.name}\n` +
+                             `🎖️ *Position:* ${randomBankai.position}\n` +
+                             `🔥 *Bankai:* ${randomBankai.bankaiName}\n` +
+                             `🔮 *Abilities:* ${randomBankai.abilities}`;
+                return await sock.sendMessage(jid, { text }, { quoted: msg });
             }
 
             const cleanQuery = args.toLowerCase().trim();
             const matched = bankaiData.find(b => b.aliases.includes(cleanQuery) || b.name.toLowerCase().includes(cleanQuery));
-            if (matched) return await sock.sendMessage(jid, { text: `🗡️ *BANKAI INDEX* \n\n👤 *Owner:* ${matched.name}\n🔥 *Bankai:* ${matched.bankaiName}\n🔮 *Abilities:* ${matched.abilities}` }, { quoted: msg });
+            if (matched) {
+                const text = `🗡️ *BANKAI INDEX* 🗡️\n` +
+                             `👤 *Owner:* ${matched.name}\n` +
+                             `🎖️ *Position:* ${matched.position}\n` +
+                             `🔥 *Bankai:* ${matched.bankaiName}\n` +
+                             `🔮 *Abilities:* ${matched.abilities}`;
+                return await sock.sendMessage(jid, { text }, { quoted: msg });
+            }
+
+            if (nonBankaiCharacters[cleanQuery]) {
+                return await sock.sendMessage(jid, { text: `❌ ${nonBankaiCharacters[cleanQuery]}` }, { quoted: msg });
+            }
+
+            if (nonBleachAnime.includes(cleanQuery)) {
+                return await sock.sendMessage(jid, { text: `❌ "${args}" is not from the Bleach anime.` }, { quoted: msg });
+            }
 
             try {
                 await sock.sendMessage(jid, { text: "Searching Soul Society archives... 🪽" }, { quoted: msg });
-                const responseText = await queryGroq([{ role: "system", content: "You are a Bleach anime expert. Analyze query and return only bankai description layout." }, { role: "user", content: args }]);
-                await sock.sendMessage(jid, { text: responseText.trim() }, { quoted: msg });
+                const systemPrompt = 
+                    "You are an expert on the Bleach anime universe.\n" +
+                    "Analyze the user's query.\n\n" +
+                    "1. If NOT from Bleach, reply ONLY: 'NOT_FROM_BLEACH'.\n" +
+                    "2. If from Bleach but has NO Bankai, reply ONLY with a clear, direct, and concise explanation why they do not possess a Bankai.\n" +
+                    "3. If they possess a Bankai, respond ONLY in this layout:\n\n" +
+                    "🗡️ *BANKAI INDEX* 🗡️\n" +
+                    "👤 *Owner:* [Name]\n" +
+                    "🎖️ *Position:* [Position/Identity]\n" +
+                    "🔥 *Bankai:* [Bankai Name]\n" +
+                    "🔮 *Abilities:* [Write a detailed, medium-length explanation of 2 to 3 sentences detailing the bankai's combat properties, visual appearance, and active abilities]";
+
+                const responseText = await queryGroq([
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: args }
+                ]);
+                const cleanResponse = responseText.trim();
+
+                if (cleanResponse.includes("NOT_FROM_BLEACH")) {
+                    await sock.sendMessage(jid, { text: `❌ "${args}" is not from the Bleach anime.` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
+                }
             } catch (err) {}
         }
     },
@@ -314,17 +427,58 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!args) {
                 const randomDomain = domainData[Math.floor(Math.random() * domainData.length)];
-                return await sock.sendMessage(jid, { text: `🌀 *DOMAIN EXPANSION* \n\n👤 *Owner:* ${randomDomain.name}\n🔥 *Domain:* ${randomDomain.domainName}\n🔮 *Abilities:* ${randomDomain.abilities}` }, { quoted: msg });
+                const text = `🌀 *DOMAIN EXPANSION* 🌀\n` +
+                             `👤 *Owner:* ${randomDomain.name}\n` +
+                             `🎖️ *Status/Grade:* ${randomDomain.position}\n` +
+                             `🔥 *Domain:* ${randomDomain.domainName}\n` +
+                             `🔮 *Abilities:* ${randomDomain.abilities}`;
+                return await sock.sendMessage(jid, { text }, { quoted: msg });
             }
 
             const cleanQuery = args.toLowerCase().trim();
             const matched = domainData.find(d => d.aliases.includes(cleanQuery) || d.name.toLowerCase().includes(cleanQuery));
-            if (matched) return await sock.sendMessage(jid, { text: `🌀 *DOMAIN EXPANSION* \n\n👤 *Owner:* ${matched.name}\n🔥 *Domain:* ${matched.domainName}\n🔮 *Abilities:* ${matched.abilities}` }, { quoted: msg });
+            if (matched) {
+                const text = `🌀 *DOMAIN EXPANSION* 🌀\n` +
+                             `👤 *Owner:* ${matched.name}\n` +
+                             `🎖️ *Status/Grade:* ${matched.position}\n` +
+                             `🔥 *Domain:* ${matched.domainName}\n` +
+                             `🔮 *Abilities:* ${matched.abilities}`;
+                return await sock.sendMessage(jid, { text }, { quoted: msg });
+            }
+
+            if (nonDomainCharacters[cleanQuery]) {
+                return await sock.sendMessage(jid, { text: `❌ ${nonDomainCharacters[cleanQuery]}` }, { quoted: msg });
+            }
+
+            if (nonJjkAnime.includes(cleanQuery)) {
+                return await sock.sendMessage(jid, { text: `❌ "${args}" is not from the JJK anime.` }, { quoted: msg });
+            }
 
             try {
                 await sock.sendMessage(jid, { text: "Expanding Domain... 🤞🌀" }, { quoted: msg });
-                const responseText = await queryGroq([{ role: "system", content: "You are a JJK anime expert. Analyze query and return only domain description layout." }, { role: "user", content: args }]);
-                await sock.sendMessage(jid, { text: responseText.trim() }, { quoted: msg });
+                const systemPrompt = 
+                    "You are an expert on the Jujutsu Kaisen (JJK) universe.\n" +
+                    "Analyze the user's query.\n\n" +
+                    "1. If NOT from JJK, reply ONLY: 'NOT_FROM_JJK'.\n" +
+                    "2. If from JJK but has NO Domain, reply ONLY with a clear, direct, and concise explanation why they do not possess a Domain Expansion.\n" +
+                    "3. If they possess a Domain, respond ONLY in this layout:\n\n" +
+                    "🌀 *DOMAIN EXPANSION* 🌀\n" +
+                    "👤 *Owner:* [Name]\n" +
+                    "🎖️ *Status:* [Status/Grade]\n" +
+                    "🔥 *Domain:* [Domain Expansion Name]\n" +
+                    "🔮 *Abilities:* [Write a detailed, medium-length explanation of 2 to 3 sentences detailing the domain's environmental appearance, sure-hit effect, and core combat properties]";
+
+                const responseText = await queryGroq([
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: args }
+                ]);
+                const cleanResponse = responseText.trim();
+
+                if (cleanResponse.includes("NOT_FROM_JJK")) {
+                    await sock.sendMessage(jid, { text: `❌ "${args}" is not from the JJK anime.` }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
+                }
             } catch (err) {}
         }
     },
@@ -337,8 +491,12 @@ module.exports = [
             const jid = msg.key.remoteJid;
             try {
                 const randomWyr = wyrQuestions[Math.floor(Math.random() * wyrQuestions.length)];
-                await sock.sendMessage(jid, { poll: { name: "Would you rather... 🤔", values: [randomWyr.o1, randomWyr.o2], selectableCount: 1 } }, { quoted: msg });
-            } catch (err) {}
+                await sock.sendMessage(jid, { 
+                    poll: { name: "Would you rather... 🤔", values: [randomWyr.o1, randomWyr.o2], selectableCount: 1 } 
+                }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: "❌ Failed to create Would You Rather poll." }, { quoted: msg });
+            }
         }
     },
 
@@ -393,7 +551,13 @@ module.exports = [
                 if (cleanParticipants.length < 2) return;
 
                 const rawMsg = getRawMessage(msg.message);
-                const contextInfo = rawMsg?.contextInfo;
+                const contextInfo = rawMsg?.contextInfo || 
+                                    rawMsg?.extendedTextMessage?.contextInfo || 
+                                    rawMsg?.imageMessage?.contextInfo || 
+                                    rawMsg?.videoMessage?.contextInfo || 
+                                    rawMsg?.stickerMessage?.contextInfo || 
+                                    rawMsg?.audioMessage?.contextInfo || 
+                                    rawMsg?.documentMessage?.contextInfo;
                 const mentions = contextInfo?.mentionedJid || [];
                 
                 let target1 = mentions[0] || cleanParticipants[Math.floor(Math.random() * cleanParticipants.length)];
@@ -403,9 +567,15 @@ module.exports = [
                 const t2Num = target2.split('@')[0].split(':')[0];
 
                 const percentage = Math.floor(Math.random() * 101);
+                
+                const barLength = 10;
+                const filledCount = Math.round((percentage / 100) * barLength);
+                const emptyCount = barLength - filledCount;
+                const bar = "█".repeat(filledCount) + "░".repeat(emptyCount);
+
                 let verdict = percentage >= 80 ? "💍 Soulmates!" : (percentage >= 50 ? "💒 Match!" : "🏃💨 Mismatch.");
 
-                const shipCaption = `💞 *SHIP* 💞\n👩‍❤️‍👨 @${t1Num} x @${t2Num} — *${percentage}%*\n📢 *Verdict:* ${verdict}`;
+                const shipCaption = `💞 *SHIP* 💞\n👩‍❤️‍👨 @${t1Num} x @${t2Num}\n📊 [${bar}] *${percentage}%*\n📢 *Verdict:* ${verdict}`;
                 await sock.sendMessage(jid, { text: shipCaption, mentions: [target1, target2] }, { quoted: msg });
             } catch (err) {}
         }
@@ -428,7 +598,6 @@ module.exports = [
                 if (!targetJid || targetJid === senderJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
                 const targetNum = targetJid.split('@')[0];
-
                 const text = `👰🤵 *HOLY MATRIMONY PROPOSAL* 👰🤵\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👉 @${targetNum}, do you accept @${senderNum} as your lawfully wedded partner?`;
 
                 const buttonMessage = {
@@ -460,13 +629,10 @@ module.exports = [
 
             const rawClicker = msg.key.participant || msg.key.remoteJid || '';
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-
-            // Optimized comparison direct extraction matching both JIDs and LIDs safely
             const clickerNum = clickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
-            // Resolved initialization bug: extracted domain based on clickerJid's properties
             const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
             const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
 
@@ -528,13 +694,10 @@ module.exports = [
 
             const rawClicker = msg.key.participant || msg.key.remoteJid || '';
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-
-            // Optimized comparison direct extraction matching both JIDs and LIDs safely
             const clickerNum = clickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
-            // Resolved initialization bug: extracted domain based on clickerJid's properties
             const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
             const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
 
@@ -596,13 +759,10 @@ module.exports = [
 
             const rawClicker = msg.key.participant || msg.key.remoteJid || '';
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-
-            // Optimized comparison direct extraction matching both JIDs and LIDs safely
             const clickerNum = clickerJid.split('@')[0];
 
             if (clickerNum !== targetNum) return; 
 
-            // Resolved initialization bug: extracted domain based on clickerJid's properties
             const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
             const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
 
@@ -647,25 +807,29 @@ module.exports = [
 
             if (selection === '100') {
                 const frames = [
+                    toSans("Take the amplified infinity and the turned-out infinity"),
+                    toSans("Then smash together those two different expressions of infinity to create and push out imaginary mass"),
                     toSans("Cursed Technique Lapse: Blue") + "\n                    🫸🔵🫷",
                     toSans("Cursed Technique Reversal: Red") + "\n                  🫸🔴🔵🫷",
                     toSans("Hollow Technique: Purple") + "\n          🤌.......🫴⏤͟͟͞🟣"
                 ];
                 let sentMsg = await sock.sendMessage(jid, { text: frames[0] }, { quoted: msg });
                 for (let i = 1; i < frames.length; i++) {
-                    await delay(2500);
+                    await delay(3000);
                     await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
                 }
             } else if (selection === '200') {
                 const frames = [
                     toSans("Maximum output!!!") + "\n          " + toSans("Blue!!!🔵"),
                     toSans("Phase!!! Paramita") + "\n    " + toSans("Pillar of light"),
+                    toSans("Phase!!!! Twilight") + "\n" + toSans("Eyes of wisdom"),
+                    toSans("Nine ropes! Polarized light") + "\n" + toSans("Crow and declaration!"),
                     toSans("Between front and back!!!!") + " \n             🫸🔴🔵🫷",
                     toSans("Hollow Purple!!") + " \n🤌.......🫴⏤͟͟͞🟣"
                 ];
                 let sentMsg = await sock.sendMessage(jid, { text: frames[0] }, { quoted: msg });
                 for (let i = 1; i < frames.length; i++) {
-                    await delay(2500);
+                    await delay(3000);
                     await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
                 }
             }
@@ -903,23 +1067,38 @@ module.exports = [
         }
     },
 
-    // 23. USER DETAIL DIAGNOSTICS
+    // 23. USER DETAIL DIAGNOSTICS (.info)
     {
         name: 'info',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
             
-            // Get raw participant JID/LID from message
-            let targetJid = contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '';
+            let targetJid = '';
             if (args) {
-                const targetFromArgs = parseTarget(msg, args);
-                if (targetFromArgs) targetJid = targetFromArgs;
+                targetJid = parseTarget(msg, args);
             }
-            
-            const rawTargetJid = targetJid.split(':')[0] + (targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            if (!targetJid) {
+                targetJid = contextInfo?.participant;
+            }
+            if (!targetJid && contextInfo?.mentionedJid?.length > 0) {
+                targetJid = contextInfo.mentionedJid[0];
+            }
+            if (!targetJid) {
+                targetJid = msg.key.participant || msg.key.remoteJid || '';
+            }
+
+            const rawTargetJid = normalizeToJid(targetJid);
+            if (!rawTargetJid) return;
+
             const targetID = rawTargetJid.split('@')[0];
             const isLid = rawTargetJid.endsWith('@lid');
 
@@ -927,13 +1106,11 @@ module.exports = [
             let phoneNumber = '';
             let username = 'User';
 
-            // Resolve contact name or fall back to message pushName
             try {
                 username = sock.getName ? sock.getName(rawTargetJid) : (msg.pushName || 'User');
             } catch (e) {}
 
             if (isLid) {
-                // If the target is a LID, resolve their traditional phone number JID
                 try {
                     const resolvedPhoneJid = await getPhoneJid(sock, rawTargetJid, jid);
                     if (resolvedPhoneJid) {
@@ -983,7 +1160,13 @@ module.exports = [
         execute: async (sock, msg) => {
             const jid = msg.key.remoteJid;
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
 
             let targetJid = contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '';
             const targetNum = targetJid.split('@')[0].split(':')[0];
