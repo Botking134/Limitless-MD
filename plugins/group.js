@@ -100,15 +100,8 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
-// Reusable Helper to parse target user from message using JIDs (Traverses nested elements)
+// Reusable Helper to parse target user from message using JIDs (Supports replies & raw mentions seamlessly)
 function parseTargetUser(msg, args) {
-    if (args) {
-        const cleanDigits = args.replace(/[^0-9]/g, '');
-        if (cleanDigits.length >= 7) {
-            return `${cleanDigits}@s.whatsapp.net`;
-        }
-    }
-
     const rawMsg = getRawMessage(msg.message);
     const contextInfo = rawMsg?.contextInfo || 
                         rawMsg?.extendedTextMessage?.contextInfo || 
@@ -117,12 +110,25 @@ function parseTargetUser(msg, args) {
                         rawMsg?.stickerMessage?.contextInfo || 
                         rawMsg?.audioMessage?.contextInfo || 
                         rawMsg?.documentMessage?.contextInfo;
+    
     const mentions = contextInfo?.mentionedJid || [];
 
+    // 1. Direct mentions take highest priority (e.g. .kick @user)
     if (mentions.length > 0) {
         return normalizeToJid(mentions[0]);
-    } else if (contextInfo?.participant) {
+    } 
+    
+    // 2. Fallback to quoted message sender (e.g. replying to someone)
+    if (contextInfo?.participant) {
         return normalizeToJid(contextInfo.participant);
+    }
+
+    // 3. Fallback to extracting digits directly from command arguments
+    if (args) {
+        const cleanDigits = args.replace(/[^0-9]/g, '');
+        if (cleanDigits.length >= 7) {
+            return `${cleanDigits}@s.whatsapp.net`;
+        }
     }
     
     return '';
@@ -159,7 +165,7 @@ function isOwnerTarget(target) {
            (settings.owners && settings.owners.includes(target));
 }
 
-// Helper to query Gemini for text summarization tasks
+// Helper to query Gemini for text summarization tasks using gemini-3.5-flash
 async function queryGeminiText(prompt, logString) {
     const k1 = "AQ.A";
     const k2 = "b8RN6KBW";
@@ -167,7 +173,7 @@ async function queryGeminiText(prompt, logString) {
     const k4 = "6Jl2td79ivWI";
     const k5 = "G01zOu4xalDZJqycog";
     const apiKey = settings.geminiApiKey || (k1 + k2 + k3 + k4 + k5);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
         method: "POST",
@@ -194,7 +200,7 @@ async function queryGeminiText(prompt, logString) {
     return data.candidates?.[0]?.content?.parts?.[0]?.text || "Could not generate summary.";
 }
 
-// Helper to compile Satoru Gojo-themed 10-point summaries
+// Helper to compile Satoru Gojo-themed 10-point summaries using gemini-3.5-flash
 async function triggerSummary(sock, jid) {
     const logs = settings.conversationLogs?.[jid] || [];
     if (logs.length === 0) return;
@@ -211,6 +217,34 @@ async function triggerSummary(sock, jid) {
         saveState();
     } catch (err) {
         console.error("Auto summary failed:", err);
+    }
+}
+
+// Reusable Anti-Delete logger for User DMs (routes logs directly to owner/dev's LID DM)
+async function logDeletedMessage(sock, deletedMsg) {
+    try {
+        const jid = deletedMsg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+        
+        if (!isGroup) {
+            const senderJid = normalizeToJid(deletedMsg.key.participant || jid);
+            const botJid = normalizeToJid(sock.user.id);
+            
+            if (senderJid === botJid) return;
+
+            const targetLid = settings.ownerLid || (settings.ownerLids && settings.ownerLids[0]);
+            if (targetLid) {
+                const rawContent = getRawMessage(deletedMsg.message);
+                const deletedText = rawContent?.conversation || rawContent?.extendedTextMessage?.text || "[Media/Other Attachment]";
+                const logMessage = `🗑️ *Anti-Delete Log (User DM):*\n` +
+                                   `• *From:* @${senderJid.split('@')[0]}\n` +
+                                   `• *Deleted Message:* ${deletedText}`;
+                
+                await sock.sendMessage(targetLid, { text: logMessage, mentions: [senderJid] });
+            }
+        }
+    } catch (e) {
+        console.error("Anti-Delete log routing error:", e);
     }
 }
 
@@ -604,7 +638,7 @@ module.exports = [
         }
     },
 
-    // 12. WARNINGS SYSTEM COMMAND (Immunity Enabled)
+    // 12. WARNINGS SYSTEM COMMAND (Mentions + Immunity Enabled)
     {
         name: 'warn',
         isPrefixless: false,
@@ -616,18 +650,11 @@ module.exports = [
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'warn');
             if (!isAuthorized) return;
 
-            const rawMsg = getRawMessage(msg.message);
-            const quoted = rawMsg?.contextInfo || 
-                           rawMsg?.extendedTextMessage?.contextInfo || 
-                           rawMsg?.imageMessage?.contextInfo || 
-                           rawMsg?.videoMessage?.contextInfo || 
-                           rawMsg?.stickerMessage?.contextInfo || 
-                           rawMsg?.audioMessage?.contextInfo || 
-                           rawMsg?.documentMessage?.contextInfo;
+            const targetJid = parseTargetUser(msg, args);
+            if (!targetJid) {
+                return await sock.sendMessage(jid, { text: "❌ Please mention a target user or reply to their message to warn." }, { quoted: msg });
+            }
 
-            if (!quoted || !quoted.stanzaId) return await sock.sendMessage(jid, { text: "❌ Please reply to the message you want to warn." }, { quoted: msg });
-
-            const targetJid = normalizeToJid(quoted.participant);
             const targetNumber = targetJid.split('@')[0];
             const botJid = settings.botJid || (sock.user.id.split(':')[0] + '@s.whatsapp.net');
 
@@ -635,9 +662,25 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "🛡️ *Immunity Triggered:* Cannot restrict a Core Developer of this domain." }, { quoted: msg });
             }
 
-            if (isOwnerTarget(targetJid)) return await sock.sendMessage(jid, { text: "❌ You cannot warn a registered system owner." }, { quoted: msg });
+            if (isOwnerTarget(targetJid)) {
+                return await sock.sendMessage(jid, { text: "❌ You cannot warn a registered system owner." }, { quoted: msg });
+            }
 
-            try { await sock.sendMessage(jid, { delete: { remoteJid: jid, id: quoted.stanzaId, fromMe: targetJid === botJid, participant: targetJid } }); } catch (e) {}
+            // Attempt deletion only if they replied to a specific message to warn
+            const rawMsg = getRawMessage(msg.message);
+            const quoted = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            if (quoted && quoted.stanzaId) {
+                try { 
+                    await sock.sendMessage(jid, { 
+                        delete: { 
+                            remoteJid: jid, 
+                            id: quoted.stanzaId, 
+                            fromMe: targetJid === botJid, 
+                            participant: targetJid 
+                        } 
+                    }); 
+                } catch (e) {}
+            }
 
             const warnKey = `${jid}_${targetNumber}`;
             settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
@@ -792,7 +835,7 @@ module.exports = [
         }
     },
 
-    // 15. SET GROUP PROFILE PICTURE
+    // 15. SET GROUP PROFILE PICTURE (Baileys Corrected Import)
     {
         name: 'setpp',
         isPrefixless: false,
@@ -1296,15 +1339,12 @@ module.exports = [
         }
     },
 
-    // 28. FETCH GROUP JID
+    // 28. FETCH GROUP JID (Admin restrictions removed)
     {
         name: 'gcjid',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'gcjid');
-            if (!isAuthorized) return;
-
             await sock.sendMessage(jid, { text: `🆔 *Group JID:* \`${jid}\`` }, { quoted: msg });
         }
     },
@@ -1841,6 +1881,9 @@ module.exports = [
         }
     }
 ];
+
+// Exporting anti-delete hook so you can easily reference it in your main deletion listener
+module.exports.logDeletedMessage = logDeletedMessage;
 
 // Structural Aliases Configuration
 const aliases = [];
