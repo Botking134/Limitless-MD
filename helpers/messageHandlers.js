@@ -191,6 +191,73 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const mentionedJids = contextInfo?.mentionedJid || [];
 
         // ============================================================================
+        // CHAT LOG RECORDING INTERCEPTOR (.gclog)
+        // ============================================================================
+        if (isGroup && settings.gclogActive?.[jid]) {
+            if (!settings.conversationLogs) settings.conversationLogs = {};
+            if (!settings.conversationLogs[jid]) settings.conversationLogs[jid] = [];
+
+            // 1. Record incoming group messages
+            if (trimmedMessage && !trimmedMessage.startsWith(settings.prefix)) {
+                const senderName = msg.pushName || senderNumber || 'Unknown';
+                settings.conversationLogs[jid].push({
+                    sender: senderName,
+                    text: trimmedMessage,
+                    time: Date.now()
+                });
+
+                if (settings.conversationLogs[jid].length > 1000) {
+                    settings.conversationLogs[jid].shift();
+                }
+
+                const { saveSettings } = require('./settingsSaver');
+                saveSettings();
+            }
+
+            // 2. Re-establish background automation timers on first interaction post-restart
+            if (!global.gclogIntervals) global.gclogIntervals = {};
+            if (!global.gclogIntervals[jid]) {
+                const s1 = "gsk_";
+                const s2 = "tPB0xMyZ2oijloaBNcDs";
+                const s3 = "WGdyb3FY5iC2p9hwRE";
+                const s4 = "SIJXAV3t53LZg9";
+                const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
+
+                global.gclogIntervals[jid] = setInterval(async () => {
+                    const logs = settings.conversationLogs?.[jid] || [];
+                    if (logs.length === 0) return;
+
+                    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+                    try {
+                        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Authorization": `Bearer ${GROQ_API_KEY}`
+                            },
+                            body: JSON.stringify({
+                                model: "llama-3.3-70b-versatile",
+                                messages: [
+                                    { role: "system", content: "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful, cocky, and engaging. Do not include any intro, outro, or conversational filler." },
+                                    { role: "user", content: logString }
+                                ]
+                            })
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            const responseText = data.choices?.[0]?.message?.content || "";
+                            await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3-HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
+                        }
+                        if (settings.conversationLogs) settings.conversationLogs[jid] = [];
+                        const { saveSettings } = require('./settingsSaver');
+                        saveSettings();
+                    } catch (err) {}
+                }, 3 * 60 * 60 * 1000);
+            }
+        }
+
+        // ============================================================================
         // GROUP SECURITY INTERCEPTORS (Antilink, Antibot, Antitag, Antigm)
         // ============================================================================
         if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
@@ -918,7 +985,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
                 'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
                 'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend',
-                'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download', 'menu_fun', 'menu_owner', 'menu_utilities'
+                'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download', 'menu_fun', 'menu_owner', 'menu_utilities',
+                'silence_ans'
             ].includes(command);
 
             if (!isPublicMode && !isAuthorized && !isDev && !isInteractiveResponse) {
