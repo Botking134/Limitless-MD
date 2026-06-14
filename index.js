@@ -30,7 +30,9 @@ function formatUptime(seconds) {
 }
 
 // Boot up the Baileys WebSocket connection safely
-startBot().then(() => {
+startBot().then(async (sock) => {
+    if (!sock || !sock.user) return;
+
     // Dynamic visual status card alignment values
     const sysName = "LIMITLESS-MD";
     const prefixVal = settings.prefix || "⚡";
@@ -50,7 +52,9 @@ startBot().then(() => {
     const prefContent = padLine(`  ▶ PREFIX :: ${prefixVal}`, 44);
     const uptContent  = padLine(`  ▶ UPTIME :: ${uptimeStr}`, 44);
 
+    // Wrapped in triple backticks so standard WhatsApp clients render it in monospace
     const statusCard = 
+        `\`\`\`` +
         `╔══════════════════════════════════════════════════╗\n` +
         `║             ⚡  ＣＯＮＮＥＣＴＥＤ ⚡             ║\n` +
         `╚══════════════════════════════════════════════════╝\n` +
@@ -67,9 +71,19 @@ startBot().then(() => {
         `   ⟫ 🟣 HOLLOW PURPLE :: READY TO FIRE\n` +
         ` ──────────────────────────────────────────────────\n` +
         `   "Don't worry, I'm the strongest."\n` +
-        ` ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+        ` ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━` +
+        `\`\`\``;
 
-    console.log(statusCard);
+    try {
+        // Resolve the bot's own primary JID/LID dynamically
+        const botJid = sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+        
+        // Dispatch the status card directly to the bot's private chat
+        await sock.sendMessage(botJid, { text: statusCard });
+        console.log(`✅ [SYSTEM] Connection status card dispatched successfully to bot's DM.`);
+    } catch (msgErr) {
+        console.error("❌ Failed to send connection card to bot DM:", msgErr.message);
+    }
 }).catch((error) => {
     console.error("[FATAL ERROR] Failed to ignite system engine:", error);
     process.exit(1);
