@@ -45,5 +45,12 @@ module.exports = {
     "vvEmoji": "🥷",
     "antipm": "off",
     "antispam": {},
-    "gojoSleepChats": []
+    "gojoSleepChats": [],
+    
+    // Conversation logging parameters for Satoru Gojo Summaries (.gclog)
+    "gclogActive": {},
+    "conversationLogs": {},
+
+    // Default Gojo-Themed Welcome Template
+    "defaultWelcome": "🔮 *DOMAIN EXPANSION: NEW INTRUDER* 🔮\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👋 Welcome @user to *{group}*!\n\n📝 *Bio:* \"{bio}\"\n🛡️ *Status:* Standard Sorcerer\n\n🤞 _\"I hope you can handle the gravity of this void. Follow the rules, or you will be exorcised!\"_"
 };
