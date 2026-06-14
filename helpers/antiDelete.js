@@ -11,6 +11,30 @@ function normalizeToJid(input) {
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
+// Comprehensive owner/developer identity verification supporting LIDs and JIDs
+function isOwnerOrDev(jid) {
+    if (!jid) return false;
+    const normalized = normalizeToJid(jid);
+    
+    // Check direct owner JID/LID configurations
+    if (normalized === normalizeToJid(settings.ownerJid)) return true;
+    if (settings.ownerLid && normalized === normalizeToJid(settings.ownerLid)) return true;
+    
+    // Helper to search within arrays of identifiers
+    const checkArray = (arr) => Array.isArray(arr) && arr.map(x => normalizeToJid(x)).includes(normalized);
+    if (checkArray(settings.ownerLids)) return true;
+    if (checkArray(settings.owners)) return true;
+    if (checkArray(settings.devs)) return true;
+    if (checkArray(settings.devLids)) return true;
+    if (checkArray(settings.sudo)) return true;
+
+    // Direct raw phone number comparison fallback
+    const rawNumber = jid.split('@')[0];
+    if (rawNumber === settings.ownerNumber) return true;
+    
+    return false;
+}
+
 // Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely
 function getRawMessage(message) {
     if (!message) return null;
@@ -25,14 +49,29 @@ function getRawMessage(message) {
 // Unified Message Deletion Logger Helper
 async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
     try {
-        const antideleteConfig = settings.antidelete || { status: 'off', logDestination: 'bot' };
-        const status = antideleteConfig.status;
+        // Retrieve and handle antidelete setting type (handles string, boolean, or object configurations safely)
+        let status = 'off';
+        let logDestination = 'bot';
+        let logUserJid = '';
+
+        if (settings.antidelete) {
+            if (typeof settings.antidelete === 'object') {
+                status = settings.antidelete.status || 'off';
+                logDestination = settings.antidelete.logDestination || 'bot';
+                logUserJid = settings.antidelete.logUserJid || '';
+            } else if (typeof settings.antidelete === 'string') {
+                status = settings.antidelete.toLowerCase().trim();
+            } else if (typeof settings.antidelete === 'boolean') {
+                status = settings.antidelete ? 'on' : 'off';
+            }
+        }
 
         let shouldLog = false;
         if (status === 'on') {
             shouldLog = true;
         } else if (status === 'here') {
-            shouldLog = (antideleteConfig.hereJid === jid);
+            const targetHere = (typeof settings.antidelete === 'object' && settings.antidelete.hereJid) || jid;
+            shouldLog = (targetHere === jid);
         }
 
         // Avoid logging self-deletions to prevent endless loopbacks
@@ -56,25 +95,24 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                 const isBotSelfDm = (normalizeToJid(jid) === botJid);
                 const isUserDm = !isGroup && !isBotSelfDm;
 
-                // If deleted in a regular user's private DM, send log to the command user's (owner's) LID DM
+                // If deleted in a regular user's private DM, send log directly to the command user's (owner's) LID DM
                 if (isUserDm) {
                     destJid = settings.ownerLid || (settings.ownerLids && settings.ownerLids[0]) || settings.ownerJid || '';
                 } else {
-                    const isTargetOwner = antideleteConfig.logUserJid && (
-                        antideleteConfig.logUserJid.split('@')[0] === settings.ownerNumber || 
-                        settings.owners.includes(antideleteConfig.logUserJid.split('@')[0]) ||
-                        settings.devs.includes(antideleteConfig.logUserJid.split('@')[0]) ||
-                        settings.sudo?.includes(antideleteConfig.logUserJid.split('@')[0])
-                    );
+                    const isTargetOwner = logUserJid && isOwnerOrDev(logUserJid);
 
-                    if (antideleteConfig.logDestination === 'user' && isTargetOwner) {
-                        destJid = antideleteConfig.logUserJid;
+                    if (logDestination === 'user' && isTargetOwner) {
+                        destJid = normalizeToJid(logUserJid);
                     } else {
-                        // Default to the bot's own self LID DM
-                        destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
-                        if (!destJid) destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
+                        // Default to the bot's own self LID/JID DM
+                        destJid = botJid;
                     }
                 }
+            }
+
+            // Secure safe fallback for destJid to prevent runtime exceptions
+            if (!destJid) {
+                destJid = settings.ownerLid || settings.ownerJid || (settings.ownerNumber + '@s.whatsapp.net');
             }
 
             const logHeader = `🚨 *ANTIDELETE LOG INTEL:* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -85,12 +123,20 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
             const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
 
             if (rawContent.imageMessage) {
+                if (!rawContent.imageMessage.url && !rawContent.imageMessage.directPath) {
+                    console.error("Image message download parameters are missing");
+                    return;
+                }
                 const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                 await sock.sendMessage(destJid, { image: buffer, caption: `${logHeader}📷 *Type:* Image\n📝 *Caption:* "${textContent}"`, mentions: [sender, revokerJid] });
             } 
             else if (rawContent.videoMessage) {
+                if (!rawContent.videoMessage.url && !rawContent.videoMessage.directPath) {
+                    console.error("Video message download parameters are missing");
+                    return;
+                }
                 const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -98,6 +144,10 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                 await sock.sendMessage(destJid, { video: buffer, mimetype: mime, caption: `${logHeader}🎥 *Type:* Video\n📝 *Caption:* "${textContent}"`, mentions: [sender, revokerJid] });
             } 
             else if (rawContent.audioMessage) {
+                if (!rawContent.audioMessage.url && !rawContent.audioMessage.directPath) {
+                    console.error("Audio message download parameters are missing");
+                    return;
+                }
                 const stream = await downloadContentFromMessage(rawContent.audioMessage, 'audio');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -106,6 +156,10 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
                 await sock.sendMessage(destJid, { audio: buffer, mimetype: mime, ptt: rawContent.audioMessage.ptt || false });
             }
             else if (rawContent.stickerMessage) {
+                if (!rawContent.stickerMessage.url && !rawContent.stickerMessage.directPath) {
+                    console.error("Sticker message download parameters are missing");
+                    return;
+                }
                 const stream = await downloadContentFromMessage(rawContent.stickerMessage, 'sticker');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -120,6 +174,7 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
         }
     } catch (err) {
         console.error("❌ [ANTIDELETE] handleMessageDeletion failed:", err.message);
+        console.error(err.stack);
     }
 }
 
