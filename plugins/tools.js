@@ -38,7 +38,7 @@ function getRawMessage(message) {
     return message;
 }
 
-// Standardized JID Parser
+// Standardized JID Parser (Traverses nested elements cleanly)
 function parseTarget(msg, args) {
     if (args) {
         const cleanDigits = args.replace(/[^0-9]/g, '');
@@ -48,7 +48,13 @@ function parseTarget(msg, args) {
     }
 
     const rawMsg = getRawMessage(msg.message);
-    const contextInfo = rawMsg?.contextInfo;
+    const contextInfo = rawMsg?.contextInfo || 
+                        rawMsg?.extendedTextMessage?.contextInfo || 
+                        rawMsg?.imageMessage?.contextInfo || 
+                        rawMsg?.videoMessage?.contextInfo || 
+                        rawMsg?.stickerMessage?.contextInfo || 
+                        rawMsg?.audioMessage?.contextInfo || 
+                        rawMsg?.documentMessage?.contextInfo;
     const mentions = contextInfo?.mentionedJid || [];
 
     if (mentions.length > 0) {
@@ -80,7 +86,6 @@ const timezoneMap = {
 };
 
 async function uploadToCloud(buffer, mimeType) {
-    // Strip out any codec parameters (e.g. converting 'ogg; codecs=opus' into 'ogg')
     let ext = mimeType.split('/')[1] || 'bin';
     ext = ext.split(';')[0].trim();
     const filename = `file_${Date.now()}.${ext}`;
@@ -125,7 +130,13 @@ module.exports = [
             if (!isOwner && !isDev) return;
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
             
             if (!quoted || !quoted.imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
@@ -153,7 +164,6 @@ module.exports = [
             const jid = msg.remoteJid || msg.key.remoteJid;
             let targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
 
-            // Resolve LID to standard phone-number JID first to preserve tracking metrics
             if (targetJid.endsWith('@lid')) {
                 const resolvedPhoneJid = await getPhoneJid(sock, targetJid, jid);
                 if (resolvedPhoneJid) {
@@ -243,14 +253,20 @@ module.exports = [
         }
     },
 
-    // 5. SAVE STATUS UPDATE (Direct private DM redirection applied)
+    // 5. SAVE STATUS UPDATE
     {
         name: 'save',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
             
             if (!quoted) {
@@ -262,7 +278,6 @@ module.exports = [
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
 
                 const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-                // Route saved media straight to the user's private DM, keeping group chats clean
                 const targetDmJid = jid.endsWith('@g.us') ? senderJid : jid;
 
                 if (rawContent.imageMessage) {
@@ -299,7 +314,13 @@ module.exports = [
             if (!isOwner && !isDev) return;
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
             
             if (!quoted) return await sock.sendMessage(jid, { text: "❌ Reply to status media." }, { quoted: msg });
@@ -343,7 +364,13 @@ module.exports = [
             if (!isOwner && !isDev) return;
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
 
             if (contextInfo && contextInfo.stanzaId && !args) {
                 const prompt = await sock.sendMessage(jid, { text: "💬 Reply directly to this prompt with target country phone number JID." }, { quoted: msg });
@@ -898,7 +925,13 @@ module.exports = [
             let label = "Your";
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
             if (contextInfo && contextInfo.stanzaId) {
                 targetMsgId = contextInfo.stanzaId;
                 label = "Target's";
@@ -924,7 +957,13 @@ module.exports = [
             let targetUrl = args ? args.trim() : '';
 
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
 
             if (!targetUrl && quoted) {
@@ -1002,7 +1041,13 @@ module.exports = [
                 }
 
                 const rawMsg = getRawMessage(msg.message);
-                const contextInfo = rawMsg?.contextInfo;
+                const contextInfo = rawMsg?.contextInfo || 
+                                    rawMsg?.extendedTextMessage?.contextInfo || 
+                                    rawMsg?.imageMessage?.contextInfo || 
+                                    rawMsg?.videoMessage?.contextInfo || 
+                                    rawMsg?.stickerMessage?.contextInfo || 
+                                    rawMsg?.audioMessage?.contextInfo || 
+                                    rawMsg?.documentMessage?.contextInfo;
                 const quoted = contextInfo?.quotedMessage;
 
                 if (!textToTranslate.trim() && quoted) {
@@ -1062,7 +1107,13 @@ module.exports = [
             const textContent = parts.slice(1).join(' ').trim();
             
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo;
+            const contextInfo = rawMsg?.contextInfo || 
+                                rawMsg?.extendedTextMessage?.contextInfo || 
+                                rawMsg?.imageMessage?.contextInfo || 
+                                rawMsg?.videoMessage?.contextInfo || 
+                                rawMsg?.stickerMessage?.contextInfo || 
+                                rawMsg?.audioMessage?.contextInfo || 
+                                rawMsg?.documentMessage?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
 
             if (quoted) {
