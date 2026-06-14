@@ -165,7 +165,7 @@ function isOwnerTarget(target) {
            (settings.owners && settings.owners.includes(target));
 }
 
-// Helper to query Gemini for text summarization tasks using gemini-3.5-flash
+// Google Gen AI SDK Text integration supporting gemini-3.5-flash
 async function queryGeminiText(prompt, logString) {
     const k1 = "AQ.A";
     const k2 = "b8RN6KZl";
@@ -173,31 +173,29 @@ async function queryGeminiText(prompt, logString) {
     const k4 = "Rlvdo3tle5ZJa";
     const k5 = "F6FdUBRk1x63EWYA";
     const apiKey = settings.geminiApiKey || (k1 + k2 + k3 + k4 + k5);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
 
-    const response = await fetch(url, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-            contents: [
-                {
-                    parts: [
-                        { text: `${prompt}\n\nHere are the chat logs:\n${logString}` }
-                    ]
-                }
-            ]
-        })
-    });
+    try {
+        const { GoogleGenAI } = await import('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: apiKey });
 
-    if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Gemini status ${response.status}: ${errText}`);
+        try {
+            // Standard SDK content generation
+            const response = await ai.models.generateContent({
+                model: "gemini-3.5-flash",
+                contents: `${prompt}\n\nHere are the chat logs:\n${logString}`
+            });
+            return response.text || "Could not generate summary.";
+        } catch (sdkErr) {
+            // Fallback to custom interactions interface if defined in your environment
+            const response = await ai.interactions.create({
+                model: "gemini-3.5-flash",
+                input: `${prompt}\n\nHere are the chat logs:\n${logString}`
+            });
+            return response.text || response.output || "Could not generate summary.";
+        }
+    } catch (e) {
+        throw new Error(`SDK error: ${e.message}`);
     }
-
-    const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Could not generate summary.";
 }
 
 // Helper to compile Satoru Gojo-themed 10-point summaries using gemini-3.5-flash
@@ -232,7 +230,7 @@ async function logDeletedMessage(sock, deletedMsg) {
             
             if (senderJid === botJid) return;
 
-            const targetLid = settings.ownerLid || (settings.ownerLids && settings.ownerLids[0]);
+            const targetLid = settings.ownerLid || (settings.ownerLids && settings.ownerLids[0]) || settings.ownerJid || '';
             if (targetLid) {
                 const rawContent = getRawMessage(deletedMsg.message);
                 const deletedText = rawContent?.conversation || rawContent?.extendedTextMessage?.text || "[Media/Other Attachment]";
@@ -1241,9 +1239,9 @@ module.exports = [
     {
         name: 'stopkickall',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isAuthorizedMember = isDev || isOwner || isSudo;
+            const isAuthorizedMember = isDev || isOwner;
             if (!isAuthorizedMember) return;
 
             if (global.kickallActive[jid]) {
