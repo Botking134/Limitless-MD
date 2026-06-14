@@ -4,12 +4,20 @@ const { saveSettings } = require('../helpers/settingsSaver');
 const { saveState } = require('../stateManager');
 const commands = require('../commands'); 
 
-// Obfuscated backup API key configuration
+// Obfuscated backup Groq API key configuration
 const s1 = "gsk_";
 const s2 = "tPB0xMyZ2oijloaBNcDs";
 const s3 = "WGdyb3FY5iC2p9hwRE";
 const s4 = "SIJXAV3t53LZg9";
 const GROQ_API_KEY_FALLBACK = s1 + s2 + s3 + s4;
+
+// Obfuscated backup Gemini API key configuration
+const k1 = "AQ.A";
+const k2 = "b8RN6KBW";
+const k3 = "ZMvTeBKiv2Y";
+const k4 = "6Jl2td79ivWI";
+const k5 = "G01zOu4xalDZJqycog";
+const GEMINI_API_KEY_FALLBACK = k1 + k2 + k3 + k4 + k5;
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -31,6 +39,47 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
         return data.choices?.[0]?.message?.content || "";
     } catch (e) {
         console.error("Groq API Query Error:", e.message);
+        throw e;
+    }
+}
+
+// Google Gemini Vision API query interface
+async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-1.5-flash") {
+    try {
+        const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                contents: [
+                    {
+                        parts: [
+                            { text: prompt },
+                            {
+                                inlineData: {
+                                    mimeType: mimeType,
+                                    data: imageBase64
+                                }
+                            }
+                        ]
+                    }
+                ]
+            })
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Gemini API error: ${response.status} - ${errText}`);
+        }
+
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    } catch (e) {
+        console.error("Gemini Vision Query Error:", e.message);
         throw e;
     }
 }
@@ -241,15 +290,18 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const rawContent = quoted ? getRawMessage(quoted) : getRawMessage(msg.message);
+            // Safe unwrapping of incoming command message to resolve disappearing messages wrapping bug
+            const rawIncoming = getRawMessage(msg.message);
+            const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo || 
+                                rawIncoming?.imageMessage?.contextInfo ||
+                                rawIncoming?.videoMessage?.contextInfo;
             
-            // Fully unwrap the nested imageMessage protocol buffer object
-            const imageMessage = rawContent?.imageMessage || 
-                                 rawContent?.viewOnceMessage?.message?.imageMessage || 
-                                 rawContent?.viewOnceMessageV2?.message?.imageMessage || 
-                                 rawContent?.viewOnceMessageV2Extension?.message?.imageMessage || 
-                                 null;
+            const quoted = contextInfo?.quotedMessage;
+            const rawContent = quoted ? getRawMessage(quoted) : rawIncoming;
+            
+            // Support both standard images and images sent uncompressed as document attachments
+            const isImageDoc = rawContent?.documentMessage && rawContent?.documentMessage?.mimetype?.startsWith('image/');
+            const imageMessage = rawContent?.imageMessage || (isImageDoc ? rawContent.documentMessage : null);
 
             if (!imageMessage) {
                 return await sock.sendMessage(jid, { 
@@ -259,32 +311,24 @@ module.exports = [
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                await sock.sendMessage(jid, { text: "Processing visual data... 👁️" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Processing visual data via Gemini... 👁️" }, { quoted: msg });
 
                 const mimeType = imageMessage.mimetype || "image/jpeg";
-                const stream = await downloadContentFromMessage(imageMessage, 'image');
+                const mediaType = rawContent?.documentMessage ? 'document' : 'image';
+                
+                const stream = await downloadContentFromMessage(imageMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const imageBase64 = buffer.toString("base64");
-                let promptQuery = args || "Analyze this image in detail.";
+                let promptQuery = args || "Analyze this image in detail and extract any text if visible.";
                 if (isDev) {
                     promptQuery += " Address the user as 'Master'.";
                 } else if (isOwner) {
                     promptQuery += ` Address the user as '${settings.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
                 }
 
-                const messages = [
-                    {
-                        role: "user",
-                        content: [
-                            { type: "text", text: promptQuery },
-                            { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }
-                        ]
-                    }
-                ];
-
-                const responseText = await queryGroq(messages, "llama-3.2-11b-vision-preview"); 
+                const responseText = await queryGeminiVision(imageBase64, mimeType, promptQuery, "gemini-1.5-flash"); 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `❌ Vision processing failed: ${error.message}` }, { quoted: msg });
