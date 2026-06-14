@@ -168,10 +168,10 @@ function isOwnerTarget(target) {
 // Helper to query Gemini for text summarization tasks using gemini-3.5-flash
 async function queryGeminiText(prompt, logString) {
     const k1 = "AQ.A";
-    const k2 = "b8RN6KBW";
-    const k3 = "ZMvTeBKiv2Y";
-    const k4 = "6Jl2td79ivWI";
-    const k5 = "G01zOu4xalDZJqycog";
+    const k2 = "b8RN6KZl";
+    const k3 = "dboFt4nmErCs";
+    const k4 = "Rlvdo3tle5ZJa";
+    const k5 = "F6FdUBRk1x63EWYA";
     const apiKey = settings.geminiApiKey || (k1 + k2 + k3 + k4 + k5);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
 
