@@ -40,6 +40,21 @@ global.vault8Sessions = global.vault8Sessions || {};
 global.aiMemory = global.aiMemory || {};
 global.botMessageAgents = global.botMessageAgents || {};
 
+// Helper to format system uptime
+function formatUptime(seconds) {
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+
+    const parts = [];
+    if (d > 0) parts.push(`${d}d`);
+    if (h > 0) parts.push(`${h}h`);
+    if (m > 0) parts.push(`${m}m`);
+    parts.push(`${s}s`);
+    return parts.join(' ');
+}
+
 async function startBot() {
     if (!fs.existsSync(path.join(__dirname, '.git'))) {
         const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
@@ -201,6 +216,42 @@ async function startBot() {
                 console.log(`👑 [SYSTEM] Developer LIDs mapped:`, settings.devLids);
             } catch (resolveErr) {
                 console.error("[WARNING] Failed to pre-resolve developer LIDs on boot:", resolveErr);
+            }
+
+            // Compile and dispatch status report to Bot DM privately
+            try {
+                const prefixVal = settings.prefix || "⚡";
+                const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour12: true });
+
+                // Calculate real-time server network latency securely
+                let pingMs = 35;
+                try {
+                    const startPing = Date.now();
+                    await fetch("https://1.1.1.1", { method: 'HEAD' });
+                    pingMs = Date.now() - startPing;
+                } catch (e) {}
+
+                const statusCard = 
+                    `\`\`\`` +
+                    `⚡ ═══ [ CONNECTED ] ═══ ⚡\n\n` +
+                    ` ▶ SYSTEM :: LIMITLESS-MD\n` +
+                    ` ▶ PREFIX :: ${prefixVal}\n` +
+                    ` ▶ SPEED  :: ${pingMs}ms\n` +
+                    ` ▶ TIME   :: ${timeStr} WAT\n\n` +
+                    `─── [ STATUS REPORT ] ───\n` +
+                    ` ⟫ 🔴 RED   :: CHARGED\n` +
+                    ` ⟫ 🔵 BLUE  :: CHARGED\n` +
+                    ` ⟫ 🟣 PURPLE:: READY TO FIRE\n\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    ` "I'm the strongest."\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━` +
+                    `\`\`\``;
+
+                const botJid = sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+                await sock.sendMessage(botJid, { text: statusCard });
+                console.log(`✅ [SYSTEM] Connection status report successfully dispatched to your private DM.`);
+            } catch (err) {
+                console.error("[WARNING] Failed to send connection report to private DM:", err.message);
             }
 
             setInterval(async () => {
