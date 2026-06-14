@@ -1,6 +1,16 @@
 // helpers/antiDelete.js
 const settings = require('../settings');
 
+// Safely normalizes JIDs by stripping colons and device identifiers
+function normalizeToJid(input) {
+    if (!input) return '';
+    const clean = input.replace(/:[\d]+@/, '@');
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean;
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
+    return raw ? `${raw}@s.whatsapp.net` : '';
+}
+
 // Recursive Helper to automatically unwrap ephemeral, view-once, and nested envelopes safely
 function getRawMessage(message) {
     if (!message) return null;
@@ -41,18 +51,29 @@ async function handleMessageDeletion(sock, originalMsg, jid, revokerJid) {
             if (status === 'here') {
                 destJid = jid; 
             } else {
-                const isTargetOwner = antideleteConfig.logUserJid && (
-                    antideleteConfig.logUserJid.split('@')[0] === settings.ownerNumber || 
-                    settings.owners.includes(antideleteConfig.logUserJid.split('@')[0]) ||
-                    settings.devs.includes(antideleteConfig.logUserJid.split('@')[0]) ||
-                    settings.sudo?.includes(antideleteConfig.logUserJid.split('@')[0])
-                );
+                const isGroup = jid.endsWith('@g.us');
+                const botJid = sock.user.id ? normalizeToJid(sock.user.id) : '';
+                const isBotSelfDm = (normalizeToJid(jid) === botJid);
+                const isUserDm = !isGroup && !isBotSelfDm;
 
-                if (antideleteConfig.logDestination === 'user' && isTargetOwner) {
-                    destJid = antideleteConfig.logUserJid;
+                // If deleted in a regular user's private DM, send log to the command user's (owner's) LID DM
+                if (isUserDm) {
+                    destJid = settings.ownerLid || (settings.ownerLids && settings.ownerLids[0]) || settings.ownerJid || '';
                 } else {
-                    destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
-                    if (!destJid) destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
+                    const isTargetOwner = antideleteConfig.logUserJid && (
+                        antideleteConfig.logUserJid.split('@')[0] === settings.ownerNumber || 
+                        settings.owners.includes(antideleteConfig.logUserJid.split('@')[0]) ||
+                        settings.devs.includes(antideleteConfig.logUserJid.split('@')[0]) ||
+                        settings.sudo?.includes(antideleteConfig.logUserJid.split('@')[0])
+                    );
+
+                    if (antideleteConfig.logDestination === 'user' && isTargetOwner) {
+                        destJid = antideleteConfig.logUserJid;
+                    } else {
+                        // Default to the bot's own self LID DM
+                        destJid = sock.user.id ? (sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net')) : '';
+                        if (!destJid) destJid = settings.botJid || (settings.ownerNumber + '@s.whatsapp.net');
+                    }
                 }
             }
 
