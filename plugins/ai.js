@@ -43,18 +43,14 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     }
 }
 
-// Google Gen AI SDK Vision integration supporting gemini-3.5-flash on Google Cloud
+// Google Gen AI SDK Vision integration supporting gemini-3.5-flash
 async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-3.5-flash") {
     try {
         const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
         const { GoogleGenAI } = await import('@google/genai');
         
-        // Initialize client with project metadata so Google Cloud validates the key correctly
-        const ai = new GoogleGenAI({ 
-            apiKey: apiKey,
-            project: "960406374521",
-            location: "us-central1"
-        });
+        // Pass only the apiKey (project/location must be omitted when using API keys)
+        const ai = new GoogleGenAI({ apiKey: apiKey });
 
         try {
             const response = await ai.models.generateContent({
