@@ -211,7 +211,7 @@ module.exports = [
         }
     },
 
-    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo - Optimized WebP-to-GIF-to-MP4 Pipeline)
+    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo - WebP-to-GIF-to-MP4 Pipeline)
     {
         name: 'tomp4',
         isPrefixless: false,
@@ -220,7 +220,7 @@ module.exports = [
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = getRawMessage(quoted || msg.message);
 
-            if (!rawContent?.stickerMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker to convert to video." }, { quoted: msg });
+            if (!rawContent?.stickerMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an animated sticker to convert to video." }, { quoted: msg });
 
             const statusMsg = await sock.sendMessage(jid, { text: "Converting WebP frames... 🎬" }, { quoted: msg });
 
@@ -230,22 +230,22 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                // Step 1: Use sharp to convert the animated WebP buffer into an animated GIF buffer
+                // Convert animated WebP buffer to animated GIF buffer using sharp to bypass ffmpeg's libwebp decode issues
                 const gifBuffer = await sharp(buffer, { animated: true }).gif().toBuffer();
 
                 const tmpInput = path.join(__dirname, `../tmp_in_${Date.now()}.gif`);
                 const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp4`);
                 fs.writeFileSync(tmpInput, gifBuffer);
 
-                // Step 2: Compile the animated GIF into an MP4 video using FFMPEG
+                // Compile animated GIF back to MP4 natively via FFMPEG
                 const cmd = `ffmpeg -i "${tmpInput}" -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p" -vcodec libx264 -preset fast -t 10 "${tmpOutput}" -y`;
                 exec(cmd, async (err) => {
                     if (err) {
-                        // Fallback to basic mpeg4 if libx264 is completely missing
+                        // Fallback automatically to mpeg4 if libx264 is missing
                         const fallbackCmd = `ffmpeg -i "${tmpInput}" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -vcodec mpeg4 -t 10 "${tmpOutput}" -y`;
                         exec(fallbackCmd, async (fallbackErr) => {
                             if (fallbackErr) {
-                                await sock.sendMessage(jid, { text: `❌ Video compilation failed: ${fallbackErr.message}`, edit: statusMsg.key });
+                                await sock.sendMessage(jid, { text: "❌ FFMPEG video conversion failed. Ensure sticker is animated and FFMPEG is installed on the host.", edit: statusMsg.key });
                             } else {
                                 const videoBuffer = fs.readFileSync(tmpOutput);
                                 await sock.sendMessage(jid, { video: videoBuffer, mimetype: "video/mp4", caption: "🎥 converted sticker successfully! (fallback)" }, { quoted: msg });
@@ -268,7 +268,7 @@ module.exports = [
         }
     },
 
-    // 4. REAL-TIME CURRENCY CONVERTER (.currency)
+    // 4. REAL-TIME CURRENCY CONVERTER (.currency) - Fully Gemini-Grounded
     {
         name: 'currency',
         isPrefixless: false,
@@ -279,11 +279,11 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Calculating financial exchange rate... 💱" }, { quoted: msg });
 
-                const prompt = `Perform a live Google Search to obtain the current real-time exchange rates. ` +
-                               `Convert the given currency amount exactly. ` +
-                               `Return the final calculation structured beautifully with country flags and exchange info.`;
+                const prompt = `You are a real-time financial converter. Perform a live Google Search to obtain the latest currency exchange rate for the following request: "${args}". ` +
+                               `Convert the amount precisely. Output the result in a clean, professional, and visually engaging card with appropriate country flags, the official currency codes (e.g. NGN, GBP, USD), ` +
+                               `the conversion formula, and a brief note about the live rate timestamp. Keep it highly organized. Do not add any conversational intro or filler.`;
 
-                const responseText = await queryGeminiText(prompt, args);
+                const responseText = await queryGeminiText(prompt, args, "gemini-3.5-flash", true);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Currency conversion failed." }, { quoted: msg });
@@ -433,7 +433,7 @@ module.exports = [
         }
     },
 
-    // 10. QUANTITY MEASUREMENT UNIT CONVERTER (.quantity / .qty)
+    // 10. QUANTITY MEASUREMENT UNIT CONVERTER (.quantity / .qty) - Fully Gemini-Grounded
     {
         name: 'quantity',
         isPrefixless: false,
@@ -444,11 +444,12 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Performing scientific quantity calculation... 📏" }, { quoted: msg });
 
-                const prompt = `Perform a scientific measurement calculation to convert the given quantity value to target unit. ` +
-                               `The input might contain obscure or standard metrics (e.g. kg, grams, pounds, ounces, km, miles). ` +
-                               `Provide the output with a clear, beautiful card showing mathematical calculation.`;
+                const prompt = `You are a scientific unit converter. Convert the given quantity value to the requested target unit for: "${args}". ` +
+                               `The input may contain standard, obscure, metric, or imperial measurements (e.g., kg to grams, stones to pounds, lightyears to meters, fahrenheit to celsius). ` +
+                               `Perform the mathematical conversion with absolute precision using Google Search. Output the result in a beautifully organized card detailing the input quantity, target quantity, conversion formula, and a brief scientific note. ` +
+                               `Do not include any conversational intro or filler.`;
 
-                const responseText = await queryGeminiText(prompt, args);
+                const responseText = await queryGeminiText(prompt, args, "gemini-3.5-flash", true);
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Quantity conversion failed." }, { quoted: msg });
@@ -517,7 +518,7 @@ module.exports = [
     {
         name: 'take',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = getRawMessage(quoted);
