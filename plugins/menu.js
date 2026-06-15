@@ -143,6 +143,8 @@ _║ ⊱ silence_
 _║ ⊱ gcalerts_
 _║ ⊱ antigcstatus_
 _║ ⊱ spamtag_
+_║ ⊱ antipromote_
+_║ ⊱ antidemote_
 
 _❖ ── [ TOOLS ] ── ❖_
 _║ ⊱ track_
@@ -163,20 +165,22 @@ _║ ⊱ antibug_
 _║ ⊱ clear_
 _║ ⊱ archive_
 _║ ⊱ unarchive_
-_║ ⊱ autoviewstatus_
+_║ ⊱ autoviewstatus_ / .autovs
 _║ ⊱ statusemoji_
-_║ ⊱ autoreactstatus_
+_║ ⊱ autoreactstatus_ / .autors
 _║ ⊱ block_
 _║ ⊱ unblock_
 _║ ⊱ aza_
 _║ ⊱ time_
-_║ ⊱ weather_
+_║ ⊱ weather_ (AI Search)
 _║ ⊱ device_
 _║ ⊱ ss_
 _║ ⊱ calc_
-_║ ⊱ trt_
+_║ ⊱ trt_ (AI dependent)
 _║ ⊱ translate_
 _║ ⊱ spam_
+_║ ⊱ livescore_ / .live (AI Search)
+_║ ⊱ score_ (AI Search)
 
 _❖ ── [ DOWNLOADER ] ── ❖_
 _║ ⊱ play_
@@ -222,7 +226,6 @@ _║ ⊱ arrest_
 _║ ⊱ liedetector_
 _║ ⊱ rizz_
 _║ ⊱ speech_
-_║ ⊱ emix_
 _║ ⊱ slap_
 _║ ⊱ kill_
 _║ ⊱ kiss_
@@ -273,6 +276,8 @@ _║ ⊱ tovv_
 _║ ⊱ tourl_
 _║ ⊱ kamui_
 _║ ⊱ vvs_
+_║ ⊱ emix_ / .emojimix
+_║ ⊱ smeme_ / .stickermeme
 _║ ⊱ addnote_
 _║ ⊱ delnote_
 _║ ⊱ getnotes_
@@ -497,7 +502,9 @@ module.exports = [
 • *${settings.prefix}silence <-s/-m/all>* — Auto-delete chat constraints.
 • *${settings.prefix}gcalerts <promote/demote/welcome/goodbye> <on/off>* — Real-time event notifications.
 • *${settings.prefix}antigcstatus <warn/delete/kick/off>* — Blocks unapproved status posts.
-• *${settings.prefix}spamtag <count> <text>* — Repeatedly tags group members with mentions.`;
+• *${settings.prefix}spamtag <count> <text>* — Repeatedly tags group members with mentions.
+• *${settings.prefix}antipromote <on/off>* — Demotes promoters and targets on unsanctioned promotions.
+• *${settings.prefix}antidemote <on/off>* — Instant demotion of unapproved demoters and re-promotion of the victim.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -510,7 +517,7 @@ module.exports = [
 `⚙️ *LIMITLESS SPATIAL TOOLS* ⚙️
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-• *${settings.prefix}track* — Spatial geographical prefix locator.
+• *${settings.prefix}track* — Spatial geographical prefix locator (Supports Kenya prefix).
 • *${settings.prefix}getpp* — Extracts target user profile picture.
 • *${settings.prefix}setname* — Modifies bot display username.
 • *${settings.prefix}save* — Saves active status media locally.
@@ -525,18 +532,20 @@ module.exports = [
 • *${settings.prefix}antibug* — Active flood rate-limit protection.
 • *${settings.prefix}clear* — Completely empties server chat logs.
 • *${settings.prefix}archive / .unarchive* — Archive states controllers.
-• *${settings.prefix}autoviewstatus* — Auto-view status triggers.
+• *${settings.prefix}autoviewstatus* / *autovs* — Auto-view status triggers.
 • *${settings.prefix}statusemoji* — Custom status reaction emoji.
-• *${settings.prefix}autoreactstatus* — Auto status reaction triggers.
+• *${settings.prefix}autoreactstatus* / *autors* — Auto status reaction triggers.
 • *${settings.prefix}block / .unblock* — Native contact blocks.
 • *${settings.prefix}aza <set>* — Bank credentials wizard configuration.
 • *${settings.prefix}time* — Regional timezone clock calculator.
-• *${settings.prefix}weather* — Tropospheric coordinates weather forecast.
+• *${settings.prefix}weather* — Live weather analytics (Gemini Search-grounded).
 • *${settings.prefix}device* — Client hardware OS signature scanner.
 • *${settings.prefix}ss <url>* — Render high-speed website screenshot.
 • *${settings.prefix}calc <expr>* — Secure mathematical expression evaluator.
-• *${settings.prefix}trt <route> <text>* — Dynamic Google translation translator.
-• *${settings.prefix}spam <count> <text/reply>* — Repeatedly loops/spams text or media.`;
+• *${settings.prefix}trt <route/text> <lang>* — AI-dependent context translator (Gemini).
+• *${settings.prefix}spam <count> <text/reply>* — Repeatedly loops/spams text or media.
+• *${settings.prefix}livescore* / *live* — Ongoing matches live scoreboard tracker (Gemini Search-grounded).
+• *${settings.prefix}score <teams> <league> <D/M/Y>* — Historical sports past score finder (Gemini Search-grounded).`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     },
@@ -599,7 +608,6 @@ module.exports = [
 • *${settings.prefix}liedetector <@user>* — Biometric truth/lie scanner.
 • *${settings.prefix}rizz* — Drops smooth, infinite pick-up lines.
 • *${settings.prefix}speech <char>* — Deliver iconic anime monologues.
-• *${settings.prefix}emix <emoji1> <emoji2>* — Combine two emojis into a 3D sticker.
 
 *🎭 Anime Interactive Actions:*
 • *${settings.prefix}slap, .kill, .kiss, .hug, .kik, .punch, .hifive, .bite, .poke*`;
@@ -650,14 +658,18 @@ module.exports = [
 • *${settings.prefix}speed* — Interactive execution speed meter.
 • *${settings.prefix}vv* — Manual view-once media extractor.
 • *${settings.prefix}tovv* — Encrypts media into View Once.
-• *${settings.prefix}sticker / .crop* — Sticker creation & cropping.
+• *${settings.prefix}sticker / .crop* — Sticker creation & cropping (low-kilobyte optimized).
 • *${settings.prefix}take / .steal* — Sticker metadata customization.
 • *${settings.prefix}setcmd / .delcmd* — Maps commands directly to stickers.
 • *${settings.prefix}tourl / .url* — Media file cloud uploaders.
 • *${settings.prefix}kamui* — Silent decryption & DM-forwarding View Once.
 • *${settings.prefix}vvs <emoji>* — Trigger decryption kamui via specific emojis.
-• *${settings.prefix}addnote / .delnote* — Sticky note managers.
-• *${settings.prefix}getnotes / .getnote* — Notes index lookup.`;
+• *${settings.prefix}emix <emoji1>+<emoji2>* — Combine two emojis into a transparent sticker.
+• *${settings.prefix}smeme <top> / <bottom>* — Create stroked impact sticker memes.
+• *${settings.prefix}addnote <title> | <content>* — Saves a custom sticky note.
+• *${settings.prefix}delnote <title>* — Deletes a specific note.
+• *${settings.prefix}getnotes* — Lists all notes saved for this chat.
+• *${settings.prefix}getnote <title>* — Retrieves the content of a note.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
     }
