@@ -28,26 +28,53 @@ function normalizeToJid(input) {
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
-// Google Gen AI SDK Text integration supporting gemini-3.5-flash with live search grounding
-async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash") {
+// Strictly maps characters mathematically using precise relative offsets to prevent overlapping
+function convertToFont(text, style) {
+    const uppercaseOffset = {
+        monospace: 120408, //  Makes Monospace A
+        bubble: 9398,      // Ⓐ
+        italic: 119860     // 𝘈
+    };
+    const lowercaseOffset = {
+        monospace: 120434, // 𝗀 Makes Monospace a
+        bubble: 9424,      // ⓐ
+        italic: 119886     // 𝘢
+    };
+
+    return text.replace(/[a-zA-Z]/g, (char) => {
+        const code = char.charCodeAt(0);
+        if (code >= 65 && code <= 90) {
+            return String.fromCodePoint(code - 65 + uppercaseOffset[style]);
+        }
+        if (code >= 97 && code <= 122) {
+            return String.fromCodePoint(code - 97 + lowercaseOffset[style]);
+        }
+        return char;
+    });
+}
+
+// Google Gen AI SDK Text integration supporting gemini-3.5-flash with live search grounding fallbacks
+async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash", useSearch = true) {
     try {
         const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
         const { GoogleGenAI } = await import('@google/genai');
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
+        const configPayload = useSearch ? { tools: [{ googleSearch: {} }] } : {};
+
         try {
+            // Attempt standard generation with search grounding first
             const response = await ai.models.generateContent({
                 model: model,
                 contents: `${prompt}\n\nContent:\n"${textContent}"`,
-                config: {
-                    tools: [{ googleSearch: {} }] // Triggers Google Search Grounding for live currency/quantity rates
-                }
+                config: configPayload
             });
             return response.text || "";
         } catch (sdkErr) {
-            const response = await ai.interactions.create({
+            // Fallback 1: Silent retry without search grounding to prevent crashes
+            const response = await ai.models.generateContent({
                 model: model,
-                input: `${prompt}\n\nContent:\n"${textContent}"`
+                contents: `${prompt}\n\nContent:\n"${textContent}"`
             });
             return response.text || response.output || "";
         }
@@ -57,7 +84,6 @@ async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash") 
     }
 }
 
-// Recursive Helper to automatically unwrap envelopes
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -69,31 +95,70 @@ function getRawMessage(message) {
     return message;
 }
 
-// Uploads a binary buffer to the public Catbox Uploader API
-async function uploadToCatbox(buffer, mimeType) {
+// Standardized JID Parser (Traverses nested elements cleanly)
+function parseTarget(msg, args) {
+    if (args) {
+        const cleanDigits = args.replace(/[^0-9]/g, '');
+        if (cleanDigits.length >= 7) {
+            return `${cleanDigits}@s.whatsapp.net`;
+        }
+    }
+
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo || 
+                        rawMsg?.extendedTextMessage?.contextInfo || 
+                        rawMsg?.imageMessage?.contextInfo || 
+                        rawMsg?.videoMessage?.contextInfo || 
+                        rawMsg?.stickerMessage?.contextInfo || 
+                        rawMsg?.audioMessage?.contextInfo || 
+                        rawMsg?.documentMessage?.contextInfo;
+    const mentions = contextInfo?.mentionedJid || [];
+
+    if (mentions.length > 0) {
+        return mentions[0].split(':')[0] + (mentions[0].includes('@lid') ? '@lid' : '@s.whatsapp.net');
+    } else if (contextInfo?.participant) {
+        const part = contextInfo.participant;
+        return part.split(':')[0] + (part.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+    }
+    return '';
+}
+
+// Uploads a binary buffer to secure cloud hosts with auto-fallback to guarantee uptime
+async function uploadToCloud(buffer, mimeType) {
     let ext = mimeType.split('/')[1] || 'bin';
     ext = ext.split(';')[0].trim();
     const filename = `file_${Date.now()}.${ext}`;
 
+    // Host 1: qu.ax
     try {
         const form = new FormData();
-        form.append('fileToUpload', buffer, { filename, contentType: mimeType });
-        form.append('reqtype', 'fileupload');
-        
-        const response = await axios.post('https://apis.davidcyril.name.ng/uploader/catbox', form, {
+        form.append('files[]', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://qu.ax/upload.php', form, {
             headers: { ...form.getHeaders() }
         });
+        if (response.data?.success && response.data.files?.[0]?.url) {
+            return response.data.files[0].url.trim();
+        }
+    } catch (err) {
+        console.error("❌ [UPLOAD] qu.ax failed:", err.message);
+    }
 
+    // Host 2: catbox.moe
+    try {
+        const form = new FormData();
+        form.append('reqtype', 'fileupload');
+        form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://catbox.moe/user/api.php', form, {
+            headers: { ...form.getHeaders() }
+        });
         if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
             return response.data.trim();
         }
-        if (response.data?.url) {
-            return response.data.url.trim();
-        }
     } catch (err) {
-        console.error("❌ [CATBOX UPLOAD] failed:", err.message);
+        console.error("❌ [UPLOAD] catbox failed:", err.message);
     }
-    throw new Error("Catbox upload failed.");
+
+    throw new Error("Catbox and qu.ax upload hosts failed.");
 }
 
 module.exports = [
@@ -120,7 +185,7 @@ module.exports = [
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const mimeType = mediaMessage.mimetype || "application/octet-stream";
-                const url = await uploadToCatbox(buffer, mimeType);
+                const url = await uploadToCloud(buffer, mimeType);
 
                 await sock.sendMessage(jid, { text: `📦 *Limitless Direct URL* 🌐\n\nDirect Link: ${url}`, edit: statusMsg.key });
             } catch (error) {
@@ -129,7 +194,7 @@ module.exports = [
         }
     },
 
-    // 2. CONVERT VIDEO TO AUDIOS (.tomp3 / .toaudio)
+    // 2. CONVERT VIDEO TO AUDIOS (.tomp3 / .toaudio - Local FFMPEG Engine)
     {
         name: 'tomp3',
         isPrefixless: false,
@@ -140,7 +205,7 @@ module.exports = [
 
             if (!rawContent?.videoMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to a video message to convert it to audio." }, { quoted: msg });
 
-            const statusMsg = await sock.sendMessage(jid, { text: "Converting video stream to audio... 🎧" }, { quoted: msg });
+            const statusMsg = await sock.sendMessage(jid, { text: "Converting video stream to audio locally... 🎧" }, { quoted: msg });
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -148,25 +213,30 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                // Upload to cloud to get a public URL for the conversion API
-                const cloudUrl = await uploadToCatbox(buffer, rawContent.videoMessage.mimetype || 'video/mp4');
+                const tmpInput = path.join(__dirname, `../tmp_in_${Date.now()}.mp4`);
+                const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp3`);
+                fs.writeFileSync(tmpInput, buffer);
 
-                const convertUrl = `https://apis.davidcyril.name.ng/convert/mp3?url=${encodeURIComponent(cloudUrl)}`;
-                const response = await axios.get(convertUrl);
-                
-                if (response.data && response.data.status && response.data.result) {
-                    await sock.sendMessage(jid, { audio: { url: response.data.result }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-                    try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
-                } else {
-                    throw new Error("Conversion API returned invalid response");
-                }
+                // Run local re-encode conversion via FFMPEG for instant offline compilation
+                const cmd = `ffmpeg -i "${tmpInput}" -q:a 0 -map a "${tmpOutput}" -y`;
+                exec(cmd, async (err) => {
+                    if (err) {
+                        await sock.sendMessage(jid, { text: "❌ FFMPEG audio conversion failed.", edit: statusMsg.key });
+                    } else {
+                        const audioBuffer = fs.readFileSync(tmpOutput);
+                        await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                        try { fs.unlinkSync(tmpOutput); } catch (e) {}
+                    }
+                    try { fs.unlinkSync(tmpInput); } catch (e) {}
+                });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `❌ Audio conversion failed: ${error.message}`, edit: statusMsg.key });
             }
         }
     },
 
-    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo)
+    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo - Supports static WebP frames)
     {
         name: 'tomp4',
         isPrefixless: false,
@@ -189,11 +259,11 @@ module.exports = [
                 const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp4`);
                 fs.writeFileSync(tmpInput, buffer);
 
-                // Re-encode using ffmpeg command locally with standard WA compatible yuv420p pixel format
-                const cmd = `ffmpeg -i "${tmpInput}" -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" "${tmpOutput}" -y`;
+                // Loop input stream if WebP is static to prevent compile errors, scales to WA-compatible even dimensions
+                const cmd = `ffmpeg -vcodec libwebp -ignore_loop 0 -i "${tmpInput}" -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p" -vcodec libx264 -preset fast -t 4 "${tmpOutput}" -y`;
                 exec(cmd, async (err) => {
                     if (err) {
-                        await sock.sendMessage(jid, { text: "❌ FFMPEG conversion failed.", edit: statusMsg.key });
+                        await sock.sendMessage(jid, { text: "❌ FFMPEG video conversion failed. Ensure sticker is animated, or use .toimg for static stickers.", edit: statusMsg.key });
                     } else {
                         const videoBuffer = fs.readFileSync(tmpOutput);
                         await sock.sendMessage(jid, { video: videoBuffer, mimetype: "video/mp4", caption: "🎥 converted sticker successfully!" }, { quoted: msg });
@@ -240,28 +310,9 @@ module.exports = [
             if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .font <text>" }, { quoted: msg });
 
             const text = args.trim();
-            
-            // Native offline fast alphanumeric unicode fonts mapping
-            const bubble = text.replace(/[a-zA-Z]/g, (char) => {
-                const code = char.charCodeAt(0);
-                if (code >= 65 && code <= 90) return String.fromCodePoint(code + 127233); // Uppercase bubble
-                if (code >= 97 && code <= 122) return String.fromCodePoint(code + 127227); // Lowercase bubble
-                return char;
-            });
-
-            const monospace = text.replace(/[a-zA-Z]/g, (char) => {
-                const code = char.charCodeAt(0);
-                if (code >= 65 && code <= 90) return String.fromCodePoint(code + 120172); 
-                if (code >= 97 && code <= 122) return String.fromCodePoint(code + 120166); 
-                return char;
-            });
-
-            const italic = text.replace(/[a-zA-Z]/g, (char) => {
-                const code = char.charCodeAt(0);
-                if (code >= 65 && code <= 90) return String.fromCodePoint(code + 120224); 
-                if (code >= 97 && code <= 122) return String.fromCodePoint(code + 120218); 
-                return char;
-            });
+            const bubble = convertToFont(text, 'bubble');
+            const monospace = convertToFont(text, 'monospace');
+            const italic = convertToFont(text, 'italic');
 
             const fontCard = 
                 `✨ *FANCY UNICODE FONTS:* ✨\n` +
@@ -395,7 +446,7 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const cloudUrl = await uploadToCatbox(buffer, 'image/jpeg');
+                const cloudUrl = await uploadToCloud(buffer, 'image/jpeg');
 
                 const scanUrl = `https://api.qrserver.com/v1/read-qr-code/?fileurl=${encodeURIComponent(cloudUrl)}`;
                 const response = await axios.get(scanUrl);
