@@ -28,31 +28,6 @@ function normalizeToJid(input) {
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
-// Strictly maps characters mathematically using precise relative offsets to prevent overlapping
-function convertToFont(text, style) {
-    const uppercaseOffset = {
-        monospace: 120408, //  Makes Monospace A
-        bubble: 9398,      // Ⓐ
-        italic: 119860     // 𝘈
-    };
-    const lowercaseOffset = {
-        monospace: 120434, // 𝗀 Makes Monospace a
-        bubble: 9424,      // ⓐ
-        italic: 119886     // 𝘢
-    };
-
-    return text.replace(/[a-zA-Z]/g, (char) => {
-        const code = char.charCodeAt(0);
-        if (code >= 65 && code <= 90) {
-            return String.fromCodePoint(code - 65 + uppercaseOffset[style]);
-        }
-        if (code >= 97 && code <= 122) {
-            return String.fromCodePoint(code - 97 + lowercaseOffset[style]);
-        }
-        return char;
-    });
-}
-
 // Google Gen AI SDK Text integration supporting gemini-3.5-flash with live search grounding fallbacks
 async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash", useSearch = true) {
     try {
@@ -236,7 +211,7 @@ module.exports = [
         }
     },
 
-    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo - Supports static WebP frames)
+    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo - Highly Compatible)
     {
         name: 'tomp4',
         isPrefixless: false,
@@ -259,8 +234,8 @@ module.exports = [
                 const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp4`);
                 fs.writeFileSync(tmpInput, buffer);
 
-                // Loop input stream if WebP is static to prevent compile errors, scales to WA-compatible even dimensions
-                const cmd = `ffmpeg -vcodec libwebp -ignore_loop 0 -i "${tmpInput}" -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p" -vcodec libx264 -preset fast -t 4 "${tmpOutput}" -y`;
+                // Removed explicit '-vcodec libwebp' to let FFMPEG auto-detect the input decoder cleanly
+                const cmd = `ffmpeg -ignore_loop 0 -i "${tmpInput}" -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -vcodec libx264 -preset fast -t 4 "${tmpOutput}" -y`;
                 exec(cmd, async (err) => {
                     if (err) {
                         await sock.sendMessage(jid, { text: "❌ FFMPEG video conversion failed. Ensure sticker is animated, or use .toimg for static stickers.", edit: statusMsg.key });
@@ -301,31 +276,7 @@ module.exports = [
         }
     },
 
-    // 5. UNICODE FANCY FONT CONVERTER (.font)
-    {
-        name: 'font',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .font <text>" }, { quoted: msg });
-
-            const text = args.trim();
-            const bubble = convertToFont(text, 'bubble');
-            const monospace = convertToFont(text, 'monospace');
-            const italic = convertToFont(text, 'italic');
-
-            const fontCard = 
-                `✨ *FANCY UNICODE FONTS:* ✨\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `• *Monospace:* \`${monospace}\`\n\n` +
-                `• *Bubbles:* \`${bubble}\`\n\n` +
-                `• *Italics:* \`${italic}\``;
-
-            await sock.sendMessage(jid, { text: fontCard }, { quoted: msg });
-        }
-    },
-
-    // 6. BINARY SYSTEM ENCODER AND DECODER (.binary)
+    // 5. BINARY SYSTEM ENCODER AND DECODER (.binary)
     {
         name: 'binary',
         isPrefixless: false,
@@ -360,7 +311,7 @@ module.exports = [
         }
     },
 
-    // 7. CONVERT STICKER TO IMAGES (.toimg)
+    // 6. CONVERT STICKER TO IMAGES (.toimg)
     {
         name: 'toimg',
         isPrefixless: false,
@@ -387,7 +338,7 @@ module.exports = [
         }
     },
 
-    // 8. TEXT TO IMAGE WEB RENDERING (.ocr / .html2image)
+    // 7. TEXT TO IMAGE WEB RENDERING (.ocr / .html2image)
     {
         name: 'ocr',
         isPrefixless: false,
@@ -407,7 +358,7 @@ module.exports = [
         }
     },
 
-    // 9. CONVERT TEXT TO QR CODES (.qr)
+    // 8. CONVERT TEXT TO QR CODES (.qr)
     {
         name: 'qr',
         isPrefixless: false,
@@ -427,7 +378,7 @@ module.exports = [
         }
     },
 
-    // 10. DECODE AND READ QR CODES (.readqr)
+    // 9. DECODE AND READ QR CODES (.readqr - Direct Upload)
     {
         name: 'readqr',
         isPrefixless: false,
@@ -438,7 +389,7 @@ module.exports = [
 
             if (!rawContent?.imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to a QR Code image to scan." }, { quoted: msg });
 
-            const statusMsg = await sock.sendMessage(jid, { text: "Decoding QR code... 👁️" }, { quoted: msg });
+            const statusMsg = await sock.sendMessage(jid, { text: "Decoding QR code directly... 👁️" }, { quoted: msg });
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -446,25 +397,28 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const cloudUrl = await uploadToCloud(buffer, 'image/jpeg');
+                // Create a multipart form to upload the buffer directly to the API
+                const form = new FormData();
+                form.append('file', buffer, { filename: 'qrcode.png', contentType: 'image/png' });
 
-                const scanUrl = `https://api.qrserver.com/v1/read-qr-code/?fileurl=${encodeURIComponent(cloudUrl)}`;
-                const response = await axios.get(scanUrl);
-                const data = response.data?.[0];
+                const response = await axios.post('https://api.qrserver.com/v1/read-qr-code/', form, {
+                    headers: { ...form.getHeaders() }
+                });
 
-                if (data?.symbol?.[0]?.data) {
-                    const decoded = data.symbol[0].data;
+                const decoded = response.data?.[0]?.symbol?.[0]?.data;
+
+                if (decoded) {
                     await sock.sendMessage(jid, { text: `📖 *QR Code Decoded Content:* \n\n\`${decoded}\``, edit: statusMsg.key });
                 } else {
-                    throw new Error("No QR code data found.");
+                    throw new Error("Could not detect a valid QR code in the image.");
                 }
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed to read or decode QR code.", edit: statusMsg.key });
+                await sock.sendMessage(jid, { text: `❌ Scan failed: ${error.message}`, edit: statusMsg.key });
             }
         }
     },
 
-    // 11. QUANTITY MEASUREMENT UNIT CONVERTER (.quantity / .qty)
+    // 10. QUANTITY MEASUREMENT UNIT CONVERTER (.quantity / .qty)
     {
         name: 'quantity',
         isPrefixless: false,
@@ -487,7 +441,7 @@ module.exports = [
         }
     },
 
-    // 12. STANDARD STICKER CONVERTER
+    // 11. STANDARD STICKER CONVERTER
     {
         name: 'sticker',
         isPrefixless: false,
@@ -515,7 +469,7 @@ module.exports = [
         }
     },
 
-    // 13. CROPPED SQUARE STICKER (.crop)
+    // 12. CROPPED SQUARE STICKER (.crop)
     {
         name: 'crop',
         isPrefixless: false,
@@ -544,11 +498,11 @@ module.exports = [
         }
     },
 
-    // 14. METADATA STEALER (.take / .steal)
+    // 13. METADATA STEALER (.take / .steal)
     {
         name: 'take',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = getRawMessage(quoted);
