@@ -6,6 +6,8 @@ const { getPhoneJid, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
 
+const notesPath = path.join(__dirname, '../notes.json');
+
 const ownerCommands = [
     'diagnose', 'update', 'mode', 'setsudo', 'delsudo', 
     'addowner', 'delowner', 'restart', 'shutdown', 'ban', 
@@ -13,6 +15,54 @@ const ownerCommands = [
     'upgrade', 'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
 ];
 const devOnlyCommands = ['upgrade', 'adddev', 'deldev'];
+
+// Local Helpers to manage Sticky Notes persistently without circular dependencies
+function readNotes() {
+    try {
+        if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
+    } catch (e) {}
+    return {};
+}
+
+function saveNotes(notes) {
+    try {
+        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
+    } catch (e) {}
+}
+
+// Reusable dynamic note saving wizard session callback handler
+async function handleNoteSession(sock, msg) {
+    try {
+        const jid = msg.key.remoteJid;
+        const rawContent = getRawMessage(msg.message);
+        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+        const quotedMsgId = rawContent?.contextInfo?.stanzaId;
+
+        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
+            const session = global.noteSessions[quotedMsgId];
+            const noteName = text.trim();
+
+            if (!noteName) return false;
+
+            const notes = readNotes();
+            notes[jid] = notes[jid] || {};
+            notes[jid][noteName.toLowerCase()] = {
+                title: noteName,
+                content: session.content,
+                author: session.author,
+                time: Date.now()
+            };
+            saveNotes(notes);
+
+            delete global.noteSessions[quotedMsgId];
+            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
+            return true; 
+        }
+    } catch (e) {
+        console.error("Note session handler error:", e);
+    }
+    return false;
+}
 
 // Unified Security Policy Enforcer
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
@@ -72,9 +122,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // ============================================================================
         
         // 1. Hook for Interactive Note Session Saving (addnote reply wizard)
-        const { handleNoteSession } = require('../plugins/utilities');
         const isNoteSaved = await handleNoteSession(sock, msg);
-        if (isNoteSaved) return; // Prevent further command processing if note saved successfully
+        if (isNoteSaved) return; 
 
         // 2. Hook for Automated Anti-ViewOnce (Anti-VV)
         const { handleAntiViewOnce } = require('./antiViewOnce');
