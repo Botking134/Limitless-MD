@@ -23,6 +23,48 @@ const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Normalizes JIDs safely
+function normalizeToJid(input) {
+    if (!input) return '';
+    const clean = input.replace(/:[\d]+@/, '@');
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean;
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
+    return raw ? `${raw}@s.whatsapp.net` : '';
+}
+
+// Estimates typing/recording delay with a 3-second minimum floor
+async function handleNaturalDelay(sock, jid, responseText, presenceType = 'composing') {
+    await sock.sendPresenceUpdate(presenceType, jid);
+    const wordCount = responseText.split(/\s+/).length;
+    const estimatedTimeMs = (wordCount / 200) * 60 * 1000; // 200 Words Per Minute typing speed
+    const finalDelay = Math.max(3000, estimatedTimeMs);
+    await delay(finalDelay);
+}
+
+// Safe check to see if a message is a direct mention or reply to the bot
+function isBotAddressed(sock, msg) {
+    const rawIncoming = getRawMessage(msg.message);
+    const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo || 
+                        rawIncoming?.imageMessage?.contextInfo ||
+                        rawIncoming?.videoMessage?.contextInfo;
+
+    const botJid = sock.user.id ? normalizeToJid(sock.user.id) : '';
+    
+    // 1. Check if the message is a reply to the bot
+    if (contextInfo?.participant && normalizeToJid(contextInfo.participant) === botJid) {
+        return true;
+    }
+
+    // 2. Check if the bot's JID is explicitly mentioned
+    const mentions = contextInfo?.mentionedJid || [];
+    if (mentions.map(m => normalizeToJid(m)).includes(botJid)) {
+        return true;
+    }
+
+    return false;
+}
+
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     try {
         const apiKey = settings.groqApiKey || GROQ_API_KEY_FALLBACK;
@@ -48,8 +90,6 @@ async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-
     try {
         const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
         const { GoogleGenAI } = await import('@google/genai');
-        
-        // Pass only the apiKey (project/location must be omitted when using API keys)
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
         try {
@@ -67,7 +107,6 @@ async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-
             });
             return response.text || "";
         } catch (sdkErr) {
-            // Fallback to custom interactions interface if defined in your environment
             const response = await ai.interactions.create({
                 model: model,
                 input: [
@@ -152,6 +191,12 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.remoteJid || msg.key.remoteJid;
             const cleanArgs = args || '';
+            
+            // Bypass/ignore if the message is a prefixed command (e.g. .summon gojo)
+            if (cleanArgs.startsWith(settings.prefix)) {
+                return;
+            }
+
             const cleanQuery = cleanArgs.toLowerCase().startsWith('gojo ') ? cleanArgs.slice(5).trim() : cleanArgs.trim();
 
             const isAuthorized = isOwner || isSudo || isDev;
@@ -174,6 +219,10 @@ module.exports = [
             if (settings.gojoGlobalSleep && !cleanArgs.startsWith(settings.prefix)) {
                 return;
             }
+
+            // Only trigger if directly addressed, mentioned, replied to, or begins with his name
+            const isAddressed = isBotAddressed(sock, msg) || cleanArgs.toLowerCase().startsWith('gojo');
+            if (!isAddressed) return;
 
             if (!cleanQuery) {
                 return await sock.sendMessage(jid, { 
@@ -208,14 +257,21 @@ module.exports = [
                     { role: "user", content: cleanQuery }
                 ];
 
+                // Trigger composing (typing...) presence
+                await sock.sendPresenceUpdate('composing', jid);
+
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
 
                 global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
                 global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
 
-                while (global.aiMemory[jid].gojo.length > 15) {
+                // sliding 50-message context memory queue
+                while (global.aiMemory[jid].gojo.length > 50) {
                     global.aiMemory[jid].gojo.shift();
                 }
+
+                // Wait natural typing duration before sending
+                await handleNaturalDelay(sock, jid, responseText, 'composing');
 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
@@ -371,7 +427,10 @@ module.exports = [
             const action = args ? args.toLowerCase().trim() : '';
             if (action === 'on') {
                 if (!settings.lizzyChats.includes(jid)) settings.lizzyChats.push(jid);
-                await sock.sendMessage(jid, { text: "🎀 *Lizzy activated in this chat!*" }, { quoted: msg });
+                // Mutually exclude other chatbots from this chat
+                settings.chatbotChats = settings.chatbotChats.filter(chat => chat !== jid);
+                
+                await sock.sendMessage(jid, { text: "🎀 *Lizzy activated in this chat!* (Jarvis has been deactivated here)" }, { quoted: msg });
             } else if (action === 'off') {
                 settings.lizzyChats = settings.lizzyChats.filter(chat => chat !== jid);
                 await sock.sendMessage(jid, { text: "🎀 *Lizzy deactivated.*" }, { quoted: msg });
@@ -389,6 +448,11 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             const prefix = settings.prefix || '⚡';
+
+            // Bypass/ignore if the message is a prefixed command (e.g. .unmute)
+            if (lowerQuery.startsWith(settings.prefix)) {
+                return;
+            }
 
             if (isOwner || isSudo || isDev) {
                 if (lowerQuery.includes('close group') || lowerQuery.includes('lock group')) {
@@ -428,14 +492,21 @@ module.exports = [
                     { role: "user", content: args }
                 ];
 
+                // Trigger composing (typing...) presence
+                await sock.sendPresenceUpdate('composing', jid);
+
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
 
                 global.aiMemory[jid].lizzy.push({ role: "user", content: args });
                 global.aiMemory[jid].lizzy.push({ role: "assistant", content: responseText });
 
-                while (global.aiMemory[jid].lizzy.length > 15) {
+                // sliding 50-message context memory queue
+                while (global.aiMemory[jid].lizzy.length > 50) {
                     global.aiMemory[jid].lizzy.shift();
                 }
+
+                // Wait natural typing duration before sending
+                await handleNaturalDelay(sock, jid, responseText, 'composing');
 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
@@ -457,7 +528,9 @@ module.exports = [
             const action = args ? args.toLowerCase().trim() : '';
             if (action === 'on') {
                 if (!settings.chatbotChats.includes(jid)) settings.chatbotChats.push(jid);
-                
+                // Mutually exclude other chatbots from this chat
+                settings.lizzyChats = settings.lizzyChats.filter(chat => chat !== jid);
+
                 const loadingMsg = await sock.sendMessage(jid, { text: "▮▮▮▮▮▮🔑 Establishing Connection..." }, { quoted: msg });
                 const frames = [
                     "▮▮▮▮▮▮▮🔑 Synchronizing system mainframe...", 
@@ -470,7 +543,7 @@ module.exports = [
                 }
                 const latency = Date.now() - msg.messageTimestamp * 1000;
                 await sock.sendMessage(jid, { 
-                    text: `⚙️ *Systems are now online.* \n📶 *Network Latency:* \`${latency}ms\``, 
+                    text: `⚙️ *Systems are now online.* (Lizzy has been deactivated here)\n📶 *Network Latency:* \`${latency}ms\``, 
                     edit: loadingMsg.key 
                 });
             } else if (action === 'off') {
@@ -488,6 +561,12 @@ module.exports = [
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
+            const lowerQuery = args ? args.toLowerCase().trim() : '';
+
+            // Bypass/ignore if the message is a prefixed command (e.g. .help)
+            if (lowerQuery.startsWith(settings.prefix)) {
+                return;
+            }
 
             try {
                 let jarvisSystemPrompt = 
@@ -516,14 +595,21 @@ module.exports = [
                     { role: "user", content: args }
                 ];
 
+                // Trigger composing (typing...) presence
+                await sock.sendPresenceUpdate('composing', jid);
+
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
 
                 global.aiMemory[jid].jarvis.push({ role: "user", content: args });
                 global.aiMemory[jid].jarvis.push({ role: "assistant", content: responseText });
 
-                while (global.aiMemory[jid].jarvis.length > 15) {
+                // sliding 50-message context memory queue
+                while (global.aiMemory[jid].jarvis.length > 50) {
                     global.aiMemory[jid].jarvis.shift();
                 }
+
+                // Wait natural typing duration before sending
+                await handleNaturalDelay(sock, jid, responseText, 'composing');
 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
@@ -585,9 +671,16 @@ module.exports = [
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            if (settings.fridayActive === false && !msg.message?.extendedTextMessage?.text?.startsWith(settings.prefix)) {
-                return; // FRIDAY is shutdown
+            const lowerQuery = args ? args.toLowerCase().trim() : '';
+
+            // Bypass/ignore if FRIDAY is off globally, or if the message is a prefixed command (e.g. .status)
+            if (settings.fridayActive === false || lowerQuery.startsWith(settings.prefix)) {
+                return; 
             }
+
+            // Bypass if another chat-level chatbot (Lizzy or Jarvis) is toggled on in this chat to prevent clashing
+            const isAnotherChatbotActive = settings.lizzyChats?.includes(jid) || settings.chatbotChats?.includes(jid);
+            if (isAnotherChatbotActive) return;
 
             try {
                 let fridaySystemPrompt = 
@@ -614,20 +707,27 @@ module.exports = [
                     { role: "user", content: args }
                 ];
 
+                // Trigger recording (recording audio...) presence
+                await sock.sendPresenceUpdate('recording', jid);
+
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
 
                 global.aiMemory[jid].friday.push({ role: "user", content: args });
                 global.aiMemory[jid].friday.push({ role: "assistant", content: responseText });
 
-                while (global.aiMemory[jid].friday.length > 15) {
+                // sliding 50-message context memory queue
+                while (global.aiMemory[jid].friday.length > 50) {
                     global.aiMemory[jid].friday.shift();
                 }
 
                 // Strictly synthesize Groq text response into an Irish voice note (MPEG format)
                 const audioBuffer = await synthesizeFridayVoice(responseText);
                 if (audioBuffer) {
+                    // Wait natural speaking recording delay before sending voice note
+                    await handleNaturalDelay(sock, jid, responseText, 'recording');
                     await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 } else {
+                    await handleNaturalDelay(sock, jid, responseText, 'composing');
                     await sock.sendMessage(jid, { text: `[Voice Fallback] ${responseText}` }, { quoted: msg });
                 }
             } catch (error) {
