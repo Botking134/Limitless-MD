@@ -62,23 +62,21 @@ function isOwnerOrDev(jid) {
     return false;
 }
 
-// Google Gen AI SDK Text integration supporting gemini-3.5-flash
-async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash") {
+// Google Gen AI SDK Text integration supporting gemini-3.5-flash with live search capabilities
+async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash", useSearch = true) {
     try {
         const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
         const { GoogleGenAI } = await import('@google/genai');
-        
-        // Pass only the apiKey (project/location must be omitted when using API keys)
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
+        const configPayload = useSearch ? { tools: [{ googleSearch: {} }] } : {};
+
         try {
-            // Standard SDK content generation with Google Search Grounding enabled
+            // Standard SDK content generation
             const response = await ai.models.generateContent({
                 model: model,
                 contents: `${prompt}\n\nContent:\n"${textContent}"`,
-                config: {
-                    tools: [{ googleSearch: {} }] // Triggers Google Search Grounding dynamically
-                }
+                config: configPayload
             });
             return response.text || "";
         } catch (sdkErr) {
@@ -797,18 +795,6 @@ module.exports = [
             } catch (e) {
                 await sock.sendMessage(jid, { text: `❌ Failed to unarchive chat: ${e.message}` }, { quoted: msg });
             }
-        }
-    },
-    // 19. UNARCHIVE CHAT
-    {
-        name: 'unarchive',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isDev) return;
-            try {
-                await sock.chatModify({ archive: false }, jid);
-            } catch (e) {}
         }
     },
 
@@ -1530,8 +1516,169 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "❌ Failed to generate sticker meme." }, { quoted: msg });
             }
         }
+    },
+
+    // 39. ADD NOTE COMMAND (.addnote)
+    {
+        name: 'addnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .addnote <content>" }, { quoted: msg });
+
+            const content = args.trim();
+
+            try {
+                const prompt = await sock.sendMessage(jid, { 
+                    text: `📝 *ADD NOTE WIZARD* 📝\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                          `👉 Please reply directly to *this message* with your desired *Note Name* to save the note.` 
+                }, { quoted: msg });
+
+                global.noteSessions = global.noteSessions || {};
+                global.noteSessions[prompt.key.id] = { content, author: msg.pushName || 'User' };
+            } catch (error) {
+                await sock.sendMessage(jid, { text: "❌ Failed to initiate note setup." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 40. DELETE NOTE COMMAND (.delnote)
+    {
+        name: 'delnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .delnote <title>" }, { quoted: msg });
+
+            const title = args.trim().toLowerCase();
+            const notes = readNotes();
+
+            if (!notes[jid] || !notes[jid][title]) {
+                return await sock.sendMessage(jid, { text: `❌ Note with title "${args.trim()}" not found in this chat.` }, { quoted: msg });
+            }
+
+            const originalTitle = notes[jid][title].title;
+            delete notes[jid][title];
+            saveNotes(notes);
+
+            await sock.sendMessage(jid, { text: `✅ Note deleted successfully: *${originalTitle}*` }, { quoted: msg });
+        }
+    },
+
+    // 41. GET STICKY NOTES SUMMARY & INSTRUCTIONS DASHBOARD (.notes)
+    {
+        name: 'notes',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const notes = readNotes();
+            const totalNotes = notes[jid] ? Object.keys(notes[jid]).length : 0;
+
+            const prompt = `📝 *STICKY NOTES SYSTEM* 📝\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                           `• *Instructions:* Save text snippets by typing \`.addnote <content>\` and replying directly to the prompt with your desired note name. To retrieve a note, use \`.getnote <name>\`.\n` +
+                           `• *Total Notes in this Chat:* \`${totalNotes}\`\n\n` +
+                           `Tapping the button below will display all saved note names.`;
+
+            const buttonMessage = {
+                text: prompt,
+                buttons: [
+                    { buttonId: `${settings.prefix}getnotes`, buttonText: { displayText: 'Get Notes 📝' }, type: 1 }
+                ],
+                headerType: 1
+            };
+
+            try {
+                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `${prompt}\n\n👉 Use \`.getnotes\` to view note names.` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 42. LIST ALL NOTES NAMES COMMAND (.getnotes)
+    {
+        name: 'getnotes',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const notes = readNotes();
+
+            if (!notes[jid] || Object.keys(notes[jid]).length === 0) {
+                return await sock.sendMessage(jid, { text: "🔮 *No notes found in this chat.*" }, { quoted: msg });
+            }
+
+            const list = Object.keys(notes[jid])
+                .map((key, i) => `${i + 1}. *${notes[jid][key].title}* _(by ${notes[jid][key].author})_`)
+                .join('\n');
+
+            await sock.sendMessage(jid, { text: `📝 *Sticky Notes in this Chat:*\n\n${list}\n\n👉 Use \`.getnote <title>\` to read a note.` }, { quoted: msg });
+        }
+    },
+
+    // 43. GET SPECIFIC NOTE COMMAND (.getnote)
+    {
+        name: 'getnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .getnote <title>" }, { quoted: msg });
+
+            const title = args.trim().toLowerCase();
+            const notes = readNotes();
+
+            if (!notes[jid] || !notes[jid][title]) {
+                return await sock.sendMessage(jid, { text: `❌ Note with title "${args.trim()}" not found in this chat.` }, { quoted: msg });
+            }
+
+            const note = notes[jid][title];
+            const noteCard = 
+                `📝 *STICKY NOTE: ${note.title.toUpperCase()}* 📝\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `${note.content}\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `👤 *Author:* \`${note.author}\`\n` +
+                `🕒 *Saved:* \`${new Date(note.time).toLocaleString()}\``;
+
+            await sock.sendMessage(jid, { text: noteCard }, { quoted: msg });
+        }
     }
 ];
+
+// Reusable dynamic note saving wizard session callback handler
+async function handleNoteSession(sock, msg) {
+    try {
+        const jid = msg.key.remoteJid;
+        const rawContent = getRawMessage(msg.message);
+        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+        const quotedMsgId = rawContent?.contextInfo?.stanzaId;
+
+        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
+            const session = global.noteSessions[quotedMsgId];
+            const noteName = text.trim();
+
+            if (!noteName) return false;
+
+            const notes = readNotes();
+            notes[jid] = notes[jid] || {};
+            notes[jid][noteName.toLowerCase()] = {
+                title: noteName,
+                content: session.content,
+                author: session.author,
+                time: Date.now()
+            };
+            saveNotes(notes);
+
+            delete global.noteSessions[quotedMsgId];
+            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
+            return true; 
+        }
+    } catch (e) {
+        console.error("Note session handler error:", e);
+    }
+    return false;
+}
+
+module.exports.handleNoteSession = handleNoteSession;
 
 const aliases = [];
 module.exports.forEach(cmd => {
