@@ -1710,7 +1710,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            constisGroup = jid.endsWith('@g.us');
+            const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'htag');
