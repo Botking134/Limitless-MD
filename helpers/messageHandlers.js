@@ -498,7 +498,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         
         if (isDevMentioned && !msg.key.fromMe) {
             (async () => {
-                const reactionSequence = ["❄", "🥷", "🪽", "⚽", "💀"];
+                const reactionSequence = ["⚽", "🥷", "🪽", "🌪", "🧘‍"];
                 for (const emoji of reactionSequence) {
                     try {
                         await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
