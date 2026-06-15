@@ -67,15 +67,22 @@ async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash") 
     try {
         const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
         const { GoogleGenAI } = await import('@google/genai');
+        
+        // Pass only the apiKey (project/location must be omitted when using API keys)
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
         try {
+            // Standard SDK content generation with Google Search Grounding enabled
             const response = await ai.models.generateContent({
                 model: model,
-                contents: `${prompt}\n\nContent:\n"${textContent}"`
+                contents: `${prompt}\n\nContent:\n"${textContent}"`,
+                config: {
+                    tools: [{ googleSearch: {} }] // Triggers Google Search Grounding dynamically
+                }
             });
             return response.text || "";
         } catch (sdkErr) {
+            // Fallback to custom interactions interface if defined in your environment
             const response = await ai.interactions.create({
                 model: model,
                 input: `${prompt}\n\nContent:\n"${textContent}"`
@@ -511,7 +518,7 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "🟢 *Auto-Typing activated globally!*" }, { quoted: msg });
             } else if (target === 'off all' || target === 'offall') {
                 settings.presence.autotyping.all = false;
-                settings.presence.autotyping.chats = [];
+                settings.presence.auttyping.chats = [];
                 await sock.sendMessage(jid, { text: "💤 *Auto-Typing deactivated globally.*" }, { quoted: msg });
             }
             saveSettings();
@@ -769,11 +776,29 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
             try {
-                await sock.chatModify({ archive: true }, jid);
-            } catch (e) {}
+                await sock.chatModify({ archive: true, lastMessages: [msg] }, jid);
+                await sock.sendMessage(jid, { text: "✅ Chat archived successfully!" }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to archive chat: ${e.message}` }, { quoted: msg });
+            }
         }
     },
 
+    // 19. UNARCHIVE CHAT
+    {
+        name: 'unarchive',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+            try {
+                await sock.chatModify({ archive: false, lastMessages: [msg] }, jid);
+                await sock.sendMessage(jid, { text: "✅ Chat unarchived successfully!" }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to unarchive chat: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
     // 19. UNARCHIVE CHAT
     {
         name: 'unarchive',
@@ -911,8 +936,19 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: detailsCard }, { quoted: msg });
             }
 
-            const promptText = `❌ *No Bank Details Configured!*\n\nPlease set your bank credentials first:`;
-            await sock.sendMessage(jid, { text: `${promptText}\n\n_Use \`${settings.prefix}aza set\` to configure details manually._` }, { quoted: msg });
+            const promptText = `❌ *No Bank Details Configured!*\n\nPlease set your bank credentials first.`;
+            const buttonMessage = {
+                text: promptText,
+                buttons: [
+                    { buttonId: `${settings.prefix}aza set`, buttonText: { displayText: 'Set Aza 🏦' }, type: 1 }
+                ],
+                headerType: 1
+            };
+            try { 
+                await sock.sendMessage(jid, buttonMessage, { quoted: msg }); 
+            } catch (e) { 
+                await sock.sendMessage(jid, { text: `${promptText}\n\n_Use \`${settings.prefix}aza set\` to configure details manually._` }, { quoted: msg }); 
+            }
         }
     },
 
@@ -1511,9 +1547,9 @@ module.exports.forEach(cmd => {
         aliases.push({ ...cmd, name: 'tdel' });
         aliases.push({ ...cmd, name: 'tdlt' });
     }
-    if (cmd.name === 'autoviewstatus') aliases.push({ ...cmd, name: 'autovs' });
-    if (cmd.name === 'autoreactstatus') aliases.push({ ...cmd, name: 'autors' });
-    if (cmd.name === 'antiviewonce') aliases.push({ ...cmd, name: 'antivv' });
-    if (cmd.name === 'livescore') aliases.push({ ...cmd, name: 'live' });
+    if (cmd.name === 'repo') {
+        aliases.push({ ...cmd, name: 'sc' });
+        aliases.push({ ...cmd, name: 'script' });
+    }
 });
 module.exports.push(...aliases);
