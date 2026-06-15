@@ -67,6 +67,19 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const senderNumber = senderJid.split('@')[0]; 
         const isGroup = jid.endsWith('@g.us');
 
+        // ============================================================================
+        // AUTOMATED BACKGROUND INTERCEPTOR HOOKS
+        // ============================================================================
+        
+        // 1. Hook for Interactive Note Session Saving (addnote reply wizard)
+        const { handleNoteSession } = require('../plugins/utilities');
+        const isNoteSaved = await handleNoteSession(sock, msg);
+        if (isNoteSaved) return; // Prevent further command processing if note saved successfully
+
+        // 2. Hook for Automated Anti-ViewOnce (Anti-VV)
+        const { handleAntiViewOnce } = require('./antiViewOnce');
+        await handleAntiViewOnce(sock, msg);
+
         // Declared early at top of scope to prevent Temporal Dead Zone ReferenceErrors
         let command;
         let args;
@@ -542,10 +555,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                             const destJid = jid.endsWith('@g.us') ? senderJid : jid;
 
                             if (mediaType === 'image') {
-                                await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reply" });
+                                await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
                             } else if (mediaType === 'video') {
                                 const mimeType = mediaMessage.mimetype || "video/mp4";
-                                await sock.sendMessage(destJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reply" });
+                                await sock.sendMessage(destJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reaction" });
                             } else if (mediaType === 'audio') {
                                 await sock.sendMessage(destJid, { audio: buffer, mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", ptt: true });
                             }
