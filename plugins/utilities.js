@@ -289,15 +289,15 @@ module.exports = [
             try {
                 const { delay } = await import('@itsliaaa/baileys');
 
-                const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ 0% [Initializing]" }, { quoted: msg });
+                const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ 0%" }, { quoted: msg });
 
                 const frames = [
-                    { text: "▰▱▱▱▱▱▱▱▱▱ 10% [Analyzing]", delay: 300 },
-                    { text: "▰▰▰▱▱▱▱▱▱▱ 30% [Ping Sent]", delay: 300 },
-                    { text: "▰▰▰▰▰▱▱▱▱▱ 50% [Handshaking]", delay: 300 },
-                    { text: "▰▰▰▰▰▰▰▱▱▱ 70% [Compiling]", delay: 300 },
-                    { text: "▰▰▰▰▰▰▰▰▰▱ 90% [Verifying]", delay: 300 },
-                    { text: "▰▰▰▰▰▰▰▰▰▰ 100% [Complete]", delay: 2000 } // Holds exactly 2 seconds (2000ms) after hitting 100%
+                    { text: "▰▱▱▱▱▱▱▱▱▱ 10%", delay: 300 },
+                    { text: "▰▰▱▱▱▱▱▱▱▱ 30%", delay: 300 },
+                    { text: "▰▰▰▰▱▱▱▱▱▱ 50%", delay: 300 },
+                    { text: "▰▰▰▰▰▰▱▱▱▱ 70%", delay: 300 },
+                    { text: "▰▰▰▰▰▰▰▰▰▱ 90%", delay: 300 },
+                    { text: "▰▰▰▰▰▰▰▰▰▰ 100%", delay: 2000 } // Holds exactly 2 seconds (2000ms) after hitting 100%
                 ];
 
                 for (const frame of frames) {
