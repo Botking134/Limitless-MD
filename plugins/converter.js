@@ -211,7 +211,7 @@ module.exports = [
         }
     },
 
-    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo - Highly Compatible)
+    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo - Diagnostic Logging Enabled)
     {
         name: 'tomp4',
         isPrefixless: false,
@@ -234,18 +234,37 @@ module.exports = [
                 const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp4`);
                 fs.writeFileSync(tmpInput, buffer);
 
-                // Removed explicit '-vcodec libwebp' to let FFMPEG auto-detect the input decoder cleanly
-                const cmd = `ffmpeg -ignore_loop 0 -i "${tmpInput}" -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -vcodec libx264 -preset fast -t 4 "${tmpOutput}" -y`;
-                exec(cmd, async (err) => {
+                // Command 1: Try compiling using standard H.264 (libx264)
+                const cmd = `ffmpeg -i "${tmpInput}" -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -vcodec libx264 -preset fast -t 4 "${tmpOutput}" -y`;
+                exec(cmd, async (err, stdout, stderr) => {
                     if (err) {
-                        await sock.sendMessage(jid, { text: "❌ FFMPEG video conversion failed. Ensure sticker is animated, or use .toimg for static stickers.", edit: statusMsg.key });
+                        // Fallback Command: Automatically retry with the universally supported mpeg4 encoder if libx264 is missing
+                        const fallbackCmd = `ffmpeg -i "${tmpInput}" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -vcodec mpeg4 -t 4 "${tmpOutput}" -y`;
+                        exec(fallbackCmd, async (fallbackErr, fStdout, fStderr) => {
+                            if (fallbackErr) {
+                                // Compile all error messages and compile-logs to show exactly why both encoders failed
+                                const errorReport = `❌ *FFMPEG Video Conversion Failed!*\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                                                    `• *Primary Error (libx264):* \`\`\`${err.message}\`\`\`\n` +
+                                                    `• *Primary Stderr:* \`\`\`${stderr}\` \`\`\n\n` +
+                                                    `• *Fallback Error (mpeg4):* \`\`\`${fallbackErr.message}\`\`\`\n` +
+                                                    `• *Fallback Stderr:* \`\`\`${fStderr}\` \`\``;
+                                                    
+                                await sock.sendMessage(jid, { text: errorReport, edit: statusMsg.key });
+                            } else {
+                                const videoBuffer = fs.readFileSync(tmpOutput);
+                                await sock.sendMessage(jid, { video: videoBuffer, mimetype: "video/mp4", caption: "🎥 converted sticker successfully! (fallback mpeg4)" }, { quoted: msg });
+                                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                            }
+                            try { fs.unlinkSync(tmpInput); } catch (e) {}
+                            try { fs.unlinkSync(tmpOutput); } catch (e) {}
+                        });
                     } else {
                         const videoBuffer = fs.readFileSync(tmpOutput);
                         await sock.sendMessage(jid, { video: videoBuffer, mimetype: "video/mp4", caption: "🎥 converted sticker successfully!" }, { quoted: msg });
                         try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                        try { fs.unlinkSync(tmpInput); } catch (e) {}
                         try { fs.unlinkSync(tmpOutput); } catch (e) {}
                     }
-                    try { fs.unlinkSync(tmpInput); } catch (e) {}
                 });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `❌ Video conversion failed: ${error.message}`, edit: statusMsg.key });
