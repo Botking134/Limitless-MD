@@ -689,6 +689,102 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Failed to download archive. Make sure the repository is public and exists.`, edit: statusMsg.key });
             }
         }
+    },
+
+    // 17. ADD NOTE COMMAND (.addnote)
+    {
+        name: 'addnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .addnote <title> | <content>" }, { quoted: msg });
+
+            const parts = args.split('|');
+            const title = parts[0]?.trim();
+            const content = parts[1]?.trim();
+
+            if (!title || !content) {
+                return await sock.sendMessage(jid, { text: "❌ Format: .addnote <title> | <content>" }, { quoted: msg });
+            }
+
+            const notes = readNotes();
+            notes[jid] = notes[jid] || {};
+            notes[jid][title.toLowerCase()] = { title, content, author: msg.pushName || 'User', time: Date.now() };
+            saveNotes(notes);
+
+            await sock.sendMessage(jid, { text: `✅ Note saved successfully under the title: *${title}*` }, { quoted: msg });
+        }
+    },
+
+    // 18. DELETE NOTE COMMAND (.delnote)
+    {
+        name: 'delnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .delnote <title>" }, { quoted: msg });
+
+            const title = args.trim().toLowerCase();
+            const notes = readNotes();
+
+            if (!notes[jid] || !notes[jid][title]) {
+                return await sock.sendMessage(jid, { text: `❌ Note with title "${args.trim()}" not found in this chat.` }, { quoted: msg });
+            }
+
+            const originalTitle = notes[jid][title].title;
+            delete notes[jid][title];
+            saveNotes(notes);
+
+            await sock.sendMessage(jid, { text: `✅ Note deleted successfully: *${originalTitle}*` }, { quoted: msg });
+        }
+    },
+
+    // 19. LIST ALL NOTES COMMAND (.getnotes)
+    {
+        name: 'getnotes',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const notes = readNotes();
+
+            if (!notes[jid] || Object.keys(notes[jid]).length === 0) {
+                return await sock.sendMessage(jid, { text: "🔮 *No notes found in this chat.*" }, { quoted: msg });
+            }
+
+            const list = Object.keys(notes[jid])
+                .map((key, i) => `${i + 1}. *${notes[jid][key].title}* _(by ${notes[jid][key].author})_`)
+                .join('\n');
+
+            await sock.sendMessage(jid, { text: `📝 *Sticky Notes in this Chat:*\n\n${list}\n\n👉 Use \`.getnote <title>\` to read a note.` }, { quoted: msg });
+        }
+    },
+
+    // 20. GET SPECIFIC NOTE COMMAND (.getnote)
+    {
+        name: 'getnote',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .getnote <title>" }, { quoted: msg });
+
+            const title = args.trim().toLowerCase();
+            const notes = readNotes();
+
+            if (!notes[jid] || !notes[jid][title]) {
+                return await sock.sendMessage(jid, { text: `❌ Note with title "${args.trim()}" not found in this chat.` }, { quoted: msg });
+            }
+
+            const note = notes[jid][title];
+            const noteCard = 
+                `📝 *STICKY NOTE: ${note.title.toUpperCase()}* 📝\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `${note.content}\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `👤 *Author:* \`${note.author}\`\n` +
+                `🕒 *Saved:* \`${new Date(note.time).toLocaleString()}\``;
+
+            await sock.sendMessage(jid, { text: noteCard }, { quoted: msg });
+        }
     }
 ];
 
