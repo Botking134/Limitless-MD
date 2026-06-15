@@ -1,14 +1,12 @@
 // plugins/utilities.js
 const settings = require('../settings'); 
 const { saveSettings } = require('../helpers/settingsSaver'); 
-const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
-const { getPhoneJid, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
 
 const notesPath = path.join(__dirname, '../notes.json');
 
+// Helper function to format system uptime
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
@@ -17,6 +15,7 @@ function formatUptime(seconds) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
 }
 
+// Duration string parser
 function parseDuration(str) {
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
@@ -28,6 +27,7 @@ function parseDuration(str) {
     return null;
 }
 
+// Sticky Notes file operations
 function readNotes() {
     try {
         if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
@@ -41,6 +41,7 @@ function saveNotes(notes) {
     } catch (e) {}
 }
 
+// Recursive Helper to automatically unwrap envelopes
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -63,7 +64,7 @@ module.exports = [
                 const start = Date.now();
 
                 const loadingMsg = await sock.sendMessage(jid, { text: "[□□□□□□]" }, { quoted: msg });
-                const frames = [" [□□□□□□]", "[■□□□□□]", "[■■□□□□]", "[■■■□□□]", "[■■■■□□]", "[■■■■■□]", "[■■■■■■]"];
+                const frames = ["[□□□□□□]", "[■□□□□□]", "[■■□□□□]", "[■■■□□□]", "[■■■■□□]", "[■■■■■□]", "[■■■■■■]"];
                 
                 for (let cycle = 0; cycle < 2; cycle++) {
                     for (const frame of frames) {
@@ -124,24 +125,16 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-
-            if (!contextInfo || !contextInfo.stanzaId) return;
+            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            if (!quoted || !quoted.stanzaId) return;
 
             try {
                 const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
                 const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
 
-                const isFromMe = contextInfo.participant === botJid || (botLid && contextInfo.participant === botLid);
+                const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
 
-                const quotedKey = { remoteJid: jid, id: contextInfo.stanzaId, fromMe: isFromMe, participant: contextInfo.participant };
+                const quotedKey = { remoteJid: jid, id: quoted.stanzaId, fromMe: isFromMe, participant: quoted.participant };
                 await sock.sendMessage(jid, { delete: quotedKey });
                 try { await sock.sendMessage(jid, { delete: msg.key }); } catch (err) {}
             } catch (error) {}
@@ -154,16 +147,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-
-            if (!contextInfo || !contextInfo.stanzaId || !args) return;
+            const quoted = msg.message.extendedTextMessage?.contextInfo;
+            if (!quoted || !quoted.stanzaId || !args) return;
 
             const durationMs = parseDuration(args.trim());
             if (!durationMs) return;
@@ -174,9 +159,9 @@ module.exports = [
                     try {
                         const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
                         const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
-                        const isFromMe = contextInfo.participant === botJid || (botLid && contextInfo.participant === botLid);
+                        const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
 
-                        const quotedKey = { remoteJid: jid, id: contextInfo.stanzaId, fromMe: isFromMe, participant: contextInfo.participant };
+                        const quotedKey = { remoteJid: jid, id: quoted.stanzaId, fromMe: isFromMe, participant: quoted.participant };
                         await sock.sendMessage(jid, { delete: quotedKey });
                         try { await sock.sendMessage(jid, { delete: countdownMsg.key }); } catch (e) {}
                     } catch (err) {}
@@ -238,402 +223,7 @@ module.exports = [
         }
     },
 
-    // 7. VIEW ONCE UNLOCKER (.vv)
-    {
-        name: 'vv',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-            if (!quoted) return;
-
-            const rawContent = getRawMessage(quoted);
-            let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage;
-            let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : "");
-
-            if (!mediaMessage) return;
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                if (mediaType === "image") {
-                    await sock.sendMessage(jid, { image: buffer, caption: mediaMessage.caption || "Unlocked 👁️🔓" }, { quoted: msg });
-                } else if (mediaType === "video") {
-                    await sock.sendMessage(jid, { video: buffer, mimetype: mediaMessage.mimetype || "video/mp4", caption: mediaMessage.caption || "Unlocked 👁️🔓" }, { quoted: msg });
-                }
-            } catch (error) {}
-        }
-    },
-
-    // 8. STANDARD STICKER CONVERTER (Compressed to Prevent size Bloating)
-    {
-        name: 'sticker',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-
-            let mediaContent = getRawMessage(quoted || msg.message);
-            let mediaMessage = mediaContent?.imageMessage || mediaContent?.videoMessage || mediaContent?.stickerMessage;
-            let mediaType = mediaContent?.imageMessage ? "image" : (mediaContent?.videoMessage ? "video" : (mediaContent?.stickerMessage ? "sticker" : ""));
-
-            if (!mediaMessage) return;
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                // Lowered standard image quality to 45 and animated video stickers to 35 to prevent large sizes (under 100KB-150KB)
-                const targetQuality = mediaType === "video" ? 35 : 45;
-
-                const sticker = new Sticker(buffer, { 
-                    pack: settings.packName, 
-                    author: settings.author, 
-                    type: StickerTypes.FULL, 
-                    quality: targetQuality 
-                });
-                await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
-            } catch (error) {}
-        }
-    },
-
-    // 9. CROPPED SQUARE STICKER (.crop)
-    {
-        name: 'crop',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-
-            const isMedia = msg.message.imageMessage || msg.message.videoMessage || quoted?.imageMessage || quoted?.videoMessage || quoted?.stickerMessage;
-            if (!isMedia) return;
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                let mediaContent = getRawMessage(quoted || msg.message);
-                let mediaType = mediaContent?.imageMessage ? "image" : (mediaContent?.videoMessage ? "video" : (mediaContent?.stickerMessage ? "sticker" : ""));
-
-                const targetMessage = mediaType === "image" ? mediaContent.imageMessage : (mediaType === "video" ? mediaContent.videoMessage : mediaContent.stickerMessage);
-                const stream = await downloadContentFromMessage(targetMessage, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                const targetQuality = mediaType === "video" ? 35 : 45;
-
-                const sticker = new Sticker(buffer, { 
-                    pack: settings.packName, 
-                    author: settings.author, 
-                    type: StickerTypes.CROPPED, 
-                    quality: targetQuality 
-                });
-                await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
-            } catch (error) {}
-        }
-    },
-
-    // 10. METADATA STEALER (.take / .steal)
-    {
-        name: 'take',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-
-            const rawContent = getRawMessage(quoted);
-            const isSticker = rawContent?.stickerMessage;
-
-            if (!isSticker) return;
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(rawContent.stickerMessage, 'sticker');
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                const parts = args.split('|');
-                const packName = parts[0] ? parts[0].trim() : settings.packName;
-                const publisher = parts[1] ? parts[1].trim() : settings.author;
-
-                // Lowered metadata copy quality to 45 to prevent ballooning file sizes
-                const sticker = new Sticker(buffer, { 
-                    pack: packName, 
-                    author: publisher, 
-                    type: StickerTypes.FULL, 
-                    quality: 45 
-                });
-                await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
-            } catch (error) {}
-        }
-    },
-
-    // 11. STICKER COMMAND TRIGGERS (.setcmd)
-    {
-        name: 'setcmd',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
-
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-            const rawContent = getRawMessage(quoted);
-            const isSticker = rawContent?.stickerMessage;
-
-            if (!args) {
-                const keys = Object.keys(settings.stickerCommands || {});
-                if (keys.length === 0) return await sock.sendMessage(jid, { text: `🔮 *No sticker commands currently registered.*` }, { quoted: msg });
-                const list = keys.map((key, i) => `${i + 1}. \`${settings.stickerCommands[key]}\``).join('\n');
-                return await sock.sendMessage(jid, { text: `🔮 *Active Sticker Commands:*\n\n${list}` }, { quoted: msg });
-            }
-
-            if (!settings.stickerCommands) settings.stickerCommands = {};
-
-            let action = args.trim();
-            if (action.startsWith(settings.prefix)) {
-                action = action.slice(settings.prefix.length).trim();
-            }
-
-            if (action.toLowerCase() === 'list') {
-                const keys = Object.keys(settings.stickerCommands);
-                if (keys.length === 0) return await sock.sendMessage(jid, { text: "🔮 *No commands found.*" }, { quoted: msg });
-                const list = keys.map((key, i) => `${i + 1}. \`${settings.stickerCommands[key]}\``).join('\n');
-                return await sock.sendMessage(jid, { text: `🔮 *Active Sticker Commands:*\n\n${list}` }, { quoted: msg });
-            }
-
-            if (!isSticker) return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker." }, { quoted: msg });
-
-            const fileHash = rawContent.stickerMessage.fileSha256?.toString('base64');
-            if (!fileHash) return;
-
-            if (action.toLowerCase() === 'del' || action.toLowerCase() === 'delete') {
-                if (!settings.stickerCommands[fileHash]) return;
-                delete settings.stickerCommands[fileHash];
-                return await sock.sendMessage(jid, { text: `✅ Removed command mapping.` }, { quoted: msg });
-            }
-
-            settings.stickerCommands[fileHash] = action;
-            saveSettings();
-            saveState();
-            await sock.sendMessage(jid, { text: `✅ Command \`${action}\` mapped to sticker!` }, { quoted: msg });
-        }
-    },
-
-    // 12. DEDICATED STICKER TRIGGER DELETER
-    {
-        name: 'delcmd',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo) return;
-
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-            const rawContent = getRawMessage(quoted);
-            const isSticker = rawContent?.stickerMessage;
-
-            if (!isSticker) return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker." }, { quoted: msg });
-
-            const fileHash = rawContent.stickerMessage.fileSha256?.toString('base64');
-            if (!fileHash || !settings.stickerCommands?.[fileHash]) return;
-
-            delete settings.stickerCommands[fileHash];
-            saveSettings();
-            saveState();
-            await sock.sendMessage(jid, { text: `✅ Trigger mapping successfully deleted!` }, { quoted: msg });
-        }
-    },
-
-    // 13. REGULAR TO VIEW ONCE CONVERTER
-    {
-        name: 'tovv',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-
-            const rawContent = getRawMessage(quoted || msg.message);
-            const isMedia = rawContent?.imageMessage || rawContent?.videoMessage;
-
-            if (!isMedia) return;
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const mediaType = rawContent.imageMessage ? "image" : "video";
-                const targetMessage = rawContent.imageMessage || rawContent.videoMessage;
-                const mimeType = targetMessage.mimetype || (mediaType === "image" ? "image/jpeg" : "video/mp4");
-
-                const stream = await downloadContentFromMessage(targetMessage, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                const payload = { caption: args || targetMessage.caption || "", viewOnce: true };
-                payload[mediaType] = buffer;
-                payload.mimetype = mimeType;
-
-                await sock.sendMessage(jid, payload, { quoted: msg });
-            } catch (error) {}
-        }
-    },
-
-    // 14. COMPRESS IMAGES AND VIDEOS UTILITY
-    {
-        name: 'compress',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-
-            const mediaContent = getRawMessage(quoted || msg.message);
-            let mediaMessage = mediaContent?.imageMessage || mediaContent?.videoMessage;
-            let mediaType = mediaContent?.imageMessage ? "image" : (mediaContent?.videoMessage ? "video" : "");
-
-            if (!mediaMessage) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply directly to an image or video to compress." }, { quoted: msg });
-            }
-
-            const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Compressing media stream...*" }, { quoted: msg });
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) {
-                    buffer = Buffer.concat([buffer, chunk]);
-                }
-
-                if (mediaType === "image") {
-                    const sharp = require('sharp');
-                    // Downscale to 1080p and drop JPEG quality to 50% for standard mobile compression
-                    const compressed = await sharp(buffer)
-                        .resize({ width: 1080, withoutEnlargement: true })
-                        .jpeg({ quality: 50 })
-                        .toBuffer();
-
-                    await sock.sendMessage(jid, { image: compressed, caption: "📉 *Image compressed successfully!*" }, { quoted: msg });
-                    try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
-                } 
-                else if (mediaType === "video") {
-                    const tmpInput = path.join(__dirname, `../tmp_in_${Date.now()}.mp4`);
-                    const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp4`);
-                    fs.writeFileSync(tmpInput, buffer);
-
-                    // Re-encode utilizing libx264 with an optimized CRF (Constant Rate Factor) scale 28/30
-                    const cmd = `ffmpeg -i "${tmpInput}" -vcodec libx264 -crf 30 -preset superfast -filter:v "scale='min(1280,iw)':-2" -acodec copy "${tmpOutput}" -y`;
-                    exec(cmd, async (err) => {
-                        if (err) {
-                            await sock.sendMessage(jid, { text: "❌ Video compression failed. Make sure FFMPEG is installed on the host.", edit: statusMsg.key });
-                        } else {
-                            const compressedBuffer = fs.readFileSync(tmpOutput);
-                            await sock.sendMessage(jid, { video: compressedBuffer, mimetype: "video/mp4", caption: "📉 *Video compressed successfully!*" }, { quoted: msg });
-                            try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
-                            try { fs.unlinkSync(tmpOutput); } catch (e) {}
-                        }
-                        try { fs.unlinkSync(tmpInput); } catch (e) {}
-                    });
-                }
-            } catch (error) {
-                await sock.sendMessage(jid, { text: `❌ Compression failed: ${error.message}`, edit: statusMsg.key });
-            }
-        }
-    },
-
-    // 15. REPOSITORY DATA EXPORTER (.repo / .sc / .script)
-    {
-        name: 'repo',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const repoImages = [
-                "https://iili.io/C3yej7s.jpg" // Satoru Gojo branding card
-            ];
-            const randomImg = repoImages[Math.floor(Math.random() * repoImages.length)];
-            
-            const repoMsg = 
-                `🔮 *LIMITLESS MD SYSTEM REPORT* 🔮\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `*"Throughout Heaven and Earth, I alone am the honoured one."* 🤞\n\n` +
-                `The ultimate Jujutsu-engineered WhatsApp automation engine is fully open-source. Tap into the Infinite Void and deploy our spatial commands directly to your server:\n\n` +
-                `📂 *REPOSITORY SYSTEM INTEL:*\n` +
-                `• 🤖 *Engine Name:* \`Limitless-MD\`\n` +
-                `• 🎖️ *Structure:* \`Baileys WebSocket Multi-Device\`\n` +
-                `• 👤 *Author:* \`Infinity\`\n` +
-                `• 🟢 *System Status:* \`Fully Operational\`\n\n` +
-                `🔗 *ACCESS SOUL SOCIETY ARCHIVES:*\n` +
-                `👉 https://github.com/Botking134/Limitless.MD\n\n` +
-                `⭐ _\"Fork and star the repository to expand your domain and manifest more cursed energy!\"_`;
-
-            await sock.sendMessage(jid, { image: { url: randomImg }, caption: repoMsg }, { quoted: msg });
-        }
-    },
-
-    // 16. AUTO REPOSITORY DOWNLOAD COMPILER (.gitclone)
+    // 7. AUTO REPOSITORY DOWNLOAD COMPILER (.gitclone)
     {
         name: 'gitclone',
         isPrefixless: false,
@@ -666,7 +256,6 @@ module.exports = [
             const statusMsg = await sock.sendMessage(jid, { text: `📥 Fetching repository archive for *${owner}/${repo}...*` }, { quoted: msg });
 
             try {
-                // Utilizing the zipball API dynamically retrieves whichever default branch is active (main or master)
                 const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
                 const res = await fetch(zipUrl);
                 if (!res.ok) throw new Error();
@@ -691,32 +280,63 @@ module.exports = [
         }
     },
 
-    // 17. ADD NOTE COMMAND (.addnote)
+    // 8. BOT LATENCY COMPARISON TEST (.ping2)
+    {
+        name: 'ping2',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            try {
+                const { delay } = await import('@itsliaaa/baileys');
+
+                const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ 0% [Initializing]" }, { quoted: msg });
+
+                const frames = [
+                    { text: "▰▱▱▱▱▱▱▱▱▱ 10% [Analyzing]", delay: 300 },
+                    { text: "▰▰▰▱▱▱▱▱▱▱ 30% [Ping Sent]", delay: 300 },
+                    { text: "▰▰▰▰▰▱▱▱▱▱ 50% [Handshaking]", delay: 300 },
+                    { text: "▰▰▰▰▰▰▰▱▱▱ 70% [Compiling]", delay: 300 },
+                    { text: "▰▰▰▰▰▰▰▰▰▱ 90% [Verifying]", delay: 300 },
+                    { text: "▰▰▰▰▰▰▰▰▰▰ 100% [Complete]", delay: 2000 } // Holds exactly 2 seconds (2000ms) after hitting 100%
+                ];
+
+                for (const frame of frames) {
+                    await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key });
+                    await delay(frame.delay);
+                }
+
+                const msgTime = msg.messageTimestamp * 1000;
+                const latency = Date.now() - msgTime;
+                await sock.sendMessage(jid, { text: `Latency: \`${latency}ms\``, edit: loadingMsg.key });
+            } catch (error) {}
+        }
+    },
+
+    // 9. ADD NOTE COMMAND (.addnote)
     {
         name: 'addnote',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .addnote <title> | <content>" }, { quoted: msg });
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .addnote <content>" }, { quoted: msg });
 
-            const parts = args.split('|');
-            const title = parts[0]?.trim();
-            const content = parts[1]?.trim();
+            const content = args.trim();
 
-            if (!title || !content) {
-                return await sock.sendMessage(jid, { text: "❌ Format: .addnote <title> | <content>" }, { quoted: msg });
+            try {
+                const prompt = await sock.sendMessage(jid, { 
+                    text: `📝 *ADD NOTE WIZARD* 📝\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                          `👉 Please reply directly to *this message* with your desired *Note Name* to save the note.` 
+                }, { quoted: msg });
+
+                global.noteSessions = global.noteSessions || {};
+                global.noteSessions[prompt.key.id] = { content, author: msg.pushName || 'User' };
+            } catch (error) {
+                await sock.sendMessage(jid, { text: "❌ Failed to initiate note setup." }, { quoted: msg });
             }
-
-            const notes = readNotes();
-            notes[jid] = notes[jid] || {};
-            notes[jid][title.toLowerCase()] = { title, content, author: msg.pushName || 'User', time: Date.now() };
-            saveNotes(notes);
-
-            await sock.sendMessage(jid, { text: `✅ Note saved successfully under the title: *${title}*` }, { quoted: msg });
         }
     },
 
-    // 18. DELETE NOTE COMMAND (.delnote)
+    // 10. DELETE NOTE COMMAND (.delnote)
     {
         name: 'delnote',
         isPrefixless: false,
@@ -739,7 +359,37 @@ module.exports = [
         }
     },
 
-    // 19. LIST ALL NOTES COMMAND (.getnotes)
+    // 11. GET STICKY NOTES SUMMARY & INSTRUCTIONS DASHBOARD (.notes)
+    {
+        name: 'notes',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const notes = readNotes();
+            const totalNotes = notes[jid] ? Object.keys(notes[jid]).length : 0;
+
+            const prompt = `📝 *STICKY NOTES SYSTEM* 📝\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                           `• *Instructions:* Save text snippets by typing \`.addnote <content>\` and replying directly to the prompt with your desired note name. To retrieve a note, use \`.getnote <name>\`.\n` +
+                           `• *Total Notes in this Chat:* \`${totalNotes}\`\n\n` +
+                           `Tapping the button below will display all saved note names.`;
+
+            const buttonMessage = {
+                text: prompt,
+                buttons: [
+                    { buttonId: `${settings.prefix}getnotes`, buttonText: { displayText: 'Get Notes 📝' }, type: 1 }
+                ],
+                headerType: 1
+            };
+
+            try {
+                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `${prompt}\n\n👉 Use \`.getnotes\` to view note names.` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 12. LIST ALL NOTES NAMES COMMAND (.getnotes)
     {
         name: 'getnotes',
         isPrefixless: false,
@@ -759,11 +409,11 @@ module.exports = [
         }
     },
 
-    // 20. GET SPECIFIC NOTE COMMAND (.getnote)
+    // 13. GET SPECIFIC NOTE COMMAND (.getnote)
     {
         name: 'getnote',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .getnote <title>" }, { quoted: msg });
 
@@ -785,15 +435,69 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: noteCard }, { quoted: msg });
         }
+    },
+
+    // 14. CONFIGURE VIEW ONCE DECRYPT REACTION EMOJI (Strictly Owner-Only)
+    {
+        name: 'vvs',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner) return; // Strict Owner-Only permission gate
+
+            if (!args) {
+                const current = settings.vvEmoji || '🥷';
+                return await sock.sendMessage(jid, { text: `❌ Please provide an emoji. (Current: ${current})` }, { quoted: msg });
+            }
+
+            const emoji = args.trim();
+            settings.vvEmoji = emoji;
+            saveSettings();
+            saveState();
+
+            await sock.sendMessage(jid, { text: `✅ View Once Decryption reaction emoji configured to: ${emoji}` }, { quoted: msg });
+        }
     }
 ];
 
+// Reusable dynamic note saving wizard session callback handler
+async function handleNoteSession(sock, msg) {
+    try {
+        const jid = msg.key.remoteJid;
+        const rawContent = getRawMessage(msg.message);
+        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+        const quotedMsgId = rawContent?.contextInfo?.stanzaId;
+
+        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
+            const session = global.noteSessions[quotedMsgId];
+            const noteName = text.trim();
+
+            if (!noteName) return false;
+
+            const notes = readNotes();
+            notes[jid] = notes[jid] || {};
+            notes[jid][noteName.toLowerCase()] = {
+                title: noteName,
+                content: session.content,
+                author: session.author,
+                time: Date.now()
+            };
+            saveNotes(notes);
+
+            delete global.noteSessions[quotedMsgId];
+            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
+            return true; 
+        }
+    } catch (e) {
+        console.error("Note session handler error:", e);
+    }
+    return false;
+}
+
+module.exports.handleNoteSession = handleNoteSession;
+
 const aliases = [];
 module.exports.forEach(cmd => {
-    if (cmd.name === 'save') aliases.push({ ...cmd, name: 'status' });
-    if (cmd.name === 'sticker') aliases.push({ ...cmd, name: 's' });
-    if (cmd.name === 'take') aliases.push({ ...cmd, name: 'steal' });
-    if (cmd.name === 'tourl') aliases.push({ ...cmd, name: 'url' });
     if (cmd.name === 'delete') {
         aliases.push({ ...cmd, name: 'del' });
         aliases.push({ ...cmd, name: 'dlt' }); 
@@ -802,9 +506,8 @@ module.exports.forEach(cmd => {
         aliases.push({ ...cmd, name: 'tdel' });
         aliases.push({ ...cmd, name: 'tdlt' });
     }
-    if (cmd.name === 'repo') {
-        aliases.push({ ...cmd, name: 'sc' });
-        aliases.push({ ...cmd, name: 'script' });
+    if (cmd.name === 'ping') {
+        aliases.push({ ...cmd, name: 'ping2' });
     }
 });
 module.exports.push(...aliases);
