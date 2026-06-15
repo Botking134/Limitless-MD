@@ -3,6 +3,7 @@ const settings = require('../settings');
 const { saveSettings } = require('../helpers/settingsSaver'); 
 const { saveState } = require('../stateManager'); 
 const commands = require('../commands'); 
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 if (!global.tkickTimers) global.tkickTimers = {};
 if (!global.kickallActive) global.kickallActive = {};
@@ -165,7 +166,17 @@ function isOwnerTarget(target) {
            (settings.owners && settings.owners.includes(target));
 }
 
-// Google Gen AI SDK Text integration supporting gemini-3.5-flash
+// Helper to dynamically generate a goodbye message layout based on the welcome message configuration
+function getGeneratedGoodbyeMessage() {
+    const welcome = settings.welcomeMsg || settings.welcomeMessage || "Welcome to our group @user! Hope you enjoy your stay here.";
+    return welcome
+        .replace(/welcome/gi, "Goodbye")
+        .replace(/join/gi, "left")
+        .replace(/hope you enjoy your stay/gi, "we will miss you")
+        .replace(/enjoy/gi, "miss");
+}
+
+// Google Generative AI SDK Text integration supporting gemini-3.5-flash
 async function queryGeminiText(prompt, logString) {
     const k1 = "AQ.A";
     const k2 = "b8RN6KZl";
@@ -215,34 +226,6 @@ async function triggerSummary(sock, jid) {
         saveState();
     } catch (err) {
         console.error("Auto summary failed:", err);
-    }
-}
-
-// Reusable Anti-Delete logger for User DMs (routes logs directly to owner/dev's LID DM)
-async function logDeletedMessage(sock, deletedMsg) {
-    try {
-        const jid = deletedMsg.key.remoteJid;
-        const isGroup = jid.endsWith('@g.us');
-        
-        if (!isGroup) {
-            const senderJid = normalizeToJid(deletedMsg.key.participant || jid);
-            const botJid = normalizeToJid(sock.user.id);
-            
-            if (senderJid === botJid) return;
-
-            const targetLid = settings.ownerLid || (settings.ownerLids && settings.ownerLids[0]) || settings.ownerJid || '';
-            if (targetLid) {
-                const rawContent = getRawMessage(deletedMsg.message);
-                const deletedText = rawContent?.conversation || rawContent?.extendedTextMessage?.text || "[Media/Other Attachment]";
-                const logMessage = `🗑️ *Anti-Delete Log (User DM):*\n` +
-                                   `• *From:* @${senderJid.split('@')[0]}\n` +
-                                   `• *Deleted Message:* ${deletedText}`;
-                
-                await sock.sendMessage(targetLid, { text: logMessage, mentions: [senderJid] });
-            }
-        }
-    } catch (e) {
-        console.error("Anti-Delete log routing error:", e);
     }
 }
 
@@ -863,7 +846,7 @@ module.exports = [
         }
     },
 
-    // 16. WELCOME MODULE CONTROLLER
+    // 16. WELCOME MODULE CONTROLLER (Unifies with gcalerts welcome)
     {
         name: 'welcome',
         isPrefixless: false,
@@ -883,6 +866,12 @@ module.exports = [
             if (subAction === 'on') {
                 settings.welcome[jid] = settings.welcome[jid] || { active: true, msg: "" };
                 settings.welcome[jid].active = true;
+
+                // Sync with gcalerts
+                if (!settings.gcalerts) settings.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
+                settings.gcalerts.welcome = settings.gcalerts.welcome || {};
+                settings.gcalerts.welcome[jid] = 'on';
+
                 saveSettings();
                 saveState();
                 return await sock.sendMessage(jid, { text: "✅ Welcoming sequence activated for new members." }, { quoted: msg });
@@ -891,6 +880,12 @@ module.exports = [
             if (subAction === 'off') {
                 settings.welcome[jid] = settings.welcome[jid] || { active: false, msg: "" };
                 settings.welcome[jid].active = false;
+
+                // Sync with gcalerts
+                if (!settings.gcalerts) settings.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
+                settings.gcalerts.welcome = settings.gcalerts.welcome || {};
+                settings.gcalerts.welcome[jid] = 'off';
+
                 saveSettings();
                 saveState();
                 return await sock.sendMessage(jid, { text: "❌ Welcoming sequence deactivated." }, { quoted: msg });
@@ -913,7 +908,7 @@ module.exports = [
         }
     },
 
-    // 17. GOODBYE MODULE CONTROLLER
+    // 17. GOODBYE MODULE CONTROLLER (Unifies with gcalerts goodbye & generates from welcome layout)
     {
         name: 'goodbye',
         isPrefixless: false,
@@ -933,6 +928,12 @@ module.exports = [
             if (subAction === 'on') {
                 settings.goodbye[jid] = settings.goodbye[jid] || { active: true, msg: "" };
                 settings.goodbye[jid].active = true;
+
+                // Sync with gcalerts
+                if (!settings.gcalerts) settings.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
+                settings.gcalerts.goodbye = settings.gcalerts.goodbye || {};
+                settings.gcalerts.goodbye[jid] = 'on';
+
                 saveSettings();
                 saveState();
                 return await sock.sendMessage(jid, { text: "✅ Goodbye notification sequence activated." }, { quoted: msg });
@@ -941,6 +942,12 @@ module.exports = [
             if (subAction === 'off') {
                 settings.goodbye[jid] = settings.goodbye[jid] || { active: false, msg: "" };
                 settings.goodbye[jid].active = false;
+
+                // Sync with gcalerts
+                if (!settings.gcalerts) settings.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
+                settings.gcalerts.goodbye = settings.gcalerts.goodbye || {};
+                settings.gcalerts.goodbye[jid] = 'off';
+
                 saveSettings();
                 saveState();
                 return await sock.sendMessage(jid, { text: "❌ Goodbye notification sequence deactivated." }, { quoted: msg });
@@ -958,7 +965,8 @@ module.exports = [
             }
 
             const currentStatus = settings.goodbye[jid]?.active ? "Enabled ✅" : "Disabled ❌";
-            const prompt = `🌸 *Goodbye Module Configuration:*\n\nStatus: \`${currentStatus}\``;
+            const currentMsg = settings.goodbye[jid]?.msg || getGeneratedGoodbyeMessage();
+            const prompt = `🌸 *Goodbye Module Configuration:*\n\nStatus: \`${currentStatus}\`\nLayout: _"${currentMsg}"_`;
             await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
         }
     },
@@ -1041,7 +1049,7 @@ module.exports = [
 
             if (!args) {
                 const current = settings.antigm[jid] || 'off';
-                const prompt = `🔮 *Limitless AntiGroup-Mention status:* (Current: \`${current}\`)\n\nSelect an option:`;
+                const prompt = `🔮 *Limitless Antigm Settings:* (Current: \`${current}\`)\n\nSelect an option:`;
                 const buttonMessage = {
                     text: prompt,
                     buttons: [
@@ -1174,7 +1182,7 @@ module.exports = [
         }
     },
 
-    // 24. EXORCISE ALL TARGETS (Available to Members/Sudos/Owners/Devs ONLY + Immunity Enabled)
+    // 24. EXORCISE ALL TARGETS (With Configurable Countdown Timers)
     {
         name: 'kickall',
         isPrefixless: false,
@@ -1190,7 +1198,23 @@ module.exports = [
                 const groupMetadata = await sock.groupMetadata(jid);
                 const participants = groupMetadata.participants;
 
-                const text = "🌪️ *Channelling Limitless Void... Exorcising all members from this domain.*";
+                const botJid = normalizeToJid(sock.user.id);
+                const targets = participants.filter(p => {
+                    const normId = normalizeToJid(p.id);
+                    return normId !== botJid && 
+                           !isOwnerTarget(normId) && 
+                           !isDeveloper(normId) &&
+                           p.admin !== 'superadmin' && p.admin !== 'admin';
+                }).map(p => p.id);
+
+                if (targets.length === 0) return await sock.sendMessage(jid, { text: "❌ No non-admin targets found to exorcise." }, { quoted: msg });
+
+                // Parse countdown duration (default is 20s if not specified)
+                const durationString = args ? args.trim() : '';
+                const countdownMs = durationString ? (parseDuration(durationString) || 20000) : 20000;
+                const countdownSecs = countdownMs / 1000;
+
+                const text = `🌪 *Channelling Limitless Void... Exorcism sequence initiated.* Removing all members in *${countdownSecs} seconds*.`;
                 const buttonMessage = {
                     text: text,
                     buttons: [
@@ -1202,21 +1226,19 @@ module.exports = [
                 try {
                     await sock.sendMessage(jid, buttonMessage, { quoted: msg });
                 } catch (btnErr) {
-                    await sock.sendMessage(jid, { text: `${text}\n\n💡 _Type:_\n• \`${settings.prefix}stopkickall\` to abort.` }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: `${text}\n\n💡 _Type:_ \`${settings.prefix}stopkickall\` to abort.` }, { quoted: msg });
                 }
 
-                const botJid = normalizeToJid(sock.user.id);
-                const targets = participants.filter(p => {
-                    const normId = normalizeToJid(p.id);
-                    return normId !== botJid && 
-                           !isOwnerTarget(normId) && 
-                           !isDeveloper(normId) &&
-                           p.admin !== 'superadmin' && p.admin !== 'admin';
-                }).map(p => p.id);
-
-                if (targets.length === 0) return await sock.sendMessage(jid, { text: "❌ No non-admin targets found." }, { quoted: msg });
-
                 global.kickallActive[jid] = true;
+
+                // Wait for the countdown grace period to elapse
+                await new Promise(resolve => setTimeout(resolve, countdownMs));
+
+                if (!global.kickallActive[jid]) {
+                    return; // Sequence aborted during grace period
+                }
+
+                await sock.sendMessage(jid, { text: "🌪 *Countdown elapsed. Beginning exorcism...*" });
 
                 for (const target of targets) {
                     if (!global.kickallActive[jid]) {
@@ -1229,8 +1251,10 @@ module.exports = [
                     } catch (err) {}
                 }
 
+                if (global.kickallActive[jid]) {
+                    await sock.sendMessage(jid, { text: "✅ *Exorcism complete.*" });
+                }
                 delete global.kickallActive[jid];
-                await sock.sendMessage(jid, { text: "✅ *Exorcism complete.*" });
             } catch (error) {}
         }
     },
@@ -1239,9 +1263,9 @@ module.exports = [
     {
         name: 'stopkickall',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isAuthorizedMember = isDev || isOwner;
+            const isAuthorizedMember = isDev || isOwner || isSudo;
             if (!isAuthorizedMember) return;
 
             if (global.kickallActive[jid]) {
@@ -1524,7 +1548,7 @@ module.exports = [
         }
     },
 
-    // 33. GROUP ALERTS CONTROLLER (.gcalerts)
+    // 33. GROUP ALERTS CONTROLLER (Consolidated toggles & synchronization)
     {
         name: 'gcalerts',
         isPrefixless: false,
@@ -1554,10 +1578,10 @@ module.exports = [
                 return await sock.sendMessage(jid, {
                     text: `🔔 *Group Alerts Dashboard (gcalerts)* 🔔\n` +
                           `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                          `• *Promote Alert:* \`${promStatus.toUpperCase()}\`\n` +
-                          `• *Demote Alert:* \`${demStatus.toUpperCase()}\`\n` +
-                          `• *Welcome Alert:* \`${welStatus.toUpperCase()}\`\n` +
-                          `• *Goodbye Alert:* \`${gbStatus.toUpperCase()}\`\n\n` +
+                          `• *Promote Alert:* \`${promStatus.toUpperCase()}\` (Format: @target was promoted by @actor)\n` +
+                          `• *Demote Alert:* \`${demStatus.toUpperCase()}\` (Format: @target was demoted by @actor)\n` +
+                          `• *Welcome Alert:* \`${welStatus.toUpperCase()}\` (Linked to .welcome)\n` +
+                          `• *Goodbye Alert:* \`${gbStatus.toUpperCase()}\` (Linked to .goodbye)\n\n` +
                           `👉 To toggle: \`${settings.prefix}gcalerts <promote/demote/welcome/goodbye> <on/off>\``
                 }, { quoted: msg });
             }
@@ -1567,6 +1591,7 @@ module.exports = [
             settings.gcalerts[sub] = settings.gcalerts[sub] || {};
             settings.gcalerts[sub][jid] = toggle;
             
+            // Unify & synchronize states back to welcome/goodbye commands
             if (sub === 'welcome') {
                 settings.welcome = settings.welcome || {};
                 settings.welcome[jid] = settings.welcome[jid] || {};
@@ -1685,7 +1710,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
+            constisGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'htag');
@@ -1877,11 +1902,68 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Failed to execute command: ${error.message}` }, { quoted: msg });
             }
         }
+    },
+
+    // 40. ANTIPROMOTE SECURITY SWITCH
+    {
+        name: 'antipromote',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antipromote');
+            if (!isAuthorized) return;
+
+            if (!settings.antipromote) settings.antipromote = {};
+
+            const action = args ? args.toLowerCase().trim() : '';
+            if (action === 'on') {
+                settings.antipromote[jid] = 'on';
+                await sock.sendMessage(jid, { text: "🔒 *Antipromote Protection Activated!* Unsanctioned promotions will result in the immediate demotion of both the target and the promoter." }, { quoted: msg });
+            } else if (action === 'off') {
+                settings.antipromote[jid] = 'off';
+                await sock.sendMessage(jid, { text: "🔓 *Antipromote Protection Disabled.*" }, { quoted: msg });
+            } else {
+                const current = settings.antipromote[jid] || 'off';
+                await sock.sendMessage(jid, { text: `🛡️ *Antipromote Security Status:* \`${current.toUpperCase()}\`` }, { quoted: msg });
+            }
+            saveSettings();
+            saveState();
+        }
+    },
+
+    // 41. ANTIDEMOTE SECURITY SWITCH (Excluding bot demotion cases)
+    {
+        name: 'antidemote',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antidemote');
+            if (!isAuthorized) return;
+
+            if (!settings.antidemote) settings.antidemote = {};
+
+            const action = args ? args.toLowerCase().trim() : '';
+            if (action === 'on') {
+                settings.antidemote[jid] = 'on';
+                await sock.sendMessage(jid, { text: "🔒 *Antidemote Protection Activated!* Unsanctioned demotions of administrators will result in instant demotion of the demoter and re-promotion of the victim." }, { quoted: msg });
+            } else if (action === 'off') {
+                settings.antidemote[jid] = 'off';
+                await sock.sendMessage(jid, { text: "🔓 *Antidemote Protection Disabled.*" }, { quoted: msg });
+            } else {
+                const current = settings.antidemote[jid] || 'off';
+                await sock.sendMessage(jid, { text: `🛡️ *Antidemote Security Status:* \`${current.toUpperCase()}\`` }, { quoted: msg });
+            }
+            saveSettings();
+            saveState();
+        }
     }
 ];
-
-// Exporting anti-delete hook so you can easily reference it in your main deletion listener
-module.exports.logDeletedMessage = logDeletedMessage;
 
 // Structural Aliases Configuration
 const aliases = [];
