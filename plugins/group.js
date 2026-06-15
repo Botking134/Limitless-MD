@@ -2,8 +2,6 @@
 const settings = require('../settings'); 
 const { saveSettings } = require('../helpers/settingsSaver'); 
 const { saveState } = require('../stateManager'); 
-const commands = require('../commands'); 
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 if (!global.tkickTimers) global.tkickTimers = {};
 if (!global.kickallActive) global.kickallActive = {};
@@ -39,7 +37,8 @@ async function resolveToPhoneJid(sock, jid) {
 function isDeveloper(jid) {
     if (!jid) return false;
     const normalized = normalizeToJid(jid);
-    return settings.devs.includes(normalized) || (settings.devLids && settings.devLids.includes(normalized));
+    return (settings.devs && settings.devs.includes(normalized)) || 
+           (settings.devLids && settings.devLids.includes(normalized));
 }
 
 // Restructured Group Command Permission Gate supporting JIDs and LIDs
@@ -176,7 +175,7 @@ function getGeneratedGoodbyeMessage() {
         .replace(/enjoy/gi, "miss");
 }
 
-// Google Generative AI SDK Text integration supporting gemini-3.5-flash
+// Google Generative AI SDK Text integration supporting gemini-3.5-flash and @google/genai
 async function queryGeminiText(prompt, logString) {
     const k1 = "AQ.A";
     const k2 = "b8RN6KZl";
@@ -190,7 +189,7 @@ async function queryGeminiText(prompt, logString) {
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
         try {
-            // Standard SDK content generation
+            // Standard SDK content generation using gemini-3.5-flash
             const response = await ai.models.generateContent({
                 model: "gemini-3.5-flash",
                 contents: `${prompt}\n\nHere are the chat logs:\n${logString}`
@@ -1299,7 +1298,14 @@ module.exports = [
 
             const durationString = args ? args.replace(/@[^ ]+/g, '').trim().split(' ')[0] : '';
             if (durationString.toLowerCase() === 'cancel' || durationString.toLowerCase() === 'stop') {
-                return await commands[`${settings.prefix}tkick_cancel_all`](sock, msg, args, { isOwner, isSudo, isDev });
+                // Dynamically load circular dependency inside execute context
+                const activeCommands = require('../commands');
+                const targetCmd = activeCommands[`${settings.prefix}tkick_cancel_all`] || activeCommands['tkick_cancel_all'];
+
+                if (typeof targetCmd === 'function') {
+                    return await targetCmd(sock, msg, args, { isOwner, isSudo, isDev });
+                }
+                return await sock.sendMessage(jid, { text: "❌ Failed to cancel timed kicks. Command resolver empty." }, { quoted: msg });
             }
 
             if (cleanTargets.length === 0) {
@@ -1361,7 +1367,7 @@ module.exports = [
         }
     },
 
-    // 28. FETCH GROUP JID (Admin restrictions removed)
+    // 28. FETCH GROUP JID
     {
         name: 'gcjid',
         isPrefixless: false,
