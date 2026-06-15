@@ -48,6 +48,16 @@ async function resolveUrlOrSearch(args) {
     return null;
 }
 
+function logCommandError(commandName, args, error) {
+    console.error(`\n================= [DIAGNOSTIC ERROR LOG: .${commandName}] =================`);
+    console.error(`Timestamp:  ${new Date().toISOString()}`);
+    console.error(`Arguments:  "${args || 'none'}"`);
+    console.error(`Error Type: ${error.name || 'Unknown'}`);
+    console.error(`Message:    ${error.message || 'No message provided'}`);
+    console.error(`Stack Trace:\n${error.stack || 'No stack trace available'}`);
+    console.error(`========================================================================\n`);
+}
+
 module.exports = [
     // 1. MUSIC PLAYER (.play)
     {
@@ -61,10 +71,10 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "Searching song... 🔍" }, { quoted: msg });
 
                 const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(args)}`);
-                if (!response.ok) throw new Error();
+                if (!response.ok) throw new Error(`HTTP network failure with status: ${response.status}`);
 
                 const data = await response.json();
-                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ No results found." }, { quoted: msg });
+                if (!data.status || !data.result) throw new Error("API returned status false or missing result field.");
 
                 const { title, thumbnail, duration, download_url } = data.result;
 
@@ -84,7 +94,8 @@ module.exports = [
                     await sock.sendMessage(jid, { audio: { url: download_url }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 }
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed to download song." }, { quoted: msg });
+                logCommandError('play', args, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download song. Diagnostic: ${error.message}` }, { quoted: msg });
             }
         }
     },
@@ -109,7 +120,7 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "Fetching audio... 📥" }, { quoted: msg });
 
                 const resolvedUrl = await resolveUrlOrSearch(query);
-                if (!resolvedUrl) return await sock.sendMessage(jid, { text: "❌ No results found." }, { quoted: msg });
+                if (!resolvedUrl) throw new Error("Could not resolve query or link to a valid YouTube URL.");
 
                 let downloadUrl = "";
                 let title = "YouTube Audio";
@@ -123,7 +134,9 @@ module.exports = [
                             downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
                         }
                     }
-                } catch (e) {}
+                } catch (e) {
+                    console.warn("[WARNING] First ytmp3 endpoint failed, attempting fallback...");
+                }
 
                 if (!downloadUrl) {
                     const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp3?url=${encodeURIComponent(resolvedUrl)}`);
@@ -136,7 +149,7 @@ module.exports = [
                     }
                 }
 
-                if (!downloadUrl) throw new Error();
+                if (!downloadUrl) throw new Error("All YouTube mp3 conversion endpoints returned empty URLs.");
 
                 const audioBuffer = await fetchBuffer(downloadUrl);
                 if (audioBuffer) {
@@ -149,7 +162,8 @@ module.exports = [
                     await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 }
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed to download audio." }, { quoted: msg });
+                logCommandError('ytmp3', query, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download audio. Diagnostic: ${error.message}` }, { quoted: msg });
             }
         }
     },
@@ -169,7 +183,7 @@ module.exports = [
                 const results = await yts(args);
                 const videos = results.videos || [];
 
-                if (videos.length === 0) return await sock.sendMessage(jid, { text: "❌ No results found." }, { quoted: msg });
+                if (videos.length === 0) throw new Error("No video results found matching the query.");
 
                 const selectedResults = videos.slice(0, 10);
 
@@ -186,7 +200,8 @@ module.exports = [
                     results: selectedResults.map(v => ({ title: v.title, url: v.url }))
                 };
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed to search song." }, { quoted: msg });
+                logCommandError('song', args, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to search song. Diagnostic: ${error.message}` }, { quoted: msg });
             }
         }
     },
@@ -211,16 +226,18 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "Fetching YouTube audio as document... 📥" }, { quoted: msg });
 
                 const resolvedUrl = await resolveUrlOrSearch(query);
-                if (!resolvedUrl) return;
+                if (!resolvedUrl) throw new Error("Could not resolve query or link to a valid YouTube URL.");
 
                 const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(resolvedUrl)}`);
-                if (!response.ok) throw new Error();
+                if (!response.ok) throw new Error(`HTTP failure with status ${response.status}`);
 
                 const data = await response.json();
-                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Failed to parse media." }, { quoted: msg });
+                if (!data.status || !data.result) throw new Error("API returned status false or missing result payload.");
 
                 const title = data.result.title || "YouTube Audio";
                 const downloadUrl = data.result.mp3 || data.result.download_url;
+
+                if (!downloadUrl) throw new Error("No download URL returned by the endpoint.");
 
                 const docBuffer = await fetchBuffer(downloadUrl);
                 if (docBuffer) {
@@ -229,7 +246,8 @@ module.exports = [
                     await sock.sendMessage(jid, { document: { url: downloadUrl }, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
                 }
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed to download audio document." }, { quoted: msg });
+                logCommandError('ytmp3doc', query, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download audio document. Diagnostic: ${error.message}` }, { quoted: msg });
             }
         }
     },
@@ -249,17 +267,18 @@ module.exports = [
                 const results = await yts(args);
                 const videos = results.videos || [];
 
-                if (videos.length === 0) return await sock.sendMessage(jid, { text: "❌ Song not found." }, { quoted: msg });
+                if (videos.length === 0) throw new Error("No videos found matching the query.");
 
                 const firstSong = videos[0];
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(firstSong.title)}`);
-                if (!response.ok) throw new Error();
+                const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(firstSong.url)}`);
+                if (!response.ok) throw new Error(`HTTP search endpoint failed with status ${response.status}`);
 
                 const data = await response.json();
-                if (!data.status || !data.result) return await sock.sendMessage(jid, { text: "❌ Song not found." }, { quoted: msg });
+                if (!data.status || !data.result) throw new Error("No matching media resource returned from final resolution endpoint.");
 
                 const { title, download_url } = data.result;
+                if (!download_url) throw new Error("Direct download link is missing from resolved data.");
 
                 const docBuffer = await fetchBuffer(download_url);
                 if (docBuffer) {
@@ -268,7 +287,8 @@ module.exports = [
                     await sock.sendMessage(jid, { document: { url: download_url }, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
                 }
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed to process document download." }, { quoted: msg });
+                logCommandError('playdoc', args, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to process document download. Diagnostic: ${error.message}` }, { quoted: msg });
             }
         }
     },
@@ -285,25 +305,29 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "Searching Spotify track... 📥" }, { quoted: msg });
 
                 const response = await fetch(`https://apis.davidcyril.name.ng/spotifydl?query=${encodeURIComponent(args)}`);
-                if (!response.ok) throw new Error();
+                if (!response.ok) throw new Error(`Spotify API returned HTTP status ${response.status}`);
 
                 const data = await response.json();
-                if (!data.status || !data.result) throw new Error();
+                if (!data.status || !data.result) throw new Error("Invalid response or unsuccessful status returned by Spotify API.");
 
                 const downloadUrl = data.result.download_url || data.result.link;
+                if (!downloadUrl) throw new Error("Download URL could not be resolved from Spotify payload.");
+
+                const title = data.result.title || "spotify-track";
 
                 const audioBuffer = await fetchBuffer(downloadUrl);
                 if (audioBuffer) {
                     try {
                         await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                     } catch (err) {
-                        await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: 'spotify-track.mp3' }, { quoted: msg });
+                        await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3` }, { quoted: msg });
                     }
                 } else {
                     await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 }
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track." }, { quoted: msg });
+                logCommandError('spotify', args, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download Spotify track. Diagnostic: ${error.message}` }, { quoted: msg });
             }
         }
     },
@@ -319,26 +343,31 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching Spotify track v2... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/spotifydl2?query=${encodeURIComponent(args)}`);
-                if (!response.ok) throw new Error();
+                // Direct to the primary updated Spotify endpoint
+                const response = await fetch(`https://apis.davidcyril.name.ng/spotifydl?query=${encodeURIComponent(args)}`);
+                if (!response.ok) throw new Error(`Spotify v2 endpoint failure with HTTP status ${response.status}`);
 
                 const data = await response.json();
-                if (!data.status || !data.result) throw new Error();
+                if (!data.status || !data.result) throw new Error("Unsuccessful status or missing result returned from Spotify v2 API.");
 
                 const downloadUrl = data.result.download_url || data.result.link;
+                if (!downloadUrl) throw new Error("Could not extract a download URL from response payload.");
+
+                const title = data.result.title || "spotify-track";
 
                 const audioBuffer = await fetchBuffer(downloadUrl);
                 if (audioBuffer) {
                     try {
                         await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                     } catch (err) {
-                        await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: 'spotify-track.mp3' }, { quoted: msg });
+                        await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3` }, { quoted: msg });
                     }
                 } else {
                     await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 }
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed to download Spotify track." }, { quoted: msg });
+                logCommandError('spotify2', args, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download Spotify track (v2). Diagnostic: ${error.message}` }, { quoted: msg });
             }
         }
     }
