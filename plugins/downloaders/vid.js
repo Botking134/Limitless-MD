@@ -232,39 +232,71 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "TikTok Video";
 
-                // Multi-route fallback array to bypass dead scraping endpoints
+                // Ultimate cross-network fallback array combining independent API clusters
                 const endpoints = [
-                    `https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(query)}`,
-                    `https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(query)}`,
-                    `https://apis.davidcyril.name.ng/tiktok2?url=${encodeURIComponent(query)}`
+                    // Route 1: TikWM (High availability, direct global CDN bypass)
+                    {
+                        url: `https://www.tikwm.com/api/?url=${encodeURIComponent(query)}`,
+                        parser: (data) => {
+                            if (data.code === 0 && data.data) {
+                                let playUrl = data.data.play || data.data.wmplay;
+                                if (playUrl && playUrl.startsWith("/")) {
+                                    playUrl = "https://www.tikwm.com" + playUrl;
+                                }
+                                return {
+                                    title: data.data.title || "TikTok Video",
+                                    url: playUrl
+                                };
+                            }
+                            return null;
+                        }
+                    },
+                    // Route 2: David Cyril V2
+                    {
+                        url: `https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(query)}`,
+                        parser: (data) => {
+                            if (data.status && data.result) {
+                                return {
+                                    title: data.result.title || "TikTok Video",
+                                    url: data.result.video || data.result.noWatermark || data.result.download_url || data.result.link
+                                };
+                            }
+                            return null;
+                        }
+                    },
+                    // Route 3: David Cyril Standard
+                    {
+                        url: `https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(query)}`,
+                        parser: (data) => {
+                            if (data.status && data.video) {
+                                return {
+                                    title: data.video.title || "TikTok Video",
+                                    url: data.video.noWatermark || data.video.url || data.video.downloadUrl || data.video.download_url
+                                };
+                            }
+                            return null;
+                        }
+                    }
                 ];
 
-                for (const url of endpoints) {
+                for (const route of endpoints) {
                     try {
-                        const response = await fetch(url);
+                        const response = await fetch(route.url);
                         if (response.ok) {
                             const data = await response.json();
-                            
-                            // Handler for structure: { status: true, result: { video: "...", title: "..." } }
-                            if (data.status && data.result) {
-                                title = data.result.title || title;
-                                downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url || data.result.link;
-                                if (downloadUrl) break;
-                            }
-                            
-                            // Handler for structure: { status: true, video: { url: "...", title: "..." } }
-                            if (data.status && data.video) {
-                                title = data.video.title || title;
-                                downloadUrl = data.video.noWatermark || data.video.url || data.video.downloadUrl || data.video.download_url;
-                                if (downloadUrl) break;
+                            const parsed = route.parser(data);
+                            if (parsed && parsed.url) {
+                                title = parsed.title;
+                                downloadUrl = parsed.url;
+                                break; // Exit loop immediately on successful extraction
                             }
                         }
                     } catch (err) {
-                        console.warn(`[DIAGNOSTIC] Fallback endpoint failed: ${url}. Error: ${err.message}`);
+                        console.warn(`[DIAGNOSTIC] Fallback endpoint failed: ${route.url}. Error: ${err.message}`);
                     }
                 }
 
-                if (!downloadUrl) throw new Error("All resolved TikTok endpoints returned false or invalid structures.");
+                if (!downloadUrl) throw new Error("All public and fallback TikTok CDN endpoints returned false or blocked structures.");
 
                 await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎵 *Title:* ${title}` }, { quoted: msg });
             } catch (error) {
