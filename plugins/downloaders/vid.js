@@ -1,4 +1,4 @@
-// plugins/downloaders/vid.js
+ // plugins/downloaders/vid.js
 const settings = require('../../settings');
 
 const urlRegex = /^(https?:\/\/[^\s]+)/i;
@@ -65,31 +65,16 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "YouTube Video";
 
-                try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(query)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result) {
-                            title = data.result.title || title;
-                            downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
-                        }
+                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        title = data.result.title || title;
+                        downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
                     }
-                } catch (e) {}
-
-                if (!downloadUrl) {
-                    try {
-                        const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(query)}`);
-                        if (response.ok) {
-                            const data = await response.json();
-                            if (data.status && data.result) {
-                                title = data.result.title || title;
-                                downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
-                            }
-                        }
-                    } catch (e) {}
                 }
 
-                if (!downloadUrl) throw new Error("Both conversion endpoints returned empty URLs.");
+                if (!downloadUrl) throw new Error("Dedicated YouTube downloader returned empty streams.");
 
                 await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎥 *Title:* ${title}` }, { quoted: msg });
             } catch (error) {
@@ -122,28 +107,13 @@ module.exports = [
                 let downloadUrl = "";
                 let title = firstVideo.title || "YouTube Video";
 
-                try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(videoUrl)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result) {
-                            title = data.result.title || title;
-                            downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
-                        }
+                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(videoUrl)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        title = data.result.title || title;
+                        downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
                     }
-                } catch (e) {}
-
-                if (!downloadUrl) {
-                    try {
-                        const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(videoUrl)}`);
-                        if (response.ok) {
-                            const data = await response.json();
-                            if (data.status && data.result) {
-                                title = data.result.title || title;
-                                downloadUrl = data.result.video || data.result.mp4 || data.result.download_url || data.result.link;
-                            }
-                        }
-                    } catch (e) {}
                 }
 
                 if (!downloadUrl) throw new Error("Unable to fetch download link for target video.");
@@ -178,27 +148,26 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Facebook video... 📥" }, { quoted: msg });
 
-                let response = await fetch(`https://apis.davidcyril.name.ng/facebook2?url=${encodeURIComponent(query)}`);
+                let response = await fetch(`https://fb.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 let data = await response.json();
                 
-                // Retry loop if internal scraper fails
                 let retries = 0;
                 while ((!data.status || !data.video) && retries < 2) {
                     await new Promise(r => setTimeout(r, 1500));
-                    response = await fetch(`https://apis.davidcyril.name.ng/facebook2?url=${encodeURIComponent(query)}`);
+                    response = await fetch(`https://fb.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
                     data = await response.json();
                     retries++;
                 }
 
-                if (!data.status || !data.video) throw new Error("Facebook API unable to extract video links.");
+                if (!data.status || !data.video) throw new Error("FB downloader reported false status.");
 
                 const title = data.video.title || "Facebook Video";
                 const downloads = data.video.downloads || [];
                 const downloadUrl = downloads.find(d => d.quality === 'hd')?.downloadUrl || downloads.find(d => d.quality === 'sd')?.downloadUrl || downloads[0]?.downloadUrl;
 
-                if (!downloadUrl) throw new Error("Download URL parsing empty.");
+                if (!downloadUrl) throw new Error("No media link extracted from FB stream array.");
 
                 await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎬 *Title:* ${title}` }, { quoted: msg });
             } catch (error) {
@@ -232,71 +201,30 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "TikTok Video";
 
-                // Ultimate cross-network fallback array combining independent API clusters
-                const endpoints = [
-                    // Route 1: TikWM (High availability, direct global CDN bypass)
-                    {
-                        url: `https://www.tikwm.com/api/?url=${encodeURIComponent(query)}`,
-                        parser: (data) => {
-                            if (data.code === 0 && data.data) {
-                                let playUrl = data.data.play || data.data.wmplay;
-                                if (playUrl && playUrl.startsWith("/")) {
-                                    playUrl = "https://www.tikwm.com" + playUrl;
-                                }
-                                return {
-                                    title: data.data.title || "TikTok Video",
-                                    url: playUrl
-                                };
-                            }
-                            return null;
-                        }
-                    },
-                    // Route 2: David Cyril V2
-                    {
-                        url: `https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(query)}`,
-                        parser: (data) => {
-                            if (data.status && data.result) {
-                                return {
-                                    title: data.result.title || "TikTok Video",
-                                    url: data.result.video || data.result.noWatermark || data.result.download_url || data.result.link
-                                };
-                            }
-                            return null;
-                        }
-                    },
-                    // Route 3: David Cyril Standard
-                    {
-                        url: `https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(query)}`,
-                        parser: (data) => {
-                            if (data.status && data.video) {
-                                return {
-                                    title: data.video.title || "TikTok Video",
-                                    url: data.video.noWatermark || data.video.url || data.video.downloadUrl || data.video.download_url
-                                };
-                            }
-                            return null;
-                        }
-                    }
-                ];
-
-                for (const route of endpoints) {
-                    try {
-                        const response = await fetch(route.url);
-                        if (response.ok) {
-                            const data = await response.json();
-                            const parsed = route.parser(data);
-                            if (parsed && parsed.url) {
-                                title = parsed.title;
-                                downloadUrl = parsed.url;
-                                break; // Exit loop immediately on successful extraction
-                            }
-                        }
-                    } catch (err) {
-                        console.warn(`[DIAGNOSTIC] Fallback endpoint failed: ${route.url}. Error: ${err.message}`);
+                const response = await fetch(`https://tiksave.name.ng/api/download?url=${encodeURIComponent(query)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        title = data.result.title || title;
+                        downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url || data.result.link;
                     }
                 }
 
-                if (!downloadUrl) throw new Error("All public and fallback TikTok CDN endpoints returned false or blocked structures.");
+                if (!downloadUrl) {
+                    const fbResponse = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(query)}`);
+                    if (fbResponse.ok) {
+                        const fbData = await fbResponse.json();
+                        if (fbData.code === 0 && fbData.data) {
+                            title = fbData.data.title || title;
+                            downloadUrl = fbData.data.play || fbData.data.wmplay;
+                            if (downloadUrl && downloadUrl.startsWith("/")) {
+                                downloadUrl = "https://www.tikwm.com" + downloadUrl;
+                            }
+                        }
+                    }
+                }
+
+                if (!downloadUrl) throw new Error("All TikTok extraction pipelines returned false.");
 
                 await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎵 *Title:* ${title}` }, { quoted: msg });
             } catch (error) {
@@ -350,7 +278,7 @@ module.exports = [
         }
     },
 
-    // 6. TWITTER VIDEO & IMAGE DOWNLOADER V2 (.x2)
+    // 6. TWITTER VIDEO & IMAGE DOWNLOADER (.x2)
     {
         name: 'x2',
         isPrefixless: false,
@@ -373,27 +301,15 @@ module.exports = [
 
                 let downloadUrl = "";
 
-                try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/twitter?url=${encodeURIComponent(query)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result) {
-                            downloadUrl = data.result.video || data.result.image || data.result.download_url || data.result.link || data.result.url;
-                        }
-                    }
-                } catch (e) {}
-
-                if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/xdownloader?url=${encodeURIComponent(query)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result) {
-                            downloadUrl = data.result.video || data.result.image || data.result.download_url || data.result.link;
-                        }
+                const response = await fetch(`https://twitter.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        downloadUrl = data.result.video || data.result.image || data.result.download_url || data.result.link || data.result.url;
                     }
                 }
 
-                if (!downloadUrl) throw new Error("No download media resolved from both endpoints.");
+                if (!downloadUrl) throw new Error("Dedicated Twitter scraper returned empty media arrays.");
 
                 const isVideo = downloadUrl.toLowerCase().includes(".mp4") || downloadUrl.includes("video");
 
