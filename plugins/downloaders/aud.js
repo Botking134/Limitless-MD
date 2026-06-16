@@ -70,20 +70,34 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching song... 🔍" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(args)}`);
-                if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+                const yts = require('yt-search');
+                const results = await yts(args);
+                const videos = results.videos || [];
+                if (videos.length === 0) throw new Error("No results found on search index.");
+                const videoUrl = videos[0].url;
 
-                const data = await response.json();
-                if (!data.status || !data.result) throw new Error("API returned status false or missing result.");
+                let downloadUrl = "";
+                let title = videos[0].title || "YouTube Audio";
+                let thumbnail = videos[0].thumbnail || "";
+                let duration = videos[0].duration?.timestamp || "N/A";
 
-                const { title, thumbnail, duration, download_url } = data.result;
+                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(videoUrl)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        title = data.result.title || title;
+                        downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
+                    }
+                }
+
+                if (!downloadUrl) throw new Error("Isolated YouTube downloader returned empty audio stream.");
 
                 await sock.sendMessage(jid, { 
                     image: { url: thumbnail }, 
                     caption: `🎵 *SONG FOUND*\n\n📌 *Title:* ${title}\n⏳ *Duration:* ${duration}` 
                 }, { quoted: msg });
 
-                const audioBuffer = await fetchBuffer(download_url);
+                const audioBuffer = await fetchBuffer(downloadUrl);
                 if (audioBuffer) {
                     try {
                         await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
@@ -91,7 +105,7 @@ module.exports = [
                         await sock.sendMessage(jid, { document: audioBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
                     }
                 } else {
-                    await sock.sendMessage(jid, { audio: { url: download_url }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    await sock.sendMessage(jid, { audio: { url: downloadUrl }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 }
             } catch (error) {
                 logError("play", args, error);
@@ -120,34 +134,21 @@ module.exports = [
                 await sock.sendMessage(jid, { text: "Fetching audio... 📥" }, { quoted: msg });
 
                 const resolvedUrl = await resolveUrlOrSearch(query);
-                if (!resolvedUrl) throw new Error("Unable to resolve link or search query.");
+                if (!resolvedUrl) throw new Error("Unable to resolve link.");
 
                 let downloadUrl = "";
                 let title = "YouTube Audio";
 
-                try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/youtube/mp33?url=${encodeURIComponent(resolvedUrl)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result) {
-                            title = data.result.title || title;
-                            downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
-                        }
-                    }
-                } catch (e) {}
-
-                if (!downloadUrl) {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/download/ytmp3?url=${encodeURIComponent(resolvedUrl)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result) {
-                            title = data.result.title || title;
-                            downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
-                        }
+                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(resolvedUrl)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status && data.result) {
+                        title = data.result.title || title;
+                        downloadUrl = data.result.mp3 || data.result.download_url || data.result.link;
                     }
                 }
 
-                if (!downloadUrl) throw new Error("Both primary and fallback converters failed.");
+                if (!downloadUrl) throw new Error("Isolated YouTube downloader returned empty audio stream.");
 
                 const audioBuffer = await fetchBuffer(downloadUrl);
                 if (audioBuffer) {
@@ -181,7 +182,7 @@ module.exports = [
                 const results = await yts(args);
                 const videos = results.videos || [];
 
-                if (videos.length === 0) throw new Error("No results found from search index.");
+                if (videos.length === 0) throw new Error("No results found.");
 
                 const selectedResults = videos.slice(0, 10);
 
@@ -226,7 +227,7 @@ module.exports = [
                 const resolvedUrl = await resolveUrlOrSearch(query);
                 if (!resolvedUrl) throw new Error("Unable to resolve link.");
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/youtube?url=${encodeURIComponent(resolvedUrl)}`);
+                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(resolvedUrl)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
@@ -234,7 +235,7 @@ module.exports = [
 
                 const title = data.result.title || "YouTube Audio";
                 const downloadUrl = data.result.mp3 || data.result.download_url;
-                if (!downloadUrl) throw new Error("No download link resolved.");
+                if (!downloadUrl) throw new Error("Audio download link resolved empty.");
 
                 const docBuffer = await fetchBuffer(downloadUrl);
                 if (docBuffer) {
@@ -268,20 +269,21 @@ module.exports = [
 
                 const firstSong = videos[0];
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(firstSong.url)}`);
+                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(firstSong.url)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
-                if (!data.status || !data.result) throw new Error("Failed to fetch download links.");
+                if (!data.status || !data.result) throw new Error("Failed to parse downloader result.");
 
-                const { title, download_url } = data.result;
-                if (!download_url) throw new Error("No download URL returned.");
+                const title = data.result.title || "YouTube Audio";
+                const downloadUrl = data.result.mp3 || data.result.download_url;
+                if (!downloadUrl) throw new Error("Direct audio stream download link empty.");
 
-                const docBuffer = await fetchBuffer(download_url);
+                const docBuffer = await fetchBuffer(downloadUrl);
                 if (docBuffer) {
                     await sock.sendMessage(jid, { document: docBuffer, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
                 } else {
-                    await sock.sendMessage(jid, { document: { url: download_url }, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
+                    await sock.sendMessage(jid, { document: { url: downloadUrl }, mimetype: 'audio/mpeg', fileName: `${title}.mp3`, caption: `🎵 *Title:* ${title}` }, { quoted: msg });
                 }
             } catch (error) {
                 logError("playdoc", args, error);
@@ -301,14 +303,14 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching Spotify track... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/spotifydl?query=${encodeURIComponent(args)}`);
+                const response = await fetch(`https://david-cyril.net.ng/projects/spotify/api?query=${encodeURIComponent(args)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
                 if (!data.status || !data.result) throw new Error("Spotify track unresolved.");
 
                 const downloadUrl = data.result.download_url || data.result.link;
-                if (!downloadUrl) throw new Error("No direct download URL resolved.");
+                if (!downloadUrl) throw new Error("Spotify download link empty.");
 
                 const audioBuffer = await fetchBuffer(downloadUrl);
                 if (audioBuffer) {
