@@ -229,16 +229,42 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading TikTok... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(query)}`);
-                if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+                let downloadUrl = "";
+                let title = "TikTok Video";
 
-                const data = await response.json();
-                if (!data.status || !data.result) throw new Error("TikTok data extraction returned false.");
+                // Multi-route fallback array to bypass dead scraping endpoints
+                const endpoints = [
+                    `https://apis.davidcyril.name.ng/download/tiktokv2?url=${encodeURIComponent(query)}`,
+                    `https://apis.davidcyril.name.ng/tiktok?url=${encodeURIComponent(query)}`,
+                    `https://apis.davidcyril.name.ng/tiktok2?url=${encodeURIComponent(query)}`
+                ];
 
-                const title = data.result.title || "TikTok Video";
-                const downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url;
+                for (const url of endpoints) {
+                    try {
+                        const response = await fetch(url);
+                        if (response.ok) {
+                            const data = await response.json();
+                            
+                            // Handler for structure: { status: true, result: { video: "...", title: "..." } }
+                            if (data.status && data.result) {
+                                title = data.result.title || title;
+                                downloadUrl = data.result.video || data.result.noWatermark || data.result.download_url || data.result.link;
+                                if (downloadUrl) break;
+                            }
+                            
+                            // Handler for structure: { status: true, video: { url: "...", title: "..." } }
+                            if (data.status && data.video) {
+                                title = data.video.title || title;
+                                downloadUrl = data.video.noWatermark || data.video.url || data.video.downloadUrl || data.video.download_url;
+                                if (downloadUrl) break;
+                            }
+                        }
+                    } catch (err) {
+                        console.warn(`[DIAGNOSTIC] Fallback endpoint failed: ${url}. Error: ${err.message}`);
+                    }
+                }
 
-                if (!downloadUrl) throw new Error("No download media URL parsed.");
+                if (!downloadUrl) throw new Error("All resolved TikTok endpoints returned false or invalid structures.");
 
                 await sock.sendMessage(jid, { video: { url: downloadUrl }, mimetype: 'video/mp4', caption: `🎵 *Title:* ${title}` }, { quoted: msg });
             } catch (error) {
