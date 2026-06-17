@@ -1,6 +1,5 @@
 // helpers/log.js
 const config = require('../config');
-const { DEV_JIDS, DEV_LIDS } = require('../devs');
 const { normalizeToJid } = require('../stateManager');
 
 // ─── MESSAGE UNWRAPPER ──────────────────────────────────────────
@@ -45,7 +44,7 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
         const senderJid = normalizeToJid(sender);
         const revokerJidNorm = normalizeToJid(revokerJid);
 
-        const logHeader = 
+        const logHeader =
             `🚨 *ANTIDELETE LOG* 🚨\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
             `📂 *Chat:* @${jid.split('@')[0]}\n` +
@@ -59,7 +58,7 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
         const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
 
         // ─── Extract text content ──────────────────────────────
-        const textContent = 
+        const textContent =
             rawContent.conversation ||
             rawContent.extendedTextMessage?.text ||
             rawContent.imageMessage?.caption ||
@@ -76,8 +75,7 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
                 caption: `${logHeader}📷 *Type:* Image\n📝 *Caption:* "${textContent}"`,
                 mentions: [senderJid, revokerJidNorm]
             });
-        } 
-        else if (rawContent.videoMessage) {
+        } else if (rawContent.videoMessage) {
             const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
             let buffer = Buffer.from([]);
             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -88,8 +86,7 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
                 caption: `${logHeader}🎥 *Type:* Video\n📝 *Caption:* "${textContent}"`,
                 mentions: [senderJid, revokerJidNorm]
             });
-        } 
-        else if (rawContent.audioMessage) {
+        } else if (rawContent.audioMessage) {
             const stream = await downloadContentFromMessage(rawContent.audioMessage, 'audio');
             let buffer = Buffer.from([]);
             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -103,8 +100,7 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
                 mimetype: mime,
                 ptt: rawContent.audioMessage.ptt || false
             });
-        } 
-        else if (rawContent.stickerMessage) {
+        } else if (rawContent.stickerMessage) {
             const stream = await downloadContentFromMessage(rawContent.stickerMessage, 'sticker');
             let buffer = Buffer.from([]);
             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -113,8 +109,7 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
                 mentions: [senderJid, revokerJidNorm]
             });
             await sock.sendMessage(destJid, { sticker: buffer });
-        } 
-        else {
+        } else {
             // ─── Text-only deletion ────────────────────────────
             if (textContent) {
                 await sock.sendMessage(destJid, {
