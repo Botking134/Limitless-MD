@@ -33,14 +33,50 @@ if (config.menuImage && Array.isArray(config.menuImage) && config.menuImage.leng
     menuImages = config.menuImage;
 }
 
-// ─── HELPER: CREATE CAROUSEL CARD ──────────────────────────────
+// ─── HELPER: FETCH IMAGE BUFFER ──────────────────────────────
+async function fetchImageBuffer(url) {
+    try {
+        const response = await fetch(url, { timeout: 5000 });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
+    } catch (e) {
+        console.error(`[MENU] Failed to fetch image: ${url}`, e.message);
+        return null;
+    }
+}
 
+// ─── UPDATED CREATE CARD ──────────────────────────────────────
 async function createCard(sock, title, description, imageUrl, commandId, buttonText) {
     const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
+    
+    // Fetch the image buffer first
+    const buffer = await fetchImageBuffer(imageUrl);
+    if (!buffer) {
+        // If image fails, return a card without image (header omitted)
+        return {
+            header: { hasMediaAttachment: false },
+            body: { text: title },
+            footer: { text: description },
+            nativeFlowMessage: {
+                buttons: [
+                    {
+                        name: "quick_reply",
+                        buttonParamsJson: JSON.stringify({
+                            display_text: buttonText,
+                            id: commandId
+                        })
+                    }
+                ]
+            }
+        };
+    }
+
     const media = await prepareWAMessageMedia(
-        { image: { url: imageUrl } },
+        { image: buffer },
         { upload: sock.waUploadToServer }
     );
+    
     return {
         header: {
             imageMessage: media.imageMessage,
@@ -60,6 +96,131 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
             ]
         }
     };
+}
+
+// ─── UPDATED RENDER CAROUSEL MENU ──────────────────────────────
+async function renderCarouselMenu(sock, msg) {
+    const jid = msg.key.remoteJid;
+    const uptime = formatUptime(process.uptime());
+
+    const headerText = 
+`┌──────────────────┐
+│   *Limitless-MD*   │
+└──────────────────┘
+_Owner: ${config.ownerName}_
+_User: ${msg.pushName || 'User'}_
+_Uptime: ${uptime}_
+_Version: 1.0.0_
+══════════════════════
+_Throughout Heaven And Earth 🌏_
+┌────────────────────────────────────┐
+│ _I alone am the Honoured one_ │
+└────────────────────────────────────┘
+
+_Swipe through the cards below to explore command categories._ 🔮`;
+
+    try {
+        const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
+
+        // ─── LOADING ANIMATION ──────────────────────────────────
+        const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
+
+        const frames = [
+            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 1000 },
+            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 1000 },
+            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 1000 },
+            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌀", delay: 1500 }
+        ];
+
+        for (const frame of frames) {
+            await delay(frame.delay);
+            try {
+                await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key });
+            } catch (editErr) { /* ignore */ }
+        }
+
+        // ─── DELETE LOADING MESSAGE ─────────────────────────────
+        try {
+            await sock.sendMessage(jid, { delete: loadingMsg.key });
+        } catch (e) { /* ignore */ }
+
+        // ─── BUILD CAROUSEL ──────────────────────────────────────
+        const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
+
+        const categories = [
+            { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
+            { name: "INTERACTIVE GAMES 🎮", desc: "Lobbies, turn-based puzzles, quizzes, and duels.", cmd: "menu_games" },
+            { name: "GROUP MANAGEMENT 👥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
+            { name: "TOOLS ⚙️", desc: "Advanced Presence parameters & tracking tools.", cmd: "menu_tools" },
+            { name: "DOWNLOADER 📥", desc: "High-speed multi-platform downloaders.", cmd: "menu_download" },
+            { name: "FUN & ROLEPLAY 🎭", desc: "Monologues, animations, and interactive cards.", cmd: "menu_fun" },
+            { name: "OWNER & DEV 👑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
+            { name: "UTILITIES 🛠️", desc: "Converter tools & network latencies.", cmd: "menu_utilities" }
+        ];
+
+        const cards = [];
+        for (let i = 0; i < categories.length; i++) {
+            const cat = categories[i];
+            try {
+                const card = await createCard(
+                    sock,
+                    cat.name,
+                    cat.desc,
+                    shuffledImages[i % shuffledImages.length],
+                    cat.cmd,
+                    "Explore Commands 🔮"
+                );
+                cards.push(card);
+            } catch (err) {
+                console.error(`[MENU] Failed to create card for ${cat.name}:`, err.message);
+                // Fallback: card without image
+                cards.push({
+                    header: { hasMediaAttachment: false },
+                    body: { text: cat.name },
+                    footer: { text: cat.desc },
+                    nativeFlowMessage: {
+                        buttons: [
+                            {
+                                name: "quick_reply",
+                                buttonParamsJson: JSON.stringify({
+                                    display_text: "Explore Commands 🔮",
+                                    id: cat.cmd
+                                })
+                            }
+                        ]
+                    }
+                });
+            }
+        }
+
+        // If no cards were created, fallback to text menu
+        if (cards.length === 0) {
+            throw new Error("No cards could be created");
+        }
+
+        const messageContent = {
+            interactiveMessage: {
+                body: { text: headerText },
+                footer: { text: "Limitless System Menu 🪽" },
+                carouselMessage: {
+                    cards: cards
+                }
+            }
+        };
+
+        const msgProto = generateWAMessageFromContent(jid, {
+            viewOnceMessage: {
+                message: messageContent
+            }
+        }, { userJid: sock.user.id });
+
+        await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+
+    } catch (error) {
+        console.error("Carousel Menu Render Error:", error);
+        // Fallback to text menu
+        await renderMenu(sock, msg);
+    }
 }
 
 // ─── RENDER TEXT MENU ────────────────────────────────────────────
