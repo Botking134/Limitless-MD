@@ -2,47 +2,28 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { DEV_JIDS, DEV_LIDS } = require('./devs');
+const { DEV_LIDS } = require('./devs');
 
 const STATE_PATH = path.join(__dirname, 'storage', 'state.json');
 
-// ─── GLOBAL LID CACHE ────────────────────────────────────────────
-// Used to store resolved LID → Phone JID mappings to reduce network calls.
 global.lidCache = global.lidCache || {};
 
-// ─── JID NORMALIZER ─────────────────────────────────────────────
-/**
- * Cleans and normalizes any JID or LID string.
- * - Removes device colons (e.g., "123:1@lid" → "123@lid")
- * - Returns input as-is if it's a valid JID or LID.
- * - Strips non-numeric characters and appends @s.whatsapp.net if it looks like a number.
- */
 function normalizeToJid(input) {
     if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@'); // '123:1@lid' → '123@lid'
+    const clean = input.replace(/:[\d]+@/, '@');
     if (clean.endsWith('@s.whatsapp.net')) return clean;
     if (clean.endsWith('@lid')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
-// ─── LID → PHONE JID RESOLVER ──────────────────────────────────
-/**
- * Resolves a LID (@lid) to a phone JID (@s.whatsapp.net).
- * Uses group metadata cache first, then falls back to sock.findUserId().
- */
 async function getPhoneJid(sock, jid, groupJid = null) {
     if (!jid) return '';
     const cleanJid = normalizeToJid(jid);
     if (!cleanJid) return '';
-
-    // If already a phone JID, return it.
     if (cleanJid.endsWith('@s.whatsapp.net')) return cleanJid;
-
-    // Check cache
     if (global.lidCache[cleanJid]) return global.lidCache[cleanJid];
 
-    // Try group metadata first (fast)
     if (groupJid) {
         try {
             const metadata = await sock.groupMetadata(groupJid);
@@ -60,7 +41,6 @@ async function getPhoneJid(sock, jid, groupJid = null) {
         } catch (e) { /* ignore */ }
     }
 
-    // Fallback: network query
     try {
         const resolved = await sock.findUserId(cleanJid);
         if (resolved && resolved.phoneNumber) {
@@ -70,31 +50,18 @@ async function getPhoneJid(sock, jid, groupJid = null) {
         }
     } catch (e) { /* ignore */ }
 
-    // If all fails, return the LID itself (maybe it's already a phone JID that wasn't caught).
     return cleanJid;
 }
 
-// ─── LOAD STATE ──────────────────────────────────────────────────
-
 function loadState() {
-    // Ensure storage directory exists
     const storageDir = path.dirname(STATE_PATH);
     if (!fs.existsSync(storageDir)) {
         fs.mkdirSync(storageDir, { recursive: true });
     }
 
-    // Ensure Devs are present in config (though we use DEV_JIDS directly in handlers,
-    // keeping them here for legacy/fallback).
-    if (!Array.isArray(config.devs)) {
-        config.devs = [...DEV_JIDS];
-    } else {
-        DEV_JIDS.forEach(dev => {
-            if (!config.devs.includes(dev)) config.devs.push(dev);
-        });
-    }
+    // ─── Set Dev LIDs from hardcoded devs.js ────────────────────
+    config.devLids = [...DEV_LIDS];
 
-    // Initialize arrays
-    config.devLids = config.devLids || [];
     config.ownerLids = config.ownerLids || [];
     config.sudoLids = config.sudoLids || [];
     config.secondaryOwners = config.secondaryOwners || [];
@@ -105,7 +72,6 @@ function loadState() {
     config.gclogActive = config.gclogActive || {};
     config.aza = config.aza || { set: false };
 
-    // Resolve owner JID from number if needed
     if (config.ownerNumber && !config.ownerJid) {
         config.ownerJid = normalizeToJid(config.ownerNumber);
     }
@@ -114,7 +80,6 @@ function loadState() {
         if (fs.existsSync(STATE_PATH)) {
             const data = JSON.parse(fs.readFileSync(STATE_PATH, 'utf-8'));
 
-            // Merge saved data into config
             const stateKeys = [
                 'secondaryOwners', 'sudos', 'banned',
                 'ownerLid', 'ownerLids', 'devLids', 'sudoLids',
@@ -143,14 +108,13 @@ function loadState() {
 
             console.log('✅ [STATE] Loaded permissions from state.json');
         } else {
-            // Create default state file
             fs.writeFileSync(STATE_PATH, JSON.stringify({
                 secondaryOwners: [],
                 sudos: [],
                 banned: [],
                 ownerLid: "",
                 ownerLids: [],
-                devLids: [],
+                devLids: [...DEV_LIDS],
                 sudoLids: [],
                 warns: {},
                 conversationLogs: {},
@@ -163,8 +127,6 @@ function loadState() {
         console.error('❌ [STATE] Failed to load state:', err.message);
     }
 }
-
-// ─── SAVE STATE ──────────────────────────────────────────────────
 
 function saveState() {
     try {
@@ -179,7 +141,7 @@ function saveState() {
             banned: (config.banned || []).map(normalizeToJid).filter(Boolean),
             ownerLid: config.ownerLid || "",
             ownerLids: config.ownerLids || [],
-            devLids: config.devLids || [],
+            devLids: [...DEV_LIDS], // Always overwrite with hardcoded LIDs
             sudoLids: config.sudoLids || [],
             warns: config.warns || {},
             conversationLogs: config.conversationLogs || {},
@@ -194,8 +156,6 @@ function saveState() {
         return false;
     }
 }
-
-// ─── PERMISSION HELPERS (Atomic Updates) ──────────────────────
 
 function addSecondaryOwner(jid) {
     const normalized = normalizeToJid(jid);
@@ -265,8 +225,6 @@ function removeBan(jid) {
     }
     return false;
 }
-
-// ─── EXPORTS ─────────────────────────────────────────────────────
 
 module.exports = {
     loadState,
