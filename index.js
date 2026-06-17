@@ -1,26 +1,43 @@
 // index.js
+require('dotenv').config();
 
-require('./converter');
+const { loadVars, syncVarsToConfig } = require('./vars');
 const { loadState } = require('./stateManager');
-loadState(); // Restore persistent sudoers, owners, group modifications, and bans on boot
-
+const { DEV_JIDS } = require('./devs');
 const { startBot } = require('./pair');
-const settings = require('./settings');
+const config = require('./config');
 
-console.clear(); // Clears the terminal screen for a clean look
+// ─── LOAD PERSISTENT STATE ──────────────────────────────────────
+
+// 1. Load behavior toggles from vars.json → sync to config
+const vars = loadVars();
+syncVarsToConfig(vars);
+
+// 2. Load permission lists from state.json → merge into config
+loadState();
+
+// ─── IGNITION ──────────────────────────────────────────────────
+
+console.clear();
 console.log(`========================================`);
 console.log(`⚡ INITIALIZING SYSTEM ENGINES...`);
-console.log(`🤖 Bot Name: ${settings.botName}`);
-console.log(`👑 Owner   : ${settings.ownerName}`);
+console.log(`🤖 Bot Name: ${config.botName}`);
+console.log(`👑 Owner   : ${config.ownerName}`);
+console.log(`⚡ Prefix  : ${config.prefix || '(prefixless)'}`);
+console.log(`🛡️ Devs    : ${DEV_JIDS.length} hardcoded`);
+console.log(`📦 Owners  : ${config.secondaryOwners.length} secondary`);
+console.log(`🛡️ Sudos   : ${config.sudos.length} registered`);
 console.log(`========================================\n`);
 
-// Boot up the Baileys WebSocket connection safely
+// ─── START THE BOT ──────────────────────────────────────────────
+
 startBot().catch((error) => {
     console.error("[FATAL ERROR] Failed to ignite system engine:", error);
     process.exit(1);
 });
 
-// Global unhandled error catchers to prevent terminal crashes
+// ─── GLOBAL ERROR CATCHERS ────────────────────────────────────
+
 process.on('unhandledRejection', (reason, promise) => {
     console.error("[SYSTEM WARNING] Unhandled Rejection at:", promise, "reason:", reason);
 });
