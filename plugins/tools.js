@@ -1,6 +1,6 @@
 // plugins/tools.js
 const config = require('../config');
-const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
+const { normalizeToJid } = require('../stateManager');
 const { setVar, loadVars, syncVarsToConfig } = require('../vars');
 const axios = require('axios');
 const FormData = require('form-data');
