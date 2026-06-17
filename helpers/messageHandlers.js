@@ -1,6 +1,6 @@
 // helpers/messageHandlers.js
 const config = require('../config');
-const { DEV_JIDS, DEV_LIDS } = require('../devs');
+const { DEV_LIDS, DEV_JIDS } = require('../devs'); // <-- ADD THIS
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
@@ -10,15 +10,6 @@ const path = require('path');
 const notesPath = path.join(__dirname, '../storage/notes.json');
 
 // ─── PERMISSION MATRIX ──────────────────────────────────────────
-// Devs:        Hardcoded in devs.js – absolute control
-// Primary:     config.ownerJid / config.ownerLid – deploys the bot
-// Secondary:   config.secondaryOwners – added via addowner command
-// Sudos:       config.sudos – trusted users, no owner perms
-// ──────────────────────────────────────────────────────────────────
-
-// ─── COMMAND PERMISSION LISTS ──────────────────────────────────
-
-/** Commands that require any owner-level permission (Dev, Primary, Secondary). */
 const ownerCommands = [
     'diagnose', 'update', 'mode', 'setsudo', 'delsudo',
     'restart', 'shutdown', 'ban', 'unban',
@@ -26,10 +17,7 @@ const ownerCommands = [
     'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
 ];
 
-/** Commands that only Devs + Primary Owner can run (Secondary blocked). */
 const primaryOnlyCommands = ['addowner', 'delowner'];
-
-/** Commands that only hardcoded Devs can run (Primary blocked too). */
 const devOnlyCommands = ['upgrade'];
 
 // ─── NOTE HELPERS ───────────────────────────────────────────────
@@ -48,8 +36,6 @@ function saveNotes(notes) {
         fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
     } catch (e) { /* ignore */ }
 }
-
-// ─── NOTE SESSION HANDLER ──────────────────────────────────────
 
 async function handleNoteSession(sock, msg) {
     try {
@@ -81,8 +67,6 @@ async function handleNoteSession(sock, msg) {
     }
     return false;
 }
-
-// ─── SECURITY POLICY ENFORCER ──────────────────────────────────
 
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
     if (!policy || policy === 'off') return;
@@ -130,8 +114,6 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
     }
 }
 
-// ─── MAIN HANDLER ───────────────────────────────────────────────
-
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
         if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
@@ -148,7 +130,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const isNoteSaved = await handleNoteSession(sock, msg);
         if (isNoteSaved) return;
 
-        // ─── Anti-ViewOnce (merged into log.js) ────────────────
         await handleViewOnce(sock, msg);
 
         let command;
@@ -160,7 +141,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         global.activeSock = sock;
 
         // ─── PERMISSION EVALUATION ──────────────────────────────
-        let isDev = DEV_JIDS.includes(senderJid) || DEV_LIDS.includes(senderJid);
+        // ─── UPDATED: Use DEV_LIDS from devs.js ──────────────────
+        let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid);
 
         let isPrimaryOwner = senderJid === config.ownerJid ||
                              (config.ownerLid && senderJid === config.ownerLid);
@@ -183,7 +165,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
             if (senderPhoneJid) {
-                if (DEV_JIDS.includes(senderPhoneJid)) isDev = true;
+                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid)) isDev = true;
                 if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
                 if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
                 if (Array.isArray(config.sudos) && config.sudos.includes(senderPhoneJid)) isSudo = true;
@@ -208,7 +190,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                    msg.message.templateButtonReplyMessage?.selectedId ||
                    '';
 
-        // ─── STICKER COMMAND MAPPING ─────────────────────────────
         if (msg.message.stickerMessage) {
             const fileHash = msg.message.stickerMessage.fileSha256?.toString('base64');
             if (fileHash && config.stickerCommands && config.stickerCommands[fileHash]) {
@@ -223,7 +204,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const trimmedMessage = body.trim();
         const lowerMessage = trimmedMessage.toLowerCase();
 
-        // ─── STORE MESSAGE FOR ANTI-DELETE ──────────────────────
         global.messageStore[msg.key.id] = msg;
         const storeKeys = Object.keys(global.messageStore);
         if (storeKeys.length > 1000) delete global.messageStore[storeKeys[0]];
@@ -236,7 +216,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // ─── GROUP SECURITY INTERCEPTORS ──────────────────────────
         if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
 
-            // Antilink
             const antilinkPolicy = config.antilink?.[jid] || 'off';
             const hasLink = /(https?:\/\/)?(www\.)?(chat\.whatsapp\.com\/[a-zA-Z0-9]+|wa\.me\/[0-9]+)/i.test(body) || /https?:\/\/[^\s]+/i.test(body);
             if (hasLink && antilinkPolicy !== 'off') {
@@ -244,7 +223,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 return;
             }
 
-            // Antibot
             const antibotPolicy = config.antibot?.[jid] || 'off';
             const isBotSender = msg.key.id.startsWith('BAE5') || msg.key.id.startsWith('3EB0') || msg.key.id.length === 12;
             if (isBotSender && antibotPolicy !== 'off') {
@@ -252,7 +230,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 return;
             }
 
-            // Antitag
             const antitagPolicy = config.antitag?.[jid] || 'off';
             const isTaggingLarge = mentionedJids.length >= 5;
             const isTaggingEveryone = body.includes('@everyone') || body.includes('@here') || isTaggingLarge;
@@ -261,7 +238,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 return;
             }
 
-            // Anti-group-mention (antigm)
             const antigmPolicy = config.antigm?.[jid] || 'off';
             const isGroupMention = mentionedJids.includes(jid);
             if (isGroupMention && antigmPolicy !== 'off') {
@@ -416,7 +392,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         // ─── DEV MENTION REACTION ──────────────────────────────────
-        const devJids = new Set([...DEV_JIDS, ...DEV_LIDS]);
+        const devJids = new Set([...DEV_LIDS, ...DEV_JIDS]);
         const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
 
         if (isDevMentioned && !msg.key.fromMe) {
@@ -504,35 +480,28 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!command) return;
 
-        // ─── AGENT CONTEXT TRACKING ──────────────────────────────
         if (command === 'gojo') global.activeAgentContext = 'gojo';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
         else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
         else if (command === 'friday_chat') global.activeAgentContext = 'friday';
         else global.activeAgentContext = null;
 
-        // ─── PUBLIC MODE BYPASS ──────────────────────────────────
         const isPublicMode = config.isPublic ?? false;
 
-        // ─── PERMISSION GATEKEEPER ──────────────────────────────
         const cleanCmd = command.startsWith(config.prefix) ? command.slice(config.prefix.length) : command;
 
-        // Block sudo from owner commands
         if (ownerCommands.includes(cleanCmd) && isSudo && !isOwner && !isDev) {
             return;
         }
 
-        // Block secondary from primary-only commands (addowner/delowner)
         if (primaryOnlyCommands.includes(cleanCmd) && !isDev && !isPrimaryOwner) {
             return;
         }
 
-        // Block everyone except devs from dev-only commands
         if (devOnlyCommands.includes(cleanCmd) && !isDev) {
             return;
         }
 
-        // ─── INTERACTIVE RESPONSES BYPASS ──────────────────────
         const interactiveResponses = [
             'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
@@ -545,7 +514,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return;
         }
 
-        // ─── EXECUTE ──────────────────────────────────────────────
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
         const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
