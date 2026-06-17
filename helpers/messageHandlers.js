@@ -1,36 +1,56 @@
 // helpers/messageHandlers.js
+const config = require('../config');
+const { DEV_JIDS, DEV_LIDS } = require('../devs');
 const commands = require('../commands');
-const settings = require('../settings');
-const { getRawMessage } = require('./antiDelete');
-const { getPhoneJid, normalizeToJid } = require('../stateManager');
+const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
+const { getRawMessage, handleViewOnce } = require('./log');
 const fs = require('fs');
 const path = require('path');
 
-const notesPath = path.join(__dirname, '../notes.json');
+const notesPath = path.join(__dirname, '../storage/notes.json');
 
+// ─── PERMISSION MATRIX ──────────────────────────────────────────
+// Devs:        Hardcoded in devs.js – absolute control
+// Primary:     config.ownerJid / config.ownerLid – deploys the bot
+// Secondary:   config.secondaryOwners – added via addowner command
+// Sudos:       config.sudos – trusted users, no owner perms
+// ──────────────────────────────────────────────────────────────────
+
+// ─── COMMAND PERMISSION LISTS ──────────────────────────────────
+
+/** Commands that require any owner-level permission (Dev, Primary, Secondary). */
 const ownerCommands = [
-    'diagnose', 'update', 'mode', 'setsudo', 'delsudo', 
-    'addowner', 'delowner', 'restart', 'shutdown', 'ban', 
-    'unban', 'adddev', 'deldev', 'afk', 'setvar', 'settings', 
-    'upgrade', 'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
+    'diagnose', 'update', 'mode', 'setsudo', 'delsudo',
+    'restart', 'shutdown', 'ban', 'unban',
+    'afk', 'setvar', 'settings',
+    'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
 ];
-const devOnlyCommands = ['upgrade', 'adddev', 'deldev'];
 
-// Local Helpers to manage Sticky Notes persistently without circular dependencies
+/** Commands that only Devs + Primary Owner can run (Secondary blocked). */
+const primaryOnlyCommands = ['addowner', 'delowner'];
+
+/** Commands that only hardcoded Devs can run (Primary blocked too). */
+const devOnlyCommands = ['upgrade'];
+
+// ─── NOTE HELPERS ───────────────────────────────────────────────
+
 function readNotes() {
     try {
         if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
     return {};
 }
 
 function saveNotes(notes) {
     try {
+        const dir = path.dirname(notesPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
 }
 
-// Reusable dynamic note saving wizard session callback handler
+// ─── NOTE SESSION HANDLER ──────────────────────────────────────
+
 async function handleNoteSession(sock, msg) {
     try {
         const jid = msg.key.remoteJid;
@@ -41,7 +61,6 @@ async function handleNoteSession(sock, msg) {
         if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
             const session = global.noteSessions[quotedMsgId];
             const noteName = text.trim();
-
             if (!noteName) return false;
 
             const notes = readNotes();
@@ -53,10 +72,9 @@ async function handleNoteSession(sock, msg) {
                 time: Date.now()
             };
             saveNotes(notes);
-
             delete global.noteSessions[quotedMsgId];
             await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
-            return true; 
+            return true;
         }
     } catch (e) {
         console.error("Note session handler error:", e);
@@ -64,177 +82,139 @@ async function handleNoteSession(sock, msg) {
     return false;
 }
 
-// Unified Security Policy Enforcer
+// ─── SECURITY POLICY ENFORCER ──────────────────────────────────
+
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
     if (!policy || policy === 'off') return;
 
     if (policy === 'delete') {
         try {
             await sock.sendMessage(jid, { delete: msg.key });
-            await sock.sendMessage(jid, { text: `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`, mentions: [senderJid] });
-        } catch (e) {}
-    } 
-    else if (policy === 'warn') {
+            await sock.sendMessage(jid, {
+                text: `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`,
+                mentions: [senderJid]
+            });
+        } catch (e) { /* ignore */ }
+    } else if (policy === 'warn') {
         try {
             await sock.sendMessage(jid, { delete: msg.key });
             const warnKey = `${jid}_${senderNumber}`;
-            settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
-            const count = settings.warns[warnKey];
-            
-            if (count >= 5) {
+            config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
+            const count = config.warns[warnKey];
+            const threshold = config.warnThreshold || 5;
+
+            if (count >= threshold) {
                 await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-                await sock.sendMessage(jid, { text: `👋 @${senderNumber} kicked. Warnings exceeded for violating ${violationReason} rules.`, mentions: [senderJid] });
-                settings.warns[warnKey] = 0;
+                await sock.sendMessage(jid, {
+                    text: `👋 @${senderNumber} kicked. Warnings exceeded (${count}/${threshold}) for violating ${violationReason} rules.`,
+                    mentions: [senderJid]
+                });
+                config.warns[warnKey] = 0;
             } else {
-                await sock.sendMessage(jid, { text: `⚠️ @${senderNumber} ${violationReason} is not allowed here! (${count}/5)`, mentions: [senderJid] });
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${senderNumber} ${violationReason} is not allowed here! (${count}/${threshold})`,
+                    mentions: [senderJid]
+                });
             }
-            const { saveSettings } = require('./settingsSaver');
-            const { saveState } = require('../stateManager');
-            saveSettings();
             saveState();
-        } catch (e) {}
-    } 
-    else if (policy === 'kick') {
+        } catch (e) { /* ignore */ }
+    } else if (policy === 'kick') {
         try {
             await sock.sendMessage(jid, { delete: msg.key });
             await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-            await sock.sendMessage(jid, { text: `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`, mentions: [senderJid] });
-        } catch (e) {}
+            await sock.sendMessage(jid, {
+                text: `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`,
+                mentions: [senderJid]
+            });
+        } catch (e) { /* ignore */ }
     }
 }
+
+// ─── MAIN HANDLER ───────────────────────────────────────────────
 
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
         if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
         const msg = chatUpdate.messages[0];
-        if (!msg || !msg.message) return; 
+        if (!msg || !msg.message) return;
 
         const jid = msg.key.remoteJid;
-        
-        // Resolve raw sender string to native JID/LID using clean normalizer
         const rawSender = msg.key.participant || msg.key.remoteJid || '';
         const senderJid = normalizeToJid(rawSender);
-        const senderNumber = senderJid.split('@')[0]; 
+        const senderNumber = senderJid.split('@')[0];
         const isGroup = jid.endsWith('@g.us');
 
-        // ============================================================================
-        // AUTOMATED BACKGROUND INTERCEPTOR HOOKS
-        // ============================================================================
-        
-        // 1. Hook for Interactive Note Session Saving (addnote reply wizard)
+        // ─── HOOKS ──────────────────────────────────────────────
         const isNoteSaved = await handleNoteSession(sock, msg);
-        if (isNoteSaved) return; 
+        if (isNoteSaved) return;
 
-        // 2. Hook for Automated Anti-ViewOnce (Anti-VV)
-        const { handleAntiViewOnce } = require('./antiViewOnce');
-        await handleAntiViewOnce(sock, msg);
+        // ─── Anti-ViewOnce (merged into log.js) ────────────────
+        await handleViewOnce(sock, msg);
 
-        // Declared early at top of scope to prevent Temporal Dead Zone ReferenceErrors
         let command;
         let args;
 
-        // Establish the bot's identity using fully-qualified identifiers
-        const botJid = settings.botJid || (sock.user?.id ? `${sock.user.id.split(':')[0]}@s.whatsapp.net` : '');
-        const botLid = settings.botLid || '';
+        const botJid = config.botJid || (sock.user?.id ? `${sock.user.id.split(':')[0]}@s.whatsapp.net` : '');
+        const botLid = config.botLid || '';
 
         global.activeSock = sock;
 
-        // 1. Instant Permission Checks (Using JIDs/LIDs directly matching settings)
-        let isDev = settings.devs.includes(senderJid) || 
-                    (settings.devLids && settings.devLids.includes(senderJid));
-        
-        let isOwner = isDev || 
-                      senderJid === settings.ownerJid || 
-                      (settings.ownerLid && senderJid === settings.ownerLid) || 
-                      (settings.owners && settings.owners.includes(senderJid)) || 
-                      (settings.ownerLids && settings.ownerLids.includes(senderJid)) || 
-                      msg.key.fromMe; 
-        
-        let isSudo = (Array.isArray(settings.sudo) && settings.sudo.includes(senderJid)) ||
-                     (Array.isArray(settings.sudoLids) && settings.sudoLids.includes(senderJid));
+        // ─── PERMISSION EVALUATION ──────────────────────────────
+        let isDev = DEV_JIDS.includes(senderJid) || DEV_LIDS.includes(senderJid);
 
-        // 2. Fallback Check: If permissions are not instantly confirmed, resolve the phone JID
+        let isPrimaryOwner = senderJid === config.ownerJid ||
+                             (config.ownerLid && senderJid === config.ownerLid);
+
+        let isSecondaryOwner = Array.isArray(config.secondaryOwners) &&
+                               config.secondaryOwners.includes(senderJid);
+
+        let isOwner = isDev || isPrimaryOwner || isSecondaryOwner || msg.key.fromMe;
+
+        let isSudo = (Array.isArray(config.sudos) && config.sudos.includes(senderJid)) ||
+                     (Array.isArray(config.sudoLids) && config.sudoLids.includes(senderJid));
+
+        // ─── Fallback: Resolve LID → Phone JID ──────────────────
         let senderPhoneJid = '';
         if (senderJid.endsWith('@lid')) {
-            if (global.lidCache[senderJid]) {
+            if (global.lidCache?.[senderJid]) {
                 senderPhoneJid = global.lidCache[senderJid];
             }
-
             if (!isOwner && !isSudo && !senderPhoneJid) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
-
             if (senderPhoneJid) {
-                if (settings.devs.includes(senderPhoneJid)) isDev = true;
-                if (isDev || senderPhoneJid === settings.ownerJid || (settings.owners && settings.owners.includes(senderPhoneJid))) isOwner = true;
-                if (Array.isArray(settings.sudo) && settings.sudo.includes(senderPhoneJid)) isSudo = true;
+                if (DEV_JIDS.includes(senderPhoneJid)) isDev = true;
+                if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
+                if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
+                if (Array.isArray(config.sudos) && config.sudos.includes(senderPhoneJid)) isSudo = true;
+                isOwner = isDev || isPrimaryOwner || isSecondaryOwner || msg.key.fromMe;
             }
         }
 
         const isAuthorized = isOwner || isSudo;
 
-        // Emoji Reaction Handler
-        const reactionMessage = msg.message.reactionMessage;
-        if (reactionMessage) {
-            const reactedMsgId = reactionMessage.key?.id;
-            const reactionText = reactionMessage.text;
-            const targetEmoji = settings.vvEmoji || "🥷";
-
-            if (reactionText === targetEmoji && isAuthorized && global.messageStore?.[reactedMsgId]) {
-                const originalMsg = global.messageStore[reactedMsgId];
-                const rawContent = getRawMessage(originalMsg.message);
-                const isViewOnce = originalMsg.message?.viewOnceMessage || originalMsg.message?.viewOnceMessageV2 || originalMsg.message?.viewOnceMessageV2Extension;
-                
-                if (isViewOnce && rawContent) {
-                    try {
-                        const mediaMessage = rawContent.imageMessage || rawContent.videoMessage || rawContent.audioMessage;
-                        const mediaType = rawContent.imageMessage ? "image" : (rawContent.videoMessage ? "video" : (rawContent.audioMessage ? "audio" : ""));
-                        
-                        if (mediaMessage && mediaType) {
-                            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                            await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
-
-                            const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                            let buffer = Buffer.from([]);
-                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                            const destJid = jid.endsWith('@g.us') ? senderJid : jid;
-                            
-                            if (mediaType === 'image') {
-                                await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
-                            } else if (mediaType === 'video') {
-                                const mimeType = mediaMessage.mimetype || "video/mp4";
-                                await sock.sendMessage(destJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reaction" });
-                            } else if (mediaType === 'audio') {
-                                await sock.sendMessage(destJid, { audio: buffer, mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", ptt: true });
-                            }
-                        }
-                    } catch (e) {}
-                }
-            }
-            return; 
-        }
-
-        // Banned status checks using both standard and phone formats
-        const isBanned = (Array.isArray(settings.banned) && settings.banned.includes(senderJid)) || 
-                         (senderPhoneJid && Array.isArray(settings.banned) && settings.banned.includes(senderPhoneJid));
+        // ─── BAN CHECK ────────────────────────────────────────────
+        const isBanned = (Array.isArray(config.banned) && config.banned.includes(senderJid)) ||
+                         (senderPhoneJid && Array.isArray(config.banned) && config.banned.includes(senderPhoneJid));
         if (isBanned) return;
-        if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return; 
+        if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
 
-        let body = msg.message.conversation || 
-                   msg.message.extendedTextMessage?.text || 
-                   msg.message.imageMessage?.caption || 
+        // ─── EXTRACT BODY ────────────────────────────────────────
+        let body = msg.message.conversation ||
+                   msg.message.extendedTextMessage?.text ||
+                   msg.message.imageMessage?.caption ||
                    msg.message.videoMessage?.caption ||
-                   msg.message.buttonsResponseMessage?.selectedButtonId || 
-                   msg.message.templateButtonReplyMessage?.selectedId || 
+                   msg.message.buttonsResponseMessage?.selectedButtonId ||
+                   msg.message.templateButtonReplyMessage?.selectedId ||
                    '';
 
+        // ─── STICKER COMMAND MAPPING ─────────────────────────────
         if (msg.message.stickerMessage) {
             const fileHash = msg.message.stickerMessage.fileSha256?.toString('base64');
-            if (fileHash && settings.stickerCommands && settings.stickerCommands[fileHash]) {
-                let mapped = settings.stickerCommands[fileHash];
-                if (!mapped.startsWith(settings.prefix) && !['speed', 'kamui', 'gojo'].includes(mapped.toLowerCase())) {
-                    mapped = settings.prefix + mapped;
+            if (fileHash && config.stickerCommands && config.stickerCommands[fileHash]) {
+                let mapped = config.stickerCommands[fileHash];
+                if (!mapped.startsWith(config.prefix) && !['speed', 'kamui', 'gojo'].includes(mapped.toLowerCase())) {
+                    mapped = config.prefix + mapped;
                 }
                 body = mapped;
             }
@@ -243,105 +223,37 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const trimmedMessage = body.trim();
         const lowerMessage = trimmedMessage.toLowerCase();
 
+        // ─── STORE MESSAGE FOR ANTI-DELETE ──────────────────────
         global.messageStore[msg.key.id] = msg;
         const storeKeys = Object.keys(global.messageStore);
-        if (storeKeys.length > 1000) delete global.messageStore[storeKeys[0]]; 
+        if (storeKeys.length > 1000) delete global.messageStore[storeKeys[0]];
 
         const rawMsg = getRawMessage(msg.message);
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // ============================================================================
-        // CHAT LOG RECORDING INTERCEPTOR (.gclog)
-        // ============================================================================
-        if (isGroup && settings.gclogActive?.[jid]) {
-            if (!settings.conversationLogs) settings.conversationLogs = {};
-            if (!settings.conversationLogs[jid]) settings.conversationLogs[jid] = [];
-
-            // 1. Record incoming group messages
-            if (trimmedMessage && !trimmedMessage.startsWith(settings.prefix)) {
-                const senderName = msg.pushName || senderNumber || 'Unknown';
-                settings.conversationLogs[jid].push({
-                    sender: senderName,
-                    text: trimmedMessage,
-                    time: Date.now()
-                });
-
-                if (settings.conversationLogs[jid].length > 1000) {
-                    settings.conversationLogs[jid].shift();
-                }
-
-                const { saveSettings } = require('./settingsSaver');
-                saveSettings();
-            }
-
-            // 2. Re-establish background automation timers on first interaction post-restart
-            if (!global.gclogIntervals) global.gclogIntervals = {};
-            if (!global.gclogIntervals[jid]) {
-                const s1 = "gsk_";
-                const s2 = "tPB0xMyZ2oijloaBNcDs";
-                const s3 = "WGdyb3FY5iC2p9hwRE";
-                const s4 = "SIJXAV3t53LZg9";
-                const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
-
-                global.gclogIntervals[jid] = setInterval(async () => {
-                    const logs = settings.conversationLogs?.[jid] || [];
-                    if (logs.length === 0) return;
-
-                    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
-                    try {
-                        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                            method: "POST",
-                            headers: {
-                                "Content-Type": "application/json",
-                                "Authorization": `Bearer ${GROQ_API_KEY}`
-                            },
-                            body: JSON.stringify({
-                                model: "llama-3.3-70b-versatile",
-                                messages: [
-                                    { role: "system", content: "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful, cocky, and engaging. Do not include any intro, outro, or conversational filler." },
-                                    { role: "user", content: logString }
-                                ]
-                            })
-                        });
-
-                        if (response.ok) {
-                            const data = await response.json();
-                            const responseText = data.choices?.[0]?.message?.content || "";
-                            await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3-HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
-                        }
-                        if (settings.conversationLogs) settings.conversationLogs[jid] = [];
-                        const { saveSettings } = require('./settingsSaver');
-                        saveSettings();
-                    } catch (err) {}
-                }, 3 * 60 * 60 * 1000);
-            }
-        }
-
-        // ============================================================================
-        // GROUP SECURITY INTERCEPTORS (Antilink, Antibot, Antitag, Antigm)
-        // ============================================================================
+        // ─── GROUP SECURITY INTERCEPTORS ──────────────────────────
         if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
-            
-            // 1. Antilink Protection
-            const antilinkPolicy = settings.antilink?.[jid] || 'off';
+
+            // Antilink
+            const antilinkPolicy = config.antilink?.[jid] || 'off';
             const hasLink = /(https?:\/\/)?(www\.)?(chat\.whatsapp\.com\/[a-zA-Z0-9]+|wa\.me\/[0-9]+)/i.test(body) || /https?:\/\/[^\s]+/i.test(body);
             if (hasLink && antilinkPolicy !== 'off') {
                 await applySecurityPolicy(sock, msg, antilinkPolicy, senderJid, senderNumber, jid, "Antilink");
-                return; 
+                return;
             }
 
-            // 2. Antibot Protection
-            const antibotPolicy = settings.antibot?.[jid] || 'off';
+            // Antibot
+            const antibotPolicy = config.antibot?.[jid] || 'off';
             const isBotSender = msg.key.id.startsWith('BAE5') || msg.key.id.startsWith('3EB0') || msg.key.id.length === 12;
             if (isBotSender && antibotPolicy !== 'off') {
                 await applySecurityPolicy(sock, msg, antibotPolicy, senderJid, senderNumber, jid, "Antibot");
                 return;
             }
 
-            // 3. Antitag Protection
-            const antitagPolicy = settings.antitag?.[jid] || 'off';
+            // Antitag
+            const antitagPolicy = config.antitag?.[jid] || 'off';
             const isTaggingLarge = mentionedJids.length >= 5;
             const isTaggingEveryone = body.includes('@everyone') || body.includes('@here') || isTaggingLarge;
             if (isTaggingEveryone && antitagPolicy === 'on') {
@@ -349,8 +261,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 return;
             }
 
-            // 4. Anti-Group-Mention Protection (antigm)
-            const antigmPolicy = settings.antigm?.[jid] || 'off';
+            // Anti-group-mention (antigm)
+            const antigmPolicy = config.antigm?.[jid] || 'off';
             const isGroupMention = mentionedJids.includes(jid);
             if (isGroupMention && antigmPolicy !== 'off') {
                 await applySecurityPolicy(sock, msg, antigmPolicy, senderJid, senderNumber, jid, "Anti-Group-Mention");
@@ -358,47 +270,57 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
+        // ─── GROUP STATUS PROTECTION ─────────────────────────────
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
         if (isGroup && isGroupStatus && !msg.key.fromMe && !isAuthorized && !isDev) {
-            const policy = settings.antigcstatus || 'off';
+            const policy = config.antigcstatus || 'off';
             if (policy !== 'off') {
                 if (policy === 'delete') {
                     try {
                         await sock.sendMessage(jid, { delete: msg.key });
-                        await sock.sendMessage(jid, { text: `❌ *Warning @${senderNumber}:* Group status updates are restricted in this domain.`, mentions: [senderJid] });
-                    } catch (e) {}
-                } 
-                else if (policy === 'warn') {
+                        await sock.sendMessage(jid, {
+                            text: `❌ *Warning @${senderNumber}:* Group status updates are restricted in this domain.`,
+                            mentions: [senderJid]
+                        });
+                    } catch (e) { /* ignore */ }
+                } else if (policy === 'warn') {
                     try {
                         await sock.sendMessage(jid, { delete: msg.key });
                         const warnKey = `${jid}_${senderNumber}`;
-                        settings.warns[warnKey] = (settings.warns[warnKey] || 0) + 1;
-                        const count = settings.warns[warnKey];
-                        
-                        if (count >= 5) {
+                        config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
+                        const count = config.warns[warnKey];
+                        const threshold = config.warnThreshold || 5;
+
+                        if (count >= threshold) {
                             await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-                            await sock.sendMessage(jid, { text: `👋 @${senderNumber} kicked. Warnings exceeded.`, mentions: [senderJid] });
-                            settings.warns[warnKey] = 0;
+                            await sock.sendMessage(jid, {
+                                text: `👋 @${senderNumber} kicked. Warnings exceeded for posting status updates.`,
+                                mentions: [senderJid]
+                            });
+                            config.warns[warnKey] = 0;
                         } else {
-                            await sock.sendMessage(jid, { text: `⚠️ @${senderNumber} Status updates are not allowed here! (${count}/5)`, mentions: [senderJid] });
+                            await sock.sendMessage(jid, {
+                                text: `⚠️ @${senderNumber} Status updates are not allowed here! (${count}/${threshold})`,
+                                mentions: [senderJid]
+                            });
                         }
-                        const { saveSettings } = require('./settingsSaver');
-                        const { saveState } = require('../stateManager');
-                        saveSettings();
                         saveState();
-                    } catch (e) {}
-                } 
-                else if (policy === 'kick') {
+                    } catch (e) { /* ignore */ }
+                } else if (policy === 'kick') {
                     try {
                         await sock.sendMessage(jid, { delete: msg.key });
                         await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-                        await sock.sendMessage(jid, { text: `👋 Exorcised @${senderNumber} for posting status updates in this domain.`, mentions: [senderJid] });
-                    } catch (e) {}
+                        await sock.sendMessage(jid, {
+                            text: `👋 Exorcised @${senderNumber} for posting status updates.`,
+                            mentions: [senderJid]
+                        });
+                    } catch (e) { /* ignore */ }
                 }
-                return; 
+                return;
             }
         }
 
+        // ─── SILENCED USERS ──────────────────────────────────────
         if (isGroup && global.silencedUsers?.[jid]?.[senderJid]) {
             const silence = global.silencedUsers[jid][senderJid];
             if (Date.now() < silence.endTime) {
@@ -413,39 +335,30 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 }
 
                 if (shouldMute) {
-                    try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) {}
-                    return; 
+                    try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
+                    return;
                 }
             } else {
-                delete global.silencedUsers[jid][senderJid]; 
+                delete global.silencedUsers[jid][senderJid];
             }
         }
 
+        // ─── STATUS BROADCAST ─────────────────────────────────────
         if (jid === 'status@broadcast') {
-            if (settings.autoviewstatus === 'on') {
-                try { await sock.readMessages([msg.key]); } catch (e) {}
+            if (config.autoviewstatus === 'on') {
+                try { await sock.readMessages([msg.key]); } catch (e) { /* ignore */ }
             }
-            if (settings.autoreactstatus === 'on') {
+            if (config.autoreactstatus === 'on') {
                 try {
-                    const emoji = settings.statusemoji || '❄';
+                    const emoji = config.statusemoji || '❄';
                     await sock.sendMessage('status@broadcast', { react: { text: emoji, key: msg.key } });
-                } catch (e) {}
-            }
-            return; 
-        }
-
-        const protocolMessage = msg.message?.protocolMessage;
-        if (protocolMessage && (protocolMessage.type === 0 || protocolMessage.type === 'REVOKE')) {
-            const deletedMsgId = protocolMessage.key?.id;
-            if (deletedMsgId && global.messageStore && global.messageStore[deletedMsgId]) {
-                const originalMsg = global.messageStore[deletedMsgId];
-                const { handleMessageDeletion } = require('./antiDelete');
-                await handleMessageDeletion(sock, originalMsg, jid, msg.key.participant || msg.key.remoteJid || '');
+                } catch (e) { /* ignore */ }
             }
             return;
         }
 
-        if (settings.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
+        // ─── ANTIBUG RATE-LIMIT ──────────────────────────────────
+        if (config.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
             const now = Date.now();
             if (!global.spamTracker[senderJid]) global.spamTracker[senderJid] = [];
             global.spamTracker[senderJid].push(now);
@@ -453,16 +366,20 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
             if (global.spamTracker[senderJid].length >= 5) {
                 try {
-                    await sock.sendMessage(jid, { text: `can't bypass my infinity? @${senderNumber}`, mentions: [senderJid] }, { quoted: msg });
+                    await sock.sendMessage(jid, {
+                        text: `can't bypass my infinity? @${senderNumber}`,
+                        mentions: [senderJid]
+                    }, { quoted: msg });
                     await sock.updateBlockStatus(senderJid, 'block');
                     await sock.chatModify({ delete: true, lastMessages: [msg] }, jid);
                     delete global.spamTracker[senderJid];
-                } catch (blockErr) {}
-                return; 
+                } catch (blockErr) { /* ignore */ }
+                return;
             }
         }
 
-        const antispamConfig = settings.antispam?.[jid];
+        // ─── ANTISPAM RATE-LIMIT ──────────────────────────────────
+        const antispamConfig = config.antispam?.[jid];
         if (isGroup && antispamConfig && antispamConfig.status === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
             const rate = antispamConfig.rate || { count: 1, seconds: 2 };
             const now = Date.now();
@@ -477,25 +394,31 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     global.spamDeletedCount[spamDeleteKey] = (global.spamDeletedCount[spamDeleteKey] || 0) + 1;
 
                     if (global.spamDeletedCount[spamDeleteKey] >= 10) {
-                        global.spamDeletedCount[spamDeleteKey] = 0; 
+                        global.spamDeletedCount[spamDeleteKey] = 0;
                         const alertText = `🚨 *SPAM ATTACK DETECTED* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumber} rate-limit violated!`;
                         const buttonMessage = {
                             text: alertText,
-                            buttons: [{ buttonId: `${settings.prefix}kick @${senderNumber}`, buttonText: { displayText: 'Kick Spammer 🥷' }, type: 1 }],
+                            buttons: [{
+                                buttonId: `${config.prefix}kick @${senderNumber}`,
+                                buttonText: { displayText: 'Kick Spammer 🥷' },
+                                type: 1
+                            }],
                             headerType: 1,
                             mentions: [senderJid]
                         };
-                        try { await sock.sendMessage(jid, buttonMessage); } catch (e) { await sock.sendMessage(jid, { text: alertText }, { mentions: [senderJid] }); }
+                        try { await sock.sendMessage(jid, buttonMessage); } catch (e) {
+                            await sock.sendMessage(jid, { text: alertText }, { mentions: [senderJid] });
+                        }
                     }
-                } catch (e) {}
-                return; 
+                } catch (e) { /* ignore */ }
+                return;
             }
         }
 
-        // Dev Mention Auto-Reaction Interceptor
-        const devJids = new Set([...(settings.devs || []), ...(settings.devLids || [])]);
+        // ─── DEV MENTION REACTION ──────────────────────────────────
+        const devJids = new Set([...DEV_JIDS, ...DEV_LIDS]);
         const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
-        
+
         if (isDevMentioned && !msg.key.fromMe) {
             (async () => {
                 const reactionSequence = ["⚽", "🥷", "🪽", "🌪", "🧘‍"];
@@ -503,491 +426,38 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     try {
                         await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
                     } catch (reactErr) {
-                        break; 
+                        break;
                     }
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
         }
 
+        // ─── AGENT DETECTION ──────────────────────────────────────
         const quotedParticipant = contextInfo?.participant;
         const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
         const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
-
-        const singleKey = jid + '_' + senderJid;
-        const quizKey = jid + '_' + senderJid + '_quiz';
-        const multiKey = jid; 
-
-        let activeKey = '';
-        if (global.triviaSessions[quizKey]) activeKey = quizKey;
-        else if (global.triviaSessions[singleKey]) activeKey = singleKey;
-        else if (global.triviaSessions[multiKey]) activeKey = multiKey;
-
-        // ============================================================================
-        // INTELLIGENT RELATIONSHIP TEXT-REPLY INTERCEPTOR
-        // ============================================================================
-        if (quotedMsgId && global.messageStore?.[quotedMsgId]) {
-            const originalMsg = global.messageStore[quotedMsgId];
-            const originalRaw = getRawMessage(originalMsg.message);
-            const originalText = originalRaw?.conversation || originalRaw?.extendedTextMessage?.text || '';
-            const originalMentions = originalRaw?.contextInfo?.mentionedJid || [];
-            
-            // 1. Intercept manual text replies to Holy Matrimony Cards
-            if (originalText.includes("HOLY MATRIMONY PROPOSAL") && originalMentions.length >= 2) {
-                const targetNum = originalMentions[0].split('@')[0];
-                const senderNum = originalMentions[1].split('@')[0];
-                const lowerAns = trimmedMessage.toLowerCase().trim();
-                
-                if (lowerAns.includes("i do")) {
-                    command = 'wed_ans';
-                    args = `yes ${targetNum} ${senderNum}`;
-                } else if (lowerAns.includes("don't") || lowerAns.includes("dont")) {
-                    command = 'wed_ans';
-                    args = `no ${targetNum} ${senderNum}`;
-                }
-            }
-            
-            // 2. Intercept manual text replies to Proposal Confession Cards
-            else if (originalText.includes("A CONFESSION") && originalMentions.length >= 1) {
-                const targetNum = originalMentions[0].split('@')[0];
-                const senderJidRaw = originalMsg.key.participant || originalMsg.key.remoteJid || '';
-                const senderNum = senderJidRaw.split('@')[0].split(':')[0];
-                const lowerAns = trimmedMessage.toLowerCase().trim();
-                
-                if (lowerAns.includes("yes")) {
-                    command = 'prop_ans';
-                    args = `yes ${targetNum} ${senderNum}`;
-                } else if (lowerAns.includes("no")) {
-                    command = 'prop_ans';
-                    args = `no ${targetNum} ${senderNum}`;
-                }
-            }
-            
-            // 3. Intercept manual text replies to Askout Confession Cards
-            else if (originalText.includes("WILL YOU GO OUT WITH ME?") && originalMentions.length >= 1) {
-                const targetNum = originalMentions[0].split('@')[0];
-                const senderJidRaw = originalMsg.key.participant || originalMsg.key.remoteJid || '';
-                const senderNum = senderJidRaw.split('@')[0].split(':')[0];
-                const lowerAns = trimmedMessage.toLowerCase().trim();
-                
-                if (lowerAns.includes("yes")) {
-                    command = 'ask_ans';
-                    args = `yes ${targetNum} ${senderNum}`;
-                } else if (lowerAns.includes("no")) {
-                    command = 'ask_ans';
-                    args = `no ${targetNum} ${senderNum}`;
-                }
-            }
-        }
-
-        // Decryption of View Once media by reaction
-        const targetEmoji = settings.vvEmoji || "🥷";
-        if (quotedMsgId && trimmedMessage === targetEmoji && isAuthorized) {
-            if (global.messageStore?.[quotedMsgId]) {
-                const originalMsg = global.messageStore[quotedMsgId];
-                const rawContent = getRawMessage(originalMsg.message);
-                const isViewOnce = originalMsg.message?.viewOnceMessage || originalMsg.message?.viewOnceMessageV2 || originalMsg.message?.viewOnceMessageV2Extension;
-
-                if (isViewOnce && rawContent) {
-                    try {
-                        const mediaMessage = rawContent.imageMessage || rawContent.videoMessage || rawContent.audioMessage;
-                        const mediaType = rawContent.imageMessage ? "image" : (rawContent.videoMessage ? "video" : (rawContent.audioMessage ? "audio" : ""));
-
-                        if (mediaMessage && mediaType) {
-                            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                            await sock.sendMessage(jid, { react: { text: "🌀", key: msg.key } });
-
-                            const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                            let buffer = Buffer.from([]);
-                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                            const destJid = jid.endsWith('@g.us') ? senderJid : jid;
-
-                            if (mediaType === 'image') {
-                                await sock.sendMessage(destJid, { image: buffer, caption: "🌀 *Kamui:* Decoded View Once Image via reaction" });
-                            } else if (mediaType === 'video') {
-                                const mimeType = mediaMessage.mimetype || "video/mp4";
-                                await sock.sendMessage(destJid, { video: buffer, mimetype: mimeType, caption: "🌀 *Kamui:* Decoded View Once Video via reaction" });
-                            } else if (mediaType === 'audio') {
-                                await sock.sendMessage(destJid, { audio: buffer, mimetype: mediaMessage.mimetype || "audio/ogg; codecs=opus", ptt: true });
-                            }
-                            return; 
-                        }
-                    } catch (e) {}
-                }
-            }
-        }
-
-        // Chat Interceptors Execution Flow...
-        if (quotedMsgId && activeKey && global.triviaSessions && global.triviaSessions[activeKey]) {
-            const session = global.triviaSessions[activeKey];
-            
-            // 1. Route replies to category selection prompts (Resolved: calling prefixless commands directly)
-            if (session.status === 'awaiting_category' && session.lastQuestionMsgId === quotedMsgId) {
-                await commands['quiz_cat'](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                return;
-            }
-            
-            // 2. Route answers to active trivia questions
-            if (session.status === 'playing' && session.lastQuestionMsgId === quotedMsgId) {
-                const ans = trimmedMessage.toLowerCase().trim();
-                if (['a', 'b', 'c', 'd'].includes(ans)) {
-                    await commands[`${settings.prefix}quiz_ans`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
-                    return; 
-                }
-            }
-        }
-
-        const torfSessionKey = jid + '_' + senderJid + '_torf';
-        if (quotedMsgId && global.torfSessions && global.torfSessions[torfSessionKey]) {
-            const session = global.torfSessions[sessionKey];
-            if (session.lastQuestionMsgId === quotedMsgId) {
-                const ans = trimmedMessage.toLowerCase().trim();
-                if (['true', 'false', 'yes', 'no'].includes(ans)) {
-                    let cleanAns = ans;
-                    if (ans === 'yes') cleanAns = 'true';
-                    if (ans === 'no') cleanAns = 'false';
-                    await commands[`${settings.prefix}torf_ans`](sock, msg, cleanAns, { isOwner, isSudo, isDev, senderNumber });
-                    return; 
-                }
-            }
-        }
-
-        const guessSessionKey = jid + '_' + senderJid + '_guess';
-        if (quotedMsgId && global.gameSessions && global.gameSessions[guessSessionKey]) {
-            const session = global.gameSessions[guessSessionKey];
-            if (session.lastQuestionMsgId === quotedMsgId) {
-                const num = parseInt(trimmedMessage);
-                if (!isNaN(num)) {
-                    await commands[`${settings.prefix}guess`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                    return; 
-                }
-            }
-        }
-
-        const millionaireSessionKey = jid + '_' + senderJid;
-        if (quotedMsgId && global.millionaireSessions && global.millionaireSessions[millionaireSessionKey]) {
-            const session = global.millionaireSessions[millionaireSessionKey];
-            if (session.status === 'playing' && session.lastQuestionMsgId === quotedMsgId) {
-                const ans = trimmedMessage.toLowerCase().trim();
-                if (['a', 'b', 'c', 'd'].includes(ans)) {
-                    await commands[`${settings.prefix}millionaire_ans`](sock, msg, ans, { isOwner, isSudo, isDev, senderNumber });
-                    return; 
-                }
-            }
-            else if (session.status === 'calling' && session.lastQuestionMsgId === quotedMsgId) {
-                await commands[`${settings.prefix}millionaire_call`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                return; 
-            }
-            else if (session.status === 'waiting_friend_decision' && session.lastQuestionMsgId === quotedMsgId) {
-                const decision = trimmedMessage.toLowerCase().trim();
-                if (['yes', 'no'].includes(decision)) {
-                    await commands[`${settings.prefix}millionaire_decision`](sock, msg, decision, { isOwner, isSudo, isDev, senderNumber });
-                    return; 
-                }
-            }
-        }
-
-        const singleAnagramKey = jid + '_' + senderJid;
-        const multiAnagramKey = jid;
-        let activeAnagramKey = '';
-        if (global.anagramSessions[singleAnagramKey]) activeAnagramKey = singleAnagramKey;
-        else if (global.anagramSessions[multiAnagramKey]) activeAnagramKey = multiAnagramKey;
-
-        if (quotedMsgId && activeAnagramKey && global.anagramSessions && global.anagramSessions[activeAnagramKey]) {
-            const session = global.anagramSessions[activeAnagramKey];
-            if (session.lastQuestionMsgId === quotedMsgId) {
-                await commands[`${settings.prefix}anagram_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                return; 
-            }
-        }
-
-        if (quotedMsgId && global.wcgSessions && global.wcgSessions[jid]) {
-            const session = global.wcgSessions[jid];
-            if (session.lastQuestionMsgId === quotedMsgId) {
-                await commands[`${settings.prefix}wcg_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                return; 
-            }
-        }
-
-        if (quotedMsgId && global.forwardSessions && global.forwardSessions[quotedMsgId]) {
-            const session = global.forwardSessions[quotedMsgId];
-            const parsedNumber = trimmedMessage.replace(/[^0-9]/g, '');
-            if (parsedNumber.length < 7) {
-                await sock.sendMessage(jid, { text: "❌ Invalid target phone number format." }, { quoted: msg });
-                return;
-            }
-
-            const targetDestJid = `${parsedNumber}@s.whatsapp.net`;
-            try {
-                await sock.sendMessage(targetDestJid, { forward: { key: { id: session.originalMsgKey, remoteJid: jid, participant: session.originalParticipant }, message: session.msgToForward } });
-                await sock.sendMessage(jid, { text: `✅ Message forwarded successfully!` }, { quoted: msg });
-                delete global.forwardSessions[quotedMsgId];
-            } catch (e) {
-                await sock.sendMessage(jid, { text: `❌ Forwarding session failed: ${e.message}` }, { quoted: msg });
-            }
-            return; 
-        }
-
-        if (quotedMsgId && global.azaSessions && global.azaSessions[quotedMsgId] && isAuthorized) {
-            const session = global.azaSessions[quotedMsgId];
-            
-            if (session.step === 1) {
-                const cleanNum = trimmedMessage.replace(/[^0-9]/g, '');
-                if (cleanNum.length < 5) {
-                    await sock.sendMessage(jid, { text: "❌ *Invalid Account Number!*\n\nPlease reply directly to the Step 1 message with a valid number." }, { quoted: msg });
-                    return;
-                }
-
-                const prompt = await sock.sendMessage(jid, { 
-                    text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                          `• *Step 2:* Excellent. Now, please reply directly to *this message* with your *Bank Name* (e.g., Sterling Bank, Access Bank).` 
-                }, { quoted: msg });
-
-                global.azaSessions[prompt.key.id] = { step: 2, account: cleanNum };
-                delete global.azaSessions[quotedMsgId];
-                return;
-            }
-
-            if (session.step === 2) {
-                const bankName = trimmedMessage.trim();
-                if (bankName.length < 2) {
-                    await sock.sendMessage(jid, { text: "❌ *Invalid Bank Name!*\n\nPlease reply directly to the Step 2 message with a valid bank name." }, { quoted: msg });
-                    return;
-                }
-
-                const prompt = await sock.sendMessage(jid, { 
-                    text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                          `• *Step 3:* Almost done. Now, please reply directly to *this message* with your *Full Name* as it appears on the bank account.` 
-                }, { quoted: msg });
-
-                global.azaSessions[prompt.key.id] = { step: 3, account: session.account, bank: bankName };
-                delete global.azaSessions[quotedMsgId];
-                return;
-            }
-
-            if (session.step === 3) {
-                const fullName = trimmedMessage.trim();
-                if (fullName.length < 3) {
-                    await sock.sendMessage(jid, { text: "❌ *Invalid Full Name!*\n\nPlease reply directly to the Step 3 message." }, { quoted: msg });
-                    return;
-                }
-
-                settings.aza = { set: true, account: session.account, bank: session.bank, name: fullName };
-                const { saveSettings } = require('./settingsSaver');
-                saveSettings();
-                const { saveState } = require('../stateManager');
-                saveState();
-
-                await sock.sendMessage(jid, { 
-                    text: `✅ *Bank Details Setup Complete!* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                          `👤 *NAME:* \`${fullName}\`\n` +
-                          `🏦 *BANK:* \`${session.bank}\`\n` +
-                          `💳 *ACCOUNT NO:* \`${session.account}\`` 
-                }, { quoted: msg });
-
-                delete global.azaSessions[quotedMsgId];
-                return;
-            }
-        }
-
-        if (quotedMsgId && global.songSessions && global.songSessions[quotedMsgId]) {
-            const session = global.songSessions[quotedMsgId];
-            const index = parseInt(trimmedMessage.trim());
-
-            if (!isNaN(index) && index >= 1 && index <= session.results.length) {
-                const chosen = session.results[index - 1];
-                delete global.songSessions[quotedMsgId]; 
-
-                await sock.sendMessage(jid, { text: `📥 *Downloading song:* "${chosen.title}"...` }, { quoted: msg });
-
-                try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(chosen.title)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result?.download_url) {
-                            await sock.sendMessage(jid, { audio: { url: data.result.download_url }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-                            return;
-                        }
-                    }
-                } catch (err) {}
-            }
-            return; 
-        }
-
-        if (quotedMsgId && global.apkSessions && global.apkSessions[quotedMsgId]) {
-            const session = global.apkSessions[quotedMsgId];
-            const index = parseInt(trimmedMessage.trim());
-
-            if (!isNaN(index) && index >= 1 && index <= session.results.length) {
-                const chosen = session.results[index - 1];
-                delete global.apkSessions[quotedMsgId]; 
-
-                await sock.sendMessage(jid, { text: `📥 *Downloading APK:* "${chosen.name}"...` }, { quoted: msg });
-
-                try {
-                    const response = await fetch("https://api.kord.live/api/apkdl?id=" + encodeURIComponent(chosen.id));
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.downloadUrl) {
-                            await sock.sendMessage(jid, {
-                                document: { url: data.downloadUrl },
-                                mimetype: "application/vnd.android.package-archive",
-                                fileName: `${chosen.name}.apk`,
-                                caption: `📦 *APK COMPLETED* 📦\n━━━━━━━━━━━━━━━━━━━\n\n📌 *Name:* ${chosen.name}`
-                            }, { quoted: msg });
-                            return;
-                        }
-                    }
-                } catch (err) {}
-            }
-            return;
-        }
-
-        if (quotedMsgId && global.shazamSessions && global.shazamSessions[quotedMsgId]) {
-            const session = global.shazamSessions[quotedMsgId];
-            const text = trimmedMessage.toLowerCase().trim();
-
-            if (text === '1' || text === 'download') {
-                delete global.shazamSessions[quotedMsgId]; 
-                await sock.sendMessage(jid, { text: `📥 *Downloading recognized song:* "${session.title} - ${session.artist}"...` }, { quoted: msg });
-
-                try {
-                    const response = await fetch(`https://apis.davidcyril.name.ng/play?query=${encodeURIComponent(session.title + ' ' + session.artist)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.status && data.result?.download_url) {
-                            await sock.sendMessage(jid, { audio: { url: data.result.download_url }, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-                            return;
-                        }
-                    }
-                } catch (err) {}
-            }
-            return;
-        }
-
-        if (quotedMsgId && global.reminderSessions && global.reminderSessions[quotedMsgId]) {
-            const session = global.reminderSessions[quotedMsgId];
-            const rTitle = trimmedMessage || "Unnamed Reminder";
-
-            let reminders = [];
-            const remindersPath = path.join(__dirname, '../reminders.json');
-            try {
-                if (fs.existsSync(remindersPath)) reminders = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
-            } catch (e) {}
-
-            reminders.push({
-                title: rTitle,
-                text: session.text,
-                jid: session.jid,
-                sender: session.sender,
-                timeSet: session.timeSet,
-                triggerTime: session.timeSet + session.durationMs,
-                durationStr: session.durationStr
-            });
-
-            try { fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8'); } catch (e) {}
-            delete global.reminderSessions[quotedMsgId];
-
-            await sock.sendMessage(jid, { text: `✅ *Reminder persistently saved!* \n\n• *Title:* *${rTitle}*\n• *Note:* _"${session.text}"_\n• *Duration:* \`${session.durationStr}\`` }, { quoted: msg });
-            return;
-        }
-
-        if (quotedMsgId && global.cancelSessions && global.cancelSessions[quotedMsgId]) {
-            delete global.cancelSessions[quotedMsgId];
-            const idx = parseInt(trimmedMessage.trim());
-
-            let reminders = [];
-            const remindersPath = path.join(__dirname, '../reminders.json');
-            try {
-                if (fs.existsSync(remindersPath)) reminders = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
-            } catch (e) {}
-
-            if (isNaN(idx) || idx < 1 || idx > reminders.length) return;
-
-            const removed = reminders[idx - 1];
-            reminders.splice(idx - 1, 1);
-            try { fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8'); } catch (e) {}
-
-            await sock.sendMessage(jid, { text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*` }, { quoted: msg });
-            return;
-        }
-
-        const pvpSessionKey = jid; 
-        if (quotedMsgId && global.pvpSessions && global.pvpSessions[pvpSessionKey]) {
-            const session = global.pvpSessions[pvpSessionKey];
-            if (session.lastQuestionMsgId === quotedMsgId) {
-                const ans = trimmedMessage.trim();
-                if (session.status === 'lobby' && senderJid !== session.p1) {
-                    // Open lobby accepts direct-reply character entries natively
-                    command = 'pvp_lobby_accept';
-                    args = ans;
-                } else if (session.status === 'p2_choosing' && senderJid === session.p2) {
-                    command = 'pvp_choose';
-                    args = ans;
-                } else if (session.status === 'fighting' && senderJid === session.turn) {
-                    command = 'pvp_fight';
-                    args = ans;
-                } else if (session.status === 'defending' && senderJid === session.defender) {
-                    command = 'pvp_defend';
-                    args = ans;
-                }
-            }
-        }
-
-        const charadeSessionKey = jid + '_' + senderJid;
-        if (quotedMsgId && global.charadeSessions && global.charadeSessions[charadeSessionKey]) {
-            const session = global.charadeSessions[charadeSessionKey];
-            if (session.lastQuestionMsgId === quotedMsgId) {
-                await commands[`${settings.prefix}charade_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                return;
-            }
-        }
-
-        const escapeSessionKey = jid + '_' + senderJid;
-        if (quotedMsgId && global.escapeSessions && global.escapeSessions[escapeSessionKey]) {
-            const session = global.escapeSessions[escapeSessionKey];
-            if (session.lastQuestionMsgId === quotedMsgId) {
-                if (['1', '2', '3'].includes(trimmedMessage)) {
-                    await commands[`${settings.prefix}escape_ans`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                    return;
-                }
-            }
-        }
-
-        const vaultSessionKey = jid + '_' + senderJid + '_v8';
-        if (quotedMsgId && global.vault8Sessions && global.vault8Sessions[vaultSessionKey]) {
-            const session = global.vault8Sessions[vaultSessionKey];
-            if (session.lastQuestionMsgId === quotedMsgId) {
-                if (['1', '2', '3'].includes(trimmedMessage)) {
-                    await commands[`${settings.prefix}vault8`](sock, msg, trimmedMessage, { isOwner, isSudo, isDev, senderNumber });
-                    return;
-                }
-            }
-        }
-
-        let identifiedAgent = null;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
         const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
         const isJarvisCalled = /\bjarvis\b|\bchatbot\b/i.test(lowerMessage);
         const isFridayCalled = /\bfriday\b/i.test(lowerMessage);
 
+        let identifiedAgent = null;
+
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
-        } 
-        else if (isMentioningBot || isReplyingToBot) {
+        } else if (isMentioningBot || isReplyingToBot) {
             if (isFridayCalled) identifiedAgent = 'friday';
             else if (isGojoCalled) identifiedAgent = 'gojo';
             else if (isLizzyCalled) identifiedAgent = 'lizzy';
             else if (isJarvisCalled) identifiedAgent = 'jarvis';
             else {
-                if (Array.isArray(settings.lizzyChats) && settings.lizzyChats.includes(jid)) identifiedAgent = 'lizzy';
-                else if (Array.isArray(settings.chatbotChats) && settings.chatbotChats.includes(jid)) identifiedAgent = 'jarvis';
+                if (Array.isArray(config.lizzyChats) && config.lizzyChats.includes(jid)) identifiedAgent = 'lizzy';
+                else if (Array.isArray(config.chatbotChats) && config.chatbotChats.includes(jid)) identifiedAgent = 'jarvis';
                 else identifiedAgent = 'gojo';
             }
-        } 
-        else {
+        } else {
             if (isFridayCalled) identifiedAgent = 'friday';
             else if (isGojoCalled) identifiedAgent = 'gojo';
             else if (isLizzyCalled) identifiedAgent = 'lizzy';
@@ -995,11 +465,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         if (identifiedAgent === 'gojo') {
-            const isAsleep = settings.gojoGlobalSleep;
-            if (isAsleep && !trimmedMessage.startsWith(settings.prefix)) identifiedAgent = null;
+            const isAsleep = config.gojoGlobalSleep;
+            if (isAsleep && !trimmedMessage.startsWith(config.prefix)) identifiedAgent = null;
         }
 
-        if (identifiedAgent && !trimmedMessage.startsWith(settings.prefix)) {
+        if (identifiedAgent && !trimmedMessage.startsWith(config.prefix)) {
             if (identifiedAgent === 'gojo') {
                 command = 'gojo';
                 args = trimmedMessage;
@@ -1015,14 +485,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
+        // ─── COMMAND EXTRACTION ──────────────────────────────────
         if (!command) {
-            if (trimmedMessage.startsWith(settings.prefix)) {
+            if (trimmedMessage.startsWith(config.prefix)) {
                 const spaceIndex = trimmedMessage.indexOf(' ');
                 if (spaceIndex === -1) {
-                    command = trimmedMessage.slice(settings.prefix.length).toLowerCase();
+                    command = trimmedMessage.slice(config.prefix.length).toLowerCase();
                     args = '';
                 } else {
-                    command = trimmedMessage.slice(settings.prefix.length, spaceIndex).toLowerCase();
+                    command = trimmedMessage.slice(config.prefix.length, spaceIndex).toLowerCase();
                     args = trimmedMessage.slice(spaceIndex + 1);
                 }
             } else if (commands[trimmedMessage.toLowerCase()]) {
@@ -1033,55 +504,62 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!command) return;
 
-        if (command) {
-            if (command === 'gojo') global.activeAgentContext = 'gojo';
-            else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
-            else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
-            else if (command === 'friday_chat') global.activeAgentContext = 'friday';
-            else global.activeAgentContext = null;
+        // ─── AGENT CONTEXT TRACKING ──────────────────────────────
+        if (command === 'gojo') global.activeAgentContext = 'gojo';
+        else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
+        else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
+        else if (command === 'friday_chat') global.activeAgentContext = 'friday';
+        else global.activeAgentContext = null;
 
-            const isPublicMode = settings.isPublic ?? false;
-            
-            // Bypass Private Mode restriction for all interactive, multiplayer lobby join, and Carousel menu category clicks
-            const isInteractiveResponse = [
-                'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
-                'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
-                'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend',
-                'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download', 'menu_fun', 'menu_owner', 'menu_utilities',
-                'silence_ans'
-            ].includes(command);
+        // ─── PUBLIC MODE BYPASS ──────────────────────────────────
+        const isPublicMode = config.isPublic ?? false;
 
-            if (!isPublicMode && !isAuthorized && !isDev && !isInteractiveResponse) {
-                return; 
-            }
-        }
+        // ─── PERMISSION GATEKEEPER ──────────────────────────────
+        const cleanCmd = command.startsWith(config.prefix) ? command.slice(config.prefix.length) : command;
 
-        const cleanCmd = command.startsWith(settings.prefix) ? command.slice(settings.prefix.length) : command;
-        const isOwnerCmd = ownerCommands.includes(cleanCmd);
-        const isDevOnlyCmd = devOnlyCommands.includes(cleanCmd);
-
-        if (isOwnerCmd && isSudo && !isOwner && !isDev) {
+        // Block sudo from owner commands
+        if (ownerCommands.includes(cleanCmd) && isSudo && !isOwner && !isDev) {
             return;
         }
 
-        const isPrimaryOwner = senderJid === settings.ownerJid || (senderPhoneJid && senderPhoneJid === settings.ownerJid);
-        if (isDevOnlyCmd && !isDev && !isPrimaryOwner) {
+        // Block secondary from primary-only commands (addowner/delowner)
+        if (primaryOnlyCommands.includes(cleanCmd) && !isDev && !isPrimaryOwner) {
             return;
         }
 
+        // Block everyone except devs from dev-only commands
+        if (devOnlyCommands.includes(cleanCmd) && !isDev) {
+            return;
+        }
+
+        // ─── EXECUTE ──────────────────────────────────────────────
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
-        const cmdKey = command.startsWith(settings.prefix) ? command : `${settings.prefix}${command}`;
+        const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
+
+        // Interactive response bypass for Private mode
+        const interactiveResponses = [
+            'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
+            'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
+            'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend',
+            'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download',
+            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans'
+        ];
+
+        if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) {
+            return;
+        }
+
         if (commands[cmdKey]) {
-            if (settings.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(msg.key.remoteJid, { react: { text: "❄", key: msg.key } }); } catch (err) {}
+            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
             }
-            await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, senderNumber });
+            await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
-            if (settings.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(msg.key.remoteJid, { react: { text: "❄", key: msg.key } }); } catch (err) {}
+            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
             }
-            await commands[command](sock, msg, args, { isOwner, isSudo, isDev, senderNumber });
+            await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         }
     } catch (err) {
         console.error('Error handling message stream:', err);
