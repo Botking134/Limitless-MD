@@ -1,7 +1,6 @@
 // plugins/converter.js
-const settings = require('../settings'); 
-const { saveSettings } = require('../helpers/settingsSaver'); 
-const { saveState } = require('../stateManager'); 
+const config = require('../config');
+const { saveState, normalizeToJid } = require('../stateManager');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const fs = require('fs');
 const path = require('path');
@@ -10,54 +9,7 @@ const FormData = require('form-data');
 const { exec } = require('child_process');
 const sharp = require('sharp');
 
-// Obfuscated backup Gemini API key configuration
-const k1 = "AQ.A";
-const k2 = "b8RN6KZl";
-const k3 = "dboFt4nmErCs";
-const k4 = "Rlvdo3tle5ZJa";
-const k5 = "F6FdUBRk1x63EWYA";
-const GEMINI_API_KEY_FALLBACK = k1 + k2 + k3 + k4 + k5;
-
-// Helper to normalize JIDs
-function normalizeToJid(input) {
-    if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@');
-    if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@lid')) return clean;
-    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
-    return raw ? `${raw}@s.whatsapp.net` : '';
-}
-
-// Google Gen AI SDK Text integration supporting gemini-3.5-flash with live search grounding fallbacks
-async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash", useSearch = true) {
-    try {
-        const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
-        const { GoogleGenAI } = await import('@google/genai');
-        const ai = new GoogleGenAI({ apiKey: apiKey });
-
-        const configPayload = useSearch ? { tools: [{ googleSearch: {} }] } : {};
-
-        try {
-            // Attempt standard generation with search grounding first
-            const response = await ai.models.generateContent({
-                model: model,
-                contents: `${prompt}\n\nContent:\n"${textContent}"`,
-                config: configPayload
-            });
-            return response.text || "";
-        } catch (sdkErr) {
-            // Fallback 1: Silent retry without search grounding to prevent crashes
-            const response = await ai.models.generateContent({
-                model: model,
-                contents: `${prompt}\n\nContent:\n"${textContent}"`
-            });
-            return response.text || response.output || "";
-        }
-    } catch (e) {
-        console.error("Gemini text query failed:", e.message);
-        throw e;
-    }
-}
+// ─── HELPERS ──────────────────────────────────────────────────────
 
 function getRawMessage(message) {
     if (!message) return null;
@@ -70,41 +22,11 @@ function getRawMessage(message) {
     return message;
 }
 
-// Standardized JID Parser (Traverses nested elements cleanly)
-function parseTarget(msg, args) {
-    if (args) {
-        const cleanDigits = args.replace(/[^0-9]/g, '');
-        if (cleanDigits.length >= 7) {
-            return `${cleanDigits}@s.whatsapp.net`;
-        }
-    }
-
-    const rawMsg = getRawMessage(msg.message);
-    const contextInfo = rawMsg?.contextInfo || 
-                        rawMsg?.extendedTextMessage?.contextInfo || 
-                        rawMsg?.imageMessage?.contextInfo || 
-                        rawMsg?.videoMessage?.contextInfo || 
-                        rawMsg?.stickerMessage?.contextInfo || 
-                        rawMsg?.audioMessage?.contextInfo || 
-                        rawMsg?.documentMessage?.contextInfo;
-    const mentions = contextInfo?.mentionedJid || [];
-
-    if (mentions.length > 0) {
-        return mentions[0].split(':')[0] + (mentions[0].includes('@lid') ? '@lid' : '@s.whatsapp.net');
-    } else if (contextInfo?.participant) {
-        const part = contextInfo.participant;
-        return part.split(':')[0] + (part.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-    }
-    return '';
-}
-
-// Uploads a binary buffer to secure cloud hosts with auto-fallback to guarantee uptime
 async function uploadToCloud(buffer, mimeType) {
     let ext = mimeType.split('/')[1] || 'bin';
     ext = ext.split(';')[0].trim();
     const filename = `file_${Date.now()}.${ext}`;
 
-    // Host 1: qu.ax
     try {
         const form = new FormData();
         form.append('files[]', buffer, { filename, contentType: mimeType });
@@ -118,7 +40,6 @@ async function uploadToCloud(buffer, mimeType) {
         console.error("❌ [UPLOAD] qu.ax failed:", err.message);
     }
 
-    // Host 2: catbox.moe
     try {
         const form = new FormData();
         form.append('reqtype', 'fileupload');
@@ -136,8 +57,36 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("Catbox and qu.ax upload hosts failed.");
 }
 
+async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash", useSearch = true) {
+    const apiKey = config.geminiApiKey;
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
+
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey });
+
+    const configPayload = useSearch ? { tools: [{ googleSearch: {} }] } : {};
+
+    try {
+        const response = await ai.models.generateContent({
+            model,
+            contents: `${prompt}\n\nContent:\n"${textContent}"`,
+            config: configPayload
+        });
+        return response.text || "";
+    } catch (sdkErr) {
+        // Fallback without search
+        const response = await ai.models.generateContent({
+            model,
+            contents: `${prompt}\n\nContent:\n"${textContent}"`
+        });
+        return response.text || response.output || "";
+    }
+}
+
+// ─── EXPORT COMMANDS ────────────────────────────────────────────
+
 module.exports = [
-    // 1. CONVERT MEDIA TO DIRECT LINKS (.url / .tourl)
+    // 1. TOURL / URL (Media to direct link)
     {
         name: 'tourl',
         isPrefixless: false,
@@ -145,7 +94,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = getRawMessage(quoted || msg.message);
-            
+
             let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.stickerMessage || rawContent?.audioMessage || rawContent?.documentMessage;
             let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.stickerMessage ? "sticker" : (rawContent?.audioMessage ? "audio" : "document")));
 
@@ -169,7 +118,7 @@ module.exports = [
         }
     },
 
-    // 2. CONVERT VIDEO TO AUDIOS (.tomp3 / .toaudio - Local FFMPEG Engine)
+    // 2. TOMP3 (Video to audio via FFMPEG)
     {
         name: 'tomp3',
         isPrefixless: false,
@@ -188,11 +137,10 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const tmpInput = path.join(__dirname, `../tmp_in_${Date.now()}.mp4`);
-                const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp3`);
+                const tmpInput = path.join(__dirname, '../storage/tmp_in_' + Date.now() + '.mp4');
+                const tmpOutput = path.join(__dirname, '../storage/tmp_out_' + Date.now() + '.mp3');
                 fs.writeFileSync(tmpInput, buffer);
 
-                // Run local re-encode conversion via FFMPEG for instant offline compilation
                 const cmd = `ffmpeg -i "${tmpInput}" -q:a 0 -map a "${tmpOutput}" -y`;
                 exec(cmd, async (err) => {
                     if (err) {
@@ -200,10 +148,10 @@ module.exports = [
                     } else {
                         const audioBuffer = fs.readFileSync(tmpOutput);
                         await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-                        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
-                        try { fs.unlinkSync(tmpOutput); } catch (e) {}
+                        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
+                        try { fs.unlinkSync(tmpOutput); } catch (e) { /* ignore */ }
                     }
-                    try { fs.unlinkSync(tmpInput); } catch (e) {}
+                    try { fs.unlinkSync(tmpInput); } catch (e) { /* ignore */ }
                 });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `❌ Audio conversion failed: ${error.message}`, edit: statusMsg.key });
@@ -211,7 +159,7 @@ module.exports = [
         }
     },
 
-    // 3. CONVERT STICKERS/GIF TO VIDEOS (.tomp4 / .tovideo - WebP-to-GIF-to-MP4 Pipeline)
+    // 3. TOMP4 (Animated sticker to video)
     {
         name: 'tomp4',
         isPrefixless: false,
@@ -230,18 +178,15 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                // Convert animated WebP buffer to animated GIF buffer using sharp to bypass ffmpeg's libwebp decode issues
                 const gifBuffer = await sharp(buffer, { animated: true }).gif().toBuffer();
 
-                const tmpInput = path.join(__dirname, `../tmp_in_${Date.now()}.gif`);
-                const tmpOutput = path.join(__dirname, `../tmp_out_${Date.now()}.mp4`);
+                const tmpInput = path.join(__dirname, '../storage/tmp_in_' + Date.now() + '.gif');
+                const tmpOutput = path.join(__dirname, '../storage/tmp_out_' + Date.now() + '.mp4');
                 fs.writeFileSync(tmpInput, gifBuffer);
 
-                // Compile animated GIF back to MP4 natively via FFMPEG
                 const cmd = `ffmpeg -i "${tmpInput}" -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p" -vcodec libx264 -preset fast -t 10 "${tmpOutput}" -y`;
                 exec(cmd, async (err) => {
                     if (err) {
-                        // Fallback automatically to mpeg4 if libx264 is missing
                         const fallbackCmd = `ffmpeg -i "${tmpInput}" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -vcodec mpeg4 -t 10 "${tmpOutput}" -y`;
                         exec(fallbackCmd, async (fallbackErr) => {
                             if (fallbackErr) {
@@ -249,17 +194,17 @@ module.exports = [
                             } else {
                                 const videoBuffer = fs.readFileSync(tmpOutput);
                                 await sock.sendMessage(jid, { video: videoBuffer, mimetype: "video/mp4", caption: "🎥 converted sticker successfully! (fallback)" }, { quoted: msg });
-                                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
                             }
-                            try { fs.unlinkSync(tmpInput); } catch (e) {}
-                            try { fs.unlinkSync(tmpOutput); } catch (e) {}
+                            try { fs.unlinkSync(tmpInput); } catch (e) { /* ignore */ }
+                            try { fs.unlinkSync(tmpOutput); } catch (e) { /* ignore */ }
                         });
                     } else {
                         const videoBuffer = fs.readFileSync(tmpOutput);
                         await sock.sendMessage(jid, { video: videoBuffer, mimetype: "video/mp4", caption: "🎥 converted sticker successfully!" }, { quoted: msg });
-                        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
-                        try { fs.unlinkSync(tmpInput); } catch (e) {}
-                        try { fs.unlinkSync(tmpOutput); } catch (e) {}
+                        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
+                        try { fs.unlinkSync(tmpInput); } catch (e) { /* ignore */ }
+                        try { fs.unlinkSync(tmpOutput); } catch (e) { /* ignore */ }
                     }
                 });
             } catch (error) {
@@ -268,7 +213,7 @@ module.exports = [
         }
     },
 
-    // 4. REAL-TIME CURRENCY CONVERTER (.currency) - Fully Gemini-Grounded
+    // 4. CURRENCY (Gemini Search)
     {
         name: 'currency',
         isPrefixless: false,
@@ -291,7 +236,7 @@ module.exports = [
         }
     },
 
-    // 5. BINARY SYSTEM ENCODER AND DECODER (.binary)
+    // 5. BINARY
     {
         name: 'binary',
         isPrefixless: false,
@@ -304,7 +249,6 @@ module.exports = [
 
             try {
                 if (isBinaryPattern) {
-                    // Decode binary to standard ASCII text
                     const clean = input.replace(/\s+/g, '');
                     let text = '';
                     for (let i = 0; i < clean.length; i += 8) {
@@ -312,7 +256,6 @@ module.exports = [
                     }
                     await sock.sendMessage(jid, { text: `📖 *Decoded Binary:* \n\n\`${text}\`` }, { quoted: msg });
                 } else {
-                    // Encode standard text to binary string
                     let binary = '';
                     for (let i = 0; i < input.length; i++) {
                         const bin = input[i].charCodeAt(0).toString(2);
@@ -326,7 +269,7 @@ module.exports = [
         }
     },
 
-    // 6. CONVERT STICKER TO IMAGES (.toimg)
+    // 6. TOIMG (Sticker to image)
     {
         name: 'toimg',
         isPrefixless: false,
@@ -343,7 +286,6 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                // Convert standard static WebP sticker to standard PNG image buffer locally using sharp
                 const imageBuffer = await sharp(buffer).png().toBuffer();
 
                 await sock.sendMessage(jid, { image: imageBuffer, caption: "📷 Converted sticker successfully!" }, { quoted: msg });
@@ -353,7 +295,7 @@ module.exports = [
         }
     },
 
-    // 7. TEXT TO IMAGE WEB RENDERING (.ocr / .html2image)
+    // 7. OCR (Text to image rendering)
     {
         name: 'ocr',
         isPrefixless: false,
@@ -366,14 +308,14 @@ module.exports = [
             try {
                 const apiLink = `https://apis.davidcyril.name.ng/converter/html2image?text=${encodeURIComponent(args)}`;
                 await sock.sendMessage(jid, { image: { url: apiLink }, caption: `🖼️ *Rendered:* "${args}"` }, { quoted: msg });
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to render text to image.", edit: statusMsg.key });
             }
         }
     },
 
-    // 8. CONVERT TEXT TO QR CODES (.qr)
+    // 8. QR (Generate QR code)
     {
         name: 'qr',
         isPrefixless: false,
@@ -386,14 +328,14 @@ module.exports = [
             try {
                 const qrUrl = `https://apis.davidcyril.name.ng/tools/qrcode?text=${encodeURIComponent(args)}`;
                 await sock.sendMessage(jid, { image: { url: qrUrl }, caption: `✅ *QR Code generated successfully!*` }, { quoted: msg });
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to generate QR code.", edit: statusMsg.key });
             }
         }
     },
 
-    // 9. DECODE AND READ QR CODES (.readqr - Direct Upload)
+    // 9. READQR (Decode QR from image)
     {
         name: 'readqr',
         isPrefixless: false,
@@ -412,7 +354,6 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                // Create a multipart form to upload the buffer directly to the API
                 const form = new FormData();
                 form.append('file', buffer, { filename: 'qrcode.png', contentType: 'image/png' });
 
@@ -433,7 +374,7 @@ module.exports = [
         }
     },
 
-    // 10. QUANTITY MEASUREMENT UNIT CONVERTER (.quantity / .qty) - Fully Gemini-Grounded
+    // 10. QUANTITY (unit conversion via Gemini Search)
     {
         name: 'quantity',
         isPrefixless: false,
@@ -457,7 +398,7 @@ module.exports = [
         }
     },
 
-    // 11. STANDARD STICKER CONVERTER
+    // 11. STICKER (Standard sticker converter)
     {
         name: 'sticker',
         isPrefixless: false,
@@ -465,7 +406,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             let mediaContent = getRawMessage(quoted || msg.message);
-            
+
             let mediaMessage = mediaContent?.imageMessage || mediaContent?.videoMessage || mediaContent?.stickerMessage;
             let mediaType = mediaContent?.imageMessage ? "image" : (mediaContent?.videoMessage ? "video" : (mediaContent?.stickerMessage ? "sticker" : ""));
 
@@ -479,13 +420,18 @@ module.exports = [
 
                 const targetQuality = mediaType === "video" ? 35 : 45;
 
-                const sticker = new Sticker(buffer, { pack: settings.packName, author: settings.author, type: StickerTypes.FULL, quality: targetQuality });
+                const sticker = new Sticker(buffer, {
+                    pack: config.packName,
+                    author: config.author,
+                    type: StickerTypes.FULL,
+                    quality: targetQuality
+                });
                 await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
-            } catch (error) {}
+            } catch (error) { /* ignore */ }
         }
     },
 
-    // 12. CROPPED SQUARE STICKER (.crop)
+    // 12. CROP (Cropped square sticker)
     {
         name: 'crop',
         isPrefixless: false,
@@ -508,13 +454,18 @@ module.exports = [
 
                 const targetQuality = mediaType === "video" ? 35 : 45;
 
-                const sticker = new Sticker(buffer, { pack: settings.packName, author: settings.author, type: StickerTypes.CROPPED, quality: targetQuality });
+                const sticker = new Sticker(buffer, {
+                    pack: config.packName,
+                    author: config.author,
+                    type: StickerTypes.CROPPED,
+                    quality: targetQuality
+                });
                 await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
-            } catch (error) {}
+            } catch (error) { /* ignore */ }
         }
     },
 
-    // 13. METADATA STEALER (.take / .steal)
+    // 13. TAKE / STEAL (Metadata stealer)
     {
         name: 'take',
         isPrefixless: false,
@@ -533,15 +484,22 @@ module.exports = [
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const parts = args.split('|');
-                const packName = parts[0] ? parts[0].trim() : settings.packName;
-                const publisher = parts[1] ? parts[1].trim() : settings.author;
+                const packName = parts[0] ? parts[0].trim() : config.packName;
+                const publisher = parts[1] ? parts[1].trim() : config.author;
 
-                const sticker = new Sticker(buffer, { pack: packName, author: publisher, type: StickerTypes.FULL, quality: 45 });
+                const sticker = new Sticker(buffer, {
+                    pack: packName,
+                    author: publisher,
+                    type: StickerTypes.FULL,
+                    quality: 45
+                });
                 await sock.sendMessage(jid, { sticker: await sticker.toBuffer() }, { quoted: msg });
-            } catch (error) {}
+            } catch (error) { /* ignore */ }
         }
     }
 ];
+
+// ─── ALIASES ──────────────────────────────────────────────────────
 
 const aliases = [];
 module.exports.forEach(cmd => {
