@@ -532,12 +532,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return;
         }
 
-        // ─── EXECUTE ──────────────────────────────────────────────
-        console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
-
-        const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
-
-        // Interactive response bypass for Private mode
+        // ─── INTERACTIVE RESPONSES BYPASS ──────────────────────
         const interactiveResponses = [
             'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
@@ -549,6 +544,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) {
             return;
         }
+
+        // ─── EXECUTE ──────────────────────────────────────────────
+        console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
+
+        const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
 
         if (commands[cmdKey]) {
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
