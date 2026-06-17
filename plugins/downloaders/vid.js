@@ -1,5 +1,5 @@
- // plugins/downloaders/vid.js
-const settings = require('../../settings');
+// plugins/downloaders/vid.js
+const config = require('../../config');
 
 const urlRegex = /^(https?:\/\/[^\s]+)/i;
 
@@ -41,7 +41,7 @@ function logError(cmd, args, err) {
 }
 
 module.exports = [
-    // 1. YOUTUBE MP4 DOWNLOADER (.ytmp4)
+    // 1. YTMP4
     {
         name: 'ytmp4',
         isPrefixless: false,
@@ -84,7 +84,7 @@ module.exports = [
         }
     },
 
-    // 2. VIDEO SEARCH DOWNPARSER (.video)
+    // 2. VIDEO (Search)
     {
         name: 'video',
         isPrefixless: false,
@@ -127,7 +127,7 @@ module.exports = [
         }
     },
 
-    // 3. FACEBOOK VIDEO DOWNLOADER (.fb)
+    // 3. FB (Facebook)
     {
         name: 'fb',
         isPrefixless: false,
@@ -152,7 +152,7 @@ module.exports = [
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 let data = await response.json();
-                
+
                 let retries = 0;
                 while ((!data.status || !data.video) && retries < 2) {
                     await new Promise(r => setTimeout(r, 1500));
@@ -177,7 +177,7 @@ module.exports = [
         }
     },
 
-    // 4. TIKTOK VIDEO DOWNLOADER (.tt)
+    // 4. TT (TikTok)
     {
         name: 'tt',
         isPrefixless: false,
@@ -234,7 +234,7 @@ module.exports = [
         }
     },
 
-    // 5. INSTAGRAM DOWNLOADER (.ig)
+    // 5. IG (Instagram)
     {
         name: 'ig',
         isPrefixless: false,
@@ -278,7 +278,7 @@ module.exports = [
         }
     },
 
-    // 6. TWITTER VIDEO & IMAGE DOWNLOADER (.x2)
+    // 6. X2 (Twitter/X)
     {
         name: 'x2',
         isPrefixless: false,
