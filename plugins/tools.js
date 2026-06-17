@@ -1155,7 +1155,61 @@ module.exports = [
         }
     },
 
-    // 32. KAMUI (hardcoded prefixless decrypter)
+    // 32. VV (Manual ViewOnce Decryption – Prefixed)
+    {
+        name: 'vv',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+
+            if (!isOwner && !isSudo && !isDev) return;
+
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo ||
+                                rawMsg?.extendedTextMessage?.contextInfo ||
+                                rawMsg?.imageMessage?.contextInfo ||
+                                rawMsg?.videoMessage?.contextInfo ||
+                                rawMsg?.stickerMessage?.contextInfo ||
+                                rawMsg?.audioMessage?.contextInfo ||
+                                rawMsg?.documentMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
+            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply directly to a View-Once message to decrypt." }, { quoted: msg });
+
+            const rawContent = getRawMessage(quoted);
+            const viewOnceMedia = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
+
+            if (!viewOnceMedia) return await sock.sendMessage(jid, { text: "❌ The replied message is not a View-Once media message." }, { quoted: msg });
+
+            try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const mediaType = rawContent.imageMessage ? 'image' : (rawContent.videoMessage ? 'video' : 'audio');
+
+                await sock.sendMessage(jid, { text: "Decrypting View-Once media... 👁️" }, { quoted: msg });
+
+                const stream = await downloadContentFromMessage(viewOnceMedia, mediaType);
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+                const caption = viewOnceMedia.caption || "Decrypted View-Once media 👁️";
+
+                if (mediaType === 'image') {
+                    await sock.sendMessage(senderJid, { image: buffer, caption: caption });
+                } else if (mediaType === 'video') {
+                    await sock.sendMessage(senderJid, { video: buffer, mimetype: viewOnceMedia.mimetype || "video/mp4", caption: caption });
+                } else if (mediaType === 'audio') {
+                    await sock.sendMessage(senderJid, { audio: buffer, mimetype: viewOnceMedia.mimetype || "audio/ogg; codecs=opus", ptt: viewOnceMedia.ptt || false });
+                }
+
+                await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
+            } catch (error) {
+                await sock.sendMessage(jid, { text: `❌ Decryption failed: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 33. KAMUI (Hardcoded prefixless decrypter)
     {
         name: 'kamui',
         isPrefixless: true,
@@ -1165,10 +1219,8 @@ module.exports = [
 
             if (!isOwner && !isSudo && !isDev) return;
 
-            // Ignore if it starts with a prefix (to avoid catching .help etc.)
             if (cleanQuery.startsWith(config.prefix)) return;
 
-            // Ensure we are replying to a ViewOnce message
             const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
             if (!quoted) {
                 return await sock.sendMessage(jid, {
@@ -1192,19 +1244,16 @@ module.exports = [
                 const mediaType = rawContent.imageMessage ? 'image' :
                                   (rawContent.videoMessage ? 'video' : 'audio');
 
-                // Send activation GIF
+                // ─── Activation GIF in the chat ────────────────
                 try {
                     await sock.sendMessage(jid, {
-                        video: { url: "https://tenor.com/view/tobi-kamui-naruto-obito-uchiha-fu-yamanaka-gif-13735716482562504897" },
+                        video: { url: "https://media.tenor.com/13735716482562504897/giphy.mp4" },
                         gifPlayback: true,
                         caption: "🌀 *Channelling Kamui...*"
                     });
                 } catch (gifErr) { /* ignore */ }
 
-                await sock.sendMessage(jid, {
-                    text: "🌀 *Decrypting View-Once media...*"
-                }, { quoted: msg });
-
+                // ─── Download and decrypt ──────────────────────
                 const stream = await downloadContentFromMessage(viewOnceMedia, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
@@ -1214,10 +1263,10 @@ module.exports = [
                 const caption = viewOnceMedia.caption || "Decrypted View-Once media 👁️";
                 const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-                // Send reverse GIF + decrypted media to sender's DM
+                // ─── Reverse GIF + decrypted media to DM ──────
                 try {
                     await sock.sendMessage(senderJid, {
-                        video: { url: "https://tenor.com/view/tobi-reverse-gif-18204914" },
+                        video: { url: "https://media.tenor.com/18204914/giphy.mp4" },
                         gifPlayback: true,
                         caption: "🌀 *Kamui Complete.* Media delivered."
                     });
@@ -1239,10 +1288,7 @@ module.exports = [
                     });
                 }
 
-                await sock.sendMessage(jid, {
-                    text: `✅ Media decrypted and sent to your private DM, @${senderJid.split('@')[0]}.`,
-                    mentions: [senderJid]
-                });
+                // ─── No extra chat messages ────────────────────
 
             } catch (error) {
                 console.error("❌ [KAMUI] Decryption failed:", error.message);
@@ -1253,7 +1299,7 @@ module.exports = [
         }
     },
 
-    // 33. VVS_ROUTER (Dynamic prefixless decrypter using config.vvs)
+    // 34. VVS_ROUTER (Dynamic prefixless decrypter using config.vvs)
     {
         name: 'vvs_router',
         isPrefixless: true,
@@ -1266,11 +1312,6 @@ module.exports = [
 
             const customTrigger = config.vvs || '';
             if (!customTrigger || cleanQuery !== customTrigger) return;
-
-            // Reuse the same logic as kamui, but without the hardcoded check.
-            // We'll just call the same decryption logic but we don't want to duplicate.
-            // Actually, we can call the kamui command logic? But kamui checks for the word.
-            // Better: replicate the decryption steps here.
 
             const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
             if (!quoted) {
