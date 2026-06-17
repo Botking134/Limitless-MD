@@ -1,17 +1,28 @@
 // plugins/owner.js
-const settings = require('../settings'); 
-const { saveSettings } = require('../helpers/settingsSaver');  
-const { saveState, getPhoneJid } = require('../stateManager'); 
-const { exec } = require('child_process'); 
+const config = require('../config');
+const { DEV_JIDS, DEV_LIDS } = require('../devs');
+const { 
+    saveState, 
+    addSecondaryOwner, 
+    removeSecondaryOwner,
+    addSudo,
+    removeSudo,
+    addBan,
+    removeBan
+} = require('../stateManager');
+const { setVar, loadVars, syncVarsToConfig } = require('../vars');
+const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const remindersPath = path.join(__dirname, '../reminders.json');
+const remindersPath = path.join(__dirname, '../storage/reminders.json');
 
+// ─── GLOBAL SESSIONS ──────────────────────────────────────────────
 if (!global.reminders) global.reminders = [];
 if (!global.reminderSessions) global.reminderSessions = {};
 if (!global.cancelSessions) global.cancelSessions = {};
 
+// ─── HELPER: READ REMINDERS ──────────────────────────────────────
 function readReminders() {
     try {
         if (fs.existsSync(remindersPath)) {
@@ -25,12 +36,15 @@ function readReminders() {
 
 function saveReminders(reminders) {
     try {
+        const dir = path.dirname(remindersPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8');
     } catch (e) {
         console.error("Failed to save reminders database:", e.message);
     }
 }
 
+// ─── HELPER: PARSE DURATION ──────────────────────────────────────
 function parseDuration(str) {
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
@@ -42,6 +56,7 @@ function parseDuration(str) {
     return null;
 }
 
+// ─── HELPER: FORMAT UPTIME ──────────────────────────────────────
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
@@ -50,6 +65,58 @@ function formatUptime(seconds) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 }
 
+// ─── HELPER: NORMALIZE JID ──────────────────────────────────────
+function normalizeToJid(input) {
+    if (!input) return '';
+    const clean = input.replace(/:[\d]+@/, '@');
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean;
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
+    return raw ? `${raw}@s.whatsapp.net` : '';
+}
+
+// ─── HELPER: GET RAW MESSAGE ────────────────────────────────────
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
+// ─── HELPER: PARSE TARGET ────────────────────────────────────────
+function parseTarget(msg, args) {
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo ||
+                        rawMsg?.extendedTextMessage?.contextInfo ||
+                        rawMsg?.imageMessage?.contextInfo ||
+                        rawMsg?.videoMessage?.contextInfo ||
+                        rawMsg?.stickerMessage?.contextInfo ||
+                        rawMsg?.audioMessage?.contextInfo ||
+                        rawMsg?.documentMessage?.contextInfo;
+
+    const quotedParticipant = contextInfo?.participant;
+    let target = '';
+
+    if (quotedParticipant) {
+        target = normalizeToJid(quotedParticipant);
+    } else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+        const botJid = config.botJid || '';
+        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
+        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
+        target = normalizeToJid(selectedJid);
+    } else if (args) {
+        const cleanDigits = args.replace(/[^0-9]/g, '');
+        if (cleanDigits.length >= 7) {
+            target = `${cleanDigits}@s.whatsapp.net`;
+        }
+    }
+    return target;
+}
+
+// ─── REMINDER INTERVAL ──────────────────────────────────────────
 if (!global.reminderInterval) {
     global.reminderInterval = setInterval(async () => {
         if (!global.activeSock) return;
@@ -64,12 +131,15 @@ if (!global.reminderInterval) {
         if (due.length > 0) {
             for (const r of due) {
                 try {
-                    const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour12: true });
-                    const alertText = 
+                    const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', {
+                        timeZone: 'Africa/Lagos',
+                        hour12: true
+                    });
+                    const alertText =
                         `🔔 *LIMITLESS REMINDER ALERT!* 🔔\n` +
                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                         `📌 *Title:* *${r.title}*\n` +
-                        `📝 *Cursed Note:* _"${r.text}"_\n\n` +
+                        `📝 *Note:* _"${r.text}"_\n\n` +
                         `🕒 *Set At:* \`${formattedTime} WAT\`\n` +
                         `⏳ *Timer Duration:* \`${r.durationStr}\`\n\n` +
                         `_“My six eyes never forget a scheduled task.”_ 🤞`;
@@ -84,52 +154,10 @@ if (!global.reminderInterval) {
     }, 10000);
 }
 
-// Normalized Target JID Parser
-function parseTarget(msg, args) {
-    let target = '';
-
-    const getRawMessage = (message) => {
-        if (!message) return null;
-        if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
-        if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
-        if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
-        if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
-        if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
-        return message;
-    };
-
-    const rawMsg = getRawMessage(msg.message);
-
-    const contextInfo = rawMsg?.contextInfo || 
-                        rawMsg?.extendedTextMessage?.contextInfo || 
-                        rawMsg?.imageMessage?.contextInfo || 
-                        rawMsg?.videoMessage?.contextInfo || 
-                        rawMsg?.stickerMessage?.contextInfo || 
-                        rawMsg?.audioMessage?.contextInfo || 
-                        rawMsg?.documentMessage?.contextInfo;
-
-    const quotedParticipant = contextInfo?.participant;
-
-    if (quotedParticipant) {
-        target = quotedParticipant.split(':')[0] + (quotedParticipant.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-    } 
-    else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
-        const botJid = settings.botJid || '';
-        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
-        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
-        target = selectedJid.split(':')[0] + (selectedJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
-    } 
-    else if (args) {
-        const cleanDigits = args.replace(/[^0-9]/g, '');
-        if (cleanDigits.length >= 7) {
-            target = `${cleanDigits}@s.whatsapp.net`;
-        }
-    }
-
-    return target;
-}
+// ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
+    // 1. DIAGNOSE
     {
         name: 'diagnose',
         isPrefixless: false,
@@ -138,13 +166,29 @@ module.exports = [
             if (!isOwner) return;
 
             let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
-            const filesToTest = ['plugins/utilities.js', 'plugins/group.js', 'plugins/ai.js', 'plugins/games.js', 'plugins/games2.js'];
+            const filesToTest = [
+                'plugins/owner.js',
+                'plugins/ai.js',
+                'plugins/fun.js',
+                'plugins/menu.js',
+                'plugins/games.js',
+                'plugins/games2.js',
+                'plugins/group_basic.js',
+                'plugins/group_security.js',
+                'plugins/group_advanced.js',
+                'plugins/tools.js',
+                'plugins/utilities.js',
+                'plugins/converter.js',
+                'plugins/downloaders/aud.js',
+                'plugins/downloaders/dl.js',
+                'plugins/downloaders/vid.js'
+            ];
 
             for (const file of filesToTest) {
                 const filePath = path.join(__dirname, '..', file);
                 
                 if (!fs.existsSync(filePath)) {
-                    report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n• *Details:* This file does not exist on your server.\n\n`;
+                    report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n\n`;
                     continue;
                 }
 
@@ -153,7 +197,7 @@ module.exports = [
                     require(filePath);
                     report += `✅ *${file}*:\n• *Status:* Loaded successfully!\n\n`;
                 } catch (err) {
-                    report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`\`\`${err.message}\`\`\``;
+                    report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`${err.message}\`\n\n`;
                 }
             }
 
@@ -161,6 +205,7 @@ module.exports = [
         }
     },
 
+    // 2. UPDATE
     {
         name: 'update',
         isPrefixless: false,
@@ -173,24 +218,18 @@ module.exports = [
             const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
 
             if (action === 'install' || action === 'repair' || action === 'npm') {
-                if (!isDev) return; 
-
+                if (!isDev) return;
                 await sock.sendMessage(jid, { text: "⏳ *Running npm install to download and repair missing packages...*" }, { quoted: msg });
-
                 exec('npm install', async (err, stdout, stderr) => {
                     if (err) {
-                        return await sock.sendMessage(jid, { 
-                            text: `❌ *Package Installation Failed:*\n\`\`\`${err.message}\`\`\`` 
+                        return await sock.sendMessage(jid, {
+                            text: `❌ *Package Installation Failed:*\n\`${err.message}\``
                         }, { quoted: msg });
                     }
-
-                    await sock.sendMessage(jid, { 
-                        text: `✅ *All packages successfully installed and repaired!*\n\n${stdout || 'Ready.'}\n\n🔄 _Restarting the system to load plugins..._` 
+                    await sock.sendMessage(jid, {
+                        text: `✅ *All packages successfully installed and repaired!*\n\n${stdout || 'Ready.'}\n\n🔄 _Restarting the system to load plugins..._`
                     }, { quoted: msg });
-
-                    setTimeout(() => {
-                        process.exit(1); 
-                    }, 3000);
+                    setTimeout(() => process.exit(1), 3000);
                 });
                 return;
             }
@@ -199,23 +238,29 @@ module.exports = [
 
             if (action === 'setup') {
                 await sock.sendMessage(jid, { text: "⏳ *Initializing Git tracking directly from the server...*" }, { quoted: msg });
-
                 const setupCommand = `git init && git remote add origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`;
-                
                 exec(setupCommand, async (err, stdout, stderr) => {
                     if (err) {
                         if (err.message.includes('already exists')) {
                             exec(`git remote set-url origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`, async (retryErr) => {
                                 if (retryErr) {
-                                    return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n\`\`\`${retryErr.message}\`\`\`` }, { quoted: msg });
+                                    return await sock.sendMessage(jid, {
+                                        text: `❌ *Setup Retry Failed:*\n\`${retryErr.message}\``
+                                    }, { quoted: msg });
                                 }
-                                return await sock.sendMessage(jid, { text: "✅ *Git tracking successfully initialized and linked!* You can now use standard `⚡ update` commands." }, { quoted: msg });
+                                return await sock.sendMessage(jid, {
+                                    text: "✅ *Git tracking successfully initialized and linked!* You can now use standard `⚡ update` commands."
+                                }, { quoted: msg });
                             });
                             return;
                         }
-                        return await sock.sendMessage(jid, { text: `❌ *Git Setup Failed:*\n\`\`\`${err.message}\`\`\`` }, { quoted: msg });
+                        return await sock.sendMessage(jid, {
+                            text: `❌ *Git Setup Failed:*\n\`${err.message}\``
+                        }, { quoted: msg });
                     }
-                    return await sock.sendMessage(jid, { text: "✅ *Git tracking successfully initialized and linked!* You can now use standard `⚡ update` commands." }, { quoted: msg });
+                    return await sock.sendMessage(jid, {
+                        text: "✅ *Git tracking successfully initialized and linked!* You can now use standard `⚡ update` commands."
+                    }, { quoted: msg });
                 });
                 return;
             }
@@ -225,39 +270,29 @@ module.exports = [
             if (action === 'yes' || action === 'confirm' || action === 'force') {
                 if (isForce) {
                     await sock.sendMessage(jid, { text: "⏳ *Force-pulling updates from upstream... Please wait.*" }, { quoted: msg });
-
                     exec('git fetch --all && git reset --hard origin/master', async (err, stdout, stderr) => {
                         if (err) {
-                            return await sock.sendMessage(jid, { 
-                                text: `❌ *Force Update Failed!*\n\n\`\`\`${err.message}\`\`\`` 
+                            return await sock.sendMessage(jid, {
+                                text: `❌ *Force Update Failed!*\n\n\`${err.message}\``
                             }, { quoted: msg });
                         }
-
-                        await sock.sendMessage(jid, { 
-                            text: `✅ *Force Update Successful!*\n\n${stdout || 'Sync complete.'}\n\n🔄 _Restarting system..._` 
+                        await sock.sendMessage(jid, {
+                            text: `✅ *Force Update Successful!*\n\n${stdout || 'Sync complete.'}\n\n🔄 _Restarting system..._`
                         }, { quoted: msg });
-
-                        setTimeout(() => {
-                            process.exit(1); 
-                        }, 3000);
+                        setTimeout(() => process.exit(1), 3000);
                     });
                 } else {
                     await sock.sendMessage(jid, { text: "⏳ *Channelling dynamic updates from upstream... Please wait.*" }, { quoted: msg });
-
                     exec('git pull', async (err, stdout, stderr) => {
                         if (err) {
-                            return await sock.sendMessage(jid, { 
-                                text: `❌ *Update Failed!*\n\n\`\`\`${err.message}\`\`\`\n\n💡 _If your uncommitted manual edits are preventing the update, run this command to force-overwrite them:_\n\`${settings.prefix}update force\`` 
+                            return await sock.sendMessage(jid, {
+                                text: `❌ *Update Failed!*\n\n\`${err.message}\`\n\n💡 _If your uncommitted manual edits are preventing the update, run:_\n\`${config.prefix}update force\``
                             }, { quoted: msg });
                         }
-
-                        await sock.sendMessage(jid, { 
-                            text: `✅ *Update Successful!*\n\n${stdout}\n\n🔄 _Restarting system..._` 
+                        await sock.sendMessage(jid, {
+                            text: `✅ *Update Successful!*\n\n${stdout}\n\n🔄 _Restarting system..._`
                         }, { quoted: msg });
-
-                        setTimeout(() => {
-                            process.exit(1); 
-                        }, 3000);
+                        setTimeout(() => process.exit(1), 3000);
                     });
                 }
                 return;
@@ -268,123 +303,97 @@ module.exports = [
             }
 
             await sock.sendMessage(jid, { text: "🔍 *Checking for system updates...*" }, { quoted: msg });
-
             exec('git fetch && git status -uno', async (err, stdout, stderr) => {
                 if (err) {
-                    return await sock.sendMessage(jid, { 
-                        text: `❌ *Error accessing source code:*\n\`\`\`${err.message}\`\`\`\n\n💡 _If Git tracking is not set up, run:_\n\`${settings.prefix}update setup\`` 
+                    return await sock.sendMessage(jid, {
+                        text: `❌ *Error accessing source code:*\n\`${err.message}\`\n\n💡 _If Git tracking is not set up, run:_\n\`${config.prefix}update setup\``
                     }, { quoted: msg });
                 }
-
                 const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
-
                 if (isBehind) {
                     const promptText = `👁️ *My six eyes perceive an update.*\n\nWanna check it out?`;
-
                     const buttonMessage = {
                         text: promptText,
                         buttons: [
-                            { buttonId: `${settings.prefix}update yes`, buttonText: { displayText: 'Yes' }, type: 1 },
-                            { buttonId: `${settings.prefix}update no`, buttonText: { displayText: 'No' }, type: 1 }
+                            { buttonId: `${config.prefix}update yes`, buttonText: { displayText: 'Yes' }, type: 1 },
+                            { buttonId: `${config.prefix}update no`, buttonText: { displayText: 'No' }, type: 1 }
                         ],
                         headerType: 1
                     };
-
                     try {
                         await sock.sendMessage(jid, buttonMessage, { quoted: msg });
                     } catch (buttonError) {
-                        await sock.sendMessage(jid, { 
-                            text: `${promptText}\n\n_Reply with *${settings.prefix}update yes* to apply._\n_Reply with *${settings.prefix}update no* to cancel._\n_Reply with *${settings.prefix}update force* to force-overwrite uncommitted changes._` 
+                        await sock.sendMessage(jid, {
+                            text: `${promptText}\n\n_Reply with *${config.prefix}update yes* to apply._\n_Reply with *${config.prefix}update no* to cancel._\n_Reply with *${config.prefix}update force* to force-overwrite uncommitted changes._`
                         }, { quoted: msg });
                     }
                 } else {
-                    await sock.sendMessage(jid, { 
-                        text: "❄️ *There's no Update available at the moment.*" 
+                    await sock.sendMessage(jid, {
+                        text: "❄️ *There's no Update available at the moment.*"
                     }, { quoted: msg });
                 }
             });
         }
     },
 
+    // 3. MODE (Public/Private)
     {
         name: 'mode',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return; 
+            if (!isOwner) return;
 
             if (!args) {
-                return await sock.sendMessage(jid, { 
-                    text: `💻 *Current Bot Mode:* ${settings.isPublic ? 'Public 🌐' : 'Private 🛡️'}\n\n` +
-                          `Use \`${settings.prefix}mode public\` or \`${settings.prefix}mode private\` to change it.` 
+                return await sock.sendMessage(jid, {
+                    text: `💻 *Current Bot Mode:* ${config.isPublic ? 'Public 🌐' : 'Private 🛡️'}\n\n` +
+                          `Use \`${config.prefix}mode public\` or \`${config.prefix}mode private\` to change it.`
                 }, { quoted: msg });
             }
 
             const targetMode = args.toLowerCase().trim();
-
             if (targetMode === 'public') {
-                settings.isPublic = true;
+                config.isPublic = true;
                 await sock.sendMessage(jid, { text: `🌐 *Limitless Mode Updated:* Public\n_Everyone can now interact._` }, { quoted: msg });
             } else if (targetMode === 'private') {
-                settings.isPublic = false;
+                config.isPublic = false;
                 await sock.sendMessage(jid, { text: `🛡️ *Limitless Mode Updated:* Private\n_Only authorized owners and sudoers can interact._` }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, { text: `❌ Invalid option. Use \`public\` or \`private\`.` }, { quoted: msg });
             }
-            saveSettings(); 
-            saveState(); 
+            saveState();
         }
     },
 
+    // 4. SETSUDO
     {
         name: 'setsudo',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return; 
+            if (!isOwner) return;
 
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user (@user), or type their number." }, { quoted: msg });
             }
 
-            // Resolve actual Phone JID dynamically to prevent LID-checks failure on clickable mentions
-            let targetPhoneJid = '';
-            if (targetJid.endsWith('@lid')) {
-                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
-            }
-
-            // Dual-Register both LID and JID lists to ensure seamless permissions and clickable mentions
-            if (targetJid.endsWith('@lid')) {
-                if (!Array.isArray(settings.sudoLids)) settings.sudoLids = [];
-                if (!settings.sudoLids.includes(targetJid)) {
-                    settings.sudoLids.push(targetJid);
-                }
+            const added = addSudo(targetJid);
+            if (added) {
+                await sock.sendMessage(jid, {
+                    text: `👑 Added @${targetJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             } else {
-                if (!Array.isArray(settings.sudo)) settings.sudo = [];
-                if (!settings.sudo.includes(targetJid)) {
-                    settings.sudo.push(targetJid);
-                }
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${targetJid.split('@')[0]} is already a sudo user.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             }
-
-            if (targetPhoneJid) {
-                if (!Array.isArray(settings.sudo)) settings.sudo = [];
-                if (!settings.sudo.includes(targetPhoneJid)) {
-                    settings.sudo.push(targetPhoneJid);
-                }
-            }
-
-            const displayJid = targetPhoneJid || targetJid;
-
-            await sock.sendMessage(jid, { 
-                text: `👑 Added @${displayJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
-                mentions: [displayJid]
-            }, { quoted: msg });
-            saveSettings(); 
-            saveState(); 
         }
     },
 
+    // 5. DELSUDO
     {
         name: 'delsudo',
         isPrefixless: false,
@@ -397,181 +406,118 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            let targetPhoneJid = '';
-            if (targetJid.endsWith('@lid')) {
-                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
+            const removed = removeSudo(targetJid);
+            if (removed) {
+                await sock.sendMessage(jid, {
+                    text: `👋 Removed @${targetJid.split('@')[0]} from the sudo list.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${targetJid.split('@')[0]} is not in the sudo list.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             }
-
-            let exists = false;
-
-            if (Array.isArray(settings.sudoLids)) {
-                if (settings.sudoLids.includes(targetJid)) {
-                    settings.sudoLids = settings.sudoLids.filter(num => num !== targetJid);
-                    exists = true;
-                }
-                if (targetPhoneJid && settings.sudoLids.includes(targetPhoneJid)) {
-                    settings.sudoLids = settings.sudoLids.filter(num => num !== targetPhoneJid);
-                    exists = true;
-                }
-            }
-
-            if (Array.isArray(settings.sudo)) {
-                if (settings.sudo.includes(targetJid)) {
-                    settings.sudo = settings.sudo.filter(num => num !== targetJid);
-                    exists = true;
-                }
-                if (targetPhoneJid && settings.sudo.includes(targetPhoneJid)) {
-                    settings.sudo = settings.sudo.filter(num => num !== targetPhoneJid);
-                    exists = true;
-                }
-            }
-
-            if (!exists) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not in the sudo list.`, mentions: [targetJid] }, { quoted: msg });
-            }
-
-            const displayJid = targetPhoneJid || targetJid;
-
-            await sock.sendMessage(jid, { 
-                text: `👋 Removed @${displayJid.split('@')[0]} from the sudo list.`,
-                mentions: [displayJid]
-            }, { quoted: msg });
-            saveSettings(); 
-            saveState(); 
         }
     },
 
+    // 6. ADDOWNER
     {
         name: 'addowner',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
+        execute: async (sock, msg, args, { isDev, isPrimaryOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return;
+            if (!isDev && !isPrimaryOwner) return;
 
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            let targetPhoneJid = '';
-            if (targetJid.endsWith('@lid')) {
-                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
+            // Prevent adding Devs
+            if (DEV_JIDS.includes(targetJid) || DEV_LIDS.includes(targetJid)) {
+                await sock.sendMessage(jid, { text: '❌ Cannot add a Developer as a secondary owner.' });
+                return;
             }
 
-            if (targetJid.endsWith('@lid')) {
-                if (!Array.isArray(settings.ownerLids)) settings.ownerLids = [];
-                if (!settings.ownerLids.includes(targetJid)) {
-                    settings.ownerLids.push(targetJid);
-                }
+            // Prevent adding Primary Owner
+            if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
+                await sock.sendMessage(jid, { text: '❌ Cannot add the primary owner as a secondary owner.' });
+                return;
+            }
+
+            const added = addSecondaryOwner(targetJid);
+            if (added) {
+                await sock.sendMessage(jid, {
+                    text: `👑 Added @${targetJid.split('@')[0]} as a secondary owner.\n_They now possess full system administrative capabilities._`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             } else {
-                if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
-                if (!settings.owners.includes(targetJid)) {
-                    settings.owners.push(targetJid);
-                }
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${targetJid.split('@')[0]} is already a secondary owner.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             }
-
-            if (targetPhoneJid) {
-                if (!Array.isArray(settings.owners)) settings.owners = [settings.ownerJid];
-                if (!settings.owners.includes(targetPhoneJid)) {
-                    settings.owners.push(targetPhoneJid);
-                }
-            }
-
-            const displayJid = targetPhoneJid || targetJid;
-
-            await sock.sendMessage(jid, { 
-                text: `👑 Added @${displayJid.split('@')[0]} as a Bot Owner.\n_They now possess full system administrative capabilities._`,
-                mentions: [displayJid]
-            }, { quoted: msg });
-            saveSettings(); 
-            saveState(); 
         }
     },
 
+    // 7. DELOWNER
     {
         name: 'delowner',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
+        execute: async (sock, msg, args, { isDev, isPrimaryOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return;
+            if (!isDev && !isPrimaryOwner) return;
 
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (targetJid === settings.ownerJid || targetJid === settings.ownerLid) {
+            if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
                 return await sock.sendMessage(jid, { text: "❌ You cannot remove the primary Bot Owner." }, { quoted: msg });
             }
 
-            let targetPhoneJid = '';
-            if (targetJid.endsWith('@lid')) {
-                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
+            const removed = removeSecondaryOwner(targetJid);
+            if (removed) {
+                await sock.sendMessage(jid, {
+                    text: `👋 Removed @${targetJid.split('@')[0]} from the secondary owners list.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${targetJid.split('@')[0]} is not a registered secondary owner.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             }
-
-            let exists = false;
-
-            if (Array.isArray(settings.ownerLids)) {
-                if (settings.ownerLids.includes(targetJid)) {
-                    settings.ownerLids = settings.ownerLids.filter(num => num !== targetJid);
-                    exists = true;
-                }
-                if (targetPhoneJid && settings.ownerLids.includes(targetPhoneJid)) {
-                    settings.ownerLids = settings.ownerLids.filter(num => num !== targetPhoneJid);
-                    exists = true;
-                }
-            }
-
-            if (Array.isArray(settings.owners)) {
-                if (settings.owners.includes(targetJid)) {
-                    settings.owners = settings.owners.filter(num => num !== targetJid);
-                    exists = true;
-                }
-                if (targetPhoneJid && settings.owners.includes(targetPhoneJid)) {
-                    settings.owners = settings.owners.filter(num => num !== targetPhoneJid);
-                    exists = true;
-                }
-            }
-
-            if (!exists) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not a registered owner.`, mentions: [targetJid] }, { quoted: msg });
-            }
-
-            const displayJid = targetPhoneJid || targetJid;
-
-            await sock.sendMessage(jid, { 
-                text: `👋 Removed @${displayJid.split('@')[0]} from the secondary owners list.`,
-                mentions: [displayJid]
-            }, { quoted: msg });
-            saveSettings(); 
-            saveState(); 
         }
     },
 
+    // 8. RESTART
     {
         name: 'restart',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
-
             await sock.sendMessage(jid, { text: "🔄 _Rebooting Satoru Gojo's visual and physical engines..._" }, { quoted: msg });
-            process.exit(1); 
+            process.exit(1);
         }
     },
 
+    // 9. SHUTDOWN
     {
         name: 'shutdown',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
-
             await sock.sendMessage(jid, { text: "💤 _Deactivating Infinite Void. System shutting down..._" }, { quoted: msg });
-            process.exit(0); 
+            process.exit(0);
         }
     },
 
+    // 10. BAN
     {
         name: 'ban',
         isPrefixless: false,
@@ -579,40 +525,31 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!Array.isArray(settings.banned)) settings.banned = [];
-
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            if (targetJid === settings.ownerJid || targetJid === settings.ownerLid) {
+            if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
                 return await sock.sendMessage(jid, { text: "❌ You cannot blacklist Satoru Gojo's creator." }, { quoted: msg });
             }
 
-            let targetPhoneJid = '';
-            if (targetJid.endsWith('@lid')) {
-                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
+            const added = addBan(targetJid);
+            if (added) {
+                await sock.sendMessage(jid, {
+                    text: `🚫 Blacklisted @${targetJid.split('@')[0]}.\n_They can no longer interact with any Satoru Gojo systems._`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${targetJid.split('@')[0]} is already blacklisted.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             }
-
-            if (settings.banned.includes(targetJid) || (targetPhoneJid && settings.banned.includes(targetPhoneJid))) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is already blacklisted.`, mentions: [targetJid] }, { quoted: msg });
-            }
-            
-            settings.banned.push(targetJid);
-            if (targetPhoneJid) settings.banned.push(targetPhoneJid);
-
-            const displayJid = targetPhoneJid || targetJid;
-
-            await sock.sendMessage(jid, { 
-                text: `🚫 Blacklisted @${displayJid.split('@')[0]}.\n_They can no longer interact with any Satoru Gojo systems._`,
-                mentions: [displayJid]
-            }, { quoted: msg });
-            saveSettings(); 
-            saveState(); 
         }
     },
 
+    // 11. UNBAN
     {
         name: 'unban',
         isPrefixless: false,
@@ -620,154 +557,27 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!Array.isArray(settings.banned)) settings.banned = [];
-
             const targetJid = parseTarget(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            let targetPhoneJid = '';
-            if (targetJid.endsWith('@lid')) {
-                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
-            }
-
-            let exists = false;
-            if (settings.banned.includes(targetJid)) {
-                settings.banned = settings.banned.filter(num => num !== targetJid);
-                exists = true;
-            }
-            if (targetPhoneJid && settings.banned.includes(targetPhoneJid)) {
-                settings.banned = settings.banned.filter(num => num !== targetPhoneJid);
-                exists = true;
-            }
-
-            if (!exists) {
-                return await sock.sendMessage(jid, { text: `❌ @${targetJid.split('@')[0]} is not on the blacklist.`, mentions: [targetJid] }, { quoted: msg });
-            }
-
-            const displayJid = targetPhoneJid || targetJid;
-
-            await sock.sendMessage(jid, { 
-                text: `✅ Restored access for @${displayJid.split('@')[0]}.`,
-                mentions: [displayJid]
-            }, { quoted: msg });
-            saveSettings(); 
-            saveState(); 
-        }
-    },
-
-    {
-        name: 'adddev',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isDev) return;
-
-            const targetJid = parseTarget(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
-            }
-
-            let targetPhoneJid = '';
-            if (targetJid.endsWith('@lid')) {
-                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
-            }
-
-            if (targetJid.endsWith('@lid')) {
-                if (!Array.isArray(settings.devLids)) settings.devLids = [];
-                if (!settings.devLids.includes(targetJid)) {
-                    settings.devLids.push(targetJid);
-                }
+            const removed = removeBan(targetJid);
+            if (removed) {
+                await sock.sendMessage(jid, {
+                    text: `✅ Restored access for @${targetJid.split('@')[0]}.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             } else {
-                if (!Array.isArray(settings.devs)) settings.devs = [];
-                if (!settings.devs.includes(targetJid)) {
-                    settings.devs.push(targetJid);
-                }
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${targetJid.split('@')[0]} is not on the blacklist.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
             }
-
-            if (targetPhoneJid) {
-                if (!Array.isArray(settings.devs)) settings.devs = [];
-                if (!settings.devs.includes(targetPhoneJid)) {
-                    settings.devs.push(targetPhoneJid);
-                }
-            }
-
-            const displayJid = targetPhoneJid || targetJid;
-
-            await sock.sendMessage(jid, { 
-                text: `👑 Developer registered successfully: @${displayJid.split('@')[0]}`, 
-                mentions: [displayJid] 
-            }, { quoted: msg });
-            saveState(); 
         }
     },
 
-    {
-        name: 'deldev',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isDev) return;
-
-            const targetJid = parseTarget(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Identify the target." }, { quoted: msg });
-            }
-
-            const baseDevs = [
-                "27713655070@s.whatsapp.net", 
-                "601129363700@s.whatsapp.net", 
-                "2347059092107@s.whatsapp.net", 
-                "2347040401291@s.whatsapp.net"
-            ];
-            if (baseDevs.includes(targetJid)) {
-                return await sock.sendMessage(jid, { text: "❌ You cannot remove a base core developer." }, { quoted: msg });
-            }
-
-            let targetPhoneJid = '';
-            if (targetJid.endsWith('@lid')) {
-                try { targetPhoneJid = await getPhoneJid(sock, targetJid, jid); } catch (e) {}
-            }
-
-            let exists = false;
-
-            if (Array.isArray(settings.devLids)) {
-                if (settings.devLids.includes(targetJid)) {
-                    settings.devLids = settings.devLids.filter(num => num !== targetJid);
-                    exists = true;
-                }
-                if (targetPhoneJid && settings.devLids.includes(targetPhoneJid)) {
-                    settings.devLids = settings.devLids.filter(num => num !== targetPhoneJid);
-                    exists = true;
-                }
-            }
-
-            if (Array.isArray(settings.devs)) {
-                if (settings.devs.includes(targetJid)) {
-                    settings.devs = settings.devs.filter(num => num !== targetJid);
-                    exists = true;
-                }
-                if (targetPhoneJid && settings.devs.includes(targetPhoneJid)) {
-                    settings.devs = settings.devs.filter(num => num !== targetPhoneJid);
-                    exists = true;
-                }
-            }
-
-            if (!exists) {
-                return await sock.sendMessage(jid, { text: "❌ Target is not a registered developer." }, { quoted: msg });
-            }
-
-            const displayJid = targetPhoneJid || targetJid;
-
-            await sock.sendMessage(jid, { 
-                text: `👋 Removed developer privileges for: @${displayJid.split('@')[0]}`, 
-                mentions: [displayJid] 
-            }, { quoted: msg });
-            saveState(); 
-        }
-    },
-
+    // 12. AFK
     {
         name: 'afk',
         isPrefixless: false,
@@ -775,136 +585,173 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!settings.afk) settings.afk = {};
+            if (!config.afk) config.afk = {};
 
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const isAlreadyAfk = settings.afk[senderJid];
+            const isAlreadyAfk = config.afk[senderJid];
 
             if (isAlreadyAfk) {
-                delete settings.afk[senderJid];
-                await sock.sendMessage(jid, { 
-                    text: `👋 *Welcome Back!* AFK mode has been deactivated.` 
+                delete config.afk[senderJid];
+                await sock.sendMessage(jid, {
+                    text: `👋 *Welcome Back!* AFK mode has been deactivated.`
                 }, { quoted: msg });
             } else {
-                settings.afk[senderJid] = {
+                config.afk[senderJid] = {
                     time: Date.now(),
                     reason: args || "Infinite Void meditation"
                 };
-                await sock.sendMessage(jid, { 
-                    text: `💤 *AFK Mode Activated.* Mentions of your name in group chats will be auto-replied by my infinity.` 
+                await sock.sendMessage(jid, {
+                    text: `💤 *AFK Mode Activated.* Mentions of your name in group chats will be auto-replied by my infinity.`
                 }, { quoted: msg });
             }
-            saveSettings(); 
-            saveState(); 
+            saveState();
         }
     },
 
+    // 13. SETVAR
     {
         name: 'setvar',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return; 
+            if (!isOwner) return;
 
             const eqIndex = args.indexOf('=');
             if (eqIndex === -1) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Invalid format.\nUsage: \`${settings.prefix}setvar KEY=VALUE\`\nExample: \`${settings.prefix}setvar prefix=⚡\`` 
+                return await sock.sendMessage(jid, {
+                    text: `❌ Invalid format.\nUsage: \`${config.prefix}setvar KEY=VALUE\`\nExample: \`${config.prefix}setvar prefix=!\``
                 }, { quoted: msg });
             }
 
             const key = args.slice(0, eqIndex).trim();
             const valueStr = args.slice(eqIndex + 1).trim();
 
+            // ─── KEY MAPPING ──────────────────────────────────────
             const keyMapping = {
-                botname: "botName",
-                ownername: "ownerName",
+                // Environment/Static (can be overridden via setvar)
+                bot_name: "botName",
+                owner_name: "ownerName",
+                owner_number: "ownerNumber",
+                session_id: "sessionId",
+                git_token: "githubToken",
+                groq_api_key: "groqApiKey",
+                gemini_api_key: "geminiApiKey",
+
+                // Dynamic (vars.json)
                 prefix: "prefix",
-                packname: "packName",
+                vvs: "vvs",
+                pack_name: "packName",
                 author: "author",
-                ispublic: "isPublic",
-                ownernumber: "ownerNumber"
+                menu_image: "menuImage",
+                warn: "warnThreshold",
+                presence: "presenceMode"
             };
 
             const mappedKey = keyMapping[key.toLowerCase()];
             if (!mappedKey) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Variable "${key}" cannot be configured dynamically. Only customizable system variables are permitted.` 
+                return await sock.sendMessage(jid, {
+                    text: `❌ Variable "${key}" cannot be configured dynamically.`
                 }, { quoted: msg });
             }
 
+            // ─── SPECIAL HANDLING ────────────────────────────────
             let finalValue = valueStr;
+
+            // Boolean handling for isPublic (though it's managed via .mode, keeping for safety)
             if (mappedKey === 'isPublic') {
                 if (valueStr.toLowerCase() === 'true') finalValue = true;
                 else if (valueStr.toLowerCase() === 'false') finalValue = false;
                 else {
-                    return await sock.sendMessage(jid, { text: "❌ isPublic must be either \`true\` or \`false\`." }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: "❌ isPublic must be either `true` or `false`." }, { quoted: msg });
                 }
             }
 
-            settings[mappedKey] = finalValue;
-            saveSettings();
-            saveState(); 
+            // ─── MENU IMAGE: comma-separated URLs ──────────────
+            if (mappedKey === 'menuImage') {
+                const urls = valueStr.split(',').map(u => u.trim()).filter(Boolean);
+                if (urls.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ menu_image requires at least one URL. Use comma-separated values." }, { quoted: msg });
+                }
+                finalValue = urls;
+            }
 
-            const commandsList = require('../commands');
-            commandsList.reload();
-
-            await sock.sendMessage(jid, {
-                text: `✅ *Variable Configured Successfully!*\n\n` +
-                      `• *Key:* \`${mappedKey}\`\n` +
-                      `• *Value:* \`${finalValue}\`\n\n` +
-                      `_Bot settings.js file has been updated, and command registries have been hot-reloaded successfully._`
-            }, { quoted: msg });
+            // ─── SET THE VARIABLE ────────────────────────────────
+            // If it's a dynamic var (in vars.json), use setVar
+            const dynamicKeys = ['prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode'];
+            if (dynamicKeys.includes(mappedKey)) {
+                const success = setVar(mappedKey, finalValue);
+                if (!success) {
+                    return await sock.sendMessage(jid, { text: `❌ Failed to save variable "${key}".` }, { quoted: msg });
+                }
+                // Reload commands if prefix changed
+                if (mappedKey === 'prefix') {
+                    const commandsList = require('../commands');
+                    commandsList.reload();
+                }
+                await sock.sendMessage(jid, {
+                    text: `✅ *Variable Configured Successfully!*\n\n` +
+                          `• *Key:* \`${mappedKey}\`\n` +
+                          `• *Value:* \`${Array.isArray(finalValue) ? finalValue.join(', ') : finalValue}\`\n\n` +
+                          `_Value has been persisted to vars.json and applied instantly._`
+                }, { quoted: msg });
+            } else {
+                // Environment/static vars: update config directly and save to .env? We'll just update config.
+                config[mappedKey] = finalValue;
+                // Try to also update .env? That's risky. We'll just log.
+                console.log(`[SETVAR] Updated ${mappedKey} to ${finalValue} (in-memory only, restart will revert unless .env is updated manually)`);
+                await sock.sendMessage(jid, {
+                    text: `✅ *${mappedKey} updated to:* \`${finalValue}\`\n\n` +
+                          `⚠️ *Note:* This variable is from .env. To make it permanent, edit your .env file manually.\n` +
+                          `_The change is active until the next restart._`
+                }, { quoted: msg });
+            }
         }
     },
 
+    // 14. SETTINGS
     {
         name: 'settings',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
-            if (!isOwner) return; 
+            if (!isOwner) return;
 
-            const ownersList = (settings.owners || []).length > 0 ? settings.owners.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
-            const ownersLidsList = (settings.ownerLids || []).length > 0 ? settings.ownerLids.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
-            const sudoList = (settings.sudo || []).length > 0 ? settings.sudo.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
-            const sudoLidsList = (settings.sudoLids || []).length > 0 ? settings.sudoLids.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
-            const bannedList = (settings.banned || []).length > 0 ? settings.banned.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+            const ownersList = (config.secondaryOwners || []).length > 0 ?
+                config.secondaryOwners.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+            const sudoList = (config.sudos || []).length > 0 ?
+                config.sudos.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+            const bannedList = (config.banned || []).length > 0 ?
+                config.banned.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
 
-            const antilinkCount = Object.keys(settings.antilink || {}).filter(k => settings.antilink[k] !== 'off').length;
-            const antitagCount = Object.keys(settings.antitag || {}).filter(k => settings.antitag[k] !== 'off').length;
-            const antibotCount = Object.keys(settings.antibot || {}).filter(k => settings.antibot[k] !== 'off').length;
+            const antilinkCount = Object.keys(config.antilink || {}).filter(k => config.antilink[k] !== 'off').length;
+            const antitagCount = Object.keys(config.antitag || {}).filter(k => config.antitag[k] !== 'off').length;
+            const antibotCount = Object.keys(config.antibot || {}).filter(k => config.antibot[k] !== 'off').length;
 
-            const settingsText = 
-                `💻 *${settings.botName.toUpperCase()} SYSTEM SETTINGS* 💻\n` +
+            const settingsText =
+                `💻 *${config.botName.toUpperCase()} SYSTEM SETTINGS* 💻\n` +
                 `━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🤖 *Bot Name:* \`${settings.botName}\`\n` +
-                `👑 *Creator Name:* \`${settings.ownerName}\`\n` +
-                `⚡ *Command Prefix:* \`${settings.prefix}\`\n` +
-                `🌐 *Bot Privacy:* \`${settings.isPublic ? 'Public' : 'Private'}\`\n` +
-                `📱 *Primary Owner Number:* \`${settings.ownerNumber}\`\n\n` +
-                
-                `📦 *Sticker Pack:* \`${settings.packName}\`\n` +
-                `🎨 *Sticker Author:* \`${settings.author}\`\n` +
-                `❄️ *Automated React:* \`${settings.autoReact}\`\n\n` +
-                
-                `👥 *Secondary Owners (Phone):* ${ownersList}\n` +
-                `👥 *Secondary Owners (LID):* ${ownersLidsList}\n` +
-                `🛡️ *Sudo Users (Phone):* ${sudoList}\n` +
-                `🛡️ *Sudo Users (LID):* ${sudoLidsList}\n` +
-                `🚫 *Banned Users:* ${bannedList}\n\n` +
-                
-                `🛡️ *Active Group Protections:*\n` +
-                `• *Antilink Groups:* \`${antilinkCount}\` chat(s)\n` +
-                `• *Antitag Groups:* \`${antitagCount}\` chat(s)\n` +
-                `• *Antibot Groups:* \`${antibotCount}\` chat(s)\n\n`;
+                `🤖 *Bot Name:* \`${config.botName}\`\n` +
+                `👑 *Owner:* \`${config.ownerName}\`\n` +
+                `⚡ *Prefix:* \`${config.prefix || '(prefixless)'}\`\n` +
+                `🌐 *Mode:* \`${config.isPublic ? 'Public' : 'Private'}\`\n` +
+                `📱 *Owner Number:* \`${config.ownerNumber}\`\n\n` +
+                `📦 *Sticker Pack:* \`${config.packName}\`\n` +
+                `🎨 *Sticker Author:* \`${config.author}\`\n` +
+                `🔮 *VVS Trigger:* \`${config.vvs || 'kamui'}\`\n` +
+                `⚠️ *Warn Threshold:* \`${config.warnThreshold || 5}\`\n\n` +
+                `👥 *Secondary Owners:* ${ownersList}\n` +
+                `🛡️ *Sudos:* ${sudoList}\n` +
+                `🚫 *Banned:* ${bannedList}\n\n` +
+                `🛡️ *Active Protections:*\n` +
+                `• *Antilink:* \`${antilinkCount}\` groups\n` +
+                `• *Antitag:* \`${antitagCount}\` groups\n` +
+                `• *Antibot:* \`${antibotCount}\` groups\n\n` +
+                `🧠 *Gojo Sleep:* \`${config.gojoGlobalSleep ? '💤' : '🟢'}\``;
 
             const allMentions = [
-                ...(settings.owners || []),
-                ...(settings.ownerLids || []),
-                ...(settings.sudo || []),
-                ...(settings.sudoLids || []),
-                ...(settings.banned || [])
+                ...(config.secondaryOwners || []),
+                ...(config.sudos || []),
+                ...(config.banned || [])
             ];
 
             await sock.sendMessage(jid, {
@@ -914,6 +761,7 @@ module.exports = [
         }
     },
 
+    // 15. UPGRADE (Dev-only)
     {
         name: 'upgrade',
         isPrefixless: false,
@@ -921,19 +769,20 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isDev) return;
 
-            const gt1 = "github_pat_11BH7NI3Q0MV8";
-            const gt2 = "yaiv4M319_DnfeP633TGVvly";
-            const gt3 = "oObxHgj9iWCH7g6EOioMSdhI";
-            const gt4 = "nKSkVMQMB7BMOqIzuJL7r";
-            const GITHUB_TOKEN = gt1 + gt2 + gt3 + gt4;
+            const GITHUB_TOKEN = config.githubToken;
+            if (!GITHUB_TOKEN) {
+                return await sock.sendMessage(jid, { text: "❌ GitHub token not configured. Please set GITHUB_TOKEN in .env" }, { quoted: msg });
+            }
 
-            const GITHUB_OWNER = "Botking134";   
-            const GITHUB_REPO = "Limitless-MD";    
-            const GITHUB_BRANCH = "master";        
+            const GITHUB_OWNER = "Botking134";
+            const GITHUB_REPO = "Limitless-MD";
+            const GITHUB_BRANCH = "master";
 
             const spaceIndex = args ? args.indexOf(' ') : -1;
             if (spaceIndex === -1) {
-                return await sock.sendMessage(jid, { text: `❌ Invalid upgrade format.\nUsage: \`${settings.prefix}upgrade <file_path> <entire_code>\`` }, { quoted: msg });
+                return await sock.sendMessage(jid, {
+                    text: `❌ Invalid upgrade format.\nUsage: \`${config.prefix}upgrade <file_path> <entire_code>\``
+                }, { quoted: msg });
             }
 
             const relativePathInput = args.slice(0, spaceIndex).trim();
@@ -990,12 +839,12 @@ module.exports = [
 
                 const putData = await putResponse.json();
 
-                await sock.sendMessage(jid, { 
-                    text: `✅ *Master Files Upgraded!* \n\n` +
+                await sock.sendMessage(jid, {
+                    text: `✅ *Master Files Upgraded!*\n\n` +
                           `• *Branch:* \`${GITHUB_BRANCH}\`\n` +
                           `• *Path:* \`${relativePathInput}\`\n` +
                           `• *Commit SHA:* \`${putData.commit?.sha?.slice(0, 7) || 'N/A'}\`\n` +
-                          `• *Status:* Pushed directly to source successfully! 🚀` 
+                          `• *Status:* Pushed directly to source successfully! 🚀`
                 }, { quoted: msg });
 
             } catch (error) {
@@ -1005,6 +854,7 @@ module.exports = [
         }
     },
 
+    // 16. ANTIPM
     {
         name: 'antipm',
         isPrefixless: false,
@@ -1013,26 +863,27 @@ module.exports = [
             if (!isOwner) return;
 
             if (!args) {
-                const current = settings.antipm || 'off';
-                return await sock.sendMessage(jid, { text: `💻 *Anti-PM Protection status:* \`${current.toUpperCase()}\`\n\nUse \`${settings.prefix}antipm on\` or \`off\` to configure.` }, { quoted: msg });
+                const current = config.antipm || 'off';
+                return await sock.sendMessage(jid, {
+                    text: `💻 *Anti-PM Protection status:* \`${current.toUpperCase()}\`\n\nUse \`${config.prefix}antipm on\` or \`off\` to configure.`
+                }, { quoted: msg });
             }
 
             const mode = args.toLowerCase().trim();
-
             if (mode === 'on') {
-                settings.antipm = 'on';
+                config.antipm = 'on';
                 await sock.sendMessage(jid, { text: "🔒 *Anti-PM Autoblocker activated!* Non-owners sending direct messages to the bot number will be blocked instantly." }, { quoted: msg });
             } else if (mode === 'off') {
-                settings.antipm = 'off';
+                config.antipm = 'off';
                 await sock.sendMessage(jid, { text: "🔓 *Anti-PM Autoblocker deactivated completely.*" }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, { text: "❌ Invalid option. Use `on` or `off`." }, { quoted: msg });
             }
-            saveSettings();
-            saveState(); 
+            saveState();
         }
     },
 
+    // 17. REMINDER
     {
         name: 'reminder',
         isPrefixless: false,
@@ -1041,7 +892,9 @@ module.exports = [
             if (!isOwner) return;
 
             if (!args) {
-                return await sock.sendMessage(jid, { text: `❌ Please provide a timer and the reminder text.\nExample: \`${settings.prefix}reminder 10m study Jujutsu history\`` }, { quoted: msg });
+                return await sock.sendMessage(jid, {
+                    text: `❌ Please provide a timer and the reminder text.\nExample: \`${config.prefix}reminder 10m study Jujutsu history\``
+                }, { quoted: msg });
             }
 
             global.activeSock = sock;
@@ -1060,8 +913,8 @@ module.exports = [
             }
 
             try {
-                const prompt = await sock.sendMessage(jid, { 
-                    text: `⏳ *Reminder Scheduled!* \n\n• *Duration:* \`${durationString}\`\n• *Note:* _"${textContent}"_\n\n⚠️ *Action Required:* Please reply directly to *this message* with a short *Title* to complete the setup.` 
+                const prompt = await sock.sendMessage(jid, {
+                    text: `⏳ *Reminder Scheduled!*\n\n• *Duration:* \`${durationString}\`\n• *Note:* _"${textContent}"_\n\n⚠️ *Action Required:* Please reply directly to *this message* with a short *Title* to complete the setup.`
                 }, { quoted: msg });
 
                 global.reminderSessions[prompt.key.id] = {
@@ -1071,13 +924,13 @@ module.exports = [
                     text: textContent,
                     timeSet: Date.now()
                 };
-
             } catch (err) {
                 console.error("Reminder setup error:", err.message);
             }
         }
     },
 
+    // 18. REMIND (List/Cancel)
     {
         name: 'remind',
         isPrefixless: false,
@@ -1090,16 +943,17 @@ module.exports = [
 
             if (args && args.toLowerCase().trim().startsWith('abort')) {
                 const idx = parseInt(args.toLowerCase().replace('abort', '').trim());
-
                 if (isNaN(idx) || idx < 1 || idx > reminders.length) {
-                    return await sock.sendMessage(jid, { text: `❌ Invalid selection index. Please enter a number between 1 and ${reminders.length}.` }, { quoted: msg });
+                    return await sock.sendMessage(jid, {
+                        text: `❌ Invalid selection index. Please enter a number between 1 and ${reminders.length}.`
+                    }, { quoted: msg });
                 }
-
                 const removed = reminders[idx - 1];
                 reminders.splice(idx - 1, 1);
                 saveReminders(reminders);
-
-                return await sock.sendMessage(jid, { text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*\n• *Remaining:* Aborted.` }, { quoted: msg });
+                return await sock.sendMessage(jid, {
+                    text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*\n• *Remaining:* Aborted.`
+                }, { quoted: msg });
             }
 
             if (args && args.toLowerCase().trim() === 'cancel') {
@@ -1131,7 +985,10 @@ module.exports = [
             reminders.forEach((r, idx) => {
                 const remainingMs = Math.max(0, r.triggerTime - Date.now());
                 const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
-                const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour12: true });
+                const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', {
+                    timeZone: 'Africa/Lagos',
+                    hour12: true
+                });
 
                 dashboard += `${idx + 1}. *${r.title}*\n`;
                 dashboard += `   • *Note:* _"${r.text}"_\n`;
@@ -1142,7 +999,7 @@ module.exports = [
             const buttonMessage = {
                 text: dashboard,
                 buttons: [
-                    { buttonId: `${settings.prefix}remind cancel`, buttonText: { displayText: 'Cancel Reminder ❌' }, type: 1 }
+                    { buttonId: `${config.prefix}remind cancel`, buttonText: { displayText: 'Cancel Reminder ❌' }, type: 1 }
                 ],
                 headerType: 1
             };
@@ -1150,12 +1007,13 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
             } catch (err) {
-                const fallbackText = `${dashboard}\n💡 _Use \`${settings.prefix}remind cancel\` to show the cancellation dashboard._`;
+                const fallbackText = `${dashboard}\n💡 _Use \`${config.prefix}remind cancel\` to show the cancellation dashboard._`;
                 await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
             }
         }
     },
 
+    // 19. GAMES (List active games)
     {
         name: 'games',
         isPrefixless: false,
@@ -1177,7 +1035,7 @@ module.exports = [
 
             const totalActive = tttCount + guessCount + v8Count + triviaCount + charadeCount + anagramCount + wcgCount + millionaireCount + torfCount + pvpCount + escapeCount;
 
-            const summary = 
+            const summary =
                 `🎮 *LIMITLESS ACTIVE GAMES REGISTER* 🎮\n` +
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `• *Tic-Tac-Toe:* \`${tttCount}\` active\n` +
@@ -1197,7 +1055,7 @@ module.exports = [
             const buttons = {
                 text: summary,
                 buttons: [
-                    { buttonId: `${settings.prefix}games_closeall`, buttonText: { displayText: 'Terminate All Games 🛑' }, type: 1 }
+                    { buttonId: `${config.prefix}games_closeall`, buttonText: { displayText: 'Terminate All Games 🛑' }, type: 1 }
                 ],
                 headerType: 1
             };
@@ -1206,6 +1064,7 @@ module.exports = [
         }
     },
 
+    // 20. GAMES_CLOSEALL
     {
         name: 'games_closeall',
         isPrefixless: false,
@@ -1213,19 +1072,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            Object.keys(global.anagramSessions || {}).forEach(k => {
-                if (global.anagramSessions[k].timerId) clearTimeout(global.anagramSessions[k].timerId);
-            });
-            Object.keys(global.wcgSessions || {}).forEach(k => {
-                if (global.wcgSessions[k].timerId) clearTimeout(global.wcgSessions[k].timerId);
-            });
-            Object.keys(global.millionaireSessions || {}).forEach(k => {
-                if (global.millionaireSessions[k].timerId) clearTimeout(global.millionaireSessions[k].timerId);
-            });
-            Object.keys(global.pvpSessions || {}).forEach(k => {
-                if (global.pvpSessions[k].timerId) clearTimeout(global.pvpSessions[k].timerId);
-            });
-
+            // Clear all active game sessions
             global.gameSessions = {};
             global.vault8Sessions = {};
             global.vault8SavedStories = {};
@@ -1242,6 +1089,7 @@ module.exports = [
         }
     },
 
+    // 21. OWNER (List owners)
     {
         name: 'owner',
         isPrefixless: false,
@@ -1249,36 +1097,28 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            const secondaries = settings.owners || [];
-            const secondariesLids = settings.ownerLids || [];
-            const sudos = settings.sudo || [];
-            const sudosLids = settings.sudoLids || [];
+            const secondaries = config.secondaryOwners || [];
+            const sudos = config.sudos || [];
 
             let list = `👑 *LIMITLESS OWNER & SUDO REGISTER* 👑\n` +
                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                       `👤 *Primary Creator JID:*\n` +
-                       `• @${settings.ownerNumber}\n\n`;
+                       `👤 *Primary Owner JID:*\n` +
+                       `• @${config.ownerNumber}\n\n`;
 
-            if (secondaries.length > 0 || secondariesLids.length > 0) {
+            if (secondaries.length > 0) {
                 list += `👑 *Secondary Owners:*\n`;
                 secondaries.forEach((num) => {
                     list += `• @${num.split('@')[0]}\n`;
-                });
-                secondariesLids.forEach((lid) => {
-                    list += `• @${lid.split('@')[0]} (LID)\n`;
                 });
                 list += `\n`;
             } else {
                 list += `👑 *Secondary Owners:* _None_\n\n`;
             }
 
-            if (sudos.length > 0 || sudosLids.length > 0) {
+            if (sudos.length > 0) {
                 list += `🛡️ *Registered Sudoers:*\n`;
                 sudos.forEach((num) => {
                     list += `• @${num.split('@')[0]}\n`;
-                });
-                sudosLids.forEach((lid) => {
-                    list += `• @${lid.split('@')[0]} (LID)\n`;
                 });
                 list += `\n`;
             } else {
@@ -1286,25 +1126,29 @@ module.exports = [
             }
 
             const mentionsList = [
-                settings.ownerJid,
+                config.ownerJid,
                 ...secondaries,
-                ...secondariesLids,
-                ...sudos,
-                ...sudosLids
-            ];
+                ...sudos
+            ].filter(Boolean);
 
             await sock.sendMessage(jid, { text: list, mentions: mentionsList }, { quoted: msg });
         }
     }
 ];
 
+// ─── ALIASES ──────────────────────────────────────────────────────
+// Add aliases for commands that have alternate names.
+
 const aliases = [];
 module.exports.forEach(cmd => {
-    if (cmd.name === 'adddev') {
-        aliases.push({ ...cmd, name: 'add-dev' });
+    if (cmd.name === 'addowner') {
+        aliases.push({ ...cmd, name: 'add-owner' });
     }
-    if (cmd.name === 'deldev') {
-        aliases.push({ ...cmd, name: 'del-dev' });
+    if (cmd.name === 'delowner') {
+        aliases.push({ ...cmd, name: 'del-owner' });
+    }
+    if (cmd.name === 'games') {
+        aliases.push({ ...cmd, name: 'activegames' });
     }
 });
 module.exports.push(...aliases);
