@@ -1,5 +1,5 @@
 // plugins/downloaders/aud.js
-const settings = require('../../settings');
+const config = require('../../config');
 
 global.songSessions = global.songSessions || {};
 
@@ -59,7 +59,7 @@ function logError(cmd, args, err) {
 }
 
 module.exports = [
-    // 1. MUSIC PLAYER (.play)
+    // 1. PLAY
     {
         name: 'play',
         isPrefixless: false,
@@ -92,9 +92,9 @@ module.exports = [
 
                 if (!downloadUrl) throw new Error("Isolated YouTube downloader returned empty audio stream.");
 
-                await sock.sendMessage(jid, { 
-                    image: { url: thumbnail }, 
-                    caption: `🎵 *SONG FOUND*\n\n📌 *Title:* ${title}\n⏳ *Duration:* ${duration}` 
+                await sock.sendMessage(jid, {
+                    image: { url: thumbnail },
+                    caption: `🎵 *SONG FOUND*\n\n📌 *Title:* ${title}\n⏳ *Duration:* ${duration}`
                 }, { quoted: msg });
 
                 const audioBuffer = await fetchBuffer(downloadUrl);
@@ -114,7 +114,7 @@ module.exports = [
         }
     },
 
-    // 2. YOUTUBE MP3 DOWNLOADER (.ytmp3)
+    // 2. YTMP3
     {
         name: 'ytmp3',
         isPrefixless: false,
@@ -167,7 +167,7 @@ module.exports = [
         }
     },
 
-    // 3. INTERACTIVE SONG SEARCHER (.song)
+    // 3. SONG (Interactive selection)
     {
         name: 'song',
         isPrefixless: false,
@@ -205,7 +205,7 @@ module.exports = [
         }
     },
 
-    // 4. DOCUMENT-FORMAT YOUTUBE LINK AUDIO DOWNLOADER (.ytmp3doc)
+    // 4. YTMP3DOC (Audio as document)
     {
         name: 'ytmp3doc',
         isPrefixless: false,
@@ -250,7 +250,7 @@ module.exports = [
         }
     },
 
-    // 5. DOCUMENT-FORMAT YOUTUBE SEARCH AUDIO DOWNLOADER (.playdoc)
+    // 5. PLAYDOC (Search and download as document)
     {
         name: 'playdoc',
         isPrefixless: false,
@@ -292,7 +292,7 @@ module.exports = [
         }
     },
 
-    // 6. SPOTIFY AUDIO DOWNLOADER (.spotify)
+    // 6. SPOTIFY
     {
         name: 'spotify',
         isPrefixless: false,
@@ -329,3 +329,9 @@ module.exports = [
         }
     }
 ];
+
+const aliases = [];
+module.exports.forEach(cmd => {
+    if (cmd.name === 'play') aliases.push({ ...cmd, name: 'play' }); // no alias
+});
+module.exports.push(...aliases);
