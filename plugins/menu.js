@@ -3,7 +3,6 @@ const config = require('../config');
 const path = require('path');
 
 // ─── HELPER: FORMAT UPTIME ──────────────────────────────────────
-
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
@@ -13,25 +12,19 @@ function formatUptime(seconds) {
 }
 
 // ─── MENU IMAGES ──────────────────────────────────────────────────
-
-// Default image pool
-const defaultImages = [
-    "https://freeimage.host/i/CoXZ9LB",
-    "https://freeimage.host/i/CoXQyXV",
-    "https://freeimage.host/i/CoXQpzQ",
-    "https://freeimage.host/i/CoXQDej",
-    "https://freeimage.host/i/CoXZJqP",
-    "https://freeimage.host/i/CoXZd11",
-    "https://freeimage.host/i/CoXZFdg",
-    "https://freeimage.host/i/CoXZ2rF",
-    "https://freeimage.host/i/CoXZK7a"
+// Updated with your new ImgBB direct links
+const menuImages = [
+    "https://i.ibb.co/0ps1KT1H/6e475f07c727d798133f2621907cb1aa.jpg",
+    "https://i.ibb.co/qLkzRkxq/60e09c407416e9a16153a3a81b476961.jpg",
+    "https://i.ibb.co/mdkVnM8/171c68f18891916b8a28d83e79aed1a1.jpg",
+    "https://i.ibb.co/jc174Zs/182099dfc7d9da33b491c6777f96472d.jpg",
+    "https://i.ibb.co/8nRKVQL4/b7ace5729aed4a88db69b41815f2d12f.jpg",
+    "https://i.ibb.co/XfPZx9KJ/9acd61def949393ae0dae459d12a59ed.jpg",
+    "https://i.ibb.co/r2D1Wssd/a6c8dac58cbdb4b3e3df8f9d3b6aaeaa.jpg",
+    "https://i.ibb.co/Ld6tRtqV/9ef4cbcbaa407583aaefd5e54f6742f6.jpg",
+    "https://i.ibb.co/JjbcsLnZ/3d9e7cf8c22e178895518cffc13035ac.jpg",
+    "https://i.ibb.co/zWLKzy6N/c7d785c9bf81d4bb8a75547b75f7cd62.jpg"
 ];
-
-// If config.menuImage is set (from .setvar menu_image=url1,url2,...), use it instead.
-let menuImages = [...defaultImages];
-if (config.menuImage && Array.isArray(config.menuImage) && config.menuImage.length > 0) {
-    menuImages = config.menuImage;
-}
 
 // ─── HELPER: FETCH IMAGE BUFFER ──────────────────────────────
 async function fetchImageBuffer(url) {
@@ -46,14 +39,14 @@ async function fetchImageBuffer(url) {
     }
 }
 
-// ─── UPDATED CREATE CARD ──────────────────────────────────────
+// ─── HELPER: CREATE CAROUSEL CARD ──────────────────────────────
 async function createCard(sock, title, description, imageUrl, commandId, buttonText) {
     const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
-    
+
     // Fetch the image buffer first
     const buffer = await fetchImageBuffer(imageUrl);
     if (!buffer) {
-        // If image fails, return a card without image (header omitted)
+        // Fallback: card without image
         return {
             header: { hasMediaAttachment: false },
             body: { text: title },
@@ -76,7 +69,7 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
         { image: buffer },
         { upload: sock.waUploadToServer }
     );
-    
+
     return {
         header: {
             imageMessage: media.imageMessage,
@@ -98,132 +91,7 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
     };
 }
 
-// ─── UPDATED RENDER CAROUSEL MENU ──────────────────────────────
-async function renderCarouselMenu(sock, msg) {
-    const jid = msg.key.remoteJid;
-    const uptime = formatUptime(process.uptime());
-
-    const headerText = 
-`┌──────────────────┐
-│   *Limitless-MD*   │
-└──────────────────┘
-_Owner: ${config.ownerName}_
-_User: ${msg.pushName || 'User'}_
-_Uptime: ${uptime}_
-_Version: 1.0.0_
-══════════════════════
-_Throughout Heaven And Earth 🌏_
-┌────────────────────────────────────┐
-│ _I alone am the Honoured one_ │
-└────────────────────────────────────┘
-
-_Swipe through the cards below to explore command categories._ 🔮`;
-
-    try {
-        const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
-
-        // ─── LOADING ANIMATION ──────────────────────────────────
-        const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
-
-        const frames = [
-            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 1000 },
-            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 1000 },
-            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 1000 },
-            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌀", delay: 1500 }
-        ];
-
-        for (const frame of frames) {
-            await delay(frame.delay);
-            try {
-                await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key });
-            } catch (editErr) { /* ignore */ }
-        }
-
-        // ─── DELETE LOADING MESSAGE ─────────────────────────────
-        try {
-            await sock.sendMessage(jid, { delete: loadingMsg.key });
-        } catch (e) { /* ignore */ }
-
-        // ─── BUILD CAROUSEL ──────────────────────────────────────
-        const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
-
-        const categories = [
-            { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
-            { name: "INTERACTIVE GAMES 🎮", desc: "Lobbies, turn-based puzzles, quizzes, and duels.", cmd: "menu_games" },
-            { name: "GROUP MANAGEMENT 👥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
-            { name: "TOOLS ⚙️", desc: "Advanced Presence parameters & tracking tools.", cmd: "menu_tools" },
-            { name: "DOWNLOADER 📥", desc: "High-speed multi-platform downloaders.", cmd: "menu_download" },
-            { name: "FUN & ROLEPLAY 🎭", desc: "Monologues, animations, and interactive cards.", cmd: "menu_fun" },
-            { name: "OWNER & DEV 👑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
-            { name: "UTILITIES 🛠️", desc: "Converter tools & network latencies.", cmd: "menu_utilities" }
-        ];
-
-        const cards = [];
-        for (let i = 0; i < categories.length; i++) {
-            const cat = categories[i];
-            try {
-                const card = await createCard(
-                    sock,
-                    cat.name,
-                    cat.desc,
-                    shuffledImages[i % shuffledImages.length],
-                    cat.cmd,
-                    "Explore Commands 🔮"
-                );
-                cards.push(card);
-            } catch (err) {
-                console.error(`[MENU] Failed to create card for ${cat.name}:`, err.message);
-                // Fallback: card without image
-                cards.push({
-                    header: { hasMediaAttachment: false },
-                    body: { text: cat.name },
-                    footer: { text: cat.desc },
-                    nativeFlowMessage: {
-                        buttons: [
-                            {
-                                name: "quick_reply",
-                                buttonParamsJson: JSON.stringify({
-                                    display_text: "Explore Commands 🔮",
-                                    id: cat.cmd
-                                })
-                            }
-                        ]
-                    }
-                });
-            }
-        }
-
-        // If no cards were created, fallback to text menu
-        if (cards.length === 0) {
-            throw new Error("No cards could be created");
-        }
-
-        const messageContent = {
-            interactiveMessage: {
-                body: { text: headerText },
-                footer: { text: "Limitless System Menu 🪽" },
-                carouselMessage: {
-                    cards: cards
-                }
-            }
-        };
-
-        const msgProto = generateWAMessageFromContent(jid, {
-            viewOnceMessage: {
-                message: messageContent
-            }
-        }, { userJid: sock.user.id });
-
-        await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
-
-    } catch (error) {
-        console.error("Carousel Menu Render Error:", error);
-        // Fallback to text menu
-        await renderMenu(sock, msg);
-    }
-}
-
-// ─── RENDER TEXT MENU ────────────────────────────────────────────
+// ─── RENDER TEXT MENU (.menu) ──────────────────────────────────
 
 async function renderMenu(sock, msg) {
     const jid = msg.key.remoteJid;
@@ -441,6 +309,7 @@ _┃ ⊱ delete_
 _┃ ⊱ tdelete_
 _┃ ⊱ autoreact_
 _┃ ⊱ speed_
+_┃ ⊱ vv_
 _┃ ⊱ sticker_
 _┃ ⊱ crop_
 _┃ ⊱ take_
@@ -464,7 +333,7 @@ _┃ ⊱ ocr_
 _┃ ⊱ qr_
 _┃ ⊱ readqr_
 _┃ ⊱ qty_
-_┃ ⊱ currency_
+_┃ ⊱ currency
 `;
 
     try {
@@ -473,6 +342,7 @@ _┃ ⊱ currency_
             caption: menuText
         }, { quoted: msg });
 
+        // Audio attachment
         const audioUrl = "https://github.com/Botking134/Limitless-MD/raw/refs/heads/master/plugins/AUD-20260604-WA0001.mp3";
         try {
             const audioResponse = await fetch(audioUrl);
@@ -493,13 +363,14 @@ _┃ ⊱ currency_
                 ptt: false
             });
         }
+
     } catch (error) {
         console.error("Menu Image Render Error:", error);
         await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
     }
 }
 
-// ─── RENDER CAROUSEL MENU ──────────────────────────────────────
+// ─── RENDER CAROUSEL MENU (.menu2) ─────────────────────────────
 
 async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
@@ -522,9 +393,31 @@ _Throughout Heaven And Earth 🌏_
 _Swipe through the cards below to explore command categories._ 🔮`;
 
     try {
-        const { generateWAMessageFromContent } = await import('@itsliaaa/baileys');
-        await sock.sendMessage(jid, { text: "Channelling Infinity Domain... 🌌" }, { quoted: msg });
+        const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
 
+        // ─── LOADING ANIMATION ──────────────────────────────────
+        const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
+
+        const frames = [
+            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 1000 },
+            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 1000 },
+            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 1000 },
+            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌀", delay: 1500 }
+        ];
+
+        for (const frame of frames) {
+            await delay(frame.delay);
+            try {
+                await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key });
+            } catch (editErr) { /* ignore */ }
+        }
+
+        // ─── DELETE LOADING MESSAGE ─────────────────────────────
+        try {
+            await sock.sendMessage(jid, { delete: loadingMsg.key });
+        } catch (e) { /* ignore */ }
+
+        // ─── BUILD CAROUSEL ──────────────────────────────────────
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
         const categories = [
@@ -541,16 +434,39 @@ _Swipe through the cards below to explore command categories._ 🔮`;
         const cards = [];
         for (let i = 0; i < categories.length; i++) {
             const cat = categories[i];
-            const card = await createCard(
-                sock,
-                cat.name,
-                cat.desc,
-                shuffledImages[i % shuffledImages.length],
-                cat.cmd,
-                "Explore Commands 🔮"
-            );
-            cards.push(card);
+            try {
+                const card = await createCard(
+                    sock,
+                    cat.name,
+                    cat.desc,
+                    shuffledImages[i % shuffledImages.length],
+                    cat.cmd,
+                    "Explore Commands 🔮"
+                );
+                cards.push(card);
+            } catch (err) {
+                console.error(`[MENU] Failed to create card for ${cat.name}:`, err.message);
+                // Fallback card without image
+                cards.push({
+                    header: { hasMediaAttachment: false },
+                    body: { text: cat.name },
+                    footer: { text: cat.desc },
+                    nativeFlowMessage: {
+                        buttons: [
+                            {
+                                name: "quick_reply",
+                                buttonParamsJson: JSON.stringify({
+                                    display_text: "Explore Commands 🔮",
+                                    id: cat.cmd
+                                })
+                            }
+                        ]
+                    }
+                });
+            }
         }
+
+        if (cards.length === 0) throw new Error("No cards could be created");
 
         const messageContent = {
             interactiveMessage: {
@@ -572,6 +488,7 @@ _Swipe through the cards below to explore command categories._ 🔮`;
 
     } catch (error) {
         console.error("Carousel Menu Render Error:", error);
+        // Fallback to text menu
         await renderMenu(sock, msg);
     }
 }
