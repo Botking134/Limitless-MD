@@ -36,7 +36,7 @@ module.exports = {
     prefix: "⚡",
 
     /** Custom prefixless ViewOnce decryption trigger (e.g., 'kamui' or '🔮'). */
-    vvs: "kamui",
+    vvs: "wow",
 
     /** Sticker pack name (metadata). */
     packName: "♾️",
