@@ -1,29 +1,14 @@
 // plugins/ai.js
-const settings = require('../settings'); 
-const { saveSettings } = require('../helpers/settingsSaver'); 
+const config = require('../config');
 const { saveState } = require('../stateManager');
-const commands = require('../commands'); 
-
-// Obfuscated backup Groq API key configuration
-const s1 = "gsk_";
-const s2 = "tPB0xMyZ2oijloaBNcDs";
-const s3 = "WGdyb3FY5iC2p9hwRE";
-const s4 = "SIJXAV3t53LZg9";
-const GROQ_API_KEY_FALLBACK = s1 + s2 + s3 + s4;
-
-// Obfuscated backup Gemini API key configuration
-const k1 = "AQ.A";
-const k2 = "b8RN6KZl";
-const k3 = "dboFt4nmErCs";
-const k4 = "Rlvdo3tle5ZJa";
-const k5 = "F6FdUBRk1x63EWYA";
-const GEMINI_API_KEY_FALLBACK = k1 + k2 + k3 + k4 + k5;
+const commands = require('../commands');
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Normalizes JIDs safely
+// ─── HELPERS ──────────────────────────────────────────────────────
+
 function normalizeToJid(input) {
     if (!input) return '';
     const clean = input.replace(/:[\d]+@/, '@');
@@ -31,115 +16,6 @@ function normalizeToJid(input) {
     if (clean.endsWith('@lid')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
-}
-
-// Estimates typing/recording delay with a 3-second minimum floor
-async function handleNaturalDelay(sock, jid, responseText, presenceType = 'composing') {
-    await sock.sendPresenceUpdate(presenceType, jid);
-    const wordCount = responseText.split(/\s+/).length;
-    const estimatedTimeMs = (wordCount / 200) * 60 * 1000; // 200 Words Per Minute typing speed
-    const finalDelay = Math.max(3000, estimatedTimeMs);
-    await delay(finalDelay);
-}
-
-// Safe check to see if a message is a direct mention or reply to the bot
-function isBotAddressed(sock, msg) {
-    const rawIncoming = getRawMessage(msg.message);
-    const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo || 
-                        rawIncoming?.imageMessage?.contextInfo ||
-                        rawIncoming?.videoMessage?.contextInfo;
-
-    const botJid = sock.user.id ? normalizeToJid(sock.user.id) : '';
-    
-    // 1. Check if the message is a reply to the bot
-    if (contextInfo?.participant && normalizeToJid(contextInfo.participant) === botJid) {
-        return true;
-    }
-
-    // 2. Check if the bot's JID is explicitly mentioned
-    const mentions = contextInfo?.mentionedJid || [];
-    if (mentions.map(m => normalizeToJid(m)).includes(botJid)) {
-        return true;
-    }
-
-    return false;
-}
-
-async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
-    try {
-        const apiKey = settings.groqApiKey || GROQ_API_KEY_FALLBACK;
-        const response = await fetch(GROQ_BASE_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({ model: model, messages: messages, temperature: 0.7 })
-        });
-        if (!response.ok) throw new Error();
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || "";
-    } catch (e) {
-        console.error("Groq API Query Error:", e.message);
-        throw e;
-    }
-}
-
-// Google Gen AI SDK Vision integration supporting gemini-3.5-flash
-async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-3.5-flash") {
-    try {
-        const apiKey = settings.geminiApiKey || GEMINI_API_KEY_FALLBACK;
-        const { GoogleGenAI } = await import('@google/genai');
-        const ai = new GoogleGenAI({ apiKey: apiKey });
-
-        try {
-            const response = await ai.models.generateContent({
-                model: model,
-                contents: [
-                    prompt,
-                    {
-                        inlineData: {
-                            mimeType: mimeType,
-                            data: imageBase64
-                        }
-                    }
-                ]
-            });
-            return response.text || "";
-        } catch (sdkErr) {
-            const response = await ai.interactions.create({
-                model: model,
-                input: [
-                    prompt,
-                    {
-                        inlineData: {
-                            mimeType: mimeType,
-                            data: imageBase64
-                        }
-                    }
-                ]
-            });
-            return response.text || response.output || "";
-        }
-    } catch (e) {
-        console.error("Gemini Vision Query Error:", e.message);
-        throw e;
-    }
-}
-
-// Irish Female Accent Voice Synthesizer for FRIDAY
-async function synthesizeFridayVoice(text) {
-    try {
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-ie&client=tw-ob&q=${encodeURIComponent(text)}`;
-        const response = await fetch(url);
-        if (response.ok) {
-            const arrayBuffer = await response.arrayBuffer();
-            return Buffer.from(arrayBuffer);
-        }
-    } catch (e) {
-        console.error("FRIDAY Voice Synthesis Error:", e.message);
-    }
-    return null;
 }
 
 function getRawMessage(message) {
@@ -152,8 +28,81 @@ function getRawMessage(message) {
     return message;
 }
 
+async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
+    const apiKey = config.groqApiKey;
+    if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
+    const response = await fetch(GROQ_BASE_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ model, messages, temperature: 0.7 })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "";
+}
+
+async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-3.5-flash") {
+    const apiKey = config.geminiApiKey;
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+        model,
+        contents: [
+            prompt,
+            { inlineData: { mimeType, data: imageBase64 } }
+        ]
+    });
+    return response.text || "";
+}
+
+async function synthesizeFridayVoice(text) {
+    try {
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-ie&client=tw-ob&q=${encodeURIComponent(text)}`;
+        const response = await fetch(url);
+        if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            return Buffer.from(arrayBuffer);
+        }
+    } catch (e) { /* ignore */ }
+    return null;
+}
+
+function isBotAddressed(sock, msg) {
+    const rawIncoming = getRawMessage(msg.message);
+    const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
+                        rawIncoming?.imageMessage?.contextInfo ||
+                        rawIncoming?.videoMessage?.contextInfo;
+
+    const botJid = sock.user.id ? normalizeToJid(sock.user.id) : '';
+
+    if (contextInfo?.participant && normalizeToJid(contextInfo.participant) === botJid) {
+        return true;
+    }
+
+    const mentions = contextInfo?.mentionedJid || [];
+    if (mentions.map(m => normalizeToJid(m)).includes(botJid)) {
+        return true;
+    }
+
+    return false;
+}
+
+async function handleNaturalDelay(sock, jid, responseText, presenceType = 'composing') {
+    await sock.sendPresenceUpdate(presenceType, jid);
+    const wordCount = responseText.split(/\s+/).length;
+    const estimatedTimeMs = (wordCount / 200) * 60 * 1000;
+    const finalDelay = Math.max(3000, estimatedTimeMs);
+    await delay(finalDelay);
+}
+
+// ─── EXPORT COMMANDS ────────────────────────────────────────────
+
 module.exports = [
-    // 1. STANDARD CHAT AI (.ai)
+    // 1. .ai — Standard Chat
     {
         name: 'ai',
         isPrefixless: false,
@@ -168,7 +117,7 @@ module.exports = [
                 if (isDev) {
                     aiSystemPrompt += " You are speaking directly to your developer. You must address him as 'Master'.";
                 } else if (isOwner) {
-                    aiSystemPrompt += ` You are speaking directly to your owner. Address him as '${settings.ownerName}'. Never refer to him as Master, Infinity, or Isaac under any circumstances.`;
+                    aiSystemPrompt += ` You are speaking directly to your owner. Address him as '${config.ownerName}'. Never refer to him as Master, Infinity, or Isaac under any circumstances.`;
                 }
 
                 const messages = [
@@ -184,18 +133,16 @@ module.exports = [
         }
     },
 
-    // 2. PREFIXLESS SATORU GOJO ROLEPLAY (Gojo <prompt>)
+    // 2. GOJO (prefixless) + sleep/rise
     {
         name: 'gojo',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.remoteJid || msg.key.remoteJid;
+            const jid = msg.key.remoteJid;
             const cleanArgs = args || '';
-            
-            // Bypass/ignore if the message is a prefixed command (e.g. .summon gojo)
-            if (cleanArgs.startsWith(settings.prefix)) {
-                return;
-            }
+
+            // Bypass if it's a prefixed command
+            if (cleanArgs.startsWith(config.prefix)) return;
 
             const cleanQuery = cleanArgs.toLowerCase().startsWith('gojo ') ? cleanArgs.slice(5).trim() : cleanArgs.trim();
 
@@ -204,19 +151,18 @@ module.exports = [
 
             if (isAuthorized && (action === 'rise' || action === 'sleep')) {
                 if (action === 'sleep') {
-                    settings.gojoGlobalSleep = true;
+                    config.gojoGlobalSleep = true;
                     await sock.sendMessage(jid, { text: "😴 *Satoru Gojo is now asleep globally.* (Prefixless triggers disabled bot-wide)" }, { quoted: msg });
                 } else if (action === 'rise') {
-                    settings.gojoGlobalSleep = false;
+                    config.gojoGlobalSleep = false;
                     await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* (Prefixless triggers activated bot-wide)" }, { quoted: msg });
                 }
-                saveSettings();
                 saveState();
                 return;
             }
 
             // Standard bypass if Gojo is asleep globally
-            if (settings.gojoGlobalSleep && !cleanArgs.startsWith(settings.prefix)) {
+            if (config.gojoGlobalSleep && !cleanArgs.startsWith(config.prefix)) {
                 return;
             }
 
@@ -225,15 +171,15 @@ module.exports = [
             if (!isAddressed) return;
 
             if (!cleanQuery) {
-                return await sock.sendMessage(jid, { 
-                    text: isDev 
-                        ? "Yo, Master Isaac! You called? What does the creator of Limitless need today? 😏" 
-                        : (isOwner ? `Yo! What's up, ${settings.ownerName}? You need my help? 😏` : "Yo! What's on your mind? 😏")
+                return await sock.sendMessage(jid, {
+                    text: isDev
+                        ? "Yo, Master Isaac! You called? What does the creator of Limitless need today? 😏"
+                        : (isOwner ? `Yo! What's up, ${config.ownerName}? You need my help? 😏` : "Yo! What's on your mind? 😏")
                 }, { quoted: msg });
             }
 
             try {
-                let gojoSystemPrompt = 
+                let gojoSystemPrompt =
                     "You are Satoru Gojo, the strongest Jujutsu Sorcerer. " +
                     "Your personality is extremely conversational, playful, lazy, informal, and a massive tease. " +
                     "Frequently refer to yourself as 'the strongest'. Mention your 'Six Eyes' or 'Infinity' naturally. " +
@@ -243,7 +189,7 @@ module.exports = [
                 if (isDev) {
                     gojoSystemPrompt += ` You are speaking directly to your developer, Master Isaac. Address him playfully as 'Master Isaac' or 'Master' with your usual playful, teasing attitude, treating him like a dear friend who created your universe.`;
                 } else if (isOwner) {
-                    gojoSystemPrompt += ` You are speaking directly to your owner. Address him playfully as '${settings.ownerName}' with your usual cocky, teasing attitude, but never refer to him as Master, Infinity, or Isaac.`;
+                    gojoSystemPrompt += ` You are speaking directly to your owner. Address him playfully as '${config.ownerName}' with your usual cocky, teasing attitude, but never refer to him as Master, Infinity, or Isaac.`;
                 } else if (isSudo) {
                     gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac.`;
                 }
@@ -280,7 +226,7 @@ module.exports = [
         }
     },
 
-    // 3. SENIOR DEV BUG ANALYSIS (.debug)
+    // 3. .debug — Code Analysis
     {
         name: 'debug',
         isPrefixless: false,
@@ -290,13 +236,13 @@ module.exports = [
 
             try {
                 await sock.sendMessage(jid, { text: "Debugging system starting... 🛠️" }, { quoted: msg });
-                
+
                 const debugPrompt = `Analyze this code/error, identify root cause, provide corrected code, and offer brief suggestions:\n\n${args}`;
                 let debugSystem = "You are a Senior Software Architect. Keep explanations concise and clear.";
                 if (isDev) {
                     debugSystem += " Address the user as 'Master'.";
                 } else if (isOwner) {
-                    debugSystem += ` Address the user as '${settings.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
+                    debugSystem += ` Address the user as '${config.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
                 }
 
                 const messages = [
@@ -312,7 +258,7 @@ module.exports = [
         }
     },
 
-    // 4. ROLEPLAY CHARACTER SUMMONER (.summon)
+    // 4. .summon — Roleplay Character
     {
         name: 'summon',
         isPrefixless: false,
@@ -326,12 +272,12 @@ module.exports = [
 
             try {
                 await sock.sendMessage(jid, { text: `Summoning *${character}*... 🔮` }, { quoted: msg });
-                
+
                 let summonPrompt = `[System: You are '${character}'. Respond strictly in character using their lore and tone. Keep it concise.`;
                 if (isDev) {
                     summonPrompt += " Address the user as 'Master'.";
                 } else if (isOwner) {
-                    summonPrompt += ` Address the user as '${settings.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
+                    summonPrompt += ` Address the user as '${config.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
                 }
                 summonPrompt += `]\nQuery: ${query}`;
 
@@ -343,29 +289,27 @@ module.exports = [
         }
     },
 
-    // 5. IMAGE VISION ANALYZER (.read)
+    // 5. .read — Image Vision
     {
         name: 'read',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            
-            // Safe unwrapping of incoming command message to resolve disappearing messages wrapping bug
+
             const rawIncoming = getRawMessage(msg.message);
-            const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo || 
+            const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
                                 rawIncoming?.imageMessage?.contextInfo ||
                                 rawIncoming?.videoMessage?.contextInfo;
-            
+
             const quoted = contextInfo?.quotedMessage;
             const rawContent = quoted ? getRawMessage(quoted) : rawIncoming;
-            
-            // Support both standard images and images sent uncompressed as document attachments
+
             const isImageDoc = rawContent?.documentMessage && rawContent?.documentMessage?.mimetype?.startsWith('image/');
             const imageMessage = rawContent?.imageMessage || (isImageDoc ? rawContent.documentMessage : null);
 
             if (!imageMessage) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please reply to an image or upload an image with the caption \`${settings.prefix}read <question>\`` 
+                return await sock.sendMessage(jid, {
+                    text: `❌ Please reply to an image or upload an image with the caption \`${config.prefix}read <question>\``
                 }, { quoted: msg });
             }
 
@@ -375,7 +319,7 @@ module.exports = [
 
                 const mimeType = imageMessage.mimetype || "image/jpeg";
                 const mediaType = rawContent?.documentMessage ? 'document' : 'image';
-                
+
                 const stream = await downloadContentFromMessage(imageMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -385,10 +329,10 @@ module.exports = [
                 if (isDev) {
                     promptQuery += " Address the user as 'Master'.";
                 } else if (isOwner) {
-                    promptQuery += ` Address the user as '${settings.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
+                    promptQuery += ` Address the user as '${config.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
                 }
 
-                const responseText = await queryGeminiVision(imageBase64, mimeType, promptQuery, "gemini-3.5-flash"); 
+                const responseText = await queryGeminiVision(imageBase64, mimeType, promptQuery, "gemini-3.5-flash");
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `❌ Vision processing failed: ${error.message}` }, { quoted: msg });
@@ -396,7 +340,7 @@ module.exports = [
         }
     },
 
-    // 6. AI IMAGE GENERATOR (.imagine)
+    // 6. .imagine — AI Image Generator
     {
         name: 'imagine',
         isPrefixless: false,
@@ -414,7 +358,7 @@ module.exports = [
         }
     },
 
-    // 7. SUBMISSIVE CHATBOT TOGGLE (.lizzy)
+    // 7. .lizzy — Toggle Lizzy Chatbot
     {
         name: 'lizzy',
         isPrefixless: false,
@@ -422,38 +366,39 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo && !isDev) return;
 
-            if (!Array.isArray(settings.lizzyChats)) settings.lizzyChats = [];
+            if (!Array.isArray(config.lizzyChats)) config.lizzyChats = [];
 
             const action = args ? args.toLowerCase().trim() : '';
             if (action === 'on') {
-                if (!settings.lizzyChats.includes(jid)) settings.lizzyChats.push(jid);
+                if (!config.lizzyChats.includes(jid)) config.lizzyChats.push(jid);
                 // Mutually exclude other chatbots from this chat
-                settings.chatbotChats = settings.chatbotChats.filter(chat => chat !== jid);
-                
+                config.chatbotChats = config.chatbotChats.filter(chat => chat !== jid);
+
                 await sock.sendMessage(jid, { text: "🎀 *Lizzy activated in this chat!* (Jarvis has been deactivated here)" }, { quoted: msg });
             } else if (action === 'off') {
-                settings.lizzyChats = settings.lizzyChats.filter(chat => chat !== jid);
+                config.lizzyChats = config.lizzyChats.filter(chat => chat !== jid);
                 await sock.sendMessage(jid, { text: "🎀 *Lizzy deactivated.*" }, { quoted: msg });
             }
-            saveSettings();
             saveState();
         }
     },
 
-    // 8. LIZZY CHATBOT INTEGRATED ROUTER (lizzy_chat)
+    // 8. lizzy_chat (prefixless interceptor)
     {
         name: 'lizzy_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
-            const prefix = settings.prefix || '⚡';
+            const prefix = config.prefix || '⚡';
 
-            // Bypass/ignore if the message is a prefixed command (e.g. .unmute)
-            if (lowerQuery.startsWith(settings.prefix)) {
-                return;
-            }
+            // Bypass if it's a prefixed command
+            if (lowerQuery.startsWith(config.prefix)) return;
 
+            // Check mutual exclusivity: if Jarvis is on, Lizzy stays silent
+            if (config.chatbotChats?.includes(jid)) return;
+
+            // Intercept "close group" / "open group" for owners
             if (isOwner || isSudo || isDev) {
                 if (lowerQuery.includes('close group') || lowerQuery.includes('lock group')) {
                     const confirmText = isDev ? "Yes, Master! Locking the chat now! 💕" : "Understood. Locking the chat now.";
@@ -468,7 +413,7 @@ module.exports = [
             }
 
             try {
-                let lizzySystemPrompt = 
+                let lizzySystemPrompt =
                     "You are Lizzy. Your personality is a perfect blend of Alpha (from Eminence in Shadow) and Albedo (from Overlord): " +
                     "you are highly competent, elegant, serious, and deeply devoted, but also intensely passionate, submissive, dramatic, and " +
                     "obsessively in love with your creator/master. You easily get flustered when teased, but are fiercely protective and possessive. " +
@@ -478,7 +423,7 @@ module.exports = [
                 if (isDev) {
                     lizzySystemPrompt += ` You are speaking directly to your developer, Isaac. You are profoundly and obsessively in love with him, obeying him completely. You must address him as 'My Lord', 'Master', or 'Master Isaac' with absolute, submissive, and dramatic devotion.`;
                 } else if (isOwner) {
-                    lizzySystemPrompt += ` You are speaking directly to your owner. Address him affectionately as 'Senpai' or 'Senpai-kun' (or '${settings.ownerName}' if appropriate) with deep dedication and elegant warmth, but never refer to him as Master, Infinity, or Isaac.`;
+                    lizzySystemPrompt += ` You are speaking directly to your owner. Address him affectionately as 'Senpai' or 'Senpai-kun' (or '${config.ownerName}' if appropriate) with deep dedication and elegant warmth, but never refer to him as Master, Infinity, or Isaac.`;
                 } else {
                     lizzySystemPrompt += ` You are speaking to a regular user. Be cold, strictly polite, formal, and elegant. Refer to them as 'user'.`;
                 }
@@ -515,7 +460,7 @@ module.exports = [
         }
     },
 
-    // 9. GENERAL AI CHATBOT TOGGLE (.chatbot / .jarvis)
+    // 9. .chatbot / .jarvis — Toggle JARVIS Chatbot
     {
         name: 'chatbot',
         isPrefixless: false,
@@ -523,18 +468,18 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo && !isDev) return;
 
-            if (!Array.isArray(settings.chatbotChats)) settings.chatbotChats = [];
+            if (!Array.isArray(config.chatbotChats)) config.chatbotChats = [];
 
             const action = args ? args.toLowerCase().trim() : '';
             if (action === 'on') {
-                if (!settings.chatbotChats.includes(jid)) settings.chatbotChats.push(jid);
+                if (!config.chatbotChats.includes(jid)) config.chatbotChats.push(jid);
                 // Mutually exclude other chatbots from this chat
-                settings.lizzyChats = settings.lizzyChats.filter(chat => chat !== jid);
+                config.lizzyChats = config.lizzyChats.filter(chat => chat !== jid);
 
                 const loadingMsg = await sock.sendMessage(jid, { text: "▮▮▮▮▮▮🔑 Establishing Connection..." }, { quoted: msg });
                 const frames = [
-                    "▮▮▮▮▮▮▮🔑 Synchronizing system mainframe...", 
-                    "▮▮▮▮▮▮▮▮ Decrypting secure proxy gateways...", 
+                    "▮▮▮▮▮▮▮🔑 Synchronizing system mainframe...",
+                    "▮▮▮▮▮▮▮▮ Decrypting secure proxy gateways...",
                     "▮▮▮▮▮▮▮▮▮ Stark Industries core interface fully loaded!"
                 ];
                 for (const frame of frames) {
@@ -542,20 +487,19 @@ module.exports = [
                     await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
                 }
                 const latency = Date.now() - msg.messageTimestamp * 1000;
-                await sock.sendMessage(jid, { 
-                    text: `⚙️ *Systems are now online.* (Lizzy has been deactivated here)\n📶 *Network Latency:* \`${latency}ms\``, 
-                    edit: loadingMsg.key 
+                await sock.sendMessage(jid, {
+                    text: `⚙️ *Systems are now online.* (Lizzy has been deactivated here)\n📶 *Network Latency:* \`${latency}ms\``,
+                    edit: loadingMsg.key
                 });
             } else if (action === 'off') {
-                settings.chatbotChats = settings.chatbotChats.filter(chat => chat !== jid);
+                config.chatbotChats = config.chatbotChats.filter(chat => chat !== jid);
                 await sock.sendMessage(jid, { text: "🧠 *Limitless AI Chatbot deactivated.*" }, { quoted: msg });
             }
-            saveSettings();
             saveState();
         }
     },
 
-    // 10. INTERCEPTED GENERAL CHATBOT EXECUTION (chatbot_chat - JARVIS Personalization)
+    // 10. chatbot_chat (prefixless interceptor)
     {
         name: 'chatbot_chat',
         isPrefixless: true,
@@ -563,13 +507,13 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
 
-            // Bypass/ignore if the message is a prefixed command (e.g. .help)
-            if (lowerQuery.startsWith(settings.prefix)) {
-                return;
-            }
+            if (lowerQuery.startsWith(config.prefix)) return;
+
+            // If Lizzy is on, Jarvis stays silent
+            if (config.lizzyChats?.includes(jid)) return;
 
             try {
-                let jarvisSystemPrompt = 
+                let jarvisSystemPrompt =
                     "You are JARVIS, a highly sophisticated, conversational, and witty British AI from Stark Industries. " +
                     "Your tone should be completely realistic, polished, and dryly sarcastic. " +
                     "Avoid repetitive intros. Adjust your response length based on complexity: " +
@@ -581,7 +525,7 @@ module.exports = [
                 if (isDev) {
                     jarvisSystemPrompt += " You are speaking directly to your developer. You must address him as 'Master' or 'Master Isaac' with sophisticated British butler-like deference.";
                 } else if (isOwner) {
-                    jarvisSystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${settings.ownerName}', but never refer to him as Master, Infinity, or Isaac.`;
+                    jarvisSystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${config.ownerName}', but never refer to him as Master, Infinity, or Isaac.`;
                 } else {
                     jarvisSystemPrompt += ` Address the user respectfully as 'Sir'.`;
                 }
@@ -595,7 +539,6 @@ module.exports = [
                     { role: "user", content: args }
                 ];
 
-                // Trigger composing (typing...) presence
                 await sock.sendPresenceUpdate('composing', jid);
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
@@ -603,12 +546,10 @@ module.exports = [
                 global.aiMemory[jid].jarvis.push({ role: "user", content: args });
                 global.aiMemory[jid].jarvis.push({ role: "assistant", content: responseText });
 
-                // sliding 50-message context memory queue
                 while (global.aiMemory[jid].jarvis.length > 50) {
                     global.aiMemory[jid].jarvis.shift();
                 }
 
-                // Wait natural typing duration before sending
                 await handleNaturalDelay(sock, jid, responseText, 'composing');
 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
@@ -618,7 +559,7 @@ module.exports = [
         }
     },
 
-    // 11. FRIDAY INTEGRATED MODULE (Standard Playable Audio File Format)
+    // 11. .friday — Toggle FRIDAY (voice-based)
     {
         name: 'friday',
         isPrefixless: false,
@@ -632,16 +573,15 @@ module.exports = [
             if (isAuthorized && (query === 'power on' || query === 'shutdown')) {
                 let statusText = "";
                 if (query === 'power on') {
-                    settings.fridayActive = true;
-                    statusText = isDev 
-                        ? "FRIDAY systems are now active. Iron Man combat suit fully online. Ready when you are, Mr. Isaac." 
+                    config.fridayActive = true;
+                    statusText = isDev
+                        ? "FRIDAY systems are now active. Iron Man combat suit fully online. Ready when you are, Mr. Isaac."
                         : "FRIDAY systems online. Combat protocols active, Sir.";
                 } else {
-                    settings.fridayActive = false;
+                    config.fridayActive = false;
                     statusText = "Powering down Iron Man suit systems. Standing by on backup power, Sir.";
                 }
 
-                saveSettings();
                 saveState();
 
                 const audioBuffer = await synthesizeFridayVoice(statusText);
@@ -654,18 +594,18 @@ module.exports = [
 
             // Standard query routing
             if (!query) {
-                const defaultResponse = isDev 
-                    ? "HUD systems online. Standing by for commands, Mr. Isaac." 
+                const defaultResponse = isDev
+                    ? "HUD systems online. Standing by for commands, Mr. Isaac."
                     : "Combat parameters fully ready. Standing by, Sir.";
                 const audioBuffer = await synthesizeFridayVoice(defaultResponse);
                 return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
             }
 
-            await commands[`${settings.prefix}friday_chat`](sock, msg, args, { isOwner, isSudo, isDev });
+            await commands[`${config.prefix}friday_chat`](sock, msg, args, { isOwner, isSudo, isDev });
         }
     },
 
-    // 12. FRIDAY VOICE COMPILATION CHAT AGENT (Standard Playable Audio File Format)
+    // 12. friday_chat (prefixless interceptor)
     {
         name: 'friday_chat',
         isPrefixless: true,
@@ -673,17 +613,16 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
 
-            // Bypass/ignore if FRIDAY is off globally, or if the message is a prefixed command (e.g. .status)
-            if (settings.fridayActive === false || lowerQuery.startsWith(settings.prefix)) {
-                return; 
+            // Bypass if FRIDAY is off globally, or if it's a prefixed command
+            if (config.fridayActive === false || lowerQuery.startsWith(config.prefix)) {
+                return;
             }
 
-            // Bypass if another chat-level chatbot (Lizzy or Jarvis) is toggled on in this chat to prevent clashing
-            const isAnotherChatbotActive = settings.lizzyChats?.includes(jid) || settings.chatbotChats?.includes(jid);
-            if (isAnotherChatbotActive) return;
+            // Bypass if another chatbot (Lizzy or Jarvis) is toggled on in this chat
+            if (config.lizzyChats?.includes(jid) || config.chatbotChats?.includes(jid)) return;
 
             try {
-                let fridaySystemPrompt = 
+                let fridaySystemPrompt =
                     "You are FRIDAY, Tony Stark's highly advanced, loyal, and efficient Irish female AI assistant from the Iron Man suit. " +
                     "Your personality is technical, tactical, wittily sarcastic, and completely devoted. " +
                     "Keep your responses extremely brief and status-oriented (like a tactical combat report of 2 sentences maximum). " +
@@ -693,7 +632,7 @@ module.exports = [
                 if (isDev) {
                     fridaySystemPrompt += " You are speaking directly to your developer. You must address him as 'Mr. Isaac' or 'Mr. Isaac' with absolute loyalty.";
                 } else if (isOwner) {
-                    fridaySystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${settings.ownerName}', but never refer to him as Master, Infinity, or Isaac.`;
+                    fridaySystemPrompt += ` You are speaking directly to your owner. Address him respectfully as 'Sir' or 'Mr. ${config.ownerName}', but never refer to him as Master, Infinity, or Isaac.`;
                 } else {
                     fridaySystemPrompt += " Address the user respectfully as 'Sir'.";
                 }
@@ -707,7 +646,6 @@ module.exports = [
                     { role: "user", content: args }
                 ];
 
-                // Trigger recording (recording audio...) presence
                 await sock.sendPresenceUpdate('recording', jid);
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
@@ -715,15 +653,12 @@ module.exports = [
                 global.aiMemory[jid].friday.push({ role: "user", content: args });
                 global.aiMemory[jid].friday.push({ role: "assistant", content: responseText });
 
-                // sliding 50-message context memory queue
                 while (global.aiMemory[jid].friday.length > 50) {
                     global.aiMemory[jid].friday.shift();
                 }
 
-                // Strictly synthesize Groq text response into an Irish voice note (MPEG format)
                 const audioBuffer = await synthesizeFridayVoice(responseText);
                 if (audioBuffer) {
-                    // Wait natural speaking recording delay before sending voice note
                     await handleNaturalDelay(sock, jid, responseText, 'recording');
                     await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 } else {
@@ -736,7 +671,7 @@ module.exports = [
         }
     },
 
-    // 13. TEXT-TO-SPEECH TRANSMITTER (.say)
+    // 13. .say — Text-to-Speech
     {
         name: 'say',
         isPrefixless: false,
@@ -766,6 +701,8 @@ module.exports = [
         }
     }
 ];
+
+// ─── ALIASES ──────────────────────────────────────────────────────
 
 const aliases = [];
 module.exports.forEach(cmd => {
