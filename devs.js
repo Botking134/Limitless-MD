@@ -11,7 +11,7 @@ const DEV_LIDS = [
 ];
 
 // Legacy support (in case any plugin still expects JIDs)
-const DEV_JIDS = DEV_LIDS.map(lid => lid); // They're already JIDs
+const DEV_JIDS = DEV_LIDS.map(lid => lid);
 
 module.exports = {
     DEV_LIDS,
