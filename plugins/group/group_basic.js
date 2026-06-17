@@ -1,6 +1,6 @@
 // plugins/group_basic.js
 const config = require('../../config');
-const { saveState, normalizeToJid } = require('../stateManager');
+const { saveState, normalizeToJid } = require('../../stateManager');
 
 // ─── GLOBAL TIMERS ──────────────────────────────────────────────
 global.groupTimers = global.groupTimers || {};
