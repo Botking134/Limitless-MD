@@ -1,6 +1,6 @@
 // plugins/games2.js
 const config = require('../config');
-const { saveState, getPhoneJid, normalizeToJid } = require('../stateManager');
+const { normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
 
