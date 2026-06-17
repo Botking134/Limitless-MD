@@ -1,6 +1,6 @@
 // plugins/games2.js
 const config = require('../config');
-const { normalizeToJid } = require('../stateManager');
+const { saveState, getPhoneJid, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
 
@@ -47,15 +47,6 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
-}
-
-function normalizeToJid(input) {
-    if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@');
-    if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@lid')) return clean;
-    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
-    return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
 async function resolveToPhoneJid(sock, jid) {
@@ -418,6 +409,250 @@ async function promptNextEscapeStep(sock, jid, sessionKey) {
 
     const prompt = await sock.sendMessage(jid, { text: stageCard });
     session.lastQuestionMsgId = prompt.key.id;
+}
+
+// ─── ANAGRAM TURN HELPERS ────────────────────────────────────────
+
+async function askNextAnagram(sock, jid, sessionKey) {
+    const session = global.anagramSessions[sessionKey];
+    const isSingle = session.type === 'single';
+
+    if (session.timerId) clearTimeout(session.timerId);
+
+    if (!isSingle) {
+        session.players = session.players.filter(pJid => session.lives[pJid] > 0);
+
+        if (session.players.length === 1) {
+            const winner = session.players[0];
+            const msgText = `🏆 *ANAGRAM CHAMPION DECLARED!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winner.split('@')[0]} has won the match as the last survivor!\n🎯 Score: \`${session.scores[winner]}\` points.`;
+            delete global.anagramSessions[sessionKey];
+            return await sock.sendMessage(jid, { text: msgText, mentions: [winner] });
+        }
+
+        if (session.players.length === 0) {
+            delete global.anagramSessions[sessionKey];
+            return await sock.sendMessage(jid, { text: "💀 *GAME OVER:* All players eliminated!" });
+        }
+
+        const limit = session.originalPlayerCount * 5;
+        if (session.currentQuestionIndex > limit) {
+            const sorted = [...session.players].sort((a, b) => session.scores[b] - session.scores[a]);
+            const topScore = session.scores[sorted[0]];
+            const tiedPlayers = session.players.filter(pJid => session.scores[pJid] === topScore);
+
+            if (tiedPlayers.length > 1) {
+                session.isTieBreaker = true;
+                session.players = tiedPlayers;
+                session.turnIndex = 0;
+            } else {
+                const winner = sorted[0];
+                const msgText = `🏆 *ANAGRAM MATCH FINISHED!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 Winner: @${winner.split('@')[0]} — \`${session.scores[winner]}\` points`;
+                delete global.anagramSessions[sessionKey];
+                return await sock.sendMessage(jid, { text: msgText, mentions: [winner] });
+            }
+        }
+    } else {
+        if (session.currentQuestionIndex > 10) {
+            const results = `📊 *ANAGRAM GAME OVER!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Score:* \`${session.score}/10\``;
+            delete global.anagramSessions[sessionKey];
+            return await sock.sendMessage(jid, { text: results, mentions: [session.player] });
+        }
+    }
+
+    let activePlayer = session.player;
+    if (!isSingle) {
+        if (session.turnIndex >= session.players.length) session.turnIndex = 0;
+        activePlayer = session.players[session.turnIndex];
+    }
+
+    const wordData = await generateAnagramWord(session.difficulty, session.pastWords);
+    if (!wordData) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve word data. Game aborted." });
+
+    const correctWord = wordData.word.toUpperCase().trim();
+    const scrambled = scrambleWord(correctWord);
+
+    session.pastWords.push(correctWord);
+    session.currentWord = correctWord;
+    session.scrambledWord = scrambled;
+
+    const roundHeader = isSingle
+        ? `🔠 *Anagram: Round ${session.currentQuestionIndex}/10 (Hearts: ${session.livesSP}❤️)*`
+        : `👥 *Anagram Round ${session.currentQuestionIndex}*`;
+
+    const livesStr = isSingle ? "" : `\n❤️ *Target Hearts Left:* \`${session.lives[activePlayer]}❤️\``;
+
+    const anagramCard =
+        `${roundHeader}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `👤 *Active Turn:* @${activePlayer.split('@')[0]}${livesStr}\n` +
+        `⏳ *Timer:* \`${session.timerMs / 1000} seconds\`\n\n` +
+        `🧩 *Rearrange this scrambled word:* \n` +
+        `👉    *${scrambled}*    \n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `👉 *Reply directly to this message with your guess!*`;
+
+    const prompt = await sock.sendMessage(jid, { text: anagramCard, mentions: isSingle ? [session.player] : [activePlayer] });
+    session.lastQuestionMsgId = prompt.key.id;
+
+    session.timerId = setTimeout(async () => {
+        await handleAnagramTimeout(sock, jid, sessionKey);
+    }, session.timerMs);
+}
+
+async function handleAnagramTimeout(sock, jid, sessionKey) {
+    const session = global.anagramSessions[sessionKey];
+    if (!session) return;
+
+    const isSingle = session.type === 'single';
+    let activePlayer = session.player;
+    if (!isSingle) activePlayer = session.players[session.turnIndex];
+
+    let resultMsg = "";
+    if (isSingle) {
+        session.livesSP--;
+        resultMsg = `⏰ *TIME IS UP!* \n\nThe correct word was *${session.currentWord}*.\n\n❤️ *Lives remaining:* \`${session.livesSP}/3\``;
+        if (session.livesSP <= 0) {
+            await sock.sendMessage(jid, { text: resultMsg });
+            const results = `📊 *ANAGRAM GAME OVER!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Score:* \`${session.score}/10\``;
+            delete global.anagramSessions[sessionKey];
+            return await sock.sendMessage(jid, { text: results, mentions: [session.player] });
+        }
+    } else {
+        session.lives[activePlayer]--;
+        const activeNumber = activePlayer.split('@')[0];
+        resultMsg = `⏰ *TIME IS UP!* \n\n@${activeNumber} failed to answer. Correct word was *${session.currentWord}*.`;
+        if (session.lives[activePlayer] <= 0) resultMsg += `\n\n💀 @${activeNumber} has been *ELIMINATED*!`;
+    }
+
+    await sock.sendMessage(jid, { text: resultMsg, mentions: isSingle ? [] : [activePlayer] });
+
+    session.currentQuestionIndex++;
+    if (!isSingle) session.turnIndex = (session.turnIndex + 1) % session.players.length;
+
+    await delay(2000);
+    await askNextAnagram(sock, jid, sessionKey);
+}
+
+// ─── WORD CHAIN TURN HELPERS ─────────────────────────────────────
+
+async function promptNextWcgTurn(sock, jid) {
+    const session = global.wcgSessions[jid];
+    if (session.timerId) clearTimeout(session.timerId);
+
+    if (session.players.length === 1) {
+        const winner = session.players[0];
+        const winCard = `🏆 *WORD CHAIN CHAMPION!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winner.split('@')[0]} has won the match as the ultimate survivor!`;
+        delete global.wcgSessions[jid];
+        return await sock.sendMessage(jid, { text: winCard, mentions: [winner] });
+    }
+
+    if (session.players.length === 0) {
+        delete global.wcgSessions[jid];
+        return await sock.sendMessage(jid, { text: "💀 *GAME OVER:* Everyone eliminated!" });
+    }
+
+    if (session.turnIndex >= session.players.length) session.turnIndex = 0;
+    const activePlayer = session.players[session.turnIndex];
+
+    let minLen = 4;
+    let maxLen = 5;
+    let timeLimit = 20000;
+    let modeLabel = "EASY";
+
+    if (session.difficulty === 'dynamic') {
+        const round = session.round || 1;
+        if (round <= 3) {
+            minLen = 4; maxLen = 5; timeLimit = 20000; modeLabel = "EASY (4-5 letters, 20s limit)";
+        } else if (round <= 6) {
+            minLen = 6; maxLen = 7; timeLimit = 15000; modeLabel = "MEDIUM (6-7 letters, 15s limit)";
+        } else {
+            minLen = 8; maxLen = 10; timeLimit = 15000; modeLabel = "HARD (8-10 letters, 15s limit)";
+        }
+    } else {
+        if (session.difficulty === 'easy') {
+            minLen = 4; maxLen = 5; timeLimit = 20000; modeLabel = "EASY (4-5 letter word)";
+        } else if (session.difficulty === 'medium') {
+            minLen = 6; maxLen = 7; timeLimit = 15000; modeLabel = "MEDIUM (6-7 letter word)";
+        } else if (session.difficulty === 'hard') {
+            minLen = 8; maxLen = 10; timeLimit = 15000; modeLabel = "HARD (8-10 letter word)";
+        }
+    }
+
+    session.minLen = minLen;
+    session.maxLen = maxLen;
+    session.activeLimitMs = timeLimit;
+
+    let instructions = "";
+    if (!session.lastWord) {
+        instructions = `👉 Start the chain! Type any valid dictionary English word of *${minLen}-${maxLen} letters* to begin.`;
+    } else {
+        const targetLetter = session.lastWord.slice(-1).toUpperCase();
+        instructions = `👉 Last word was *"${session.lastWord.toUpperCase()}"*. You must reply with an unused *${minLen}-${maxLen} letter word* starting with *"${targetLetter}"*!`;
+    }
+
+    const listTurns = session.players.map((p, idx) => `${idx === session.turnIndex ? '👉 ' : '• '}@${p.split('@')[0]}`).join('\n');
+
+    const chainCard =
+        `⛓️ *Word Chain: Round ${session.round || 1}* ⛓️\n` +
+        `📂 *Tier Mode:* \`${modeLabel}\`\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `👤 *Active turn:* @${activePlayer.split('@')[0]}\n` +
+        `⏳ *Timer:* \`${timeLimit / 1000} seconds\`\n\n` +
+        `${instructions}\n\n` +
+        `📊 *Lineup:*\n${listTurns}\n\n` +
+        `👉 *Reply to this message with your word guess!*`;
+
+    const prompt = await sock.sendMessage(jid, { text: chainCard, mentions: session.players });
+    session.lastQuestionMsgId = prompt.key.id;
+
+    session.timerId = setTimeout(async () => {
+        await handleWcgTimeout(sock, jid);
+    }, timeLimit);
+}
+
+async function handleWcgTimeout(sock, jid) {
+    const session = global.wcgSessions[jid];
+    if (!session) return;
+
+    const eliminatedPlayer = session.players[session.turnIndex];
+    session.players.splice(session.turnIndex, 1);
+
+    await sock.sendMessage(jid, {
+        text: `⏰ *TIME IS UP!* \n\n💀 @${eliminatedPlayer.split('@')[0]} failed to submit a word and has been *ELIMINATED*!`,
+        mentions: [eliminatedPlayer]
+    });
+
+    session.round = (session.round || 1) + 1;
+    await delay(2000);
+    await promptNextWcgTurn(sock, jid);
+}
+
+// ─── STANDARDIZED JID PARSER ────────────────────────────────────
+
+function parseTarget(msg, args) {
+    if (args) {
+        const cleanDigits = args.replace(/[^0-9]/g, '');
+        if (cleanDigits.length >= 7) {
+            return `${cleanDigits}@s.whatsapp.net`;
+        }
+    }
+
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo ||
+                        rawMsg?.extendedTextMessage?.contextInfo ||
+                        rawMsg?.imageMessage?.contextInfo ||
+                        rawMsg?.videoMessage?.contextInfo ||
+                        rawMsg?.stickerMessage?.contextInfo ||
+                        rawMsg?.audioMessage?.contextInfo ||
+                        rawMsg?.documentMessage?.contextInfo;
+    const mentions = contextInfo?.mentionedJid || [];
+
+    if (mentions.length > 0) {
+        return mentions[0].split(':')[0] + (mentions[0].includes('@lid') ? '@lid' : '@s.whatsapp.net');
+    } else if (contextInfo?.participant) {
+        const part = contextInfo.participant;
+        return part.split(':')[0] + (part.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+    }
+    return '';
 }
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
@@ -1104,221 +1339,6 @@ module.exports = [
         }
     }
 ];
-
-// ─── ANAGRAM TURN HELPERS ────────────────────────────────────────
-
-async function askNextAnagram(sock, jid, sessionKey) {
-    const session = global.anagramSessions[sessionKey];
-    const isSingle = session.type === 'single';
-
-    if (session.timerId) clearTimeout(session.timerId);
-
-    if (!isSingle) {
-        session.players = session.players.filter(pJid => session.lives[pJid] > 0);
-
-        if (session.players.length === 1) {
-            const winner = session.players[0];
-            const msgText = `🏆 *ANAGRAM CHAMPION DECLARED!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winner.split('@')[0]} has won the match as the last survivor!\n🎯 Score: \`${session.scores[winner]}\` points.`;
-            delete global.anagramSessions[sessionKey];
-            return await sock.sendMessage(jid, { text: msgText, mentions: [winner] });
-        }
-
-        if (session.players.length === 0) {
-            delete global.anagramSessions[sessionKey];
-            return await sock.sendMessage(jid, { text: "💀 *GAME OVER:* All players eliminated!" });
-        }
-
-        const limit = session.originalPlayerCount * 5;
-        if (session.currentQuestionIndex > limit) {
-            const sorted = [...session.players].sort((a, b) => session.scores[b] - session.scores[a]);
-            const topScore = session.scores[sorted[0]];
-            const tiedPlayers = session.players.filter(pJid => session.scores[pJid] === topScore);
-
-            if (tiedPlayers.length > 1) {
-                session.isTieBreaker = true;
-                session.players = tiedPlayers;
-                session.turnIndex = 0;
-            } else {
-                const winner = sorted[0];
-                const msgText = `🏆 *ANAGRAM MATCH FINISHED!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 Winner: @${winner.split('@')[0]} — \`${session.scores[winner]}\` points`;
-                delete global.anagramSessions[sessionKey];
-                return await sock.sendMessage(jid, { text: msgText, mentions: [winner] });
-            }
-        }
-    } else {
-        if (session.currentQuestionIndex > 10) {
-            const results = `📊 *ANAGRAM GAME OVER!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Score:* \`${session.score}/10\``;
-            delete global.anagramSessions[sessionKey];
-            return await sock.sendMessage(jid, { text: results, mentions: [session.player] });
-        }
-    }
-
-    let activePlayer = session.player;
-    if (!isSingle) {
-        if (session.turnIndex >= session.players.length) session.turnIndex = 0;
-        activePlayer = session.players[session.turnIndex];
-    }
-
-    const wordData = await generateAnagramWord(session.difficulty, session.pastWords);
-    if (!wordData) return await sock.sendMessage(jid, { text: "❌ Failed to retrieve word data. Game aborted." });
-
-    const correctWord = wordData.word.toUpperCase().trim();
-    const scrambled = scrambleWord(correctWord);
-
-    session.pastWords.push(correctWord);
-    session.currentWord = correctWord;
-    session.scrambledWord = scrambled;
-
-    const roundHeader = isSingle
-        ? `🔠 *Anagram: Round ${session.currentQuestionIndex}/10 (Hearts: ${session.livesSP}❤️)*`
-        : `👥 *Anagram Round ${session.currentQuestionIndex}*`;
-
-    const livesStr = isSingle ? "" : `\n❤️ *Target Hearts Left:* \`${session.lives[activePlayer]}❤️\``;
-
-    const anagramCard =
-        `${roundHeader}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `👤 *Active Turn:* @${activePlayer.split('@')[0]}${livesStr}\n` +
-        `⏳ *Timer:* \`${session.timerMs / 1000} seconds\`\n\n` +
-        `🧩 *Rearrange this scrambled word:* \n` +
-        `👉    *${scrambled}*    \n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `👉 *Reply directly to this message with your guess!*`;
-
-    const prompt = await sock.sendMessage(jid, { text: anagramCard, mentions: isSingle ? [session.player] : [activePlayer] });
-    session.lastQuestionMsgId = prompt.key.id;
-
-    session.timerId = setTimeout(async () => {
-        await handleAnagramTimeout(sock, jid, sessionKey);
-    }, session.timerMs);
-}
-
-async function handleAnagramTimeout(sock, jid, sessionKey) {
-    const session = global.anagramSessions[sessionKey];
-    if (!session) return;
-
-    const isSingle = session.type === 'single';
-    let activePlayer = session.player;
-    if (!isSingle) activePlayer = session.players[session.turnIndex];
-
-    let resultMsg = "";
-    if (isSingle) {
-        session.livesSP--;
-        resultMsg = `⏰ *TIME IS UP!* \n\nThe correct word was *${session.currentWord}*.\n\n❤️ *Lives remaining:* \`${session.livesSP}/3\``;
-        if (session.livesSP <= 0) {
-            await sock.sendMessage(jid, { text: resultMsg });
-            const results = `📊 *ANAGRAM GAME OVER!* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Player:* @${session.player.split('@')[0]}\n🎯 *Score:* \`${session.score}/10\``;
-            delete global.anagramSessions[sessionKey];
-            return await sock.sendMessage(jid, { text: results, mentions: [session.player] });
-        }
-    } else {
-        session.lives[activePlayer]--;
-        const activeNumber = activePlayer.split('@')[0];
-        resultMsg = `⏰ *TIME IS UP!* \n\n@${activeNumber} failed to answer. Correct word was *${session.currentWord}*.`;
-        if (session.lives[activePlayer] <= 0) resultMsg += `\n\n💀 @${activeNumber} has been *ELIMINATED*!`;
-    }
-
-    await sock.sendMessage(jid, { text: resultMsg, mentions: isSingle ? [] : [activePlayer] });
-
-    session.currentQuestionIndex++;
-    if (!isSingle) session.turnIndex = (session.turnIndex + 1) % session.players.length;
-
-    await delay(2000);
-    await askNextAnagram(sock, jid, sessionKey);
-}
-
-// ─── WORD CHAIN TURN HELPERS ─────────────────────────────────────
-
-async function promptNextWcgTurn(sock, jid) {
-    const session = global.wcgSessions[jid];
-    if (session.timerId) clearTimeout(session.timerId);
-
-    if (session.players.length === 1) {
-        const winner = session.players[0];
-        const winCard = `🏆 *WORD CHAIN CHAMPION!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winner.split('@')[0]} has won the match as the ultimate survivor!`;
-        delete global.wcgSessions[jid];
-        return await sock.sendMessage(jid, { text: winCard, mentions: [winner] });
-    }
-
-    if (session.players.length === 0) {
-        delete global.wcgSessions[jid];
-        return await sock.sendMessage(jid, { text: "💀 *GAME OVER:* Everyone eliminated!" });
-    }
-
-    if (session.turnIndex >= session.players.length) session.turnIndex = 0;
-    const activePlayer = session.players[session.turnIndex];
-
-    let minLen = 4;
-    let maxLen = 5;
-    let timeLimit = 20000;
-    let modeLabel = "EASY";
-
-    if (session.difficulty === 'dynamic') {
-        const round = session.round || 1;
-        if (round <= 3) {
-            minLen = 4; maxLen = 5; timeLimit = 20000; modeLabel = "EASY (4-5 letters, 20s limit)";
-        } else if (round <= 6) {
-            minLen = 6; maxLen = 7; timeLimit = 15000; modeLabel = "MEDIUM (6-7 letters, 15s limit)";
-        } else {
-            minLen = 8; maxLen = 10; timeLimit = 15000; modeLabel = "HARD (8-10 letters, 15s limit)";
-        }
-    } else {
-        if (session.difficulty === 'easy') {
-            minLen = 4; maxLen = 5; timeLimit = 20000; modeLabel = "EASY (4-5 letter word)";
-        } else if (session.difficulty === 'medium') {
-            minLen = 6; maxLen = 7; timeLimit = 15000; modeLabel = "MEDIUM (6-7 letter word)";
-        } else if (session.difficulty === 'hard') {
-            minLen = 8; maxLen = 10; timeLimit = 15000; modeLabel = "HARD (8-10 letter word)";
-        }
-    }
-
-    session.minLen = minLen;
-    session.maxLen = maxLen;
-    session.activeLimitMs = timeLimit;
-
-    let instructions = "";
-    if (!session.lastWord) {
-        instructions = `👉 Start the chain! Type any valid dictionary English word of *${minLen}-${maxLen} letters* to begin.`;
-    } else {
-        const targetLetter = session.lastWord.slice(-1).toUpperCase();
-        instructions = `👉 Last word was *"${session.lastWord.toUpperCase()}"*. You must reply with an unused *${minLen}-${maxLen} letter word* starting with *"${targetLetter}"*!`;
-    }
-
-    const listTurns = session.players.map((p, idx) => `${idx === session.turnIndex ? '👉 ' : '• '}@${p.split('@')[0]}`).join('\n');
-
-    const chainCard =
-        `⛓️ *Word Chain: Round ${session.round || 1}* ⛓️\n` +
-        `📂 *Tier Mode:* \`${modeLabel}\`\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `👤 *Active turn:* @${activePlayer.split('@')[0]}\n` +
-        `⏳ *Timer:* \`${timeLimit / 1000} seconds\`\n\n` +
-        `${instructions}\n\n` +
-        `📊 *Lineup:*\n${listTurns}\n\n` +
-        `👉 *Reply to this message with your word guess!*`;
-
-    const prompt = await sock.sendMessage(jid, { text: chainCard, mentions: session.players });
-    session.lastQuestionMsgId = prompt.key.id;
-
-    session.timerId = setTimeout(async () => {
-        await handleWcgTimeout(sock, jid);
-    }, timeLimit);
-}
-
-async function handleWcgTimeout(sock, jid) {
-    const session = global.wcgSessions[jid];
-    if (!session) return;
-
-    const eliminatedPlayer = session.players[session.turnIndex];
-    session.players.splice(session.turnIndex, 1);
-
-    await sock.sendMessage(jid, {
-        text: `⏰ *TIME IS UP!* \n\n💀 @${eliminatedPlayer.split('@')[0]} failed to submit a word and has been *ELIMINATED*!`,
-        mentions: [eliminatedPlayer]
-    });
-
-    session.round = (session.round || 1) + 1;
-    await delay(2000);
-    await promptNextWcgTurn(sock, jid);
-}
 
 // ─── ALIASES ──────────────────────────────────────────────────────
 
