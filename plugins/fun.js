@@ -1,35 +1,13 @@
 // plugins/fun.js
-const settings = require('../settings'); 
-const { Sticker, StickerTypes } = require('wa-sticker-formatter'); 
+const config = require('../config');
+const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const { getPhoneJid, normalizeToJid } = require('../stateManager');
 
-const s1 = "gsk_";
-const s2 = "tPB0xMyZ2oijloaBNcDs";
-const s3 = "WGdyb3FY5iC2p9hwRE";
-const s4 = "SIJXAV3t53LZg9";
-const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
-    try {
-        const response = await fetch(GROQ_BASE_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROQ_API_KEY}`
-            },
-            body: JSON.stringify({ model: model, messages: messages, temperature: 0.3 })
-        });
-        if (!response.ok) throw new Error();
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || "";
-    } catch (e) {
-        console.error("Groq Query Error (fun.js):", e.message);
-        throw e;
-    }
-}
-
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ─── HELPERS ──────────────────────────────────────────────────────
 
 function getRawMessage(message) {
     if (!message) return null;
@@ -41,14 +19,23 @@ function getRawMessage(message) {
     return message;
 }
 
+function normalizeToJid(input) {
+    if (!input) return '';
+    const clean = input.replace(/:[\d]+@/, '@');
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean;
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
+    return raw ? `${raw}@s.whatsapp.net` : '';
+}
+
 function parseTarget(msg, args) {
     const rawMsg = getRawMessage(msg.message);
-    const contextInfo = rawMsg?.contextInfo || 
-                        rawMsg?.extendedTextMessage?.contextInfo || 
-                        rawMsg?.imageMessage?.contextInfo || 
-                        rawMsg?.videoMessage?.contextInfo || 
-                        rawMsg?.stickerMessage?.contextInfo || 
-                        rawMsg?.audioMessage?.contextInfo || 
+    const contextInfo = rawMsg?.contextInfo ||
+                        rawMsg?.extendedTextMessage?.contextInfo ||
+                        rawMsg?.imageMessage?.contextInfo ||
+                        rawMsg?.videoMessage?.contextInfo ||
+                        rawMsg?.stickerMessage?.contextInfo ||
+                        rawMsg?.audioMessage?.contextInfo ||
                         rawMsg?.documentMessage?.contextInfo;
 
     const quotedParticipant = contextInfo?.participant;
@@ -57,7 +44,7 @@ function parseTarget(msg, args) {
     if (quotedParticipant) {
         target = normalizeToJid(quotedParticipant);
     } else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
-        const botJid = settings.botJid || '';
+        const botJid = config.botJid || '';
         const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
         const selectedJid = filteredMention || contextInfo.mentionedJid[0];
         target = normalizeToJid(selectedJid);
@@ -108,6 +95,24 @@ function toSans(text) {
         return char;
     }).join('');
 }
+
+async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
+    const apiKey = config.groqApiKey;
+    if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
+    const response = await fetch(GROQ_BASE_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ model, messages, temperature: 0.3 })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "";
+}
+
+// ─── ASSETS ──────────────────────────────────────────────────────
 
 const assets = {
     slap: [
@@ -231,7 +236,7 @@ async function executeAction(sock, msg, category, verb, args) {
                 const groupMetadata = await sock.groupMetadata(jid);
                 const participants = groupMetadata.participants.map(p => p.id);
                 finalMentions = [...finalMentions, ...participants];
-            } catch (e) {}
+            } catch (e) { /* ignore */ }
         }
     }
 
@@ -240,14 +245,16 @@ async function executeAction(sock, msg, category, verb, args) {
     const mediaUrl = getGiphyDirectUrl(randomUrl);
 
     if (mediaUrl) {
-        await sock.sendMessage(jid, { 
-            video: { url: mediaUrl }, 
-            gifPlayback: true, 
-            caption: captionText, 
-            mentions: finalMentions 
+        await sock.sendMessage(jid, {
+            video: { url: mediaUrl },
+            gifPlayback: true,
+            caption: captionText,
+            mentions: finalMentions
         }, { quoted: msg });
     }
 }
+
+// ─── STATIC DATABASES ───────────────────────────────────────────
 
 const bankaiData = [
     { name: "Ichigo Kurosaki", aliases: ["ichigo", "kurosaki", "tensa zangetsu"], position: "Substitute Shinigami", bankaiName: "Tensa Zangetsu", abilities: "Grants extreme speed and enhanced reflexes. It concentrates his spiritual pressure into a condensed sword state, allowing him to fire devastating, high-velocity black Getsuga Tensho blasts." },
@@ -338,12 +345,6 @@ const askoutMessages = [
     "No games, no curses, just pure feelings. Will you be mine?"
 ];
 
-const sadnessQuotes = [
-    "Ouch... the conceptual void collapsed. My heart is officially shattered. 💔😭",
-    "Rejected... Even absolute zero feels warmer than this cold refusal. 🥀",
-    "My disappointment is immeasurable, and my day is ruined. 💔"
-];
-
 const rizzLines = [
     "Are you a cursed spirit? Because you've been haunting my mind all day.",
     "Is your name Gojo? Because you're the strongest thing that's ever hit my heart."
@@ -354,8 +355,10 @@ const famousSpeeches = [
     { character: "Sosuke Aizen", speech: "No one stands on the top of the world from the beginning. Not you, not me, not even Gods." }
 ];
 
+// ─── EXPORT COMMANDS ────────────────────────────────────────────
+
 module.exports = [
-    // 1. BANKAI COMMAND
+    // 1. BANKAI
     {
         name: 'bankai',
         isPrefixless: false,
@@ -392,7 +395,7 @@ module.exports = [
 
             try {
                 await sock.sendMessage(jid, { text: "Searching Soul Society archives... 🪽" }, { quoted: msg });
-                const systemPrompt = 
+                const systemPrompt =
                     "You are an expert on the Bleach anime universe.\n" +
                     "Analyze the user's query.\n\n" +
                     "1. If NOT from Bleach, reply ONLY: 'NOT_FROM_BLEACH'.\n" +
@@ -415,11 +418,11 @@ module.exports = [
                 } else {
                     await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
                 }
-            } catch (err) {}
+            } catch (err) { /* ignore */ }
         }
     },
 
-    // 2. DOMAIN EXPANSION COMMAND
+    // 2. DOMAIN EXPANSION
     {
         name: 'dom-exp',
         isPrefixless: false,
@@ -456,7 +459,7 @@ module.exports = [
 
             try {
                 await sock.sendMessage(jid, { text: "Expanding Domain... 🤞🌀" }, { quoted: msg });
-                const systemPrompt = 
+                const systemPrompt =
                     "You are an expert on the Jujutsu Kaisen (JJK) universe.\n" +
                     "Analyze the user's query.\n\n" +
                     "1. If NOT from JJK, reply ONLY: 'NOT_FROM_JJK'.\n" +
@@ -479,11 +482,11 @@ module.exports = [
                 } else {
                     await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
                 }
-            } catch (err) {}
+            } catch (err) { /* ignore */ }
         }
     },
 
-    // 3. WOULD YOU RATHER POLL
+    // 3. WOULD YOU RATHER
     {
         name: 'wyr',
         isPrefixless: false,
@@ -491,8 +494,8 @@ module.exports = [
             const jid = msg.key.remoteJid;
             try {
                 const randomWyr = wyrQuestions[Math.floor(Math.random() * wyrQuestions.length)];
-                await sock.sendMessage(jid, { 
-                    poll: { name: "Would you rather... 🤔", values: [randomWyr.o1, randomWyr.o2], selectableCount: 1 } 
+                await sock.sendMessage(jid, {
+                    poll: { name: "Would you rather... 🤔", values: [randomWyr.o1, randomWyr.o2], selectableCount: 1 }
                 }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(jid, { text: "❌ Failed to create Would You Rather poll." }, { quoted: msg });
@@ -500,7 +503,7 @@ module.exports = [
         }
     },
 
-    // 4. JOKE COMMAND
+    // 4. JOKE
     {
         name: 'joke',
         isPrefixless: false,
@@ -510,7 +513,7 @@ module.exports = [
         }
     },
 
-    // 5. INSULT COMMAND
+    // 5. INSULT
     {
         name: 'insult',
         isPrefixless: false,
@@ -522,7 +525,7 @@ module.exports = [
         }
     },
 
-    // 6. ROAST COMMAND
+    // 6. ROAST
     {
         name: 'roast',
         isPrefixless: false,
@@ -534,7 +537,7 @@ module.exports = [
         }
     },
 
-    // 7. COMPATIBILITY CALCULATOR
+    // 7. SHIP
     {
         name: 'ship',
         isPrefixless: false,
@@ -551,15 +554,15 @@ module.exports = [
                 if (cleanParticipants.length < 2) return;
 
                 const rawMsg = getRawMessage(msg.message);
-                const contextInfo = rawMsg?.contextInfo || 
-                                    rawMsg?.extendedTextMessage?.contextInfo || 
-                                    rawMsg?.imageMessage?.contextInfo || 
-                                    rawMsg?.videoMessage?.contextInfo || 
-                                    rawMsg?.stickerMessage?.contextInfo || 
-                                    rawMsg?.audioMessage?.contextInfo || 
+                const contextInfo = rawMsg?.contextInfo ||
+                                    rawMsg?.extendedTextMessage?.contextInfo ||
+                                    rawMsg?.imageMessage?.contextInfo ||
+                                    rawMsg?.videoMessage?.contextInfo ||
+                                    rawMsg?.stickerMessage?.contextInfo ||
+                                    rawMsg?.audioMessage?.contextInfo ||
                                     rawMsg?.documentMessage?.contextInfo;
                 const mentions = contextInfo?.mentionedJid || [];
-                
+
                 let target1 = mentions[0] || cleanParticipants[Math.floor(Math.random() * cleanParticipants.length)];
                 let target2 = mentions[1] || cleanParticipants.filter(p => p !== target1)[Math.floor(Math.random() * (cleanParticipants.length - 1))];
 
@@ -567,7 +570,7 @@ module.exports = [
                 const t2Num = target2.split('@')[0].split(':')[0];
 
                 const percentage = Math.floor(Math.random() * 101);
-                
+
                 const barLength = 10;
                 const filledCount = Math.round((percentage / 100) * barLength);
                 const emptyCount = barLength - filledCount;
@@ -577,11 +580,11 @@ module.exports = [
 
                 const shipCaption = `💞 *SHIP* 💞\n👩‍❤️‍👨 @${t1Num} x @${t2Num}\n📊 [${bar}] *${percentage}%*\n📢 *Verdict:* ${verdict}`;
                 await sock.sendMessage(jid, { text: shipCaption, mentions: [target1, target2] }, { quoted: msg });
-            } catch (err) {}
+            } catch (err) { /* ignore */ }
         }
     },
 
-    // 8. WED PROPOSAL COMMAND
+    // 8. WED (Marriage Proposal with Buttons)
     {
         name: 'wed',
         isPrefixless: false,
@@ -603,18 +606,18 @@ module.exports = [
                 const buttonMessage = {
                     text: text,
                     buttons: [
-                        { buttonId: `${settings.prefix}wed_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💍 I Do!' }, type: 1 },
-                        { buttonId: `${settings.prefix}wed_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: "💔 I Don't" }, type: 1 }
+                        { buttonId: `${config.prefix}wed_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💍 I Do!' }, type: 1 },
+                        { buttonId: `${config.prefix}wed_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: "💔 I Don't" }, type: 1 }
                     ],
                     headerType: 1,
                     mentions: [targetJid, senderJid]
                 };
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (err) {}
+            } catch (err) { /* ignore */ }
         }
     },
 
-    // 9. WED PROPOSAL ANSWER HANDLER
+    // 9. WED_ANS (Marriage Answer Handler)
     {
         name: 'wed_ans',
         isPrefixless: false,
@@ -631,7 +634,7 @@ module.exports = [
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
             const clickerNum = clickerJid.split('@')[0];
 
-            if (clickerNum !== targetNum) return; 
+            if (clickerNum !== targetNum) return;
 
             const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
             const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
@@ -644,7 +647,7 @@ module.exports = [
         }
     },
 
-    // 10. PROPOSE COMMAND
+    // 10. PROPOSE
     {
         name: 'propose',
         isPrefixless: false,
@@ -668,18 +671,18 @@ module.exports = [
                 const buttonMessage = {
                     text: text,
                     buttons: [
-                        { buttonId: `${settings.prefix}prop_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💍 Yes!' }, type: 1 },
-                        { buttonId: `${settings.prefix}prop_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: '💔 No' }, type: 1 }
+                        { buttonId: `${config.prefix}prop_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💍 Yes!' }, type: 1 },
+                        { buttonId: `${config.prefix}prop_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: '💔 No' }, type: 1 }
                     ],
                     headerType: 1,
                     mentions: [targetJid]
                 };
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (err) {}
+            } catch (err) { /* ignore */ }
         }
     },
 
-    // 11. PROPOSE ANSWER HANDLER
+    // 11. PROP_ANS
     {
         name: 'prop_ans',
         isPrefixless: false,
@@ -696,7 +699,7 @@ module.exports = [
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
             const clickerNum = clickerJid.split('@')[0];
 
-            if (clickerNum !== targetNum) return; 
+            if (clickerNum !== targetNum) return;
 
             const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
             const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
@@ -709,7 +712,7 @@ module.exports = [
         }
     },
 
-    // 12. ASKOUT COMMAND
+    // 12. ASKOUT
     {
         name: 'askout',
         isPrefixless: false,
@@ -733,18 +736,18 @@ module.exports = [
                 const buttonMessage = {
                     text: text,
                     buttons: [
-                        { buttonId: `${settings.prefix}ask_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💖 Yes!' }, type: 1 },
-                        { buttonId: `${settings.prefix}ask_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: '💔 No' }, type: 1 }
+                        { buttonId: `${config.prefix}ask_ans yes ${targetNum} ${senderNum}`, buttonText: { displayText: '💖 Yes!' }, type: 1 },
+                        { buttonId: `${config.prefix}ask_ans no ${targetNum} ${senderNum}`, buttonText: { displayText: '💔 No' }, type: 1 }
                     ],
                     headerType: 1,
                     mentions: [targetJid]
                 };
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (err) {}
+            } catch (err) { /* ignore */ }
         }
     },
 
-    // 13. ASKOUT ANSWER HANDLER
+    // 13. ASK_ANS
     {
         name: 'ask_ans',
         isPrefixless: false,
@@ -761,7 +764,7 @@ module.exports = [
             const clickerJid = rawClicker.split(':')[0] + (rawClicker.includes('@lid') ? '@lid' : '@s.whatsapp.net');
             const clickerNum = clickerJid.split('@')[0];
 
-            if (clickerNum !== targetNum) return; 
+            if (clickerNum !== targetNum) return;
 
             const targetJid = targetNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
             const senderJid = senderNum + (clickerJid.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
@@ -785,16 +788,16 @@ module.exports = [
             const buttonMessage = {
                 text: text,
                 buttons: [
-                    { buttonId: `${settings.prefix}purple_ans 100`, buttonText: { displayText: '100%' }, type: 1 },
-                    { buttonId: `${settings.prefix}purple_ans 200`, buttonText: { displayText: '200%' }, type: 1 }
+                    { buttonId: `${config.prefix}purple_ans 100`, buttonText: { displayText: '100%' }, type: 1 },
+                    { buttonId: `${config.prefix}purple_ans 200`, buttonText: { displayText: '200%' }, type: 1 }
                 ],
                 headerType: 1
             };
-            try { await sock.sendMessage(jid, buttonMessage, { quoted: msg }); } catch (err) {}
+            try { await sock.sendMessage(jid, buttonMessage, { quoted: msg }); } catch (err) { /* ignore */ }
         }
     },
 
-    // 15. HOLLOW PURPLE ANSWER HANDLER
+    // 15. PURPLE_ANS
     {
         name: 'purple_ans',
         isPrefixless: false,
@@ -836,7 +839,7 @@ module.exports = [
         }
     },
 
-    // 16. DETAILED TERMINAL HACK COMMANDS
+    // 16. HACK
     {
         name: 'hack',
         isPrefixless: false,
@@ -882,7 +885,7 @@ module.exports = [
         }
     },
 
-    // 17. ARREST CONTEXT INITIALIZER
+    // 17. ARREST
     {
         name: 'arrest',
         isPrefixless: false,
@@ -900,7 +903,7 @@ module.exports = [
 
                 const targetNum = targetJid.split('@')[0];
 
-                const text = 
+                const text =
                     `🚨 *ARREST WARRANT* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `👤 *Target:* @${targetNum}\n` +
                     `⚖️ *Officer:* @${senderNum}\n\n` +
@@ -908,16 +911,16 @@ module.exports = [
 
                 const buttonMessage = {
                     text: text,
-                    buttons: [{ buttonId: `${settings.prefix}jail_ans ${targetNum}`, buttonText: { displayText: 'Send to Jail ⛓️' }, type: 1 }],
+                    buttons: [{ buttonId: `${config.prefix}jail_ans ${targetNum}`, buttonText: { displayText: 'Send to Jail ⛓️' }, type: 1 }],
                     headerType: 1,
                     mentions: [targetJid, senderJid]
                 };
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (err) {}
+            } catch (err) { /* ignore */ }
         }
     },
 
-    // 18. JAIL PROFILE OVERLAY CONTEXT GENERATOR
+    // 18. JAIL_ANS
     {
         name: 'jail_ans',
         isPrefixless: false,
@@ -961,7 +964,7 @@ module.exports = [
                     .png()
                     .toBuffer();
 
-                try { await sock.sendMessage(jid, { delete: craftingMsg.key }); } catch (e) {}
+                try { await sock.sendMessage(jid, { delete: craftingMsg.key }); } catch (e) { /* ignore */ }
 
                 await sock.sendMessage(jid, { image: processedBuffer, caption: `⛓️ *Target @${targetNum} locked up inside jail!*`, mentions: [targetJid] }, { quoted: msg });
             } catch (err) {
@@ -970,7 +973,7 @@ module.exports = [
         }
     },
 
-    // 19. RECONSTRUCTED INTERACTION COMMANDS
+    // 19. INTERACTION COMMANDS (Slap, Punch, etc.)
     { name: 'slap', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "slap", "slapped", args); } },
     { name: 'punch', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "punch", "punched", args); } },
     { name: 'hifive', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "hifive", "highfived", args); } },
@@ -982,7 +985,7 @@ module.exports = [
     { name: 'bite', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "bite", "bit", args); } },
     { name: 'poke', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "poke", "poked", args); } },
 
-    // 20. SOLO COMMAND: DANCE
+    // 20. DANCE
     {
         name: 'dance',
         isPrefixless: false,
@@ -996,17 +999,17 @@ module.exports = [
             const mediaUrl = getGiphyDirectUrl(randomUrl);
 
             if (mediaUrl) {
-                await sock.sendMessage(jid, { 
-                    video: { url: mediaUrl }, 
-                    gifPlayback: true, 
-                    caption: `✨ @${senderNumber} is dancing`, 
-                    mentions: [senderJid] 
+                await sock.sendMessage(jid, {
+                    video: { url: mediaUrl },
+                    gifPlayback: true,
+                    caption: `✨ @${senderNumber} is dancing`,
+                    mentions: [senderJid]
                 }, { quoted: msg });
             }
         }
     },
 
-    // 21. SOLO COMMAND: AURA
+    // 21. AURA
     {
         name: 'aura',
         isPrefixless: false,
@@ -1020,17 +1023,17 @@ module.exports = [
             const mediaUrl = getGiphyDirectUrl(randomUrl);
 
             if (mediaUrl) {
-                await sock.sendMessage(jid, { 
-                    video: { url: mediaUrl }, 
-                    gifPlayback: true, 
-                    caption: `✨ @${senderNumber} is aura farming`, 
-                    mentions: [senderJid] 
+                await sock.sendMessage(jid, {
+                    video: { url: mediaUrl },
+                    gifPlayback: true,
+                    caption: `✨ @${senderNumber} is aura farming`,
+                    mentions: [senderJid]
                 }, { quoted: msg });
             }
         }
     },
 
-    // 22. REACTION DUAL-ROUTE COMMAND: LOL
+    // 22. LOL
     {
         name: 'lol',
         isPrefixless: false,
@@ -1057,31 +1060,31 @@ module.exports = [
             const mediaUrl = getGiphyDirectUrl(randomUrl);
 
             if (mediaUrl) {
-                await sock.sendMessage(jid, { 
-                    video: { url: mediaUrl }, 
-                    gifPlayback: true, 
-                    caption: captionText, 
-                    mentions: finalMentions 
+                await sock.sendMessage(jid, {
+                    video: { url: mediaUrl },
+                    gifPlayback: true,
+                    caption: captionText,
+                    mentions: finalMentions
                 }, { quoted: msg });
             }
         }
     },
 
-    // 23. USER DETAIL DIAGNOSTICS (.info)
+    // 23. INFO
     {
         name: 'info',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
+            const contextInfo = rawMsg?.contextInfo ||
+                                rawMsg?.extendedTextMessage?.contextInfo ||
+                                rawMsg?.imageMessage?.contextInfo ||
+                                rawMsg?.videoMessage?.contextInfo ||
+                                rawMsg?.stickerMessage?.contextInfo ||
+                                rawMsg?.audioMessage?.contextInfo ||
                                 rawMsg?.documentMessage?.contextInfo;
-            
+
             let targetJid = '';
             if (args) {
                 targetJid = parseTarget(msg, args);
@@ -1108,7 +1111,7 @@ module.exports = [
 
             try {
                 username = sock.getName ? sock.getName(rawTargetJid) : (msg.pushName || 'User');
-            } catch (e) {}
+            } catch (e) { /* ignore */ }
 
             if (isLid) {
                 try {
@@ -1117,7 +1120,7 @@ module.exports = [
                         phoneJid = resolvedPhoneJid;
                         phoneNumber = `+${resolvedPhoneJid.split('@')[0]}`;
                     }
-                } catch (e) {}
+                } catch (e) { /* ignore */ }
             } else {
                 phoneJid = rawTargetJid;
                 phoneNumber = `+${targetID}`;
@@ -1131,17 +1134,17 @@ module.exports = [
             }
 
             let bio = "No bio set.";
-            try { 
-                bio = (await sock.fetchStatus(rawTargetJid))?.status || bio; 
+            try {
+                bio = (await sock.fetchStatus(rawTargetJid))?.status || bio;
             } catch (e) {
                 if (phoneJid && phoneJid !== rawTargetJid) {
-                    try { bio = (await sock.fetchStatus(phoneJid))?.status || bio; } catch (err) {}
+                    try { bio = (await sock.fetchStatus(phoneJid))?.status || bio; } catch (err) { /* ignore */ }
                 }
             }
 
             const device = getDeviceTypeFromId(contextInfo?.stanzaId || msg.key.id);
 
-            const infoCaption = 
+            const infoCaption =
                 `📋 *LIMITLESS USER INTEL* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `👤 *Username:* \`${username}\`\n` +
                 `🆔 *User ID / LID:* \`${targetID}${isLid ? ' (@lid)' : ' (@s.whatsapp.net)'}\`\n` +
@@ -1153,19 +1156,19 @@ module.exports = [
         }
     },
 
-    // 24. LIE DETECTOR
+    // 24. LIEDETECTOR
     {
         name: 'liedetector',
         isPrefixless: false,
         execute: async (sock, msg) => {
             const jid = msg.key.remoteJid;
             const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || 
-                                rawMsg?.extendedTextMessage?.contextInfo || 
-                                rawMsg?.imageMessage?.contextInfo || 
-                                rawMsg?.videoMessage?.contextInfo || 
-                                rawMsg?.stickerMessage?.contextInfo || 
-                                rawMsg?.audioMessage?.contextInfo || 
+            const contextInfo = rawMsg?.contextInfo ||
+                                rawMsg?.extendedTextMessage?.contextInfo ||
+                                rawMsg?.imageMessage?.contextInfo ||
+                                rawMsg?.videoMessage?.contextInfo ||
+                                rawMsg?.stickerMessage?.contextInfo ||
+                                rawMsg?.audioMessage?.contextInfo ||
                                 rawMsg?.documentMessage?.contextInfo;
 
             let targetJid = contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '';
@@ -1176,9 +1179,9 @@ module.exports = [
             await delay(1500);
 
             const isLying = Math.random() < 0.5;
-            const percentage = Math.floor(Math.random() * 41) + 60; 
+            const percentage = Math.floor(Math.random() * 41) + 60;
 
-            const verdict = isLying 
+            const verdict = isLying
                 ? `🔴 *Lying with ${percentage}% certainty!*`
                 : `🟢 *Saying the truth with ${percentage}% certainty!*`;
 
@@ -1186,7 +1189,7 @@ module.exports = [
         }
     },
 
-    // 25. RIZZ LINES
+    // 25. RIZZ
     {
         name: 'rizz',
         isPrefixless: false,
@@ -1196,7 +1199,7 @@ module.exports = [
         }
     },
 
-    // 26. ANIME MONOLOGUES
+    // 26. SPEECH
     {
         name: 'speech',
         isPrefixless: false,
@@ -1211,11 +1214,11 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `Searching speech archives...` }, { quoted: msg });
                 const responseText = await queryGroq([{ role: "system", content: "You are an anime librarian. Find or write the most iconic speech of the requested character. Format nicely. Do not include pleasantries." }, { role: "user", content: args }]);
                 await sock.sendMessage(jid, { text: responseText.trim() }, { quoted: msg });
-            } catch (err) {}
+            } catch (err) { /* ignore */ }
         }
     },
 
-    // 27. EMOJIMIX GENERATOR
+    // 27. EMOJIMIX
     {
         name: 'emojimix',
         isPrefixless: false,
@@ -1232,14 +1235,14 @@ module.exports = [
             try {
                 const mixApiUrl = `https://api.sandipbbaruwal.onrender.com/emojimix?emoji1=${encodeURIComponent(emoji1)}&emoji2=${encodeURIComponent(emoji2)}`;
                 const mixRes = await fetch(mixApiUrl);
-                
+
                 if (mixRes.ok) {
                     const arrayBuffer = await mixRes.arrayBuffer();
                     const imageBuffer = Buffer.from(arrayBuffer);
 
                     const sticker = new Sticker(imageBuffer, {
-                        pack: settings.packName,
-                        author: settings.author,
+                        pack: config.packName,
+                        author: config.author,
                         type: StickerTypes.CROPPED,
                         quality: 85
                     });
@@ -1258,8 +1261,8 @@ module.exports = [
                     const imageBuffer = Buffer.from(arrayBuffer);
 
                     const sticker = new Sticker(imageBuffer, {
-                        pack: settings.packName,
-                        author: settings.author,
+                        pack: config.packName,
+                        author: config.author,
                         type: StickerTypes.CROPPED,
                         quality: 85
                     });
@@ -1271,6 +1274,8 @@ module.exports = [
         }
     }
 ];
+
+// ─── ALIASES ──────────────────────────────────────────────────────
 
 const aliases = [];
 module.exports.forEach(cmd => {
