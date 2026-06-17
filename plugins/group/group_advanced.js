@@ -1,6 +1,6 @@
 // plugins/group_advanced.js
 const config = require('../../config');
-const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
+const { saveState, normalizeToJid, getPhoneJid } = require('../../stateManager');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
