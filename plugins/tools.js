@@ -1,6 +1,6 @@
 // plugins/tools.js
 const config = require('../config');
-const { normalizeToJid } = require('../stateManager');
+const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
 const { setVar, loadVars, syncVarsToConfig } = require('../vars');
 const axios = require('axios');
 const FormData = require('form-data');
@@ -22,15 +22,6 @@ function getRawMessage(message) {
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     if (message.groupStatusMessageV2?.message) return getRawMessage(message.groupStatusMessageV2.message);
     return message;
-}
-
-function normalizeToJid(input) {
-    if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@');
-    if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@lid')) return clean;
-    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
-    return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
 function parseTarget(msg, args) {
