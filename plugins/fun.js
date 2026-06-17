@@ -1,7 +1,8 @@
 // plugins/fun.js
 const config = require('../config');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
-const { normalizeToJid } = require('../stateManager');
+const { getPhoneJid, normalizeToJid } = require('../stateManager');
+
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -16,15 +17,6 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
-}
-
-function normalizeToJid(input) {
-    if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@');
-    if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@lid')) return clean;
-    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
-    return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
 function parseTarget(msg, args) {
