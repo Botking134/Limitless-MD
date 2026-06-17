@@ -1,8 +1,7 @@
 // plugins/fun.js
 const config = require('../config');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
-const { getPhoneJid, normalizeToJid } = require('../stateManager');
-
+const { normalizeToJid } = require('../stateManager');
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
