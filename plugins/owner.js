@@ -1,9 +1,9 @@
 // plugins/owner.js
 const config = require('../config');
 const { DEV_JIDS, DEV_LIDS } = require('../devs');
-const { 
-    saveState, 
-    addSecondaryOwner, 
+const {
+    saveState,
+    addSecondaryOwner,
     removeSecondaryOwner,
     addSudo,
     removeSudo,
@@ -167,18 +167,22 @@ module.exports = [
 
             let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
             const filesToTest = [
+                // Core plugins (root)
                 'plugins/owner.js',
                 'plugins/ai.js',
                 'plugins/fun.js',
                 'plugins/menu.js',
                 'plugins/games.js',
                 'plugins/games2.js',
+                // Group plugins (in subfolder)
                 'plugins/group/group_basic.js',
                 'plugins/group/group_security.js',
                 'plugins/group/group_advanced.js',
+                // Other plugins
                 'plugins/tools.js',
                 'plugins/utilities.js',
                 'plugins/converter.js',
+                // Downloaders
                 'plugins/downloaders/aud.js',
                 'plugins/downloaders/dl.js',
                 'plugins/downloaders/vid.js'
@@ -186,7 +190,7 @@ module.exports = [
 
             for (const file of filesToTest) {
                 const filePath = path.join(__dirname, '..', file);
-                
+
                 if (!fs.existsSync(filePath)) {
                     report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n\n`;
                     continue;
@@ -695,9 +699,8 @@ module.exports = [
                           `_Value has been persisted to vars.json and applied instantly._`
                 }, { quoted: msg });
             } else {
-                // Environment/static vars: update config directly and save to .env? We'll just update config.
+                // Environment/static vars: update config directly
                 config[mappedKey] = finalValue;
-                // Try to also update .env? That's risky. We'll just log.
                 console.log(`[SETVAR] Updated ${mappedKey} to ${finalValue} (in-memory only, restart will revert unless .env is updated manually)`);
                 await sock.sendMessage(jid, {
                     text: `✅ *${mappedKey} updated to:* \`${finalValue}\`\n\n` +
@@ -1137,8 +1140,6 @@ module.exports = [
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
-// Add aliases for commands that have alternate names.
-
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'addowner') {
