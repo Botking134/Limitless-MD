@@ -1,160 +1,282 @@
 // stateManager.js
 const fs = require('fs');
 const path = require('path');
-const settings = require('./settings');
+const config = require('./config');
+const { DEV_JIDS, DEV_LIDS } = require('./devs');
 
-const statePath = path.join(__dirname, 'state.json');
+const STATE_PATH = path.join(__dirname, 'storage', 'state.json');
 
-// Standardized Core Developer JIDs as full JIDs
-const BASE_DEVS = [
-    "27713655070@s.whatsapp.net", 
-    "601129363700@s.whatsapp.net", 
-    "2347059092107@s.whatsapp.net", 
-    "2347040401291@s.whatsapp.net"
-];
-
+// ─── GLOBAL LID CACHE ────────────────────────────────────────────
+// Used to store resolved LID → Phone JID mappings to reduce network calls.
 global.lidCache = global.lidCache || {};
 
-// Upgraded normalizeToJid using a safe RegExp to strip device colons without losing the domain suffix
+// ─── JID NORMALIZER ─────────────────────────────────────────────
+/**
+ * Cleans and normalizes any JID or LID string.
+ * - Removes device colons (e.g., "123:1@lid" → "123@lid")
+ * - Returns input as-is if it's a valid JID or LID.
+ * - Strips non-numeric characters and appends @s.whatsapp.net if it looks like a number.
+ */
 function normalizeToJid(input) {
     if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@'); // Safely converts '123:1@lid' into '123@lid'
+    const clean = input.replace(/:[\d]+@/, '@'); // '123:1@lid' → '123@lid'
     if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@lid')) return clean; 
+    if (clean.endsWith('@lid')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
-// Relocated getPhoneJid helper here to break the circular dependency loop completely
+// ─── LID → PHONE JID RESOLVER ──────────────────────────────────
+/**
+ * Resolves a LID (@lid) to a phone JID (@s.whatsapp.net).
+ * Uses group metadata cache first, then falls back to sock.findUserId().
+ */
 async function getPhoneJid(sock, jid, groupJid = null) {
     if (!jid) return '';
-    let clean = jid.split(':')[0].split('@')[0];
-    
-    if (jid.endsWith('@lid')) {
-        if (global.lidCache[jid]) return global.lidCache[jid];
-        
-        // Quick Scan: Try to resolve instantly using the group participants cache
-        if (groupJid) {
-            try {
-                const metadata = await sock.groupMetadata(groupJid);
-                const participant = metadata?.participants?.find(
-                    p => p.lid === jid || p.id.split(':')[0] === jid.split(':')[0]
-                );
-                if (participant && participant.id.endsWith('@s.whatsapp.net')) {
-                    const resolvedJid = participant.id.split(':')[0] + '@s.whatsapp.net';
-                    global.lidCache[jid] = resolvedJid;
-                    return resolvedJid;
-                }
-            } catch (e) {}
-        }
+    const cleanJid = normalizeToJid(jid);
+    if (!cleanJid) return '';
 
-        // Fallback: Query the network
+    // If already a phone JID, return it.
+    if (cleanJid.endsWith('@s.whatsapp.net')) return cleanJid;
+
+    // Check cache
+    if (global.lidCache[cleanJid]) return global.lidCache[cleanJid];
+
+    // Try group metadata first (fast)
+    if (groupJid) {
         try {
-            const resolved = await sock.findUserId(jid);
-            if (resolved && resolved.phoneNumber) {
-                const phoneJid = `${resolved.phoneNumber}@s.whatsapp.net`;
-                global.lidCache[jid] = phoneJid;
-                return phoneJid;
+            const metadata = await sock.groupMetadata(groupJid);
+            const participant = metadata?.participants?.find(p => {
+                const pLid = p.lid ? normalizeToJid(p.lid) : '';
+                return pLid === cleanJid || normalizeToJid(p.id) === cleanJid;
+            });
+            if (participant) {
+                const resolved = normalizeToJid(participant.id);
+                if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+                    global.lidCache[cleanJid] = resolved;
+                    return resolved;
+                }
             }
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
     }
-    return `${clean}@s.whatsapp.net`;
+
+    // Fallback: network query
+    try {
+        const resolved = await sock.findUserId(cleanJid);
+        if (resolved && resolved.phoneNumber) {
+            const phoneJid = `${resolved.phoneNumber}@s.whatsapp.net`;
+            global.lidCache[cleanJid] = phoneJid;
+            return phoneJid;
+        }
+    } catch (e) { /* ignore */ }
+
+    // If all fails, return the LID itself (maybe it's already a phone JID that wasn't caught).
+    return cleanJid;
 }
 
-function loadState() {
-    settings.devs = [...BASE_DEVS];
-    settings.devLids = settings.devLids || [];
-    settings.ownerLids = settings.ownerLids || [];
-    settings.sudoLids = settings.sudoLids || [];
+// ─── LOAD STATE ──────────────────────────────────────────────────
 
-    if (settings.ownerNumber) {
-        settings.ownerJid = normalizeToJid(settings.ownerNumber);
+function loadState() {
+    // Ensure storage directory exists
+    const storageDir = path.dirname(STATE_PATH);
+    if (!fs.existsSync(storageDir)) {
+        fs.mkdirSync(storageDir, { recursive: true });
     }
-    
+
+    // Ensure Devs are present in config (though we use DEV_JIDS directly in handlers,
+    // keeping them here for legacy/fallback).
+    if (!Array.isArray(config.devs)) {
+        config.devs = [...DEV_JIDS];
+    } else {
+        DEV_JIDS.forEach(dev => {
+            if (!config.devs.includes(dev)) config.devs.push(dev);
+        });
+    }
+
+    // Initialize arrays
+    config.devLids = config.devLids || [];
+    config.ownerLids = config.ownerLids || [];
+    config.sudoLids = config.sudoLids || [];
+    config.secondaryOwners = config.secondaryOwners || [];
+    config.sudos = config.sudos || [];
+    config.banned = config.banned || [];
+    config.warns = config.warns || {};
+    config.conversationLogs = config.conversationLogs || {};
+    config.gclogActive = config.gclogActive || {};
+    config.aza = config.aza || { set: false };
+
+    // Resolve owner JID from number if needed
+    if (config.ownerNumber && !config.ownerJid) {
+        config.ownerJid = normalizeToJid(config.ownerNumber);
+    }
+
     try {
-        if (fs.existsSync(statePath)) {
-            const data = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
-            
-            for (const key in data) {
+        if (fs.existsSync(STATE_PATH)) {
+            const data = JSON.parse(fs.readFileSync(STATE_PATH, 'utf-8'));
+
+            // Merge saved data into config
+            const stateKeys = [
+                'secondaryOwners', 'sudos', 'banned',
+                'ownerLid', 'ownerLids', 'devLids', 'sudoLids',
+                'warns', 'conversationLogs', 'aza', 'gclogActive'
+            ];
+
+            for (const key of stateKeys) {
                 if (data[key] !== undefined) {
-                    if (Array.isArray(data[key]) && Array.isArray(settings[key])) {
-                        const merged = [...new Set([...settings[key], ...data[key]])];
-                        settings[key] = merged;
+                    if (Array.isArray(data[key]) && Array.isArray(config[key])) {
+                        const merged = [...new Set([...config[key], ...data[key]])];
+                        config[key] = merged;
+                    } else if (typeof data[key] === 'object' && data[key] !== null) {
+                        config[key] = { ...config[key], ...data[key] };
                     } else {
-                        if (settings[key] !== undefined && settings[key] !== "" && (data[key] === undefined || data[key] === "")) {
-                            continue;
-                        }
-                        settings[key] = data[key];
+                        config[key] = data[key];
                     }
                 }
             }
-        }
 
-        // Standardize list arrays to use full JIDs on boot
-        if (Array.isArray(settings.owners)) {
-            settings.owners = settings.owners.map(normalizeToJid).filter(Boolean);
-        } else {
-            settings.owners = [];
-        }
-
-        if (Array.isArray(settings.sudo)) {
-            settings.sudo = settings.sudo.map(normalizeToJid).filter(Boolean);
-        } else {
-            settings.sudo = [];
-        }
-
-        if (Array.isArray(settings.banned)) {
-            settings.banned = settings.banned.map(normalizeToJid).filter(Boolean);
-        } else {
-            settings.banned = [];
-        }
-
-        if (Array.isArray(settings.devs)) {
-            settings.devs = settings.devs.map(normalizeToJid).filter(Boolean);
-        }
-
-        // Ensure baseline developers are always included
-        BASE_DEVS.forEach(num => {
-            if (!settings.devs.includes(num)) {
-                settings.devs.push(num);
+            // Ensure devLids never get wiped
+            if (data.devLids && Array.isArray(data.devLids)) {
+                data.devLids.forEach(lid => {
+                    if (!config.devLids.includes(lid)) config.devLids.push(lid);
+                });
             }
-        });
 
-        console.log("📂 [STATE] Standardized and loaded configuration state using full JIDs and LIDs.");
+            console.log('✅ [STATE] Loaded permissions from state.json');
+        } else {
+            // Create default state file
+            fs.writeFileSync(STATE_PATH, JSON.stringify({
+                secondaryOwners: [],
+                sudos: [],
+                banned: [],
+                ownerLid: "",
+                ownerLids: [],
+                devLids: [],
+                sudoLids: [],
+                warns: {},
+                conversationLogs: {},
+                aza: { set: false },
+                gclogActive: {}
+            }, null, 2));
+            console.log('📝 [STATE] Created default state.json');
+        }
     } catch (err) {
-        console.error("❌ [STATE] Failed to load state:", err.message);
+        console.error('❌ [STATE] Failed to load state:', err.message);
     }
 }
+
+// ─── SAVE STATE ──────────────────────────────────────────────────
 
 function saveState() {
     try {
+        const storageDir = path.dirname(STATE_PATH);
+        if (!fs.existsSync(storageDir)) {
+            fs.mkdirSync(storageDir, { recursive: true });
+        }
+
         const stateData = {
-            sessionId: settings.sessionId || "",
-            isPublic: settings.isPublic,
-            ownerJid: normalizeToJid(settings.ownerJid || settings.ownerNumber),
-            ownerLid: settings.ownerLid || "",
-            owners: (settings.owners || []).map(normalizeToJid).filter(Boolean),
-            ownerLids: settings.ownerLids || [],
-            sudo: (settings.sudo || []).map(normalizeToJid).filter(Boolean),
-            sudoLids: settings.sudoLids || [],
-            banned: (settings.banned || []).map(normalizeToJid).filter(Boolean),
-            devs: (settings.devs || []).map(normalizeToJid).filter(Boolean),
-            devLids: settings.devLids || [],
-            autoReact: settings.autoReact,
-            antilink: settings.antilink,
-            antitag: settings.antitag,
-            antibot: settings.antibot,
-            warns: settings.warns,
-            stickerCommands: settings.stickerCommands,
-            afk: settings.afk || {},
-            lizzyChats: settings.lizzyChats || [],
-            chatbotChats: settings.chatbotChats || [],
-            gojoSleepChats: settings.gojoSleepChats || []
+            secondaryOwners: (config.secondaryOwners || []).map(normalizeToJid).filter(Boolean),
+            sudos: (config.sudos || []).map(normalizeToJid).filter(Boolean),
+            banned: (config.banned || []).map(normalizeToJid).filter(Boolean),
+            ownerLid: config.ownerLid || "",
+            ownerLids: config.ownerLids || [],
+            devLids: config.devLids || [],
+            sudoLids: config.sudoLids || [],
+            warns: config.warns || {},
+            conversationLogs: config.conversationLogs || {},
+            aza: config.aza || { set: false },
+            gclogActive: config.gclogActive || {}
         };
-        fs.writeFileSync(statePath, JSON.stringify(stateData, null, 2), 'utf-8');
+
+        fs.writeFileSync(STATE_PATH, JSON.stringify(stateData, null, 2), 'utf-8');
+        return true;
     } catch (err) {
-        console.error("❌ [STATE] Failed to save state:", err.message);
+        console.error('❌ [STATE] Failed to save state:', err.message);
+        return false;
     }
 }
 
-module.exports = { loadState, saveState, normalizeToJid, getPhoneJid };
+// ─── PERMISSION HELPERS (Atomic Updates) ──────────────────────
+
+function addSecondaryOwner(jid) {
+    const normalized = normalizeToJid(jid);
+    if (!normalized) return false;
+    if (!config.secondaryOwners.includes(normalized)) {
+        config.secondaryOwners.push(normalized);
+        saveState();
+        return true;
+    }
+    return false;
+}
+
+function removeSecondaryOwner(jid) {
+    const normalized = normalizeToJid(jid);
+    if (!normalized) return false;
+    const index = config.secondaryOwners.indexOf(normalized);
+    if (index !== -1) {
+        config.secondaryOwners.splice(index, 1);
+        saveState();
+        return true;
+    }
+    return false;
+}
+
+function addSudo(jid) {
+    const normalized = normalizeToJid(jid);
+    if (!normalized) return false;
+    if (!config.sudos.includes(normalized)) {
+        config.sudos.push(normalized);
+        saveState();
+        return true;
+    }
+    return false;
+}
+
+function removeSudo(jid) {
+    const normalized = normalizeToJid(jid);
+    if (!normalized) return false;
+    const index = config.sudos.indexOf(normalized);
+    if (index !== -1) {
+        config.sudos.splice(index, 1);
+        saveState();
+        return true;
+    }
+    return false;
+}
+
+function addBan(jid) {
+    const normalized = normalizeToJid(jid);
+    if (!normalized) return false;
+    if (!config.banned.includes(normalized)) {
+        config.banned.push(normalized);
+        saveState();
+        return true;
+    }
+    return false;
+}
+
+function removeBan(jid) {
+    const normalized = normalizeToJid(jid);
+    if (!normalized) return false;
+    const index = config.banned.indexOf(normalized);
+    if (index !== -1) {
+        config.banned.splice(index, 1);
+        saveState();
+        return true;
+    }
+    return false;
+}
+
+// ─── EXPORTS ─────────────────────────────────────────────────────
+
+module.exports = {
+    loadState,
+    saveState,
+    normalizeToJid,
+    getPhoneJid,
+    addSecondaryOwner,
+    removeSecondaryOwner,
+    addSudo,
+    removeSudo,
+    addBan,
+    removeBan
+};
