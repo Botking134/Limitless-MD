@@ -1,4 +1,4 @@
-// plugins/group_security.js
+// plugins/group/group_security.js
 const config = require('../../config');
 const { saveState, normalizeToJid } = require('../../stateManager');
 
@@ -15,15 +15,6 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
-}
-
-function normalizeToJid(input) {
-    if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@');
-    if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@lid')) return clean;
-    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
-    return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
 function parseTargetUser(msg, args) {
@@ -59,7 +50,7 @@ function parseTargetUser(msg, args) {
 function isDeveloper(jid) {
     if (!jid) return false;
     const normalized = normalizeToJid(jid);
-    const { DEV_JIDS, DEV_LIDS } = require('../devs');
+    const { DEV_JIDS, DEV_LIDS } = require('../../devs');
     return DEV_JIDS.includes(normalized) || DEV_LIDS.includes(normalized);
 }
 
