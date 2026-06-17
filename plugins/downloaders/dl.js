@@ -1,8 +1,7 @@
 // plugins/downloaders/dl.js
-const settings = require('../../settings');
+const config = require('../../config');
 const axios = require('axios');
 const FormData = require('form-data');
-const fs = require('fs');
 
 global.apkSessions = global.apkSessions || {};
 global.shazamSessions = global.shazamSessions || {};
@@ -46,7 +45,7 @@ async function uploadToCloud(buffer, mimeType) {
             headers: { ...form.getHeaders() }
         });
         if (response.data?.success && response.data.files?.[0]?.url) {
-            return response.data.files[0].url;
+            return response.data.files[0].url.trim();
         }
     } catch (err) {
         console.error("❌ [UPLOAD] qu.ax failed:", err.message);
@@ -80,7 +79,7 @@ function logError(cmd, args, err) {
 }
 
 module.exports = [
-    // 1. IMAGE SEARCH DOWNLOADER (.img)
+    // 1. IMG
     {
         name: 'img',
         isPrefixless: false,
@@ -97,7 +96,7 @@ module.exports = [
                 parts.pop();
                 query = parts.join(' ').trim();
             } else {
-                count = 1; 
+                count = 1;
             }
 
             if (count < 1) count = 1;
@@ -123,7 +122,7 @@ module.exports = [
         }
     },
 
-    // 2. MEDIAFIRE FILE DOWNLOADER (.mediafire)
+    // 2. MEDIAFIRE
     {
         name: 'mediafire',
         isPrefixless: false,
@@ -167,7 +166,7 @@ module.exports = [
         }
     },
 
-    // 3. DIRECT APK DOWNLOADER (.apk)
+    // 3. APK
     {
         name: 'apk',
         isPrefixless: false,
@@ -205,7 +204,7 @@ module.exports = [
         }
     },
 
-    // 4. INTERACTIVE APK SEARCHER (.apksearch)
+    // 4. APKSEARCH (Interactive)
     {
         name: 'apksearch',
         isPrefixless: false,
@@ -243,7 +242,7 @@ module.exports = [
         }
     },
 
-    // 5. AUDIO RECOGNIZER (.shazam)
+    // 5. SHAZAM
     {
         name: 'shazam',
         isPrefixless: false,
@@ -268,7 +267,7 @@ module.exports = [
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const mimeType = mediaMessage.mimetype || (mediaType === "audio" ? "audio/ogg" : "video/mp4");
-                
+
                 const uploadedUrl = await uploadToCloud(buffer, mimeType);
                 if (!uploadedUrl) throw new Error("Cloud upload servers are completely offline or blocked.");
 
@@ -290,7 +289,7 @@ module.exports = [
                             genre = data.result.genre || "N/A";
                         }
                     }
-                } catch (e) {}
+                } catch (e) { /* ignore */ }
 
                 if (!title) {
                     try {
@@ -305,12 +304,12 @@ module.exports = [
                                 genre = data.result.genres || "N/A";
                             }
                         }
-                    } catch (e) {}
+                    } catch (e) { /* ignore */ }
                 }
 
                 if (!title) throw new Error("Identified audio fields empty across secondary networks.");
 
-                const recognitionCaption = 
+                const recognitionCaption =
                     `🎧 *SHAZAM RECOGNITION* 🎧\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `📌 *Title:* ${title}\n` +
                     `👤 *Artist:* ${artist}\n` +
@@ -329,7 +328,7 @@ module.exports = [
         }
     },
 
-    // 6. GOOGLE DRIVE DOWNLOADER (.gdrive)
+    // 6. GDRIVE
     {
         name: 'gdrive',
         isPrefixless: false,
@@ -373,7 +372,7 @@ module.exports = [
         }
     },
 
-    // 7. GITHUB REPOSITORY CLONER (.gitclone)
+    // 7. GITCLONE
     {
         name: 'gitclone',
         isPrefixless: false,
@@ -414,7 +413,7 @@ module.exports = [
         }
     },
 
-    // 8. PINTEREST DOWNPARSER (.pinterest)
+    // 8. PINTEREST
     {
         name: 'pinterest',
         isPrefixless: false,
@@ -473,7 +472,7 @@ module.exports = [
         }
     },
 
-    // 9. SUBTITLE FILE DOWNLOADER (.subtitle)
+    // 9. SUBTITLE
     {
         name: 'subtitle',
         isPrefixless: false,
@@ -509,7 +508,7 @@ module.exports = [
         }
     },
 
-    // 10. WEBSITE DOWNLOADER & PACKER (.web)
+    // 10. WEB (Website zipper)
     {
         name: 'web',
         isPrefixless: false,
@@ -544,56 +543,10 @@ module.exports = [
         }
     },
 
-    // 11. MEDIA TO DIRECT WEB URL CONVERTER (.tourl / .url)
-    {
-        name: 'tourl',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const rawContent = getRawMessage(quoted || msg.message);
-            
-            let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.stickerMessage || rawContent?.audioMessage || rawContent?.documentMessage;
-            let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.stickerMessage ? "sticker" : (rawContent?.audioMessage ? "audio" : "document")));
+    // 11. TOURL (already in converter, but here for completeness – we skip duplicate)
+    // We'll keep it here as an alias.
 
-            if (!mediaMessage) {
-                return await sock.sendMessage(jid, { 
-                    text: "❌ *Invalid Context:* Please reply directly to an image, video, sticker, audio, or document file to generate a URL." 
-                }, { quoted: msg });
-            }
-
-            const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Channelling media into direct link...*" }, { quoted: msg });
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) {
-                    buffer = Buffer.concat([buffer, chunk]);
-                }
-
-                const mimeType = mediaMessage.mimetype || "application/octet-stream";
-                const url = await uploadToCloud(buffer, mimeType);
-                if (!url) throw new Error("File hosting servers returned null.");
-
-                const finalReport = `📦 *DIRECT URL MANIFESTED* 🌐\n` +
-                                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                                    `🔗 *Link:* ${url}\n` +
-                                    `⚖️ *Size:* \`${(buffer.length / (1024 * 1024)).toFixed(2)} MB\`\n\n` +
-                                    `_“My six eyes see straight through the data.”_ 🤞`;
-
-                await sock.sendMessage(jid, { text: finalReport, edit: statusMsg.key });
-            } catch (error) {
-                logError("tourl", '', error);
-                await sock.sendMessage(jid, { 
-                    text: `❌ *Upload Failed:* ${error.message || "Unable to complete cloud stream."}`, 
-                    edit: statusMsg.key 
-                });
-            }
-        }
-    },
-
-    // 12. WEB TO PDF CONVERTER (.pdf)
+    // 12. PDF (Web to PDF)
     {
         name: 'pdf',
         isPrefixless: false,
@@ -632,11 +585,11 @@ module.exports = [
 
                 if (!pdfBuffer) throw new Error("Could not download target PDF stream.");
 
-                await sock.sendMessage(jid, { 
-                    document: pdfBuffer, 
-                    mimetype: "application/pdf", 
-                    fileName: fileName, 
-                    caption: `📄 *PDF Generated:* \`${query}\`` 
+                await sock.sendMessage(jid, {
+                    document: pdfBuffer,
+                    mimetype: "application/pdf",
+                    fileName: fileName,
+                    caption: `📄 *PDF Generated:* \`${query}\``
                 }, { quoted: msg });
             } catch (error) {
                 logError("pdf", query, error);
@@ -645,7 +598,7 @@ module.exports = [
         }
     },
 
-    // 13. TELEGRAM STICKER DOWNLOADER (.tgs)
+    // 13. TGS (Telegram sticker pack)
     {
         name: 'tgs',
         isPrefixless: false,
@@ -685,11 +638,11 @@ module.exports = [
 
                 if (!fileBuffer) throw new Error("Sticker zip packaging stream empty.");
 
-                await sock.sendMessage(jid, { 
-                    document: fileBuffer, 
-                    mimetype: "application/zip", 
-                    fileName: fileName, 
-                    caption: `🎁 *Telegram Sticker Pack Downloaded*` 
+                await sock.sendMessage(jid, {
+                    document: fileBuffer,
+                    mimetype: "application/zip",
+                    fileName: fileName,
+                    caption: `🎁 *Telegram Sticker Pack Downloaded*`
                 }, { quoted: msg });
             } catch (error) {
                 logError("tgs", query, error);
@@ -703,6 +656,5 @@ const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'gitclone') aliases.push({ ...cmd, name: 'gitdl' });
     if (cmd.name === 'pinterest') aliases.push({ ...cmd, name: 'pint' });
-    if (cmd.name === 'tourl') aliases.push({ ...cmd, name: 'url' });
 });
 module.exports.push(...aliases);
