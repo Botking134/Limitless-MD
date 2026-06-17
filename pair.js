@@ -3,7 +3,7 @@ const readline = require('readline');
 const { Boom } = require('@hapi/boom');
 const path = require('path');
 const config = require('./config');
-const { DEV_JIDS, DEV_LIDS } = require('./devs');
+const { DEV_LIDS } = require('./devs');
 const commands = require('./commands');
 const { handleDeletion } = require('./helpers/log');
 const { handleIncomingMessage } = require('./helpers/messageHandlers');
@@ -13,11 +13,9 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 // ─── TRACK BOT-SENT MESSAGES ──────────────────────────────────
-// Used to prevent the bot from replying to its own messages.
 const botSentMessageIds = new Set();
 
 // ─── GLOBAL SESSIONS & CACHES ──────────────────────────────────
-// These are shared across the entire bot runtime.
 global.messageStore = global.messageStore || {};
 global.spamTracker = global.spamTracker || {};
 global.spamDeletedCount = global.spamDeletedCount || {};
@@ -58,6 +56,16 @@ function formatUptime(seconds) {
     return parts.join(' ');
 }
 
+// ─── JID NORMALIZER ──────────────────────────────────────────────
+function normalizeToJid(input) {
+    if (!input) return '';
+    const clean = input.replace(/:[\d]+@/, '@');
+    if (clean.endsWith('@s.whatsapp.net')) return clean;
+    if (clean.endsWith('@lid')) return clean;
+    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
+    return raw ? `${raw}@s.whatsapp.net` : '';
+}
+
 // ─── MAIN BOT STARTER ──────────────────────────────────────────
 
 async function startBot() {
@@ -70,7 +78,6 @@ async function startBot() {
     } = await import('@itsliaaa/baileys');
 
     // ─── AUTH STATE ────────────────────────────────────────────────
-    // Store session in storage/ folder to keep root clean.
     const authFolder = path.join(__dirname, 'storage', 'session_auth');
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
@@ -112,16 +119,14 @@ async function startBot() {
     // ─── CREATE SOCKET ─────────────────────────────────────────────
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // We handle QR manually
+        printQRInTerminal: false,
         logger: require('pino')({ level: 'silent' }),
         browser: Browsers.ubuntu('Chrome')
     });
 
     // ─── OVERRIDE SEND MESSAGE ──────────────────────────────────
-    // Used to track bot-sent messages and simulate presence.
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
-        // ─── Presence Simulation ──────────────────────────────
         if (config.presence && !jid.endsWith('@broadcast')) {
             const autotypingActive = config.presence.autotyping?.all ||
                 config.presence.autotyping?.chats?.includes(jid);
@@ -142,16 +147,12 @@ async function startBot() {
 
         const sent = await originalSendMessage(jid, content, options);
 
-        // Track bot-sent message IDs for self-reply prevention.
         if (sent && sent.key && sent.key.id) {
             botSentMessageIds.add(sent.key.id);
-            // Keep cache size manageable.
             if (botSentMessageIds.size > 500) {
                 const firstKey = botSentMessageIds.values().next().value;
                 botSentMessageIds.delete(firstKey);
             }
-
-            // Track AI agent context for reply routing.
             if (global.activeAgentContext) {
                 global.botMessageAgents[sent.key.id] = global.activeAgentContext;
                 const mappingKeys = Object.keys(global.botMessageAgents);
@@ -196,6 +197,8 @@ async function startBot() {
         // ─── Handle Disconnection ──────────────────────────────
         if (connection === 'close') {
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            console.error('❌ Disconnected. Reason code:', reason);
+            console.error('❌ Error details:', lastDisconnect?.error?.message || 'No message');
             if (reason === DisconnectReason.loggedOut) {
                 console.log('❌ Session logged out. Exiting...');
                 process.exit(1);
@@ -208,104 +211,96 @@ async function startBot() {
         // ─── Handle Connection Open ─────────────────────────────
         if (connection === 'open') {
             console.log('\n✅ Connection established successfully!');
+            try {
+                // ─── Set Bot's Own IDs ────────────────────────────────
+                if (sock.user && sock.user.id) {
+                    // Use sock.user.id directly – no findUserId() needed
+                    const rawJid = sock.user.id.split(':')[0] || sock.user.id;
+                    config.botJid = normalizeToJid(rawJid);
+                    console.log('📌 Bot JID:', config.botJid);
 
-            // ─── Resolve Bot's Own IDs ─────────────────────────
-            if (sock.user && sock.user.id) {
-                const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                config.botJid = selfJid;
+                    // If it's a LID, store it too
+                    if (config.botJid.endsWith('@lid')) {
+                        config.botLid = config.botJid;
+                    }
+                }
+
+                // ─── Set Primary Owner LID (Hardcoded) ──────────────────
+                // Use the owner LID from your logs, or fallback to resolving if needed.
+                // Since you have the LID, we'll hardcode it directly.
+                const ownerLid = "139780398567572@lid";
+                config.ownerLid = ownerLid;
+                if (!config.ownerLids.includes(ownerLid)) {
+                    config.ownerLids.push(ownerLid);
+                }
+                console.log(`👑 [SYSTEM] Primary Owner LID set: ${ownerLid}`);
+
+                // ─── Set Developer LIDs (Hardcoded) ─────────────────────
+                config.devLids = [...DEV_LIDS];
+                console.log(`👑 [SYSTEM] Developer LIDs set:`, config.devLids);
+
+                // ─── Send Status Report to Bot DM ──────────────────
                 try {
-                    const resolved = await sock.findUserId(sock.user.id);
-                    if (resolved) {
-                        if (resolved.phoneNumber) {
-                            config.botJid = `${resolved.phoneNumber}@s.whatsapp.net`;
-                        }
-                        if (resolved.lid) {
-                            config.botLid = resolved.lid;
-                        }
+                    const prefixVal = config.prefix || "⚡";
+                    const timeStr = new Date().toLocaleTimeString('en-US', {
+                        timeZone: 'Africa/Lagos',
+                        hour12: true
+                    });
+
+                    let pingMs = 35;
+                    try {
+                        const startPing = Date.now();
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 3000);
+                        await fetch("https://1.1.1.1", { method: 'HEAD', signal: controller.signal });
+                        clearTimeout(timeout);
+                        pingMs = Date.now() - startPing;
+                    } catch (e) { /* ignore */ }
+
+                    const statusCard =
+                        `\`\`\`` +
+                        `⚡ ═══ [ CONNECTED ] ═══ ⚡\n\n` +
+                        ` ▶ SYSTEM :: LIMITLESS-MD\n` +
+                        ` ▶ PREFIX :: ${prefixVal}\n` +
+                        ` ▶ SPEED  :: ${pingMs}ms\n` +
+                        ` ▶ TIME   :: ${timeStr} WAT\n\n` +
+                        `─── [ STATUS REPORT ] ───\n` +
+                        ` ⟫ 🔴 RED   :: CHARGED\n` +
+                        ` ⟫ 🔵 BLUE  :: CHARGED\n` +
+                        ` ⟫ 🟣 PURPLE:: READY TO FIRE\n\n` +
+                        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                        ` "I'm the strongest."\n` +
+                        `━━━━━━━━━━━━━━━━━━━━━━━━━━` +
+                        `\`\`\``;
+
+                    const botJid = config.botJid || sock.user.id;
+                    if (botJid && 
+                        (botJid.endsWith('@s.whatsapp.net') || botJid.endsWith('@lid')) &&
+                        !botJid.includes('@s.whatsapp.net@s.whatsapp.net')) {
+                        console.log(`📨 Sending status report to: ${botJid}`);
+                        await sock.sendMessage(botJid, { text: statusCard });
+                        console.log(`✅ [SYSTEM] Connection status report dispatched.`);
+                    } else {
+                        console.warn("[WARNING] Invalid bot JID, skipping status report:", botJid);
                     }
-                } catch (err) { /* ignore */ }
-            }
+                } catch (err) {
+                    console.error("[WARNING] Failed to send connection report:", err.message);
+                    console.error(err.stack);
+                }
 
-            // ─── Resolve Primary Owner LID ──────────────────────
-            try {
-                const primaryOwnerJid = config.ownerJid || `${config.ownerNumber}@s.whatsapp.net`;
-                console.log("⚡ [SYSTEM] Resolving primary owner LID...");
-                const resolvedOwner = await sock.findUserId(primaryOwnerJid);
-                if (resolvedOwner && resolvedOwner.lid) {
-                    config.ownerLid = resolvedOwner.lid;
-                    if (!config.ownerLids.includes(resolvedOwner.lid)) {
-                        config.ownerLids.push(resolvedOwner.lid);
+                // ─── Always-Online Presence ────────────────────────
+                setInterval(async () => {
+                    if (config.presence && config.presence.alwaysonline?.all) {
+                        try { await sock.sendPresenceUpdate('available'); } catch (e) { /* ignore */ }
                     }
-                    console.log(`👑 [SYSTEM] Primary Owner LID resolved: ${resolvedOwner.lid}`);
-                }
-            } catch (resolveOwnerErr) {
-                console.error("[WARNING] Failed to resolve primary owner LID:", resolveOwnerErr);
+                }, 15000);
+
+                console.log('✅ [SYSTEM] All connection tasks completed successfully.');
+
+            } catch (openError) {
+                console.error('❌ [FATAL] Unhandled error during connection.open:', openError);
+                console.error(openError.stack);
             }
-
-            // ─── Resolve Developer LIDs ─────────────────────────
-            try {
-                console.log("⚡ [SYSTEM] Resolving developer LIDs...");
-                config.devLids = config.devLids || [];
-                for (const devJid of DEV_JIDS) {
-                    const resolvedDev = await sock.findUserId(devJid);
-                    if (resolvedDev && resolvedDev.lid) {
-                        if (!config.devLids.includes(resolvedDev.lid)) {
-                            config.devLids.push(resolvedDev.lid);
-                        }
-                    }
-                }
-                console.log(`👑 [SYSTEM] Developer LIDs mapped:`, config.devLids);
-            } catch (resolveErr) {
-                console.error("[WARNING] Failed to resolve developer LIDs:", resolveErr);
-            }
-
-            // ─── Send Status Report to Bot DM ──────────────────
-            try {
-                const prefixVal = config.prefix || "⚡";
-                const timeStr = new Date().toLocaleTimeString('en-US', {
-                    timeZone: 'Africa/Lagos',
-                    hour12: true
-                });
-
-                let pingMs = 35;
-                try {
-                    const startPing = Date.now();
-                    const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 3000);
-                    await fetch("https://1.1.1.1", { method: 'HEAD', signal: controller.signal });
-                    clearTimeout(timeout);
-                    pingMs = Date.now() - startPing;
-                } catch (e) { /* ignore */ }
-
-                const statusCard =
-                    `\`\`\`` +
-                    `⚡ ═══ [ CONNECTED ] ═══ ⚡\n\n` +
-                    ` ▶ SYSTEM :: LIMITLESS-MD\n` +
-                    ` ▶ PREFIX :: ${prefixVal}\n` +
-                    ` ▶ SPEED  :: ${pingMs}ms\n` +
-                    ` ▶ TIME   :: ${timeStr} WAT\n\n` +
-                    `─── [ STATUS REPORT ] ───\n` +
-                    ` ⟫ 🔴 RED   :: CHARGED\n` +
-                    ` ⟫ 🔵 BLUE  :: CHARGED\n` +
-                    ` ⟫ 🟣 PURPLE:: READY TO FIRE\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    ` "I'm the strongest."\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━` +
-                    `\`\`\``;
-
-                const botJid = config.botJid || sock.user.id;
-                await sock.sendMessage(botJid, { text: statusCard });
-                console.log(`✅ [SYSTEM] Connection status report dispatched to private DM.`);
-            } catch (err) {
-                console.error("[WARNING] Failed to send connection report:", err.message);
-            }
-
-            // ─── Always-Online Presence ────────────────────────
-            setInterval(async () => {
-                if (config.presence && config.presence.alwaysonline?.all) {
-                    try { await sock.sendPresenceUpdate('available'); } catch (e) { /* ignore */ }
-                }
-            }, 15000);
         }
     });
 
@@ -359,8 +354,6 @@ async function startBot() {
     });
 
     // ─── MESSAGES UPDATE (Anti-Delete) ───────────────────────────
-    // This is the ONLY place where deleted messages are handled.
-    // The duplicate protocolMessage block in messageHandlers.js has been removed.
     sock.ev.on('messages.update', async (updates) => {
         try {
             for (const update of updates) {
