@@ -1,23 +1,42 @@
 // plugins/games.js
-const settings = require('../settings');
+const config = require('../config');
+const { saveState, getPhoneJid, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
-const { getPhoneJid } = require('../stateManager');
 
+// ─── GLOBAL SESSIONS ──────────────────────────────────────────────
 global.gameSessions = global.gameSessions || {};
 global.vault8Sessions = global.vault8Sessions || {};
 global.vault8SavedStories = global.vault8SavedStories || {};
 global.triviaSessions = global.triviaSessions || {};
 global.charadeSessions = global.charadeSessions || {};
 
-const s1 = "gsk_";
-const s2 = "tPB0xMyZ2oijloaBNcDs";
-const s3 = "WGdyb3FY5iC2p9hwRE";
-const s4 = "SIJXAV3t53LZg9";
-const GROQ_API_KEY = settings.groqApiKey || (s1 + s2 + s3 + s4);
+// ─── GROQ API HELPER ─────────────────────────────────────────────
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
+async function queryLLM(prompt, temperature = 0.8) {
+    const apiKey = config.groqApiKey;
+    if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
+    const response = await fetch(GROQ_BASE_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            messages: [{ role: "user", content: prompt }],
+            temperature: temperature
+        })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "";
+}
+
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ─── HELPERS ──────────────────────────────────────────────────────
 
 function getRawMessage(message) {
     if (!message) return null;
@@ -29,15 +48,6 @@ function getRawMessage(message) {
     return message;
 }
 
-function normalizeToJid(input) {
-    if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@'); 
-    if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@lid')) return clean;
-    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
-    return raw ? `${raw}@s.whatsapp.net` : '';
-}
-
 async function resolveToPhoneJid(sock, jid) {
     if (!jid) return '';
     if (jid.endsWith('@s.whatsapp.net')) return jid;
@@ -45,11 +55,13 @@ async function resolveToPhoneJid(sock, jid) {
         try {
             const res = await sock.findUserId(jid);
             if (res && res.phoneNumber) return `${res.phoneNumber}@s.whatsapp.net`;
-        } catch (e) {}
+        } catch (e) { /* ignore */ }
     }
     const num = jid.split('@')[0].split(':')[0];
     return `${num}@s.whatsapp.net`;
 }
+
+// ─── FALLBACK QUIZ QUESTIONS ──────────────────────────────────────
 
 const fallbackQuizQuestions = [
     {
@@ -71,23 +83,22 @@ const fallbackQuizQuestions = [
 
 function getLocalQuestion(category) {
     try {
-        const dbPath = path.join(__dirname, '../quiz.js');
+        const dbPath = path.join(__dirname, '../data/quiz.js');
         let questions = fallbackQuizQuestions;
-
         if (fs.existsSync(dbPath)) {
             delete require.cache[require.resolve(dbPath)];
             questions = require(dbPath);
         }
-
         const filtered = questions.filter(q => q.category.toLowerCase() === category.toLowerCase());
         if (filtered.length === 0) return null;
-
         return filtered[Math.floor(Math.random() * filtered.length)];
     } catch (e) {
         console.error("❌ [PARSER] Failed to resolve quiz question:", e.message);
         return null;
     }
 }
+
+// ─── TIC-TAC-TOE HELPERS ─────────────────────────────────────────
 
 function renderCoolTttBoard(board) {
     const symbolsMap = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
@@ -137,55 +148,33 @@ function getGojoTttMove(board, gojoSymbol, opponentSymbol) {
     return available[Math.floor(Math.random() * available.length)];
 }
 
-async function queryLLM(prompt, temperature = 0.8) {
-    try {
-        const response = await fetch(GROQ_BASE_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROQ_API_KEY}`
-            },
-            body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
-                messages: [{ role: "user", content: prompt }],
-                temperature: temperature
-            })
-        });
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || "";
-    } catch (e) {
-        console.error("LLM Query Error:", e.message);
-        return null;
-    }
-}
+// ─── VAULT 8 ENGINE ──────────────────────────────────────────────
 
 async function queryVaultEngine(messages) {
-    try {
-        const response = await fetch(GROQ_BASE_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROQ_API_KEY}`
-            },
-            body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
-                messages: messages,
-                temperature: 0.85
-            })
-        });
-        if (!response.ok) throw new Error();
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || "";
-    } catch (e) {
-        console.error("Vault 8 Engine Error:", e.message);
-        return null;
-    }
+    const apiKey = config.groqApiKey;
+    if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
+    const response = await fetch(GROQ_BASE_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            messages: messages,
+            temperature: 0.85
+        })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "";
 }
+
+// ─── EMOJI CHARADE GENERATION ────────────────────────────────────
 
 async function generateEmojiPuzzle(excludeList = []) {
     const salt = Math.random() + '_' + Date.now();
-    const prompt = 
+    const prompt =
         `Generate an easy-to-medium emoji charades puzzle representing a globally famous movie, cartoon, brand, food, or object.\n` +
         `Respond strictly with a JSON object in this exact layout. No other text or markdown:\n` +
         `{"emojis": "🦁👑", "ans": "The Lion King"}\n` +
@@ -206,6 +195,8 @@ async function checkAnswerCorrectness(correctAnswer, userGuess) {
     const response = await queryLLM(prompt, 0.1);
     return response ? response.trim().toUpperCase().includes("YES") : false;
 }
+
+// ─── QUIZ HELPERS ─────────────────────────────────────────────────
 
 async function askNextQuizQuestion(sock, jid, sessionKey) {
     const session = global.triviaSessions[sessionKey];
@@ -247,11 +238,11 @@ async function askNextQuizQuestion(sock, jid, sessionKey) {
     session.currentQuestion = questionData.q;
     session.currentOptions = questionData.options;
 
-    const quizLabel = isSingle 
+    const quizLabel = isSingle
         ? `📝 *Topic Quiz: Round ${session.currentQuestionIndex}/10*`
         : `👥 *Quiz Turn: @${activePhone.split('@')[0]} (${session.currentQuestionIndex}/${limit})*`;
 
-    const quizCard = 
+    const quizCard =
         `${quizLabel}\n` +
         `📂 *Category:* \`${session.category}\`\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -263,6 +254,8 @@ async function askNextQuizQuestion(sock, jid, sessionKey) {
     const prompt = await sock.sendMessage(jid, { text: quizCard, mentions: [activePhone] });
     session.lastQuestionMsgId = prompt.key.id;
 }
+
+// ─── CHARADE HELPERS ──────────────────────────────────────────────
 
 async function askNextCharadePuzzle(sock, jid, sessionKey) {
     const session = global.charadeSessions[sessionKey];
@@ -283,7 +276,7 @@ async function askNextCharadePuzzle(sock, jid, sessionKey) {
     session.currentEmojiCombo = puzzleData.emojis;
     session.currentCorrectAnswer = puzzleData.ans;
 
-    const charadeCard = 
+    const charadeCard =
         `🎭 *Emoji Charades: Round ${session.currentQuestionIndex}/10* 🎭\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
         `🧩 *Analyze the combination:* \n\n` +
@@ -295,6 +288,8 @@ async function askNextCharadePuzzle(sock, jid, sessionKey) {
     session.lastQuestionMsgId = prompt.key.id;
 }
 
+// ─── VAULT 8 TURN HANDLER ────────────────────────────────────────
+
 async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     const jid = msg.key.remoteJid;
     const session = global.vault8Sessions[sessionKey];
@@ -302,7 +297,7 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     await sock.sendMessage(jid, { text: "💾 `Processing decision...`" }, { quoted: msg });
     session.step++;
 
-    const turnPrompt = 
+    const turnPrompt =
         `The user chose: "${userChoice}". Evaluate this choice for Step ${session.step} of 20.\n\n` +
         `If their choice leads to death, write a chilling description, and conclude with the exact text "GAME_OVER" at the very end.\n\n` +
         `If they survive, generate Step ${session.step} of 20. Scenario must be brief (2-3 sentences max). Provide 3 new choices (1, 2, 3).\n\n` +
@@ -321,7 +316,7 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     if (engineResponse.includes("GAME_OVER")) {
         delete global.vault8Sessions[sessionKey];
         const cleanDeathMsg = engineResponse.replace("GAME_OVER", "").trim();
-        const deathCard = 
+        const deathCard =
             `💀 *VAULT 8: DIED AT STEP ${session.step}/20* 💀\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
             `${cleanDeathMsg}\n\n` +
@@ -331,8 +326,8 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
         const failButtons = {
             text: deathCard,
             buttons: [
-                { buttonId: `${settings.prefix}v8_btn play`, buttonText: { displayText: 'Retry 🔄' }, type: 1 },
-                { buttonId: `${settings.prefix}v8_btn cancel`, buttonText: { displayText: 'Give Up 🛑' }, type: 1 }
+                { buttonId: `${config.prefix}v8_btn play`, buttonText: { displayText: 'Retry 🔄' }, type: 1 },
+                { buttonId: `${config.prefix}v8_btn cancel`, buttonText: { displayText: 'Give Up 🛑' }, type: 1 }
             ],
             headerType: 1
         };
@@ -343,7 +338,7 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
         delete global.vault8Sessions[sessionKey];
         delete global.vault8SavedStories[sessionKey];
         const cleanVictoryMsg = engineResponse.replace("VICTORY", "").trim();
-        const victoryCard = 
+        const victoryCard =
             `🏆 *VAULT 8: SIMULATION COMPLETED!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
             `${cleanVictoryMsg}\n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -351,7 +346,7 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
         return await sock.sendMessage(jid, { text: victoryCard }, { quoted: msg });
     }
 
-    const gameCard = 
+    const gameCard =
         `📁 *VAULT 8: STEP ${session.step}/20* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
         `${engineResponse}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -361,8 +356,10 @@ async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     session.lastQuestionMsgId = prompt.key.id;
 }
 
+// ─── EXPORT COMMANDS ────────────────────────────────────────────
+
 module.exports = [
-    // 1. TIC-TAC-TOE INITIATOR
+    // 1. TIC-TAC-TOE
     {
         name: 'ttt',
         isPrefixless: false,
@@ -439,8 +436,8 @@ module.exports = [
             const buttons = {
                 text: `🎮 *TIC-TAC-TOE* 🎮\n\nSelect your game format:`,
                 buttons: [
-                    { buttonId: `${settings.prefix}ttt_mode ai`, buttonText: { displayText: 'Play with AI 🤖' }, type: 1 },
-                    { buttonId: `${settings.prefix}ttt_mode multi`, buttonText: { displayText: 'Multiplayer ⚔️' }, type: 1                }
+                    { buttonId: `${config.prefix}ttt_mode ai`, buttonText: { displayText: 'Play with AI 🤖' }, type: 1 },
+                    { buttonId: `${config.prefix}ttt_mode multi`, buttonText: { displayText: 'Multiplayer ⚔️' }, type: 1 }
                 ],
                 headerType: 1
             };
@@ -448,7 +445,7 @@ module.exports = [
         }
     },
 
-    // 2. TIC-TAC-TOE LOBBY MANAGEMENT MODES
+    // 2. TTT MODE
     {
         name: 'ttt_mode',
         isPrefixless: false,
@@ -463,9 +460,9 @@ module.exports = [
             if (mode === 'ai') {
                 const sessionKey = jid + '_ttt';
                 const initialBoard = renderCoolTttBoard([' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ']);
-                
+
                 const prompt = await sock.sendMessage(jid, { text: `🎮 *TIC-TAC-TOE: GOJO CHALLENGE* 🎮\n\n👤 *Player:* @${senderNumber} (❌)\n🤖 *AI:* Gojo (⭕)\n\n${initialBoard}\n\n👉 It is your turn! Reply directly with a position number (1-9).`, mentions: [senderPhone] }, { quoted: msg });
-                
+
                 global.gameSessions[sessionKey] = {
                     board: [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '],
                     player1: senderJid,
@@ -474,8 +471,7 @@ module.exports = [
                     symbols: { [senderJid]: '❌', 'gojo': '⭕' },
                     lastQuestionMsgId: prompt.key.id
                 };
-            } 
-            else if (mode === 'multi') {
+            } else if (mode === 'multi') {
                 if (!isGroup) return await sock.sendMessage(jid, { text: "❌ Multiplayer modes require an active Group Chat." }, { quoted: msg });
 
                 const sessionKey = jid + '_ttt';
@@ -490,7 +486,7 @@ module.exports = [
 
                 const searchButtons = {
                     text: `⚔️ *TIC-TAC-TOE DUEL LOBBY* ⚔️\n\n👤 *Player 1:* @${senderNumber}\n🌐 *Status:* Searching for Player 2...\n\n👉 Tap join to enter!`,
-                    buttons: [{ buttonId: `${settings.prefix}ttt_join`, buttonText: { displayText: 'Join Duel ⚔️' }, type: 1 }],
+                    buttons: [{ buttonId: `${config.prefix}ttt_join`, buttonText: { displayText: 'Join Duel ⚔️' }, type: 1 }],
                     headerType: 1,
                     mentions: [senderPhone]
                 };
@@ -499,7 +495,7 @@ module.exports = [
         }
     },
 
-    // 3. TIC-TAC-TOE LOBBY JOIN CONTROLLER
+    // 3. TTT JOIN
     {
         name: 'ttt_join',
         isPrefixless: false,
@@ -526,14 +522,14 @@ module.exports = [
         }
     },
 
-    // 4. ROCK-PAPER-SCI-GOJO
+    // 4. RPS
     {
         name: 'rps',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             if (!args) {
-                return await sock.sendMessage(jid, { text: `✊ *ROCK PAPER SCISSORS vs GOJO* 🖐️\n\nChoose your weapon:\n• \`${settings.prefix}rps rock\` 🪨\n• \`${settings.prefix}rps paper\` 📄\n• \`${settings.prefix}rps scissors\` ✂️` }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: `✊ *ROCK PAPER SCISSORS vs GOJO* 🖐️\n\nChoose your weapon:\n• \`${config.prefix}rps rock\` 🪨\n• \`${config.prefix}rps paper\` 📄\n• \`${config.prefix}rps scissors\` ✂️` }, { quoted: msg });
             }
 
             const playerChoice = args.toLowerCase().trim();
@@ -570,7 +566,7 @@ module.exports = [
         }
     },
 
-    // 5. CURSED ENERGY GUESSING GAME
+    // 5. GUESS
     {
         name: 'guess',
         isPrefixless: false,
@@ -581,20 +577,20 @@ module.exports = [
             const activeSession = global.gameSessions[sessionKey];
 
             if (!args) {
-                if (activeSession) return await sock.sendMessage(jid, { text: `⚠️ Active game running. Guess using \`${settings.prefix}guess <number>\`. ${6 - activeSession.attempts} attempts left.` }, { quoted: msg });
+                if (activeSession) return await sock.sendMessage(jid, { text: `⚠️ Active game running. Guess using \`${config.prefix}guess <number>\`. ${6 - activeSession.attempts} attempts left.` }, { quoted: msg });
 
                 const targetNum = Math.floor(Math.random() * 100) + 1;
                 const prompt = await sock.sendMessage(jid, { text: `🌀 *CURSED ENERGY CONCENTRATION* 🌀\n\nI have suppressed a specific quantity of Cursed Energy between *1 and 100*.\n\n👉 Guess the level by replying directly to this message!` }, { quoted: msg });
-                
-                global.gameSessions[sessionKey] = { 
-                    target: targetNum, 
+
+                global.gameSessions[sessionKey] = {
+                    target: targetNum,
                     attempts: 0,
-                    lastQuestionMsgId: prompt.key.id 
+                    lastQuestionMsgId: prompt.key.id
                 };
                 return;
             }
 
-            if (!activeSession) return await sock.sendMessage(jid, { text: `❌ No active guessing game running.` }, { msg });
+            if (!activeSession) return await sock.sendMessage(jid, { text: `❌ No active guessing game running.` }, { quoted: msg });
 
             const userGuess = parseInt(args.trim());
             if (isNaN(userGuess) || userGuess < 1 || userGuess > 100) return await sock.sendMessage(jid, { text: "❌ Please provide a valid integer guess." }, { quoted: msg });
@@ -614,12 +610,11 @@ module.exports = [
 
             const clue = userGuess < activeSession.target ? "Too LOW! 📈" : "Too HIGH! 📉";
             const updatedPrompt = await sock.sendMessage(jid, { text: `🔮 *Cursed Energy Clue:* \`${clue}\`\n\n• Attempts remaining: \`${6 - activeSession.attempts}/6\`\n\n👉 Reply directly to this message to submit your next guess!` });
-            
             activeSession.lastQuestionMsgId = updatedPrompt.key.id;
         }
     },
 
-    // 6. THRILLER TEXT RPG: THE VAULT 8
+    // 6. VAULT 8
     {
         name: 'vault8',
         isPrefixless: false,
@@ -646,7 +641,7 @@ module.exports = [
                 }
 
                 await delay(800);
-                const bannerText = 
+                const bannerText =
                     `🖥️ *VAULT 8 SECURE INTEL PORTAL* 🖥️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `⚠️ *WARNING:* You are entering a restricted psychological text adventure game. Scenarios are highly dangerous. *Any wrong decision will result in your death.*\n\n` +
                     `Select an option below to proceed:`;
@@ -654,14 +649,14 @@ module.exports = [
                 const buttonMessage = {
                     text: bannerText,
                     buttons: [
-                        { buttonId: `${settings.prefix}v8_btn play`, buttonText: { displayText: 'Replay Story 🖥️' }, type: 1 },
-                        { buttonId: `${settings.prefix}v8_btn refresh`, buttonText: { displayText: 'Refresh Story 🔄' }, type: 1 },
-                        { buttonId: `${settings.prefix}v8_btn cancel`, buttonText: { displayText: 'Cancel 🛑' }, type: 1 }
+                        { buttonId: `${config.prefix}v8_btn play`, buttonText: { displayText: 'Replay Story 🖥️' }, type: 1 },
+                        { buttonId: `${config.prefix}v8_btn refresh`, buttonText: { displayText: 'Refresh Story 🔄' }, type: 1 },
+                        { buttonId: `${config.prefix}v8_btn cancel`, buttonText: { displayText: 'Cancel 🛑' }, type: 1 }
                     ],
                     headerType: 1
                 };
 
-                try { await sock.sendMessage(jid, { delete: sentMsg.key }); } catch (e) {}
+                try { await sock.sendMessage(jid, { delete: sentMsg.key }); } catch (e) { /* ignore */ }
                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
             } catch (err) {
                 console.error(err);
@@ -669,7 +664,7 @@ module.exports = [
         }
     },
 
-    // 7. VAULT8 INTERACTIVE BUTTON CONTROLLER
+    // 7. V8 BTN
     {
         name: 'v8_btn',
         isPrefixless: false,
@@ -684,8 +679,8 @@ module.exports = [
 
                 if (saved) {
                     await sock.sendMessage(jid, { text: "💾 `[SYSTEM] Reloading saved scenario environment...`" }, { quoted: msg });
-                    
-                    const gameHeader = 
+
+                    const gameHeader =
                         `📁 *VAULT 8: STEP 1/20 (REPLAY)* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                         `${saved.firstStep}\n\n` +
                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -704,8 +699,8 @@ module.exports = [
                     return;
                 } else {
                     await sock.sendMessage(jid, { text: "👁️ `[SYSTEM] Generating new scenario file assets...`" }, { quoted: msg });
-                    
-                    const systemPrompt = 
+
+                    const systemPrompt =
                         "You are the terminal engine of 'Vault 8', a creepy psychological text adventure game. " +
                         "Generate Step 1 of a creepy text adventure. Describe the dark, cold environment they wake up in. " +
                         "Give them exactly 3 distinct choices (1, 2, 3). Keep scenarios brief and medium-length (maximum of 2-3 sentences), " +
@@ -715,7 +710,7 @@ module.exports = [
                     const firstStep = await queryVaultEngine(initialSession);
                     if (!firstStep) return await sock.sendMessage(jid, { text: "❌ Connection timeout." }, { quoted: msg });
 
-                    const gameHeader = 
+                    const gameHeader =
                         `📁 *VAULT 8: STEP 1/20* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                         `${firstStep}\n\n` +
                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -734,21 +729,19 @@ module.exports = [
                     };
                     return;
                 }
-            } 
-            else if (action === 'refresh') {
+            } else if (action === 'refresh') {
                 delete global.vault8Sessions[sessionKey];
                 delete global.vault8SavedStories[sessionKey];
                 await sock.sendMessage(jid, { text: "🔄 `[SYSTEM] Connection wiped.`" });
-                return await commands[`${settings.prefix}vault8`](sock, msg, '', { isOwner: false });
-            } 
-            else if (action === 'cancel' || action === 'giveup') {
+                return await commands[`${config.prefix}vault8`](sock, msg, '', { isOwner: false });
+            } else if (action === 'cancel' || action === 'giveup') {
                 delete global.vault8Sessions[sessionKey];
                 await sock.sendMessage(jid, { text: "🛑 Terminal connection closed safely." }, { quoted: msg });
             }
         }
     },
 
-    // 8. DYNAMIC CATEGORIZED QUIZ INITIATOR
+    // 8. QUIZ
     {
         name: 'quiz',
         isPrefixless: false,
@@ -766,7 +759,7 @@ module.exports = [
                 if (subAction === 'multi' && !isGroup) return await sock.sendMessage(jid, { text: "❌ Multiplayer modes require an active Group Chat." }, { quoted: msg });
 
                 const sessionKey = subAction === 'single' ? (jid + '_' + senderJid) : jid;
-                
+
                 if (global.triviaSessions[sessionKey]) return await sock.sendMessage(jid, { text: "⚠️ Active Quiz session already running." }, { quoted: msg });
 
                 const sessionData = {
@@ -787,7 +780,7 @@ module.exports = [
 
                 global.triviaSessions[sessionKey] = sessionData;
 
-                const catMenu = 
+                const catMenu =
                     `📚 *LIMITLESS QUIZ CATEGORIES* 📚\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `1. General Anime 🏮\n` +
@@ -807,7 +800,7 @@ module.exports = [
                 } else {
                     const lobbyButtons = {
                         text: `👥 *QUIZ MULTIPLAYER LOBBY* 👥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n• Players Joined: \`1/10\`\n👤 @${senderNumber}\n\n👉 Tap Join to enter!`,
-                        buttons: [{ buttonId: `${settings.prefix}quiz_join`, buttonText: { displayText: 'Join Lobby 👥' }, type: 1 }],
+                        buttons: [{ buttonId: `${config.prefix}quiz_join`, buttonText: { displayText: 'Join Lobby 👥' }, type: 1 }],
                         headerType: 1,
                         mentions: [senderPhone]
                     };
@@ -825,7 +818,7 @@ module.exports = [
                         }
 
                         session.status = 'awaiting_category';
-                        
+
                         const p1Phone = await resolveToPhoneJid(sock, session.player);
                         const prompt = await sock.sendMessage(jid, { text: `👥 *MULTIPLAYER CATEGORY SELECTION* 👥\n\n@${p1Phone.split('@')[0]}, please choose a category:\n\n${catMenu}`, mentions: [p1Phone] });
                         session.lastQuestionMsgId = prompt.key.id;
@@ -837,8 +830,8 @@ module.exports = [
             const buttons = {
                 text: `📚 *LIMITLESS QUIZ WORLD* 📚\n\nSelect your game format to proceed:`,
                 buttons: [
-                    { buttonId: `${settings.prefix}quiz single`, buttonText: { displayText: 'Singleplayer 👤' }, type: 1 },
-                    { buttonId: `${settings.prefix}quiz multi`, buttonText: { displayText: 'Multiplayer 👥' }, type: 1 }
+                    { buttonId: `${config.prefix}quiz single`, buttonText: { displayText: 'Singleplayer 👤' }, type: 1 },
+                    { buttonId: `${config.prefix}quiz multi`, buttonText: { displayText: 'Multiplayer 👥' }, type: 1 }
                 ],
                 headerType: 1
             };
@@ -846,7 +839,7 @@ module.exports = [
         }
     },
 
-    // 9. QUIZ MULTIPLAYER LOBBY JOIN CONTROLLER
+    // 9. QUIZ JOIN
     {
         name: 'quiz_join',
         isPrefixless: false,
@@ -875,19 +868,19 @@ module.exports = [
 
             const lobbyButtons = {
                 text: `👥 *QUIZ MULTIPLAYER LOBBY* 👥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n• Players: \`${joinedCount}/10\`\n${listPlayers}\n\n👉 Tap Join to enter!`,
-                buttons: [{ buttonId: `${settings.prefix}quiz_join`, buttonText: { displayText: 'Join Lobby 👥' }, type: 1 }],
+                buttons: [{ buttonId: `${config.prefix}quiz_join`, buttonText: { displayText: 'Join Lobby 👥' }, type: 1 }],
                 headerType: 1,
                 mentions: phonePlayers
             };
 
-            try { await sock.sendMessage(jid, { delete: { remoteJid: jid, id: session.lobbyMsgId, fromMe: true } }); } catch (e) {}
+            try { await sock.sendMessage(jid, { delete: { remoteJid: jid, id: session.lobbyMsgId, fromMe: true } }); } catch (e) { /* ignore */ }
 
             const updatedLobby = await sock.sendMessage(jid, lobbyButtons);
             session.lobbyMsgId = updatedLobby.key.id;
         }
     },
 
-    // 10. QUIZ CATEGORY SELECT ROUTER
+    // 10. QUIZ CAT
     {
         name: 'quiz_cat',
         isPrefixless: true,
@@ -902,7 +895,7 @@ module.exports = [
             if (session.type === 'multi' && session.player !== senderJid) return;
 
             const categoryChoice = args.trim().toLowerCase();
-            
+
             const categoryIndexMap = {
                 "1": "general anime",
                 "2": "chemistry",
@@ -917,7 +910,7 @@ module.exports = [
             const resolvedChoice = categoryIndexMap[categoryChoice] || categoryChoice;
 
             const validCategories = [
-                'English', 'Chemistry', 'General Knowledge', 'Biology', 
+                'English', 'Chemistry', 'General Knowledge', 'Biology',
                 'General Anime', 'DC', 'Marvel', 'All Sports'
             ];
 
@@ -938,7 +931,7 @@ module.exports = [
         }
     },
 
-    // 11. QUIZ ANSWER EVALUATOR
+    // 11. QUIZ ANS
     {
         name: 'quiz_ans',
         isPrefixless: false,
@@ -995,12 +988,12 @@ module.exports = [
             let resultLabel = "";
             if (resultData.isCorrect) {
                 if (isSingle) session.score++; else session.scores[senderJid]++;
-                resultLabel = 
+                resultLabel =
                     `✅ *CORRECT!* \n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `👁️ *Gojo:* _"${resultData.explanation}"_\n\n` +
                     `🎉 +1 point for @${senderNumber}!`;
             } else {
-                resultLabel = 
+                resultLabel =
                     `❌ *INCORRECT!* \n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `👁️ *Gojo:* _"${resultData.explanation}"_\n\n` +
                     `🙄 Looks like @${senderNumber} missed that one!`;
@@ -1016,7 +1009,7 @@ module.exports = [
         }
     },
 
-    // 12. EMOJI CHARADES GAME INITIATOR
+    // 12. CHARADE
     {
         name: 'charade',
         isPrefixless: false,
@@ -1046,7 +1039,7 @@ module.exports = [
         }
     },
 
-    // 13. CHARADE EVALUATION MANAGER
+    // 13. CHARADE ANS
     {
         name: 'charade_ans',
         isPrefixless: false,
@@ -1083,16 +1076,16 @@ module.exports = [
         }
     },
 
-    // 14. UNIFIED PUBLIC ARCADE LOBBY LAUNCHER
+    // 14. GAMES LOBBY
     {
         name: 'games',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const prefix = settings.prefix || '⚡';
+            const prefix = config.prefix || '⚡';
 
-            const portalText = 
-                `幕 *INFINITE ARCADE LOBBY* 幕\n` +
+            const portalText =
+                `🎮 *INFINITE ARCADE LOBBY* 🎮\n` +
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `Welcome to Satoru Gojo's game domain! Select an active game category below to begin:\n\n` +
                 `📚 *1. QUIZ* — Complete topic-focused challenges.\n` +
@@ -1130,6 +1123,8 @@ module.exports = [
         }
     }
 ];
+
+// ─── ALIASES ──────────────────────────────────────────────────────
 
 const aliases = [];
 module.exports.forEach(cmd => {
