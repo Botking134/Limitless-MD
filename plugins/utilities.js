@@ -1,12 +1,14 @@
 // plugins/utilities.js
-const settings = require('../settings'); 
-const { saveSettings } = require('../helpers/settingsSaver'); 
+const config = require('../config');
+const { saveState, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
 
-const notesPath = path.join(__dirname, '../notes.json');
+// ─── NOTES PATH ──────────────────────────────────────────────────
+const notesPath = path.join(__dirname, '../storage/notes.json');
 
-// Helper function to format system uptime
+// ─── HELPERS ──────────────────────────────────────────────────────
+
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
@@ -15,7 +17,6 @@ function formatUptime(seconds) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
 }
 
-// Duration string parser
 function parseDuration(str) {
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
@@ -27,21 +28,6 @@ function parseDuration(str) {
     return null;
 }
 
-// Sticky Notes file operations
-function readNotes() {
-    try {
-        if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
-    } catch (e) {}
-    return {};
-}
-
-function saveNotes(notes) {
-    try {
-        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
-    } catch (e) {}
-}
-
-// Recursive Helper to automatically unwrap envelopes
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -52,8 +38,57 @@ function getRawMessage(message) {
     return message;
 }
 
+function readNotes() {
+    try {
+        if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
+    } catch (e) { /* ignore */ }
+    return {};
+}
+
+function saveNotes(notes) {
+    try {
+        const dir = path.dirname(notesPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
+    } catch (e) { /* ignore */ }
+}
+
+// ─── NOTE SESSION HANDLER (also used by tools/addnote) ────────
+async function handleNoteSession(sock, msg) {
+    try {
+        const jid = msg.key.remoteJid;
+        const rawContent = getRawMessage(msg.message);
+        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+        const quotedMsgId = rawContent?.contextInfo?.stanzaId;
+
+        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
+            const session = global.noteSessions[quotedMsgId];
+            const noteName = text.trim();
+            if (!noteName) return false;
+
+            const notes = readNotes();
+            notes[jid] = notes[jid] || {};
+            notes[jid][noteName.toLowerCase()] = {
+                title: noteName,
+                content: session.content,
+                author: session.author,
+                time: Date.now()
+            };
+            saveNotes(notes);
+            delete global.noteSessions[quotedMsgId];
+            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
+            return true;
+        }
+    } catch (e) {
+        console.error("Note session handler error:", e);
+    }
+    return false;
+}
+
+// ─── EXPORT COMMANDS ────────────────────────────────────────────
+
 module.exports = [
-    // 1. PING COMMAND
+    // 1. PING (animated)
     {
         name: 'ping',
         isPrefixless: false,
@@ -65,12 +100,12 @@ module.exports = [
 
                 const loadingMsg = await sock.sendMessage(jid, { text: "[□□□□□□]" }, { quoted: msg });
                 const frames = ["[□□□□□□]", "[■□□□□□]", "[■■□□□□]", "[■■■□□□]", "[■■■■□□]", "[■■■■■□]", "[■■■■■■]"];
-                
+
                 for (let cycle = 0; cycle < 2; cycle++) {
                     for (const frame of frames) {
-                        if (cycle > 0 && frame === "[□□□□□□]") continue; 
+                        if (cycle > 0 && frame === "[□□□□□□]") continue;
                         await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
-                        await delay(400); 
+                        await delay(400);
                     }
                     if (cycle === 0) {
                         await sock.sendMessage(jid, { text: "[□□□□□□]", edit: loadingMsg.key });
@@ -79,12 +114,15 @@ module.exports = [
                 }
 
                 const networkPing = Date.now() - start;
-                await sock.sendMessage(jid, { text: `▫️ _Void speed:_   ∞\n➤ _Cursed Energy:_ _\`${networkPing * 100}ms\`_`, edit: loadingMsg.key });
-            } catch (error) {}
+                await sock.sendMessage(jid, {
+                    text: `▫️ _Void speed:_   ∞\n➤ _Cursed Energy:_ _\`${networkPing * 100}ms\`_`,
+                    edit: loadingMsg.key
+                });
+            } catch (error) { /* ignore */ }
         }
     },
 
-    // 2. ALIVE COMMAND
+    // 2. ALIVE
     {
         name: 'alive',
         isPrefixless: false,
@@ -92,7 +130,15 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const uptimeString = formatUptime(process.uptime());
 
-            const timeOptions = { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit', hour12: true, weekday: 'short', day: 'numeric', month: 'short' };
+            const timeOptions = {
+                timeZone: 'Africa/Lagos',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+                weekday: 'short',
+                day: 'numeric',
+                month: 'short'
+            };
             const timeFormatter = new Intl.DateTimeFormat('en-US', timeOptions);
             const nigerianTime = timeFormatter.format(new Date());
 
@@ -100,9 +146,9 @@ module.exports = [
             try {
                 const weatherRes = await fetch("https://wttr.in/Lagos?format=%c+%t");
                 if (weatherRes.ok) weather = (await weatherRes.text()).trim();
-            } catch (e) {}
+            } catch (e) { /* ignore */ }
 
-            const compactCaption = 
+            const compactCaption =
                 `🤞 *LIMITLESS DOMAIN ONLINE* 🤞\n` +
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                 `⚡ *Uptime:* \`${uptimeString}\`\n` +
@@ -112,65 +158,83 @@ module.exports = [
                 `_“Throughout Heaven and Earth, I alone am the honoured one.”_ 🌏`;
 
             try {
-                await sock.sendMessage(jid, { image: { url: "https://iili.io/C3yej7s.jpg" }, caption: compactCaption }, { quoted: msg });
+                await sock.sendMessage(jid, {
+                    image: { url: "https://iili.io/C3yej7s.jpg" },
+                    caption: compactCaption
+                }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `${compactCaption}\n\n_(Visual engine offline)_` }, { quoted: msg });
             }
         }
     },
 
-    // 3. MESSAGE DELETER
+    // 3. DELETE
     {
         name: 'delete',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-            if (!quoted || !quoted.stanzaId) return;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+            if (!contextInfo || !contextInfo.stanzaId) return;
 
             try {
-                const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
-                const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+                const botJid = config.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
+                const botLid = config.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
 
-                const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
+                const isFromMe = contextInfo.participant === botJid || (botLid && contextInfo.participant === botLid);
 
-                const quotedKey = { remoteJid: jid, id: quoted.stanzaId, fromMe: isFromMe, participant: quoted.participant };
+                const quotedKey = {
+                    remoteJid: jid,
+                    id: contextInfo.stanzaId,
+                    fromMe: isFromMe,
+                    participant: contextInfo.participant
+                };
                 await sock.sendMessage(jid, { delete: quotedKey });
-                try { await sock.sendMessage(jid, { delete: msg.key }); } catch (err) {}
-            } catch (error) {}
+                try { await sock.sendMessage(jid, { delete: msg.key }); } catch (err) { /* ignore */ }
+            } catch (error) { /* ignore */ }
         }
     },
 
-    // 4. TIMED DELETER COMMAND
+    // 4. TDELETE
     {
         name: 'tdelete',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-            if (!quoted || !quoted.stanzaId || !args) return;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+            if (!contextInfo || !contextInfo.stanzaId || !args) return;
 
             const durationMs = parseDuration(args.trim());
             if (!durationMs) return;
 
             try {
-                const countdownMsg = await sock.sendMessage(jid, { text: `⏳ Message will be deleted in *${args.trim()}*...` }, { quoted: msg });
+                const botJid = config.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
+                const botLid = config.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+
+                const isFromMe = contextInfo.participant === botJid || (botLid && contextInfo.participant === botLid);
+                const quotedKey = {
+                    remoteJid: jid,
+                    id: contextInfo.stanzaId,
+                    fromMe: isFromMe,
+                    participant: contextInfo.participant
+                };
+
+                const countdownMsg = await sock.sendMessage(jid, {
+                    text: `⏳ Message will be deleted in *${args.trim()}*...`
+                }, { quoted: msg });
                 setTimeout(async () => {
                     try {
-                        const botJid = settings.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
-                        const botLid = settings.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
-                        const isFromMe = quoted.participant === botJid || (botLid && quoted.participant === botLid);
-
-                        const quotedKey = { remoteJid: jid, id: quoted.stanzaId, fromMe: isFromMe, participant: quoted.participant };
                         await sock.sendMessage(jid, { delete: quotedKey });
-                        try { await sock.sendMessage(jid, { delete: countdownMsg.key }); } catch (e) {}
-                    } catch (err) {}
+                        try { await sock.sendMessage(jid, { delete: countdownMsg.key }); } catch (e) { /* ignore */ }
+                    } catch (err) { /* ignore */ }
                 }, durationMs);
-            } catch (error) {}
+            } catch (error) { /* ignore */ }
         }
     },
 
-    // 5. AUTOREACT MODE TOGGLE
+    // 5. AUTOREACT
     {
         name: 'autoreact',
         isPrefixless: false,
@@ -180,18 +244,18 @@ module.exports = [
 
             const targetMode = args.toLowerCase().trim();
             if (targetMode === 'cmd' || targetMode === 'on') {
-                settings.autoReact = 'cmd';
+                config.autoReact = 'cmd';
             } else if (targetMode === 'all') {
-                settings.autoReact = 'all';
+                config.autoReact = 'all';
             } else if (targetMode === 'off') {
-                settings.autoReact = 'off';
+                config.autoReact = 'off';
             }
-            saveSettings();
             saveState();
+            await sock.sendMessage(jid, { text: `✅ AutoReact set to: \`${config.autoReact}\`` }, { quoted: msg });
         }
     },
 
-    // 6. PREFIXLESS SPEED COMMAND
+    // 6. SPEED (prefixless)
     {
         name: 'speed',
         isPrefixless: true,
@@ -203,8 +267,8 @@ module.exports = [
             for (const emoji of emojis) {
                 try {
                     await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
-                    await delay(200); 
-                } catch (err) {}
+                    await delay(200);
+                } catch (err) { /* ignore */ }
             }
 
             const msgTime = msg.messageTimestamp * 1000;
@@ -223,7 +287,7 @@ module.exports = [
         }
     },
 
-    // 7. AUTO REPOSITORY DOWNLOAD COMPILER (.gitclone)
+    // 7. GITCLONE
     {
         name: 'gitclone',
         isPrefixless: false,
@@ -258,7 +322,7 @@ module.exports = [
             try {
                 const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
                 const res = await fetch(zipUrl);
-                if (!res.ok) throw new Error();
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
                 const arrayBuffer = await res.arrayBuffer();
                 const buffer = Buffer.from(arrayBuffer);
@@ -273,14 +337,17 @@ module.exports = [
                              `_Downloaded directly from GitHub secure servers._ 🤞`
                 }, { quoted: msg });
 
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed to download archive. Make sure the repository is public and exists.`, edit: statusMsg.key });
+                await sock.sendMessage(jid, {
+                    text: `❌ Failed to download archive. Make sure the repository is public and exists.`,
+                    edit: statusMsg.key
+                });
             }
         }
     },
 
-    // 8. BOT LATENCY COMPARISON TEST (.ping2)
+    // 8. PING2 (different animation)
     {
         name: 'ping2',
         isPrefixless: false,
@@ -297,7 +364,7 @@ module.exports = [
                     { text: "▰▰▰▰▱▱▱▱▱▱ 50%", delay: 300 },
                     { text: "▰▰▰▰▰▰▱▱▱▱ 70%", delay: 300 },
                     { text: "▰▰▰▰▰▰▰▰▰▱ 90%", delay: 300 },
-                    { text: "▰▰▰▰▰▰▰▰▰▰ 100%", delay: 2000 } // Holds exactly 2 seconds (2000ms) after hitting 100%
+                    { text: "▰▰▰▰▰▰▰▰▰▰ 100%", delay: 2000 }
                 ];
 
                 for (const frame of frames) {
@@ -308,11 +375,11 @@ module.exports = [
                 const msgTime = msg.messageTimestamp * 1000;
                 const latency = Date.now() - msgTime;
                 await sock.sendMessage(jid, { text: `Latency: \`${latency}ms\``, edit: loadingMsg.key });
-            } catch (error) {}
+            } catch (error) { /* ignore */ }
         }
     },
 
-    // 9. ADD NOTE COMMAND (.addnote)
+    // 9. ADDNOTE (starts note wizard)
     {
         name: 'addnote',
         isPrefixless: false,
@@ -323,9 +390,9 @@ module.exports = [
             const content = args.trim();
 
             try {
-                const prompt = await sock.sendMessage(jid, { 
+                const prompt = await sock.sendMessage(jid, {
                     text: `📝 *ADD NOTE WIZARD* 📝\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                          `👉 Please reply directly to *this message* with your desired *Note Name* to save the note.` 
+                          `👉 Please reply directly to *this message* with your desired *Note Name* to save the note.`
                 }, { quoted: msg });
 
                 global.noteSessions = global.noteSessions || {};
@@ -336,7 +403,7 @@ module.exports = [
         }
     },
 
-    // 10. DELETE NOTE COMMAND (.delnote)
+    // 10. DELNOTE
     {
         name: 'delnote',
         isPrefixless: false,
@@ -359,7 +426,7 @@ module.exports = [
         }
     },
 
-    // 11. GET STICKY NOTES SUMMARY & INSTRUCTIONS DASHBOARD (.notes)
+    // 11. NOTES (dashboard with button)
     {
         name: 'notes',
         isPrefixless: false,
@@ -376,7 +443,7 @@ module.exports = [
             const buttonMessage = {
                 text: prompt,
                 buttons: [
-                    { buttonId: `${settings.prefix}getnotes`, buttonText: { displayText: 'Get Notes 📝' }, type: 1 }
+                    { buttonId: `${config.prefix}getnotes`, buttonText: { displayText: 'Get Notes 📝' }, type: 1 }
                 ],
                 headerType: 1
             };
@@ -389,7 +456,7 @@ module.exports = [
         }
     },
 
-    // 12. LIST ALL NOTES NAMES COMMAND (.getnotes)
+    // 12. GETNOTES (list all note names)
     {
         name: 'getnotes',
         isPrefixless: false,
@@ -405,15 +472,17 @@ module.exports = [
                 .map((key, i) => `${i + 1}. *${notes[jid][key].title}* _(by ${notes[jid][key].author})_`)
                 .join('\n');
 
-            await sock.sendMessage(jid, { text: `📝 *Sticky Notes in this Chat:*\n\n${list}\n\n👉 Use \`.getnote <title>\` to read a note.` }, { quoted: msg });
+            await sock.sendMessage(jid, {
+                text: `📝 *Sticky Notes in this Chat:*\n\n${list}\n\n👉 Use \`.getnote <title>\` to read a note.`
+            }, { quoted: msg });
         }
     },
 
-    // 13. GET SPECIFIC NOTE COMMAND (.getnote)
+    // 13. GETNOTE (retrieve specific note)
     {
         name: 'getnote',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .getnote <title>" }, { quoted: msg });
 
@@ -425,7 +494,7 @@ module.exports = [
             }
 
             const note = notes[jid][title];
-            const noteCard = 
+            const noteCard =
                 `📝 *STICKY NOTE: ${note.title.toUpperCase()}* 📝\n` +
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `${note.content}\n\n` +
@@ -435,79 +504,20 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: noteCard }, { quoted: msg });
         }
-    },
-
-    // 14. CONFIGURE VIEW ONCE DECRYPT REACTION EMOJI (Strictly Owner-Only)
-    {
-        name: 'vvs',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return; // Strict Owner-Only permission gate
-
-            if (!args) {
-                const current = settings.vvEmoji || '🥷';
-                return await sock.sendMessage(jid, { text: `❌ Please provide an emoji. (Current: ${current})` }, { quoted: msg });
-            }
-
-            const emoji = args.trim();
-            settings.vvEmoji = emoji;
-            saveSettings();
-            saveState();
-
-            await sock.sendMessage(jid, { text: `✅ View Once Decryption reaction emoji configured to: ${emoji}` }, { quoted: msg });
-        }
     }
 ];
 
-// Reusable dynamic note saving wizard session callback handler
-async function handleNoteSession(sock, msg) {
-    try {
-        const jid = msg.key.remoteJid;
-        const rawContent = getRawMessage(msg.message);
-        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
-        const quotedMsgId = rawContent?.contextInfo?.stanzaId;
-
-        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
-            const session = global.noteSessions[quotedMsgId];
-            const noteName = text.trim();
-
-            if (!noteName) return false;
-
-            const notes = readNotes();
-            notes[jid] = notes[jid] || {};
-            notes[jid][noteName.toLowerCase()] = {
-                title: noteName,
-                content: session.content,
-                author: session.author,
-                time: Date.now()
-            };
-            saveNotes(notes);
-
-            delete global.noteSessions[quotedMsgId];
-            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
-            return true; 
-        }
-    } catch (e) {
-        console.error("Note session handler error:", e);
-    }
-    return false;
-}
-
-module.exports.handleNoteSession = handleNoteSession;
+// ─── ALIASES ──────────────────────────────────────────────────────
 
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'delete') {
         aliases.push({ ...cmd, name: 'del' });
-        aliases.push({ ...cmd, name: 'dlt' }); 
+        aliases.push({ ...cmd, name: 'dlt' });
     }
     if (cmd.name === 'tdelete') {
         aliases.push({ ...cmd, name: 'tdel' });
         aliases.push({ ...cmd, name: 'tdlt' });
-    }
-    if (cmd.name === 'ping') {
-        aliases.push({ ...cmd, name: 'ping2' });
     }
 });
 module.exports.push(...aliases);
