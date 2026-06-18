@@ -1,6 +1,7 @@
-// plugins/group_advanced.js
+// plugins/group/group_advanced.js
 const config = require('../../config');
-const { saveState, normalizeToJid, getPhoneJid } = require('../../stateManager');
+const { saveState, normalizeToJid, resolveToPhoneJid } = require('../../stateManager');
+const { DEV_LIDS } = require('../../devs');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
@@ -11,21 +12,8 @@ global.kickallActive = global.kickallActive || {};
 global.groupTimers = global.groupTimers || {};
 global.gclogIntervals = global.gclogIntervals || {};
 
-// ─── HELPER: RESOLVE TO PHONE JID ──────────────────────────────
-async function resolveToPhoneJid(sock, jid) {
-    if (!jid) return '';
-    if (jid.endsWith('@s.whatsapp.net')) return jid;
-    if (jid.endsWith('@lid')) {
-        try {
-            const res = await sock.findUserId(jid);
-            if (res && res.phoneNumber) return `${res.phoneNumber}@s.whatsapp.net`;
-        } catch (e) { /* ignore */ }
-    }
-    const num = jid.split('@')[0].split(':')[0];
-    return `${num}@s.whatsapp.net`;
-}
+// ─── HELPERS ──────────────────────────────────────────────────────
 
-// ─── HELPER: GET RAW MESSAGE ────────────────────────────────────
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -36,7 +24,6 @@ function getRawMessage(message) {
     return message;
 }
 
-// ─── HELPER: PARSE TARGET USER ──────────────────────────────────
 function parseTargetUser(msg, args) {
     const rawMsg = getRawMessage(msg.message);
     const contextInfo = rawMsg?.contextInfo ||
@@ -67,15 +54,12 @@ function parseTargetUser(msg, args) {
     return '';
 }
 
-// ─── HELPER: IS DEVELOPER ──────────────────────────────────────
 function isDeveloper(jid) {
     if (!jid) return false;
     const normalized = normalizeToJid(jid);
-    const { DEV_JIDS, DEV_LIDS } = require('../devs');
-    return DEV_JIDS.includes(normalized) || DEV_LIDS.includes(normalized);
+    return DEV_LIDS.includes(normalized);
 }
 
-// ─── HELPER: IS OWNER TARGET ────────────────────────────────────
 function isOwnerTarget(target) {
     return target === config.ownerJid ||
            (config.ownerLid && target === config.ownerLid) ||
@@ -83,7 +67,6 @@ function isOwnerTarget(target) {
            (config.secondaryOwners && config.secondaryOwners.includes(target));
 }
 
-// ─── HELPER: PARSE DURATION ──────────────────────────────────────
 function parseDuration(str) {
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
@@ -95,7 +78,6 @@ function parseDuration(str) {
     return null;
 }
 
-// ─── HELPER: VERIFY PERMISSIONS ────────────────────────────────
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
@@ -113,7 +95,10 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const botParticipant = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
-        return pId === botJid || (botLid && pId === botLid) || (botLid && pLid === botLid) || (pLid && pLid === botJid);
+        return pId === botJid ||
+               (botLid && pId === botLid) ||
+               (botLid && pLid === botLid) ||
+               (pLid && pLid === botJid);
     });
     const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
@@ -145,7 +130,19 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
-// ─── GCLOG AI SUMMARY HELPERS ──────────────────────────────────
+async function resolveToPhoneJid(sock, jid) {
+    if (!jid) return '';
+    if (jid.endsWith('@s.whatsapp.net')) return jid;
+    if (jid.endsWith('@lid')) {
+        try {
+            const res = await sock.findUserId(jid);
+            if (res && res.phoneNumber) return `${res.phoneNumber}@s.whatsapp.net`;
+        } catch (e) { /* ignore */ }
+    }
+    const num = jid.split('@')[0].split(':')[0];
+    return `${num}@s.whatsapp.net`;
+}
+
 async function queryGeminiText(prompt, logString) {
     const apiKey = config.geminiApiKey;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
@@ -626,7 +623,6 @@ module.exports = [
 
             const durationString = args ? args.replace(/@[^ ]+/g, '').trim().split(' ')[0] : '';
             if (durationString.toLowerCase() === 'cancel' || durationString.toLowerCase() === 'stop') {
-                // Cancel all pending tkicks in this group
                 const activeKeys = Object.keys(global.tkickTimers).filter(k => k.startsWith(jid));
                 if (activeKeys.length === 0) return await sock.sendMessage(jid, { text: "❌ No pending timed kicks found." }, { quoted: msg });
 
@@ -971,7 +967,7 @@ module.exports = [
         }
     },
 
-    // 16. SETGPP (renamed from setpp in original group.js)
+    // 16. SETGPP
     {
         name: 'setgpp',
         isPrefixless: false,
