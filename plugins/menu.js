@@ -4,22 +4,20 @@ const path = require('path');
 
 // ─── ASSETS ──────────────────────────────────────────────────────
 
-// GIFs for .menu (Issue 4a)
-const menuGifs = [
+// GIFs for .tag / .tagall (shared with menu but used elsewhere)
+const madaraGifs = [
     "https://media.giphy.com/media/PmCiutdmK8mt2/giphy.mp4",
     "https://media.giphy.com/media/5D8fDjKyQfuZW/giphy.mp4"
 ];
 
-// Audio files for .menu (Issue 4a)
+// Combined audio pool for .menu (7 files – all original + menu2 audio)
 const menuAudios = [
+    // Original 4
     "https://github.com/Botking134/Limitless-MD/raw/refs/heads/master/plugins/AUD-20260604-WA0001.mp3",
     "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/itamio%20shire.mp3",
     "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/katon%20gokame.mp3",
-    "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/gojo.mp3"
-];
-
-// Audio files for .menu2 (Issue 4c)
-const menu2Audios = [
+    "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/gojo.mp3",
+    // Added from menu2 (3 files)
     "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/itachi.mp3",
     "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/itamio2.mp3",
     "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/sharingans.mp3"
@@ -111,7 +109,7 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
     };
 }
 
-// ─── RENDER TEXT MENU (unchanged) ──────────────────────────────
+// ─── RENDER TEXT MENU ──────────────────────────────────────────
 async function renderMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -366,7 +364,7 @@ _┃ ⊱ currency
     }
 }
 
-// ─── RENDER CAROUSEL MENU (unchanged) ─────────────────────────
+// ─── RENDER CAROUSEL MENU ──────────────────────────────────────
 async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -390,7 +388,7 @@ _Swipe through the cards below to explore command categories._ 🔮`;
     try {
         const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
 
-        // Loading animation (unchanged)
+        // Loading animation
         const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
 
         const frames = [
@@ -411,7 +409,7 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             await sock.sendMessage(jid, { delete: loadingMsg.key });
         } catch (e) { /* ignore */ }
 
-        // Build carousel (unchanged)
+        // Build carousel
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
         const categories = [
@@ -471,7 +469,6 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             }
         };
 
-        // --- REMOVED viewOnceMessage wrapper to fix carousel ---
         const msgProto = generateWAMessageFromContent(jid, messageContent, { userJid: sock.user.id });
 
         await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
@@ -482,51 +479,20 @@ _Swipe through the cards below to explore command categories._ 🔮`;
     }
 }
 
-// ─── SUB-MENU HELPERS (unchanged) ──────────────────────────────
-function buildSubMenu(commands) {
-    return commands.map(c => `_┃ ⊱ ${c}_`).join('\n');
-}
-
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // ─── .menu (Issue 4a + GIF auto-delete) ────────────────────
+    // ─── .menu (Text Menu – No GIF, 7 Audio Files) ─────────────
     {
         name: 'menu',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            // 1. Send random GIF and capture its key
-            const randomGif = menuGifs[Math.floor(Math.random() * menuGifs.length)];
-            let gifKey = null;
-            try {
-                const gifMsg = await sock.sendMessage(jid, {
-                    video: { url: randomGif },
-                    gifPlayback: true,
-                    caption: "🔥"
-                });
-                gifKey = gifMsg.key;
-            } catch (err) {
-                console.error("Failed to send GIF for menu:", err);
-            }
-
-            // 2. Wait 4 seconds
-            await new Promise(resolve => setTimeout(resolve, 4000));
-
-            // 3. Delete the GIF if it was sent
-            if (gifKey) {
-                try {
-                    await sock.sendMessage(jid, { delete: gifKey });
-                } catch (err) {
-                    console.error("Failed to delete menu GIF:", err);
-                }
-            }
-
-            // 4. Show text menu (image + caption)
+            // Show text menu (image + caption)
             await renderMenu(sock, msg);
 
-            // 5. Send random audio from menu pool
+            // Send random audio from combined pool (7 files)
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
             try {
                 const audioResponse = await fetch(randomAudio);
@@ -541,7 +507,6 @@ module.exports = [
                     throw new Error();
                 }
             } catch (audioErr) {
-                // Fallback to direct URL
                 await sock.sendMessage(jid, {
                     audio: { url: randomAudio },
                     mimetype: "audio/mpeg",
@@ -558,36 +523,8 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            // 1. Send random GIF and capture its key
-            const randomGif = menuGifs[Math.floor(Math.random() * menuGifs.length)];
-            let gifKey = null;
-            try {
-                const gifMsg = await sock.sendMessage(jid, {
-                    video: { url: randomGif },
-                    gifPlayback: true,
-                    caption: "🔥"
-                });
-                gifKey = gifMsg.key;
-            } catch (err) {
-                console.error("Failed to send GIF for list:", err);
-            }
-
-            // 2. Wait 4 seconds
-            await new Promise(resolve => setTimeout(resolve, 4000));
-
-            // 3. Delete the GIF if it was sent
-            if (gifKey) {
-                try {
-                    await sock.sendMessage(jid, { delete: gifKey });
-                } catch (err) {
-                    console.error("Failed to delete list GIF:", err);
-                }
-            }
-
-            // 4. Show text menu (image + caption)
             await renderMenu(sock, msg);
 
-            // 5. Send random audio from menu pool
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
             try {
                 const audioResponse = await fetch(randomAudio);
@@ -611,7 +548,7 @@ module.exports = [
         }
     },
 
-    // ─── .menu2 (Issue 4c – unchanged, carousel now without viewOnce) ───
+    // ─── .menu2 (Carousel – Loading Animation Only, No Audio) ──
     {
         name: 'menu2',
         isPrefixless: false,
@@ -620,28 +557,6 @@ module.exports = [
 
             // Render carousel menu (includes loading animation)
             await renderCarouselMenu(sock, msg);
-
-            // After carousel is sent, play random audio from menu2 pool
-            const randomAudio = menu2Audios[Math.floor(Math.random() * menu2Audios.length)];
-            try {
-                const audioResponse = await fetch(randomAudio);
-                if (audioResponse.ok) {
-                    const arrayBuffer = await audioResponse.arrayBuffer();
-                    await sock.sendMessage(jid, {
-                        audio: Buffer.from(arrayBuffer),
-                        mimetype: "audio/mpeg",
-                        ptt: false
-                    });
-                } else {
-                    throw new Error();
-                }
-            } catch (audioErr) {
-                await sock.sendMessage(jid, {
-                    audio: { url: randomAudio },
-                    mimetype: "audio/mpeg",
-                    ptt: false
-                });
-            }
         }
     },
 
@@ -652,31 +567,10 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             await renderCarouselMenu(sock, msg);
-
-            const randomAudio = menu2Audios[Math.floor(Math.random() * menu2Audios.length)];
-            try {
-                const audioResponse = await fetch(randomAudio);
-                if (audioResponse.ok) {
-                    const arrayBuffer = await audioResponse.arrayBuffer();
-                    await sock.sendMessage(jid, {
-                        audio: Buffer.from(arrayBuffer),
-                        mimetype: "audio/mpeg",
-                        ptt: false
-                    });
-                } else {
-                    throw new Error();
-                }
-            } catch (audioErr) {
-                await sock.sendMessage(jid, {
-                    audio: { url: randomAudio },
-                    mimetype: "audio/mpeg",
-                    ptt: false
-                });
-            }
         }
     },
 
-    // ─── SUB-MENUS (unchanged) ──────────────────────────────────
+    // ─── SUB-MENUS (unchanged – copy from your existing file) ──
     // (All sub-menus like menu_ai, menu_games, etc. remain as they were.
     //  You can copy them from your existing menu.js – they are not affected.)
     // ... (the rest of your sub-menu definitions)
