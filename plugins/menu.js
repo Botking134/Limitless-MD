@@ -471,11 +471,8 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             }
         };
 
-        const msgProto = generateWAMessageFromContent(jid, {
-            viewOnceMessage: {
-                message: messageContent
-            }
-        }, { userJid: sock.user.id });
+        // --- REMOVED viewOnceMessage wrapper to fix carousel ---
+        const msgProto = generateWAMessageFromContent(jid, messageContent, { userJid: sock.user.id });
 
         await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
 
@@ -493,28 +490,43 @@ function buildSubMenu(commands) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // ─── .menu (Issue 4a) ──────────────────────────────────────
+    // ─── .menu (Issue 4a + GIF auto-delete) ────────────────────
     {
         name: 'menu',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            // 1. Send random GIF
+            // 1. Send random GIF and capture its key
             const randomGif = menuGifs[Math.floor(Math.random() * menuGifs.length)];
-            await sock.sendMessage(jid, {
-                video: { url: randomGif },
-                gifPlayback: true,
-                caption: "🔥"
-            });
+            let gifKey = null;
+            try {
+                const gifMsg = await sock.sendMessage(jid, {
+                    video: { url: randomGif },
+                    gifPlayback: true,
+                    caption: "🔥"
+                });
+                gifKey = gifMsg.key;
+            } catch (err) {
+                console.error("Failed to send GIF for menu:", err);
+            }
 
             // 2. Wait 4 seconds
             await new Promise(resolve => setTimeout(resolve, 4000));
 
-            // 3. Show text menu
+            // 3. Delete the GIF if it was sent
+            if (gifKey) {
+                try {
+                    await sock.sendMessage(jid, { delete: gifKey });
+                } catch (err) {
+                    console.error("Failed to delete menu GIF:", err);
+                }
+            }
+
+            // 4. Show text menu (image + caption)
             await renderMenu(sock, msg);
 
-            // 4. Send random audio from menu pool
+            // 5. Send random audio from menu pool
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
             try {
                 const audioResponse = await fetch(randomAudio);
@@ -544,20 +556,38 @@ module.exports = [
         name: 'list',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            // Reuse the same flow as .menu
             const jid = msg.key.remoteJid;
 
+            // 1. Send random GIF and capture its key
             const randomGif = menuGifs[Math.floor(Math.random() * menuGifs.length)];
-            await sock.sendMessage(jid, {
-                video: { url: randomGif },
-                gifPlayback: true,
-                caption: "🔥"
-            });
+            let gifKey = null;
+            try {
+                const gifMsg = await sock.sendMessage(jid, {
+                    video: { url: randomGif },
+                    gifPlayback: true,
+                    caption: "🔥"
+                });
+                gifKey = gifMsg.key;
+            } catch (err) {
+                console.error("Failed to send GIF for list:", err);
+            }
 
+            // 2. Wait 4 seconds
             await new Promise(resolve => setTimeout(resolve, 4000));
 
+            // 3. Delete the GIF if it was sent
+            if (gifKey) {
+                try {
+                    await sock.sendMessage(jid, { delete: gifKey });
+                } catch (err) {
+                    console.error("Failed to delete list GIF:", err);
+                }
+            }
+
+            // 4. Show text menu (image + caption)
             await renderMenu(sock, msg);
 
+            // 5. Send random audio from menu pool
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
             try {
                 const audioResponse = await fetch(randomAudio);
@@ -581,7 +611,7 @@ module.exports = [
         }
     },
 
-    // ─── .menu2 (Issue 4c) ──────────────────────────────────────
+    // ─── .menu2 (Issue 4c – unchanged, carousel now without viewOnce) ───
     {
         name: 'menu2',
         isPrefixless: false,
@@ -648,10 +678,6 @@ module.exports = [
 
     // ─── SUB-MENUS (unchanged) ──────────────────────────────────
     // (All sub-menus like menu_ai, menu_games, etc. remain as they were.
-    //  They are not affected by these changes.)
-    // ... (the rest of your sub-menu definitions are exactly as before)
-
-    // For brevity, I've omitted the sub-menu definitions here,
-    // but they must be included exactly as they were in your original file.
-    // You can copy them from your existing menu.js.
+    //  You can copy them from your existing menu.js – they are not affected.)
+    // ... (the rest of your sub-menu definitions)
 ];
