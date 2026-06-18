@@ -130,19 +130,6 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
-async function resolveToPhoneJid(sock, jid) {
-    if (!jid) return '';
-    if (jid.endsWith('@s.whatsapp.net')) return jid;
-    if (jid.endsWith('@lid')) {
-        try {
-            const res = await sock.findUserId(jid);
-            if (res && res.phoneNumber) return `${res.phoneNumber}@s.whatsapp.net`;
-        } catch (e) { /* ignore */ }
-    }
-    const num = jid.split('@')[0].split(':')[0];
-    return `${num}@s.whatsapp.net`;
-}
-
 async function queryGeminiText(prompt, logString) {
     const apiKey = config.geminiApiKey;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
