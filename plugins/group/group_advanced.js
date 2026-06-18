@@ -963,20 +963,24 @@ module.exports = [
         }
     },
 
-    // 16. SETPP
+    // 16. SETGPP (FIXED – Group Profile Picture)
     {
-        name: 'setpp',
+        name: 'setgpp',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'setpp');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'setgpp');
             if (!isAuthorized) return;
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted || !quoted.imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
+            if (!quoted || !quoted.imageMessage) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ Please reply to an image message to set as group profile picture." 
+                }, { quoted: msg });
+            }
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -985,10 +989,17 @@ module.exports = [
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
+
+                // Update group profile picture using the group JID
                 await sock.updateProfilePicture(jid, buffer);
-                await sock.sendMessage(jid, { text: "✅ Successfully updated Group Profile Picture!" }, { quoted: msg });
+                await sock.sendMessage(jid, { 
+                    text: "✅ Successfully updated Group Profile Picture!" 
+                }, { quoted: msg });
             } catch (e) {
-                await sock.sendMessage(jid, { text: "❌ Failed to update profile picture." }, { quoted: msg });
+                console.error("setgpp error:", e.message);
+                await sock.sendMessage(jid, { 
+                    text: `❌ Failed to update profile picture: ${e.message}` 
+                }, { quoted: msg });
             }
         }
     },
