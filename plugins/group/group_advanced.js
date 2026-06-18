@@ -495,7 +495,7 @@ module.exports = [
         }
     },
 
-    // 8. KICKALL
+    // 8. KICKALL (with GIF per removal – or you can move it outside the loop if you prefer)
     {
         name: 'kickall',
         isPrefixless: false,
@@ -557,6 +557,13 @@ module.exports = [
                         break;
                     }
                     try {
+                        // ─── Send Kick GIF ──────────────────────────────
+                        await sock.sendMessage(jid, {
+                            video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzJmenhraWhkZHhsNHlnMmg2Z3hqM29pNHFvZ2dzNm53bXVnYjdoeiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QfCQQQAI860CXZY9qs/giphy.mp4" },
+                            gifPlayback: true,
+                            caption: "Kokeida Na.... Yare Yare"
+                        });
+
                         await sock.groupParticipantsUpdate(jid, [target], "remove");
                         await new Promise(r => setTimeout(r, 1000));
                     } catch (err) { /* ignore */ }
@@ -588,7 +595,7 @@ module.exports = [
         }
     },
 
-    // 10. TKICK
+    // 10. TKICK (with GIF on timer expire)
     {
         name: 'tkick',
         isPrefixless: false,
@@ -644,6 +651,13 @@ module.exports = [
 
                 const timeoutId = setTimeout(async () => {
                     try {
+                        // ─── Send Kick GIF ──────────────────────────────
+                        await sock.sendMessage(jid, {
+                            video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzJmenhraWhkZHhsNHlnMmg2Z3hqM29pNHFvZ2dzNm53bXVnYjdoeiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QfCQQQAI860CXZY9qs/giphy.mp4" },
+                            gifPlayback: true,
+                            caption: "Kokeida Na.... Yare Yare"
+                        });
+
                         await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
                         await sock.sendMessage(jid, { text: `🌪️ *Timer Elapsed.* Exorcised: @${targetJid.split('@')[0]}`, mentions: [targetJid] });
                     } catch (err) { /* ignore */ }
