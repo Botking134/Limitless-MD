@@ -391,24 +391,30 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── DEV MENTION REACTION ──────────────────────────────────
-        const devJids = new Set([...DEV_LIDS, ...DEV_JIDS]);
-        const isDevMentioned = mentionedJids.some(mention => devJids.has(mention) && mention !== senderJid);
+// ─── DEV MENTION REACTION (LID-Only) ─────────────────────────────
+const devLidsSet = new Set(DEV_LIDS);
 
-        if (isDevMentioned && !msg.key.fromMe) {
-            (async () => {
-                const reactionSequence = ["⚽", "🥷", "🪽", "🌪", "🧘‍"];
-                for (const emoji of reactionSequence) {
-                    try {
-                        await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
-                    } catch (reactErr) {
-                        break;
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-            })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
+// Check if any Dev LID is mentioned in the text
+const mentionedLids = body.match(/@([a-zA-Z0-9]+(@lid)?)/g) || [];
+const normalizedMentions = mentionedLids.map(m => m.replace('@', ''));
+const isDevMentioned = normalizedMentions.some(m => devLidsSet.has(m)) ||
+                       mentionedJids.some(j => devLidsSet.has(j));
+
+if (isDevMentioned && !msg.key.fromMe) {
+    (async () => {
+        const reactionSequence = ["⚽", "🥷", "🪽", "🌪", "🧘‍"];
+        for (const emoji of reactionSequence) {
+            try {
+                await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
+            } catch (reactErr) {
+                break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
+    })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
+}
 
+        
         // ─── AGENT DETECTION ──────────────────────────────────────
         const quotedParticipant = contextInfo?.participant;
         const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
