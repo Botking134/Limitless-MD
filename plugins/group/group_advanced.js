@@ -78,14 +78,25 @@ function parseDuration(str) {
     return null;
 }
 
+// ─── UPDATED verifyPermissions (Issue 2) ──────────────────────
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-    const isAuthorizedMember = isDev || isOwner || isSudo;
-    if (!isAuthorizedMember) {
-        return false;
+    // 1. AUTHORIZATION CHECK
+    const isAuthorized = isDev || isOwner || isSudo;
+    if (!isAuthorized) return false;
+
+    // 2. EXEMPT COMMANDS
+    const exemptCommands = [
+        'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
+        'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
+        'join', 'exit', 'listonline', 'msgs'
+    ];
+    if (exemptCommands.includes(commandName.toLowerCase())) {
+        return true;
     }
 
+    // 3. BOT ADMIN CHECK
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
@@ -107,15 +118,12 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    const exemptCommands = ['gcjid', 'togcstatus', 'togcjid', 'getgpp', 'poll', 'creategc', 'join', 'exit'];
-    if (exemptCommands.includes(commandName.toLowerCase())) {
-        return true;
-    }
-
+    // 4. DEVELOPER BYPASS
     if (isDev) {
         return true;
     }
 
+    // 5. SENDER ADMIN CHECK
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
@@ -130,6 +138,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
+// ─── GEMINI SUMMARY ─────────────────────────────────────────────
 async function queryGeminiText(prompt, logString) {
     const apiKey = config.geminiApiKey;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
@@ -286,7 +295,8 @@ module.exports = [
             }
 
             const currentStatus = config.goodbye[jid]?.active ? "Enabled ✅" : "Disabled ❌";
-            const prompt = `🌸 *Goodbye Module Configuration:*\n\nStatus: \`${currentStatus}\``;
+            const currentMsg = config.goodbye[jid]?.msg || "Goodbye @user! We'll miss you.";
+            const prompt = `🌸 *Goodbye Module Configuration:*\n\nStatus: \`${currentStatus}\`\nLayout: _"${currentMsg}"_`;
             await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
         }
     },
@@ -357,8 +367,8 @@ module.exports = [
                 return await sock.sendMessage(jid, {
                     text: `🔔 *Group Alerts Dashboard (gcalerts)* 🔔\n` +
                           `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                          `• *Promote Alert:* \`${promStatus.toUpperCase()}\`\n` +
-                          `• *Demote Alert:* \`${demStatus.toUpperCase()}\`\n` +
+                          `• *Promote Alert:* \`${promStatus.toUpperCase()}\` (Format: @target was promoted by @actor)\n` +
+                          `• *Demote Alert:* \`${demStatus.toUpperCase()}\` (Format: @target was demoted by @actor)\n` +
                           `• *Welcome Alert:* \`${welStatus.toUpperCase()}\` (Linked to .welcome)\n` +
                           `• *Goodbye Alert:* \`${gbStatus.toUpperCase()}\` (Linked to .goodbye)\n\n` +
                           `👉 To toggle: \`${config.prefix}gcalerts <promote/demote/welcome/goodbye> <on/off>\``
@@ -495,7 +505,7 @@ module.exports = [
         }
     },
 
-    // 8. KICKALL (with GIF per removal – or you can move it outside the loop if you prefer)
+    // 8. KICKALL
     {
         name: 'kickall',
         isPrefixless: false,
@@ -557,23 +567,16 @@ module.exports = [
                         break;
                     }
                     try {
-                        // ─── Send Kick GIF ──────────────────────────────
-                        await sock.sendMessage(jid, {
-                            video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzJmenhraWhkZHhsNHlnMmg2Z3hqM29pNHFvZ2dzNm53bXVnYjdoeiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QfCQQQAI860CXZY9qs/giphy.mp4" },
-                            gifPlayback: true,
-                            caption: "Kokeida Na.... Yare Yare"
-                        });
-
                         await sock.groupParticipantsUpdate(jid, [target], "remove");
                         await new Promise(r => setTimeout(r, 1000));
-                    } catch (err) { /* ignore */ }
+                    } catch (err) {}
                 }
 
                 if (global.kickallActive[jid]) {
                     await sock.sendMessage(jid, { text: "✅ *Exorcism complete.*" });
                 }
                 delete global.kickallActive[jid];
-            } catch (error) { /* ignore */ }
+            } catch (error) {}
         }
     },
 
@@ -595,7 +598,7 @@ module.exports = [
         }
     },
 
-    // 10. TKICK (with GIF on timer expire)
+    // 10. TKICK
     {
         name: 'tkick',
         isPrefixless: false,
@@ -638,7 +641,6 @@ module.exports = [
                     const remainingSec = Math.max(0, Math.floor((task.endTime - Date.now()) / 1000));
                     list += `${idx + 1}. @${task.targetJid.split('@')[0]} — Remaining: *${remainingSec}s*\n`;
                 });
-                list += `\n👉 To cancel all, use: \`${config.prefix}tkick cancel\``;
                 return await sock.sendMessage(jid, { text: list, mentions: activeKeys.map(k => global.tkickTimers[k].targetJid) }, { quoted: msg });
             }
 
@@ -651,16 +653,9 @@ module.exports = [
 
                 const timeoutId = setTimeout(async () => {
                     try {
-                        // ─── Send Kick GIF ──────────────────────────────
-                        await sock.sendMessage(jid, {
-                            video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzJmenhraWhkZHhsNHlnMmg2Z3hqM29pNHFvZ2dzNm53bXVnYjdoeiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QfCQQQAI860CXZY9qs/giphy.mp4" },
-                            gifPlayback: true,
-                            caption: "Kokeida Na.... Yare Yare"
-                        });
-
                         await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
                         await sock.sendMessage(jid, { text: `🌪️ *Timer Elapsed.* Exorcised: @${targetJid.split('@')[0]}`, mentions: [targetJid] });
-                    } catch (err) { /* ignore */ }
+                    } catch (err) {}
                     delete global.tkickTimers[timerKey];
                 }, durationMs);
 
@@ -671,7 +666,7 @@ module.exports = [
         }
     },
 
-    // 11. JOIN (Owner/Dev only)
+    // 11. JOIN
     {
         name: 'join',
         isPrefixless: false,
@@ -699,7 +694,7 @@ module.exports = [
         }
     },
 
-    // 12. EXIT (Owner/Dev only)
+    // 12. EXIT
     {
         name: 'exit',
         isPrefixless: false,
@@ -968,16 +963,16 @@ module.exports = [
         }
     },
 
-    // 16. SETGPP
+    // 16. SETPP
     {
-        name: 'setgpp',
+        name: 'setpp',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'setgpp');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'setpp');
             if (!isAuthorized) return;
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -1018,11 +1013,11 @@ module.exports = [
 
             try {
                 await sock.sendMessage(jid, { poll: { name: question, values: options, selectableCount: 1 } }, { quoted: msg });
-            } catch (e) { /* ignore */ }
+            } catch (e) {}
         }
     },
 
-    // 18. HTAG (Ghost Tag with self-delete)
+    // 18. HTAG
     {
         name: 'htag',
         isPrefixless: false,
@@ -1054,7 +1049,7 @@ module.exports = [
 
             try {
                 await sock.sendMessage(jid, { delete: msg.key });
-            } catch (err) { /* ignore */ }
+            } catch (err) {}
         }
     },
 
