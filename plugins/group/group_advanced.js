@@ -82,11 +82,9 @@ function parseDuration(str) {
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-    // 1. AUTHORIZATION CHECK
     const isAuthorized = isDev || isOwner || isSudo;
     if (!isAuthorized) return false;
 
-    // 2. EXEMPT COMMANDS
     const exemptCommands = [
         'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
         'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
@@ -96,7 +94,6 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return true;
     }
 
-    // 3. BOT ADMIN CHECK
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
@@ -118,12 +115,10 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    // 4. DEVELOPER BYPASS
     if (isDev) {
         return true;
     }
 
-    // 5. SENDER ADMIN CHECK
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
@@ -963,7 +958,7 @@ module.exports = [
         }
     },
 
-    // 16. SETGPP (FIXED – Group Profile Picture)
+    // 16. SETGPP (FIXED – Resolves LID before admin check)
     {
         name: 'setgpp',
         isPrefixless: false,
@@ -971,6 +966,20 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
+
+            // ─── FIX: Resolve bot LID before calling verifyPermissions ──
+            if (!config.botLid && sock.user && sock.user.id) {
+                try {
+                    const botJid = normalizeToJid(sock.user.id);
+                    const resolved = await sock.findUserId(botJid);
+                    if (resolved && resolved.lid) {
+                        config.botLid = normalizeToJid(resolved.lid);
+                        console.log('📌 [SETGPP] Resolved bot LID:', config.botLid);
+                    }
+                } catch (e) {
+                    console.warn("Could not resolve bot LID for setgpp:", e.message);
+                }
+            }
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'setgpp');
             if (!isAuthorized) return;
@@ -990,7 +999,6 @@ module.exports = [
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                // Update group profile picture using the group JID
                 await sock.updateProfilePicture(jid, buffer);
                 await sock.sendMessage(jid, { 
                     text: "✅ Successfully updated Group Profile Picture!" 
