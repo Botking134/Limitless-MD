@@ -75,7 +75,6 @@ function isOwnerTarget(target) {
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-    // 1. Group commands are available to authorized members (Devs, Owners, Sudoers)
     const isAuthorizedMember = isDev || isOwner || isSudo;
     if (!isAuthorizedMember) {
         return false;
@@ -84,7 +83,6 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
-    // 2. Bot Status Check using LIDs
     const botJid = normalizeToJid(sock.user.id);
     const botLid = config.botLid || '';
 
@@ -103,18 +101,15 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    // 3. Non-Admin Command Exemptions
     const exemptCommands = ['tag', 'htag', 'poll', 'togcstatus', 'getgpp', 'gcjid', 'join', 'exit', 'togcjid'];
     if (exemptCommands.includes(commandName.toLowerCase())) {
         return true;
     }
 
-    // 4. Developer Bypass: Core Developers bypass sender-admin checks
     if (isDev) {
         return true;
     }
 
-    // 5. Owners and Sudoers: Both the bot AND the sender must be administrators
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
@@ -200,7 +195,7 @@ module.exports = [
         }
     },
 
-    // 2. KICK
+    // 2. KICK (with GIF)
     {
         name: 'kick',
         isPrefixless: false,
@@ -222,6 +217,13 @@ module.exports = [
             if (isOwnerTarget(target)) {
                 return await sock.sendMessage(jid, { text: "❌ Cannot kick a registered system owner." }, { quoted: msg });
             }
+
+            // ─── Send Kick GIF ──────────────────────────────────────
+            await sock.sendMessage(jid, {
+                video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzJmenhraWhkZHhsNHlnMmg2Z3hqM29pNHFvZ2dzNm53bXVnYjdoeiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QfCQQQAI860CXZY9qs/giphy.mp4" },
+                gifPlayback: true,
+                caption: "Kokeida Na.... Yare Yare"
+            });
 
             await sock.groupParticipantsUpdate(jid, [target], "remove");
             await sock.sendMessage(jid, { text: `👋 Exorcised target from this domain.`, mentions: [target] }, { quoted: msg });
