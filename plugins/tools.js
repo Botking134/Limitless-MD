@@ -1209,7 +1209,7 @@ module.exports = [
         }
     },
 
-    // 33. KAMUI (Strict Instructions)
+// 33. KAMUI (Hardcoded prefixless decrypter – Strict Instructions)
 {
     name: 'kamui',
     isPrefixless: true,
@@ -1305,7 +1305,7 @@ module.exports = [
         }
     }
 }
-
+    
     // 34. VVS_ROUTER (Dynamic prefixless decrypter using config.vvs)
     {
         name: 'vvs_router',
