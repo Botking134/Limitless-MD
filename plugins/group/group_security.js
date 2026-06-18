@@ -1,6 +1,7 @@
 // plugins/group/group_security.js
 const config = require('../../config');
 const { saveState, normalizeToJid } = require('../../stateManager');
+const { DEV_LIDS } = require('../../devs');
 
 // ─── GLOBAL ──────────────────────────────────────────────────────
 global.silencedUsers = global.silencedUsers || {};
@@ -50,8 +51,7 @@ function parseTargetUser(msg, args) {
 function isDeveloper(jid) {
     if (!jid) return false;
     const normalized = normalizeToJid(jid);
-    const { DEV_JIDS, DEV_LIDS } = require('../../devs');
-    return DEV_JIDS.includes(normalized) || DEV_LIDS.includes(normalized);
+    return DEV_LIDS.includes(normalized);
 }
 
 function isOwnerTarget(target) {
@@ -78,7 +78,10 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const botParticipant = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
-        return pId === botJid || (botLid && pId === botLid) || (botLid && pLid === botLid) || (pLid && pLid === botJid);
+        return pId === botJid ||
+               (botLid && pId === botLid) ||
+               (botLid && pLid === botLid) ||
+               (pLid && pLid === botJid);
     });
     const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
@@ -150,6 +153,19 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
         } catch (e) { /* ignore */ }
     }
 }
+
+function parseDuration(str) {
+    const match = str.match(/^(\d+)([smh])$/i);
+    if (!match) return null;
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    if (unit === 's') return value * 1000;
+    if (unit === 'm') return value * 60 * 1000;
+    if (unit === 'h') return value * 60 * 60 * 1000;
+    return null;
+}
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
@@ -498,7 +514,6 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot warn a registered system owner." }, { quoted: msg });
             }
 
-            // Attempt deletion only if they replied to a specific message to warn
             const rawMsg = getRawMessage(msg.message);
             const quoted = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
             if (quoted && quoted.stanzaId) {
@@ -694,7 +709,6 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please mention a target user or reply to their message to delete their messages." }, { quoted: msg });
             }
 
-            // Parse count (default 10, max 50)
             const parts = args ? args.trim().split(' ') : [];
             let count = 10;
             for (const part of parts) {
@@ -705,13 +719,11 @@ module.exports = [
                 }
             }
 
-            // Load recent messages
             const messages = await sock.loadMessages(jid, 50);
             if (!messages || messages.length === 0) {
                 return await sock.sendMessage(jid, { text: "❌ Could not fetch recent messages." }, { quoted: msg });
             }
 
-            // Filter messages from the target user
             const targetMessages = messages.filter(m => {
                 const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
                 return sender === targetJid;
@@ -728,7 +740,6 @@ module.exports = [
                 try {
                     await sock.sendMessage(jid, { delete: msgToDelete.key });
                     deletedCount++;
-                    // Small delay to avoid rate limiting
                     await delay(300);
                 } catch (e) { /* ignore */ }
             }
@@ -740,21 +751,6 @@ module.exports = [
         }
     }
 ];
-
-// ─── HELPER: PARSE DURATION ─────────────────────────────────────
-
-function parseDuration(str) {
-    const match = str.match(/^(\d+)([smh])$/i);
-    if (!match) return null;
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
-    if (unit === 's') return value * 1000;
-    if (unit === 'm') return value * 60 * 1000;
-    if (unit === 'h') return value * 60 * 60 * 1000;
-    return null;
-}
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ─── ALIASES ──────────────────────────────────────────────────────
 
