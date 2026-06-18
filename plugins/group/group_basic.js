@@ -1,6 +1,7 @@
-// plugins/group_basic.js
+// plugins/group/group_basic.js
 const config = require('../../config');
-const { saveState, normalizeToJid } = require('../../stateManager');
+const { saveState, normalizeToJid, resolveToPhoneJid } = require('../../stateManager');
+const { DEV_LIDS } = require('../../devs');
 
 // ─── GLOBAL TIMERS ──────────────────────────────────────────────
 global.groupTimers = global.groupTimers || {};
@@ -61,8 +62,7 @@ function parseTargetUser(msg, args) {
 function isDeveloper(jid) {
     if (!jid) return false;
     const normalized = normalizeToJid(jid);
-    const { DEV_JIDS, DEV_LIDS } = require('../devs');
-    return DEV_JIDS.includes(normalized) || DEV_LIDS.includes(normalized);
+    return DEV_LIDS.includes(normalized);
 }
 
 function isOwnerTarget(target) {
@@ -75,6 +75,7 @@ function isOwnerTarget(target) {
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
+    // 1. Group commands are available to authorized members (Devs, Owners, Sudoers)
     const isAuthorizedMember = isDev || isOwner || isSudo;
     if (!isAuthorizedMember) {
         return false;
@@ -83,13 +84,17 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
+    // 2. Bot Status Check using LIDs
     const botJid = normalizeToJid(sock.user.id);
     const botLid = config.botLid || '';
 
     const botParticipant = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
-        return pId === botJid || (botLid && pId === botLid) || (botLid && pLid === botLid) || (pLid && pLid === botJid);
+        return pId === botJid ||
+               (botLid && pId === botLid) ||
+               (botLid && pLid === botLid) ||
+               (pLid && pLid === botJid);
     });
     const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
@@ -98,15 +103,18 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    const exemptCommands = ['tag', 'tagall', 'poll', 'togcstatus', 'getgpp', 'gcjid'];
+    // 3. Non-Admin Command Exemptions
+    const exemptCommands = ['tag', 'htag', 'poll', 'togcstatus', 'getgpp', 'gcjid', 'join', 'exit', 'togcjid'];
     if (exemptCommands.includes(commandName.toLowerCase())) {
         return true;
     }
 
+    // 4. Developer Bypass: Core Developers bypass sender-admin checks
     if (isDev) {
         return true;
     }
 
+    // 5. Owners and Sudoers: Both the bot AND the sender must be administrators
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
