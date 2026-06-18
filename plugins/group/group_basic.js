@@ -3,6 +3,9 @@ const config = require('../../config');
 const { saveState, normalizeToJid, resolveToPhoneJid } = require('../../stateManager');
 const { DEV_LIDS } = require('../../devs');
 
+// ─── IMPORT MADARA GIFS FROM MENU ──────────────────────────────
+const { madaraGifs } = require('../menu');
+
 // ─── GLOBAL TIMERS ──────────────────────────────────────────────
 global.groupTimers = global.groupTimers || {};
 
@@ -76,11 +79,11 @@ function isOwnerTarget(target) {
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-    // 1. AUTHORIZATION CHECK – only Devs, Owners, and Sudoers can run group commands
+    // 1. AUTHORIZATION CHECK
     const isAuthorized = isDev || isOwner || isSudo;
     if (!isAuthorized) return false;
 
-    // 2. EXEMPT COMMANDS – these do NOT require bot to be admin, nor sender to be admin
+    // 2. EXEMPT COMMANDS
     const exemptCommands = [
         'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
         'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
@@ -90,7 +93,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return true;
     }
 
-    // 3. BOT ADMIN CHECK – for commands that modify group settings or act on members
+    // 3. BOT ADMIN CHECK
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
@@ -112,12 +115,12 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    // 4. DEVELOPER BYPASS – Devs skip sender-admin check
+    // 4. DEVELOPER BYPASS
     if (isDev) {
         return true;
     }
 
-    // 5. SENDER ADMIN CHECK – Owners and Sudoers must be admins for non‑exempt commands
+    // 5. SENDER ADMIN CHECK
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
@@ -287,7 +290,7 @@ module.exports = [
         }
     },
 
-    // 5. TAGALL
+    // 5. TAGALL (with Madara GIF) 😈
     {
         name: 'tagall',
         isPrefixless: false,
@@ -307,7 +310,7 @@ module.exports = [
             const members = participants.filter(p => p.admin === null || p.admin === undefined);
 
             let text = `📢 *Note:* _"${messageText}"_\n\n`;
-
+            
             text += `             ⟬ ＡＤＭＩＮＳ⟭\n`;
             for (let i = 0; i < admins.length; i += 2) {
                 const a1 = admins[i] ? `➣@${admins[i].id.split('@')[0]}` : '';
@@ -322,6 +325,15 @@ module.exports = [
 
             const allJids = participants.map(p => p.id);
 
+            // ─── Send Madara GIF first (stays in chat) ───────────
+            const randomGif = madaraGifs[Math.floor(Math.random() * madaraGifs.length)];
+            await sock.sendMessage(jid, {
+                video: { url: randomGif },
+                gifPlayback: true,
+                caption: "🔥"
+            });
+
+            // ─── Then send the tag message ──────────────────────
             await sock.sendMessage(jid, {
                 text: text,
                 mentions: allJids
@@ -329,7 +341,7 @@ module.exports = [
         }
     },
 
-    // 6. TAG (Ghost Tag)
+    // 6. TAG (with Madara GIF) 😈
     {
         name: 'tag',
         isPrefixless: false,
@@ -354,6 +366,15 @@ module.exports = [
 
             const messageText = args ? args : (quotedText ? quotedText : "🤞 *Summoned by Satoru Gojo.*");
 
+            // ─── Send Madara GIF first (stays in chat) ───────────
+            const randomGif = madaraGifs[Math.floor(Math.random() * madaraGifs.length)];
+            await sock.sendMessage(jid, {
+                video: { url: randomGif },
+                gifPlayback: true,
+                caption: "🔥"
+            });
+
+            // ─── Then send the tag message ──────────────────────
             await sock.sendMessage(jid, {
                 text: messageText,
                 mentions: participants
