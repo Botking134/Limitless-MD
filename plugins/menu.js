@@ -2,13 +2,7 @@
 const config = require('../config');
 const path = require('path');
 
-// ─── ASSETS ──────────────────────────────────────────────────────
-
-// GIFs for .tag / .tagall (shared with menu but used elsewhere)
-const madaraGifs = [
-    "https://media.giphy.com/media/PmCiutdmK8mt2/giphy.mp4",
-    "https://media.giphy.com/media/5D8fDjKyQfuZW/giphy.mp4"
-];
+// ─── AUDIO ASSETS ────────────────────────────────────────────────
 
 // Combined audio pool for .menu (7 files – all original + menu2 audio)
 const menuAudios = [
@@ -46,7 +40,7 @@ const menuImages = [
     "https://i.ibb.co/zWLKzy6N/c7d785c9bf81d4bb8a75547b75f7cd62.jpg"
 ];
 
-// ─── HELPER: FETCH IMAGE BUFFER ──────────────────────────────
+// ─── HELPER: FETCH IMAGE BUFFER (for carousel) ──────────────────
 async function fetchImageBuffer(url) {
     try {
         const response = await fetch(url, { timeout: 5000 });
@@ -388,7 +382,7 @@ _Swipe through the cards below to explore command categories._ 🔮`;
     try {
         const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
 
-        // Loading animation
+        // Loading animation (kept – "too peak")
         const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
 
         const frames = [
@@ -409,7 +403,7 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             await sock.sendMessage(jid, { delete: loadingMsg.key });
         } catch (e) { /* ignore */ }
 
-        // Build carousel
+        // Build carousel (unchanged)
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
         const categories = [
