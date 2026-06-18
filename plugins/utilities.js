@@ -168,7 +168,7 @@ module.exports = [
         }
     },
 
-    // 3. DELETE
+    // 3. DELETE (with Amaterasu GIF)
     {
         name: 'delete',
         isPrefixless: false,
@@ -190,13 +190,30 @@ module.exports = [
                     fromMe: isFromMe,
                     participant: contextInfo.participant
                 };
+
+                // ─── Send Amaterasu GIF ──────────────────────────────
+                const gifMsg = await sock.sendMessage(jid, {
+                    video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
+                    gifPlayback: true,
+                    caption: "Amaterasu!!!!"
+                });
+
+                // ─── Delete the target message ──────────────────────
                 await sock.sendMessage(jid, { delete: quotedKey });
                 try { await sock.sendMessage(jid, { delete: msg.key }); } catch (err) { /* ignore */ }
+
+                // ─── Delete the GIF after 10 seconds ────────────────
+                setTimeout(async () => {
+                    try {
+                        await sock.sendMessage(jid, { delete: gifMsg.key });
+                    } catch (err) { /* ignore */ }
+                }, 10000);
+
             } catch (error) { /* ignore */ }
         }
     },
 
-    // 4. TDELETE
+    // 4. TDELETE (with Amaterasu GIF)
     {
         name: 'tdelete',
         isPrefixless: false,
@@ -221,13 +238,27 @@ module.exports = [
                     participant: contextInfo.participant
                 };
 
+                // ─── Send Amaterasu GIF ──────────────────────────────
+                const gifMsg = await sock.sendMessage(jid, {
+                    video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
+                    gifPlayback: true,
+                    caption: "Amaterasu!!!!"
+                });
+
                 const countdownMsg = await sock.sendMessage(jid, {
                     text: `⏳ Message will be deleted in *${args.trim()}*...`
                 }, { quoted: msg });
+
                 setTimeout(async () => {
                     try {
                         await sock.sendMessage(jid, { delete: quotedKey });
                         try { await sock.sendMessage(jid, { delete: countdownMsg.key }); } catch (e) { /* ignore */ }
+                        // ─── Delete the GIF after 10 seconds ────────
+                        setTimeout(async () => {
+                            try {
+                                await sock.sendMessage(jid, { delete: gifMsg.key });
+                            } catch (err) { /* ignore */ }
+                        }, 10000);
                     } catch (err) { /* ignore */ }
                 }, durationMs);
             } catch (error) { /* ignore */ }
