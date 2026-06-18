@@ -61,14 +61,38 @@ function isOwnerTarget(target) {
            (config.secondaryOwners && config.secondaryOwners.includes(target));
 }
 
+function parseDuration(str) {
+    const match = str.match(/^(\d+)([smh])$/i);
+    if (!match) return null;
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    if (unit === 's') return value * 1000;
+    if (unit === 'm') return value * 60 * 1000;
+    if (unit === 'h') return value * 60 * 60 * 1000;
+    return null;
+}
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ─── UPDATED verifyPermissions (Issue 2) ──────────────────────
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-    const isAuthorizedMember = isDev || isOwner || isSudo;
-    if (!isAuthorizedMember) {
-        return false;
+    // 1. AUTHORIZATION CHECK
+    const isAuthorized = isDev || isOwner || isSudo;
+    if (!isAuthorized) return false;
+
+    // 2. EXEMPT COMMANDS
+    const exemptCommands = [
+        'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
+        'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
+        'join', 'exit', 'listonline', 'msgs'
+    ];
+    if (exemptCommands.includes(commandName.toLowerCase())) {
+        return true;
     }
 
+    // 3. BOT ADMIN CHECK
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
@@ -90,10 +114,12 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
+    // 4. DEVELOPER BYPASS
     if (isDev) {
         return true;
     }
 
+    // 5. SENDER ADMIN CHECK
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
@@ -108,6 +134,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
+// ─── SECURITY POLICY HELPER ────────────────────────────────────
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
     if (!policy || policy === 'off') return;
 
@@ -153,19 +180,6 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
         } catch (e) { /* ignore */ }
     }
 }
-
-function parseDuration(str) {
-    const match = str.match(/^(\d+)([smh])$/i);
-    if (!match) return null;
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
-    if (unit === 's') return value * 1000;
-    if (unit === 'm') return value * 60 * 1000;
-    if (unit === 'h') return value * 60 * 60 * 1000;
-    return null;
-}
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
