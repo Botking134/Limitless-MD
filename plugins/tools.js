@@ -1155,62 +1155,71 @@ module.exports = [
         }
     },
 
-    // 32. VV (Manual ViewOnce Decryption – Prefixed)
-    {
-        name: 'vv',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-
-            if (!isOwner && !isSudo && !isDev) return;
-
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo ||
-                                rawMsg?.extendedTextMessage?.contextInfo ||
-                                rawMsg?.imageMessage?.contextInfo ||
-                                rawMsg?.videoMessage?.contextInfo ||
-                                rawMsg?.stickerMessage?.contextInfo ||
-                                rawMsg?.audioMessage?.contextInfo ||
-                                rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-
-            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply directly to a View-Once message to decrypt." }, { quoted: msg });
-
-            const rawContent = getRawMessage(quoted);
-            const viewOnceMedia = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
-
-            if (!viewOnceMedia) return await sock.sendMessage(jid, { text: "❌ The replied message is not a View-Once media message." }, { quoted: msg });
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const mediaType = rawContent.imageMessage ? 'image' : (rawContent.videoMessage ? 'video' : 'audio');
-
-                await sock.sendMessage(jid, { text: "Decrypting View-Once media... 👁️" }, { quoted: msg });
-
-                const stream = await downloadContentFromMessage(viewOnceMedia, mediaType);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                const caption = viewOnceMedia.caption || "Decrypted View-Once media 👁️";
-
-                if (mediaType === 'image') {
-                    await sock.sendMessage(senderJid, { image: buffer, caption: caption });
-                } else if (mediaType === 'video') {
-                    await sock.sendMessage(senderJid, { video: buffer, mimetype: viewOnceMedia.mimetype || "video/mp4", caption: caption });
-                } else if (mediaType === 'audio') {
-                    await sock.sendMessage(senderJid, { audio: buffer, mimetype: viewOnceMedia.mimetype || "audio/ogg; codecs=opus", ptt: viewOnceMedia.ptt || false });
-                }
-
-                await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
-            } catch (error) {
-                await sock.sendMessage(jid, { text: `❌ Decryption failed: ${error.message}` }, { quoted: msg });
-            }
-        }
-    },
-
     
-// 33. KAMUI (Buffer-Based – GIFs Work Everywhere)
+// 32. VV (Manual ViewOnce Decryption – Prefixed)
+{
+    name: 'vv',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+
+        if (!isOwner && !isSudo && !isDev) return;
+
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo ||
+                            rawMsg?.extendedTextMessage?.contextInfo ||
+                            rawMsg?.imageMessage?.contextInfo ||
+                            rawMsg?.videoMessage?.contextInfo ||
+                            rawMsg?.stickerMessage?.contextInfo ||
+                            rawMsg?.audioMessage?.contextInfo ||
+                            rawMsg?.documentMessage?.contextInfo;
+        const quoted = contextInfo?.quotedMessage;
+
+        if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply directly to a View-Once message to decrypt." }, { quoted: msg });
+
+        const rawContent = getRawMessage(quoted);
+        const viewOnceMedia = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage;
+
+        if (!viewOnceMedia) return await sock.sendMessage(jid, { text: "❌ The replied message is not a View-Once media message." }, { quoted: msg });
+
+        try {
+            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+            const mediaType = rawContent.imageMessage ? 'image' : (rawContent.videoMessage ? 'video' : 'audio');
+
+            // ─── Send Madara GIF before decryption ──────────────
+            await sock.sendMessage(jid, {
+                video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzh6bzl1azdlcmlsZmM4d3hnemJuNG54bDV0b3M2N3RjZXczd254OCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/8qXJTU5oEhQZO/giphy.mp4" },
+                gifPlayback: true,
+                caption: "Hmmmmmm..."
+            });
+
+            // ─── Decrypt and send to DM ──────────────────────────
+            await sock.sendMessage(jid, { text: "Decrypting View-Once media... 👁️" }, { quoted: msg });
+
+            const stream = await downloadContentFromMessage(viewOnceMedia, mediaType);
+            let buffer = Buffer.from([]);
+            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+            const caption = viewOnceMedia.caption || "Decrypted View-Once media 👁️";
+
+            if (mediaType === 'image') {
+                await sock.sendMessage(senderJid, { image: buffer, caption: caption });
+            } else if (mediaType === 'video') {
+                await sock.sendMessage(senderJid, { video: buffer, mimetype: viewOnceMedia.mimetype || "video/mp4", caption: caption });
+            } else if (mediaType === 'audio') {
+                await sock.sendMessage(senderJid, { audio: buffer, mimetype: viewOnceMedia.mimetype || "audio/ogg; codecs=opus", ptt: viewOnceMedia.ptt || false });
+            }
+
+            await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
+        } catch (error) {
+            await sock.sendMessage(jid, { text: `❌ Decryption failed: ${error.message}` }, { quoted: msg });
+        }
+    }
+},
+
+
+ // 33. KAMUI (Hardcoded prefixless decrypter – Strict Instructions)
 {
     name: 'kamui',
     isPrefixless: true,
@@ -1219,6 +1228,7 @@ module.exports = [
         const cleanQuery = args ? args.trim() : '';
 
         if (!isOwner && !isSudo && !isDev) return;
+
         if (cleanQuery.startsWith(config.prefix)) return;
 
         const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -1244,40 +1254,19 @@ module.exports = [
             const mediaType = rawContent.imageMessage ? 'image' :
                               (rawContent.videoMessage ? 'video' : 'audio');
 
-            // ─── FETCH ACTIVATION GIF AS BUFFER ────────────────
-            let activationBuffer = null;
-            try {
-                const response = await fetch("https://media.tenor.com/13735716482562504897/giphy.mp4");
-                if (response.ok) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    activationBuffer = Buffer.from(arrayBuffer);
-                }
-            } catch (fetchErr) {
-                console.warn("⚠️ Failed to fetch activation GIF:", fetchErr.message);
-            }
+            // ─── STEP 1: Activation GIF in chat ────────────────
+            await sock.sendMessage(jid, {
+                video: { url: "https://media.giphy.com/media/LUnjrcDnwdbi/giphy.mp4" },
+                gifPlayback: true,
+                caption: "ＫＡＭＵＩ!!!!!!"
+            });
 
-            // ─── SEND ACTIVATION GIF (buffer if available, otherwise URL fallback) ──
-            if (activationBuffer) {
-                await sock.sendMessage(jid, {
-                    video: activationBuffer,
-                    gifPlayback: true,
-                    caption: "ＫＡＭＵＩ!!!!!!"
-                });
-            } else {
-                // Fallback to URL (might fail, but better than nothing)
-                await sock.sendMessage(jid, {
-                    video: { url: "https://media.tenor.com/13735716482562504897/giphy.mp4" },
-                    gifPlayback: true,
-                    caption: "ＫＡＭＵＩ!!!!!!"
-                });
-            }
-
-            // ─── REACT WITH 🌀 ──────────────────────────────────
+            // ─── STEP 2: React to trigger with 🌀 ───────────────
             await sock.sendMessage(jid, {
                 react: { text: "🌀", key: msg.key }
             });
 
-            // ─── DOWNLOAD DECRYPTED MEDIA ──────────────────────
+            // ─── STEP 3: Download decrypted media ──────────────
             const stream = await downloadContentFromMessage(viewOnceMedia, mediaType);
             let buffer = Buffer.from([]);
             for await (const chunk of stream) {
@@ -1287,39 +1276,19 @@ module.exports = [
             const caption = viewOnceMedia.caption || "Decrypted View-Once media 👁️";
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-            // ─── FETCH REVERSE GIF AS BUFFER ────────────────────
-            let reverseBuffer = null;
-            try {
-                const response = await fetch("https://media.tenor.com/18204914/giphy.mp4");
-                if (response.ok) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    reverseBuffer = Buffer.from(arrayBuffer);
-                }
-            } catch (fetchErr) {
-                console.warn("⚠️ Failed to fetch reverse GIF:", fetchErr.message);
-            }
-
-            // ─── DM: TEXT ────────────────────────────────────────
+            // ─── STEP 4: DM - Text message ──────────────────────
             await sock.sendMessage(senderJid, {
                 text: "Orae Wa Uchiha Obito 👁"
             });
 
-            // ─── DM: REVERSE GIF ────────────────────────────────
-            if (reverseBuffer) {
-                await sock.sendMessage(senderJid, {
-                    video: reverseBuffer,
-                    gifPlayback: true,
-                    caption: "Ｋａｍｕｉ!!!! 🌀"
-                });
-            } else {
-                await sock.sendMessage(senderJid, {
-                    video: { url: "https://media.tenor.com/18204914/giphy.mp4" },
-                    gifPlayback: true,
-                    caption: "Ｋａｍｕｉ!!!! 🌀"
-                });
-            }
+            // ─── STEP 5: DM - Reverse GIF ───────────────────────
+            await sock.sendMessage(senderJid, {
+                video: { url: "https://media.giphy.com/media/mzdeCXqTmG1IA/giphy.mp4" },
+                gifPlayback: true,
+                caption: "Ｋａｍｕｉ!!!! 🌀"
+            });
 
-            // ─── DM: DECRYPTED MEDIA ────────────────────────────
+            // ─── STEP 6: DM - Decrypted media ──────────────────
             if (mediaType === 'image') {
                 await sock.sendMessage(senderJid, { image: buffer, caption });
             } else if (mediaType === 'video') {
@@ -1345,7 +1314,8 @@ module.exports = [
             }, { quoted: msg });
         }
     }
-}, 
+},   
+
 
     // 34. VVS_ROUTER (Dynamic prefixless decrypter using config.vvs)
     {
