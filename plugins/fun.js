@@ -3,6 +3,10 @@ const config = require('../config');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const { getPhoneJid, normalizeToJid } = require('../stateManager');
 
+// ─── PURPLE_ANS GIFS (Issue 6) ──────────────────────────────────
+const PURPLE_100_GIF = "https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExMXgwdG55YjMyeGtsbThnOGczY2k5bTczYjFzbXBocndiemZzYjJxNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/1Nzq2od8Zz3aQYqfFi/giphy.mp4";
+const PURPLE_200_GIF = "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExMGlyODhydzVqM2FxNnJmMDY1ZXQyZDR0YnhiaTh6ZHlwZHRwYmR0MyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/0wxRYPhdD7n3W7NQ1R/giphy.mp4";
+
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -103,7 +107,7 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     return data.choices?.[0]?.message?.content || "";
 }
 
-// ─── ASSETS ──────────────────────────────────────────────────────
+// ─── ASSETS (unchanged) ────────────────────────────────────────
 
 const assets = {
     slap: [
@@ -575,7 +579,7 @@ module.exports = [
         }
     },
 
-    // 8. WED (Marriage Proposal with Buttons)
+    // 8. WED
     {
         name: 'wed',
         isPrefixless: false,
@@ -608,7 +612,7 @@ module.exports = [
         }
     },
 
-    // 9. WED_ANS (Marriage Answer Handler)
+    // 9. WED_ANS
     {
         name: 'wed_ans',
         isPrefixless: false,
@@ -788,7 +792,7 @@ module.exports = [
         }
     },
 
-    // 15. PURPLE_ANS
+    // ─── 15. PURPLE_ANS (Issue 6) ───────────────────────────────
     {
         name: 'purple_ans',
         isPrefixless: false,
@@ -812,6 +816,13 @@ module.exports = [
                     await delay(3000);
                     await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
                 }
+
+                // ─── Send 100% follow‑up GIF (Issue 6) ──────────
+                await sock.sendMessage(jid, {
+                    video: { url: PURPLE_100_GIF },
+                    gifPlayback: true,
+                    caption: "100% Hollow Purple"
+                });
             } else if (selection === '200') {
                 const frames = [
                     toSans("Maximum output!!!") + "\n          " + toSans("Blue!!!🔵"),
@@ -826,6 +837,13 @@ module.exports = [
                     await delay(3000);
                     await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
                 }
+
+                // ─── Send 200% follow‑up GIF (Issue 6) ──────────
+                await sock.sendMessage(jid, {
+                    video: { url: PURPLE_200_GIF },
+                    gifPlayback: true,
+                    caption: "200% Hollow Purple"
+                });
             }
         }
     },
@@ -964,7 +982,7 @@ module.exports = [
         }
     },
 
-    // 19. INTERACTION COMMANDS (Slap, Punch, etc.)
+    // 19. INTERACTION COMMANDS
     { name: 'slap', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "slap", "slapped", args); } },
     { name: 'punch', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "punch", "punched", args); } },
     { name: 'hifive', isPrefixless: false, execute: async (sock, msg, args) => { await executeAction(sock, msg, "hifive", "highfived", args); } },
