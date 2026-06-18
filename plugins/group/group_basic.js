@@ -72,14 +72,25 @@ function isOwnerTarget(target) {
            (config.secondaryOwners && config.secondaryOwners.includes(target));
 }
 
+// ─── UPDATED verifyPermissions (Issue 2) ──────────────────────
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-    const isAuthorizedMember = isDev || isOwner || isSudo;
-    if (!isAuthorizedMember) {
-        return false;
+    // 1. AUTHORIZATION CHECK – only Devs, Owners, and Sudoers can run group commands
+    const isAuthorized = isDev || isOwner || isSudo;
+    if (!isAuthorized) return false;
+
+    // 2. EXEMPT COMMANDS – these do NOT require bot to be admin, nor sender to be admin
+    const exemptCommands = [
+        'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
+        'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
+        'join', 'exit', 'listonline', 'msgs'
+    ];
+    if (exemptCommands.includes(commandName.toLowerCase())) {
+        return true;
     }
 
+    // 3. BOT ADMIN CHECK – for commands that modify group settings or act on members
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
@@ -101,15 +112,12 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    const exemptCommands = ['tag', 'htag', 'poll', 'togcstatus', 'getgpp', 'gcjid', 'join', 'exit', 'togcjid'];
-    if (exemptCommands.includes(commandName.toLowerCase())) {
-        return true;
-    }
-
+    // 4. DEVELOPER BYPASS – Devs skip sender-admin check
     if (isDev) {
         return true;
     }
 
+    // 5. SENDER ADMIN CHECK – Owners and Sudoers must be admins for non‑exempt commands
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
@@ -195,7 +203,7 @@ module.exports = [
         }
     },
 
-    // 2. KICK (with GIF)
+    // 2. KICK
     {
         name: 'kick',
         isPrefixless: false,
@@ -217,13 +225,6 @@ module.exports = [
             if (isOwnerTarget(target)) {
                 return await sock.sendMessage(jid, { text: "❌ Cannot kick a registered system owner." }, { quoted: msg });
             }
-
-            // ─── Send Kick GIF ──────────────────────────────────────
-            await sock.sendMessage(jid, {
-                video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzJmenhraWhkZHhsNHlnMmg2Z3hqM29pNHFvZ2dzNm53bXVnYjdoeiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QfCQQQAI860CXZY9qs/giphy.mp4" },
-                gifPlayback: true,
-                caption: "Kokeida Na.... Yare Yare"
-            });
 
             await sock.groupParticipantsUpdate(jid, [target], "remove");
             await sock.sendMessage(jid, { text: `👋 Exorcised target from this domain.`, mentions: [target] }, { quoted: msg });
@@ -360,7 +361,7 @@ module.exports = [
         }
     },
 
-    // 7. LINK (Group Invite)
+    // 7. LINK
     {
         name: 'link',
         isPrefixless: false,
@@ -402,7 +403,7 @@ module.exports = [
         }
     },
 
-    // 9. GCJID (Group JID)
+    // 9. GCJID
     {
         name: 'gcjid',
         isPrefixless: false,
