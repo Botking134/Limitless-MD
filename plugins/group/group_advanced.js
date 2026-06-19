@@ -828,114 +828,123 @@ module.exports = [
         }
     },
 
-    // 14. TOGCJID
-    {
-        name: 'togcjid',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
+  // ─── 14. TOGCJID (Now usable in DMs) ──────────────────────────
+{
+    name: 'togcjid',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'togcjid');
-            if (!isAuthorized) return;
+        // ─── AUTHORIZATION CHECK (no group required) ──────────────
+        if (!isOwner && !isSudo && !isDev) {
+            return await sock.sendMessage(jid, { text: "❌ You are not authorized to use this command." }, { quoted: msg });
+        }
 
-            const targetJid = args ? args.trim().split(' ')[0] : '';
-            if (!targetJid || !targetJid.endsWith('@g.us')) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide a valid target Group JID.\nUsage: reply to media/text and type `.togcjid 120363xxx@g.us`" }, { quoted: msg });
-            }
+        const targetJid = args ? args.trim().split(' ')[0] : '';
+        if (!targetJid || !targetJid.endsWith('@g.us')) {
+            return await sock.sendMessage(jid, { 
+                text: "❌ Please provide a valid target Group JID.\nUsage: reply to media/text and type `.togcjid 120363xxx@g.us`" 
+            }, { quoted: msg });
+        }
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const rawContent = quoted ? getRawMessage(quoted) : null;
+        const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+        const rawContent = quoted ? getRawMessage(quoted) : null;
 
-            try {
-                const {
-                    downloadContentFromMessage,
-                    prepareWAMessageMedia,
-                    generateWAMessageFromContent,
-                    proto
-                } = await import('@itsliaaa/baileys');
+        try {
+            const {
+                downloadContentFromMessage,
+                prepareWAMessageMedia,
+                generateWAMessageFromContent,
+                proto
+            } = await import('@itsliaaa/baileys');
 
-                let messagePayload = {};
+            let messagePayload = {};
 
-                if (rawContent && (rawContent.videoMessage || rawContent.imageMessage || rawContent.audioMessage)) {
-                    const mediaType = rawContent.videoMessage ? "video" : (rawContent.imageMessage ? "image" : "audio");
-                    const targetMessage = rawContent[mediaType + "Message"];
+            if (rawContent && (rawContent.videoMessage || rawContent.imageMessage || rawContent.audioMessage)) {
+                const mediaType = rawContent.videoMessage ? "video" : (rawContent.imageMessage ? "image" : "audio");
+                const targetMessage = rawContent[mediaType + "Message"];
 
-                    const stream = await downloadContentFromMessage(targetMessage, mediaType);
-                    let buffer = Buffer.from([]);
-                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                const stream = await downloadContentFromMessage(targetMessage, mediaType);
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                    let mediaOptions = {};
-                    if (mediaType === "image") {
-                        mediaOptions = { image: buffer, caption: targetMessage.caption || '' };
-                    } else if (mediaType === "video") {
-                        mediaOptions = { video: buffer, caption: targetMessage.caption || '' };
-                    } else if (mediaType === "audio") {
-                        mediaOptions = {
-                            audio: buffer,
-                            mimetype: targetMessage.mimetype,
-                            ptt: targetMessage.ptt || false,
-                            seconds: targetMessage.seconds
-                        };
-                    }
-
-                    const preparedMedia = await prepareWAMessageMedia(
-                        mediaOptions,
-                        { upload: sock.waUploadToServer }
-                    );
-
-                    let mediaMessage = {};
-                    if (mediaType === "image") mediaMessage = { imageMessage: preparedMedia.imageMessage };
-                    else if (mediaType === "video") mediaMessage = { videoMessage: preparedMedia.videoMessage };
-                    else if (mediaType === "audio") mediaMessage = { audioMessage: preparedMedia.audioMessage };
-
-                    messagePayload = {
-                        groupStatusMessageV2: { message: mediaMessage }
-                    };
-                } else {
-                    const remainingText = args.replace(targetJid, '').trim();
-                    const textToSend = remainingText || quoted?.conversation || quoted?.extendedTextMessage?.text || '';
-                    if (!textToSend) {
-                        return await sock.sendMessage(jid, { text: "❌ Please reply to text or media to post on group status." }, { quoted: msg });
-                    }
-
-                    const randomHex = Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
-                    const bgColor = 0xff000000 + parseInt(randomHex, 16);
-
-                    messagePayload = {
-                        groupStatusMessageV2: {
-                            message: {
-                                extendedTextMessage: {
-                                    text: textToSend,
-                                    backgroundArgb: bgColor,
-                                    font: 2
-                                }
-                            }
-                        }
+                let mediaOptions = {};
+                if (mediaType === "image") {
+                    mediaOptions = { image: buffer, caption: targetMessage.caption || '' };
+                } else if (mediaType === "video") {
+                    mediaOptions = { video: buffer, caption: targetMessage.caption || '' };
+                } else if (mediaType === "audio") {
+                    mediaOptions = {
+                        audio: buffer,
+                        mimetype: targetMessage.mimetype,
+                        ptt: targetMessage.ptt || false,
+                        seconds: targetMessage.seconds
                     };
                 }
 
-                await sock.sendMessage(jid, { text: `Uploading media to status list for target JID: \`${targetJid}\`... 📡` }, { quoted: msg });
-
-                const statusMsg = generateWAMessageFromContent(
-                    targetJid,
-                    proto.Message.fromObject(messagePayload),
-                    { userJid: sock.user.id }
+                const preparedMedia = await prepareWAMessageMedia(
+                    mediaOptions,
+                    { upload: sock.waUploadToServer }
                 );
 
-                await sock.relayMessage(
-                    targetJid,
-                    statusMsg.message,
-                    { messageId: statusMsg.key.id }
-                );
+                let mediaMessage = {};
+                if (mediaType === "image") mediaMessage = { imageMessage: preparedMedia.imageMessage };
+                else if (mediaType === "video") mediaMessage = { videoMessage: preparedMedia.videoMessage };
+                else if (mediaType === "audio") mediaMessage = { audioMessage: preparedMedia.audioMessage };
 
-                await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
+                messagePayload = {
+                    groupStatusMessageV2: { message: mediaMessage }
+                };
+            } 
+            else {
+                const remainingText = args.replace(targetJid, '').trim();
+                const textToSend = remainingText || quoted?.conversation || quoted?.extendedTextMessage?.text || '';
+                if (!textToSend) {
+                    return await sock.sendMessage(jid, { 
+                        text: "❌ Please reply to text or media to post on group status." 
+                    }, { quoted: msg });
+                }
 
-            } catch (error) {
-                console.error("togcjid error:", error.message);
-                await sock.sendMessage(jid, { text: `❌ Failed to execute command: ${error.message}` }, { quoted: msg });
+                const randomHex = Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+                const bgColor = 0xff000000 + parseInt(randomHex, 16);
+
+                messagePayload = {
+                    groupStatusMessageV2: {
+                        message: {
+                            extendedTextMessage: {
+                                text: textToSend,
+                                backgroundArgb: bgColor,
+                                font: 2
+                            }
+                        }
+                    }
+                };
             }
+
+            await sock.sendMessage(jid, { 
+                text: `📡 Uploading media to status list for target JID: \`${targetJid}\`...` 
+            }, { quoted: msg });
+
+            const statusMsg = generateWAMessageFromContent(
+                targetJid,
+                proto.Message.fromObject(messagePayload),
+                { userJid: sock.user.id }
+            );
+
+            await sock.relayMessage(
+                targetJid,
+                statusMsg.message,
+                { messageId: statusMsg.key.id }
+            );
+
+            await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
+
+        } catch (error) {
+            console.error("togcjid error:", error.message);
+            await sock.sendMessage(jid, { text: `❌ Failed to execute command: ${error.message}` }, { quoted: msg });
         }
-    },
+    }
+}, 
 
     // 15. GETGPP
     {
