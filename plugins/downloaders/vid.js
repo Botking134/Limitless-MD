@@ -65,6 +65,7 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "YouTube Video";
 
+                // KEEP OLD: no new video endpoint provided, stay with yt.david-cyril.net.ng
                 const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
                 if (response.ok) {
                     const data = await response.json();
@@ -107,6 +108,7 @@ module.exports = [
                 let downloadUrl = "";
                 let title = firstVideo.title || "YouTube Video";
 
+                // KEEP OLD: no new video endpoint
                 const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(videoUrl)}`);
                 if (response.ok) {
                     const data = await response.json();
@@ -148,7 +150,8 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Facebook video... 📥" }, { quoted: msg });
 
-                let response = await fetch(`https://fb.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
+                // UPDATED: new facebook endpoint
+                let response = await fetch(`https://apis.prexzyvilla.site/download/facebook?url=${encodeURIComponent(query)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 let data = await response.json();
@@ -156,7 +159,7 @@ module.exports = [
                 let retries = 0;
                 while ((!data.status || !data.video) && retries < 2) {
                     await new Promise(r => setTimeout(r, 1500));
-                    response = await fetch(`https://fb.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
+                    response = await fetch(`https://apis.prexzyvilla.site/download/facebook?url=${encodeURIComponent(query)}`);
                     data = await response.json();
                     retries++;
                 }
@@ -201,7 +204,8 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "TikTok Video";
 
-                const response = await fetch(`https://tiksave.name.ng/api/download?url=${encodeURIComponent(query)}`);
+                // UPDATED: new tiktok endpoint (primary)
+                const response = await fetch(`https://apis.prexzyvilla.site/download/tiktok?url=${encodeURIComponent(query)}`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.status && data.result) {
@@ -210,6 +214,7 @@ module.exports = [
                     }
                 }
 
+                // Fallback to tikwm if prexzyvilla fails
                 if (!downloadUrl) {
                     const fbResponse = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(query)}`);
                     if (fbResponse.ok) {
@@ -255,7 +260,8 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Instagram media... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/instagram?url=${encodeURIComponent(query)}`);
+                // UPDATED: new instagram endpoint
+                const response = await fetch(`https://apis.prexzyvilla.site/download/instagram?url=${encodeURIComponent(query)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
@@ -301,7 +307,8 @@ module.exports = [
 
                 let downloadUrl = "";
 
-                const response = await fetch(`https://twitter.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
+                // UPDATED: new twitter endpoint
+                const response = await fetch(`https://apis.prexzyvilla.site/download/twitter?url=${encodeURIComponent(query)}`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.status && data.result) {
