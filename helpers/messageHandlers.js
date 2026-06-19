@@ -478,21 +478,21 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         // ─── COMMAND EXTRACTION ──────────────────────────────────
-        if (!command) {
-            if (trimmedMessage.startsWith(config.prefix)) {
-                const spaceIndex = trimmedMessage.indexOf(' ');
-                if (spaceIndex === -1) {
-                    command = trimmedMessage.slice(config.prefix.length).toLowerCase();
-                    args = '';
-                } else {
-                    command = trimmedMessage.slice(config.prefix.length, spaceIndex).toLowerCase();
-                    args = trimmedMessage.slice(spaceIndex + 1);
-                }
-            } else if (commands[trimmedMessage.toLowerCase()]) {
-                command = trimmedMessage.toLowerCase();
-                args = '';
-            }
+if (!command) {
+    if (trimmedMessage.startsWith(config.prefix)) {
+        const spaceIndex = trimmedMessage.indexOf(' ');
+        if (spaceIndex === -1) {
+            command = trimmedMessage.slice(config.prefix.length).toLowerCase();
+            args = [];
+        } else {
+            command = trimmedMessage.slice(config.prefix.length, spaceIndex).toLowerCase();
+            args = trimmedMessage.slice(spaceIndex + 1).trim().split(/\s+/);
         }
+    } else if (commands[trimmedMessage.toLowerCase()]) {
+        command = trimmedMessage.toLowerCase();
+        args = [];
+    }
+}
 
         if (!command) return;
 
@@ -514,7 +514,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (commands[cmdKey]) {
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
+                try { await sock.sendMessage(jid, { react: { text: "🥷", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
