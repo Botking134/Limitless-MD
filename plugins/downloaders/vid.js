@@ -2,6 +2,17 @@
 const config = require('../../config');
 
 const urlRegex = /^(https?:\/\/[^\s]+)/i;
+const activeSessions = new Map(); // Key: "jid:sender", Value: { type: 'xvid'|'xxx', videos: [...], timestamp: Date.now() }
+
+// Auto-cleanup expired sessions (older than 5 minutes) every minute
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, session] of activeSessions.entries()) {
+        if (now - session.timestamp > 300000) { 
+            activeSessions.delete(key);
+        }
+    }
+}, 60000);
 
 function getRawMessage(message) {
     if (!message) return null;
@@ -11,23 +22,6 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
-}
-
-async function resolveUrlOrSearch(args) {
-    if (!args) return null;
-    if (urlRegex.test(args)) {
-        return args.trim();
-    }
-    try {
-        const yts = require('yt-search');
-        const results = await yts(args);
-        if (results.videos && results.videos.length > 0) {
-            return results.videos[0].url;
-        }
-    } catch (e) {
-        console.error("resolveUrlOrSearch error:", e.message);
-    }
-    return null;
 }
 
 function logError(cmd, args, err) {
@@ -40,7 +34,7 @@ function logError(cmd, args, err) {
     console.error(`==================================================================\n`);
 }
 
-module.exports = [
+const commands = [
     // 1. YTMP4
     {
         name: 'ytmp4',
@@ -331,58 +325,47 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
+            const sender = msg.key.participant || msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
             if (!query) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide an XVideos search query or direct link." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Please provide an XVideos search query." }, { quoted: msg });
             }
 
             try {
-                let videoUrl = "";
-                let fallbackTitle = "";
+                await sock.sendMessage(jid, { text: `Searching XVideos for "${query}"... 🔍` }, { quoted: msg });
+                const searchResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xvideos-search?query=${encodeURIComponent(query)}`);
+                if (!searchResponse.ok) throw new Error(`Search failed with status ${searchResponse.status}`);
 
-                if (urlRegex.test(query)) {
-                    videoUrl = query;
-                } else {
-                    await sock.sendMessage(jid, { text: `Searching XVideos for "${query}"... 🔍` }, { quoted: msg });
-                    const searchResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xvideos-search?query=${encodeURIComponent(query)}`);
-                    if (!searchResponse.ok) throw new Error(`Search failed with status ${searchResponse.status}`);
-
-                    const searchData = await searchResponse.json();
-                    if (!searchData.status || !searchData.result || searchData.result.length === 0) {
-                        throw new Error("No search results found.");
-                    }
-
-                    const firstResult = searchData.result[0];
-                    videoUrl = firstResult.url || firstResult.link;
-                    fallbackTitle = firstResult.title || "";
+                const searchData = await searchResponse.json();
+                const videosList = searchData.videos || [];
+                if (!searchData.status || videosList.length === 0) {
+                    throw new Error("No search results found.");
                 }
 
-                if (!videoUrl) throw new Error("Could not resolve a valid video URL.");
+                const limitList = videosList.slice(0, 10);
+                activeSessions.set(`${jid}:${sender}`, {
+                    type: 'xvid',
+                    videos: limitList,
+                    timestamp: Date.now()
+                });
 
-                await sock.sendMessage(jid, { text: "Downloading video... 📥" }, { quoted: msg });
+                let menuText = `🎥 *XVideos Search Results:*\n\n`;
+                limitList.forEach((v, index) => {
+                    menuText += `*${index + 1}.* ${v.title}\n⏳ Duration: ${v.duration} min\n\n`;
+                });
+                menuText += `*Reply to this message with the number you want to download.*`;
 
-                const dlResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xvideos-dl?url=${encodeURIComponent(videoUrl)}`);
-                if (!dlResponse.ok) throw new Error(`Download API status ${dlResponse.status}`);
-
-                const dlData = await dlResponse.json();
-                if (!dlData.status || !dlData.result) throw new Error("Downloader API returned an empty status.");
-
-                const downloadUrl = dlData.result.url || dlData.result.video || dlData.result.download_url || dlData.result.link;
-                if (!downloadUrl) throw new Error("No download link resolved.");
-
-                const title = dlData.result.title || fallbackTitle || "XVideos Video";
-
-                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
             } catch (error) {
                 logError("xvid", query, error);
-                await sock.sendMessage(jid, { text: `❌ Failed to process XVideos request. Error: ${error.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `❌ Failed to fetch search results. Error: ${error.message}` }, { quoted: msg });
             }
         }
     },
@@ -393,65 +376,109 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
+            const sender = msg.key.participant || msg.key.remoteJid;
             let query = args ? args.trim() : '';
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
             if (!query && quoted) {
                 const rawContent = getRawMessage(quoted);
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
             if (!query) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide an XNXX search query or direct link." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Please provide an XNXX search query." }, { quoted: msg });
             }
 
             try {
-                let videoUrl = "";
-                let fallbackTitle = "";
+                await sock.sendMessage(jid, { text: `Searching XNXX for "${query}"... 🔍` }, { quoted: msg });
+                const searchResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xnxx-search?query=${encodeURIComponent(query)}`);
+                if (!searchResponse.ok) throw new Error(`Search failed with status ${searchResponse.status}`);
 
-                if (urlRegex.test(query)) {
-                    videoUrl = query;
-                } else {
-                    await sock.sendMessage(jid, { text: `Searching XNXX for "${query}"... 🔍` }, { quoted: msg });
-                    const searchResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xnxx-search?query=${encodeURIComponent(query)}`);
-                    if (!searchResponse.ok) throw new Error(`Search failed with status ${searchResponse.status}`);
-
-                    const searchData = await searchResponse.json();
-                    if (!searchData.status || !searchData.result || searchData.result.length === 0) {
-                        throw new Error("No search results found.");
-                    }
-
-                    const firstResult = searchData.result[0];
-                    videoUrl = firstResult.url || firstResult.link;
-                    fallbackTitle = firstResult.title || "";
+                const searchData = await searchResponse.json();
+                const videosList = searchData.videos || [];
+                if (!searchData.status || videosList.length === 0) {
+                    throw new Error("No search results found.");
                 }
 
-                if (!videoUrl) throw new Error("Could not resolve a valid video URL.");
+                const limitList = videosList.slice(0, 10);
+                activeSessions.set(`${jid}:${sender}`, {
+                    type: 'xxx',
+                    videos: limitList,
+                    timestamp: Date.now()
+                });
 
-                await sock.sendMessage(jid, { text: "Downloading video... 📥" }, { quoted: msg });
+                let menuText = `🎥 *XNXX Search Results:*\n\n`;
+                limitList.forEach((v, index) => {
+                    menuText += `*${index + 1}.* ${v.title}\n⏳ Duration: ${v.duration} min\n\n`;
+                });
+                menuText += `*Reply to this message with the number you want to download.*`;
 
-                const dlResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xnxx-dl?url=${encodeURIComponent(videoUrl)}`);
-                if (!dlResponse.ok) throw new Error(`Download API status ${dlResponse.status}`);
-
-                const dlData = await dlResponse.json();
-                if (!dlData.status || !dlData.result) throw new Error("Downloader API returned an empty status.");
-
-                const downloadUrl = dlData.result.url || dlData.result.video || dlData.result.download_url || dlData.result.link;
-                if (!downloadUrl) throw new Error("No download link resolved.");
-
-                const title = dlData.result.title || fallbackTitle || "XNXX Video";
-
-                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+                await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
             } catch (error) {
                 logError("xxx", query, error);
-                await sock.sendMessage(jid, { text: `❌ Failed to process XNXX request. Error: ${error.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `❌ Failed to fetch search results. Error: ${error.message}` }, { quoted: msg });
             }
         }
     }
 ];
 
+// Generate dynamic prefixless selectors for choices 1 through 15
+for (let i = 1; i <= 15; i++) {
+    commands.push({
+        name: `${i}`,
+        isPrefixless: true,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const sender = msg.key.participant || msg.key.remoteJid;
+            const sessionKey = `${jid}:${sender}`;
+
+            if (!activeSessions.has(sessionKey)) return;
+
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!quoted) return;
+
+            const quotedText = quoted?.conversation || quoted?.extendedTextMessage?.text || "";
+            if (!quotedText.includes("Reply to this message with the number")) return;
+
+            const session = activeSessions.get(sessionKey);
+            const index = i - 1;
+
+            if (index >= session.videos.length) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid selection index." }, { quoted: msg });
+            }
+
+            const selectedVideo = session.videos[index];
+            activeSessions.delete(sessionKey); // Clean up active session
+
+            try {
+                await sock.sendMessage(jid, { text: `Downloading selected video... 📥\n_${selectedVideo.title}_` }, { quoted: msg });
+
+                const dlEndpoint = session.type === 'xvid' 
+                    ? `https://apis.prexzyvilla.site/nsfw/xvideos-dl?url=${encodeURIComponent(selectedVideo.url)}`
+                    : `https://apis.prexzyvilla.site/nsfw/xnxx-dl?url=${encodeURIComponent(selectedVideo.url)}`;
+
+                const response = await fetch(dlEndpoint);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const dlData = await response.json();
+                if (!dlData.status || !dlData.result) throw new Error("Video download failed to resolve media.");
+
+                const downloadUrl = dlData.result.url || dlData.result.video || dlData.result.download_url || dlData.result.link;
+                if (!downloadUrl) throw new Error("No media stream resolved.");
+
+                const title = dlData.result.title || selectedVideo.title;
+
+                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+            } catch (error) {
+                logError(session.type + "-download", selectedVideo.url, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download video. Error: ${error.message}` }, { quoted: msg });
+            }
+        }
+    });
+}
+
 const aliases = [];
-module.exports.forEach(cmd => {
+commands.forEach(cmd => {
     if (cmd.name === 'fb') aliases.push({ ...cmd, name: 'facebook' });
     if (cmd.name === 'tt') aliases.push({ ...cmd, name: 'tiktok' });
     if (cmd.name === 'ig') aliases.push({ ...cmd, name: 'instagram' });
@@ -460,4 +487,6 @@ module.exports.forEach(cmd => {
         aliases.push({ ...cmd, name: 'x' });
     }
 });
-module.exports.push(...aliases);
+commands.push(...aliases);
+
+module.exports = commands;
