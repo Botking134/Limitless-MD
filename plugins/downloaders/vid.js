@@ -457,16 +457,22 @@ for (let i = 1; i <= 15; i++) {
                     ? `https://apis.prexzyvilla.site/nsfw/xvideos-dl?url=${encodeURIComponent(selectedVideo.url)}`
                     : `https://apis.prexzyvilla.site/nsfw/xnxx-dl?url=${encodeURIComponent(selectedVideo.url)}`;
 
-                const response = await fetch(dlEndpoint);
+                // Adding a standard browser User-Agent to prevent HTTP 400 rejection on fetch
+                const response = await fetch(dlEndpoint, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+                    }
+                });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const dlData = await response.json();
-                if (!dlData.status || !dlData.result) throw new Error("Video download failed to resolve media.");
+                if (!dlData.status) throw new Error("Downloader API failed to parse video elements.");
 
-                const downloadUrl = dlData.result.url || dlData.result.video || dlData.result.download_url || dlData.result.link;
-                if (!downloadUrl) throw new Error("No media stream resolved.");
+                // Extracted from the "files" container direct property format
+                const downloadUrl = dlData.files?.high || dlData.files?.low || dlData.files?.hls;
+                if (!downloadUrl) throw new Error("The media download URLs returned empty.");
 
-                const title = dlData.result.title || selectedVideo.title;
+                const title = dlData.title || selectedVideo.title;
 
                 await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
             } catch (error) {
