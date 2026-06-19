@@ -157,57 +157,52 @@ if (!global.reminderInterval) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. DIAGNOSE
-    {
-        name: 'diagnose',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
+    // ─── 1. DIAGNOSE ─────────────────────────────────────────────────
+{
 
-            let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
-            const filesToTest = [
-                // Core plugins (root)
-                'plugins/owner.js',
-                'plugins/ai.js',
-                'plugins/fun.js',
-                'plugins/menu.js',
-                'plugins/games.js',
-                'plugins/games2.js',
-                // Group plugins (in subfolder)
-                'plugins/group/group_basic.js',
-                'plugins/group/group_security.js',
-                'plugins/group/group_advanced.js',
-                // Other plugins
-                'plugins/tools.js',
-                'plugins/utilities.js',
-                'plugins/converter.js',
-                // Downloaders
-                'plugins/downloaders/aud.js',
-                'plugins/downloaders/dl.js',
-                'plugins/downloaders/vid.js'
-            ];
+    name: 'diagnose',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
 
-            for (const file of filesToTest) {
-                const filePath = path.join(__dirname, '..', file);
+        let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
+        const filesToTest = [
+            'plugins/owner.js',
+            'plugins/ai.js',
+            'plugins/fun.js',
+            'plugins/menu.js',
+            'plugins/games.js',
+            'plugins/games2.js',
+            'plugins/group/group_basic.js',
+            'plugins/group/group_security.js',
+            'plugins/group/group_advanced.js',
+            'plugins/tools.js',
+            'plugins/utilities.js',
+            'plugins/converter.js',
+            'plugins/dl.js'   // NEW
+        ];
 
-                if (!fs.existsSync(filePath)) {
-                    report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n\n`;
-                    continue;
-                }
+        for (const file of filesToTest) {
+            const filePath = path.join(__dirname, '..', file);
 
-                try {
-                    delete require.cache[require.resolve(filePath)];
-                    require(filePath);
-                    report += `✅ *${file}*:\n• *Status:* Loaded successfully!\n\n`;
-                } catch (err) {
-                    report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`${err.message}\`\n\n`;
-                }
+            if (!fs.existsSync(filePath)) {
+                report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n\n`;
+                continue;
             }
 
-            await sock.sendMessage(jid, { text: report }, { quoted: msg });
+            try {
+                delete require.cache[require.resolve(filePath)];
+                require(filePath);
+                report += `✅ *${file}*:\n• *Status:* Loaded successfully!\n\n`;
+            } catch (err) {
+                report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`${err.message}\`\n\n`;
+            }
         }
-    },
+
+        await sock.sendMessage(jid, { text: report }, { quoted: msg });
+    }
+}, 
 
     // 2. UPDATE
     {
