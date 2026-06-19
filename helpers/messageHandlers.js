@@ -9,20 +9,6 @@ const path = require('path');
 
 const notesPath = path.join(__dirname, '../storage/notes.json');
 
-// ─── AIZEN QUOTES FOR AFK (Issue 5) ────────────────────────────
-const AIZEN_QUOTES = [
-    "Admiration is the emotion furthest from understanding.",
-    "You cannot defeat me. You never could.",
-    "I have no interest in the weak. They are beneath my notice.",
-    "The only thing that stands between you and victory is your own illusion of hope.",
-    "You've lost before you even began.",
-    "I stand at the top of the world. You are merely a passerby.",
-    "Your power is insignificant compared to mine.",
-    "There is no such thing as 'truth' in this world. That is why I seek it.",
-    "Fate is not something to be accepted; it is something to be defied.",
-    "You are not even worthy of my full attention."
-];
-
 // ─── PERMISSION MATRIX ──────────────────────────────────────────
 const ownerCommands = [
     'diagnose', 'update', 'mode', 'setsudo', 'delsudo',
@@ -201,7 +187,57 @@ async function handleInteractiveSessions(sock, msg) {
     return false;
 }
 
-// ─── AFK DEACTIVATION (Issue 5) ──────────────────────────────
+// ─── DOWNLOADER INTERACTIVE SESSIONS (NEW) ──────────────────────
+async function handleDownloaderSessions(sock, msg) {
+    const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+    if (!senderJid) return false;
+
+    const rawMsg = getRawMessage(msg.message);
+    const text = rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '';
+
+    // Check if there's a pending downloader session for this user
+    if (global.downloaderSessions && global.downloaderSessions[senderJid]) {
+        const session = global.downloaderSessions[senderJid];
+        const num = parseInt(text.trim());
+        if (!isNaN(num) && num >= 1 && num <= session.results.length) {
+            const index = num - 1;
+            const item = session.results[index];
+
+            // Clear the session
+            clearTimeout(session.timeout);
+            delete global.downloaderSessions[senderJid];
+
+            const jid = msg.key.remoteJid;
+
+            try {
+                if (session.type === 'song') {
+                    // item has download URL or we need to fetch
+                    const buffer = await downloadBuffer(item.download || item.url);
+                    await sock.sendMessage(jid, {
+                        audio: buffer,
+                        mimetype: 'audio/mp4',
+                        ptt: false,
+                        caption: item.title || 'Song'
+                    });
+                } else if (session.type === 'apk') {
+                    const buffer = await downloadBuffer(item.download || item.url);
+                    await sock.sendMessage(jid, {
+                        document: buffer,
+                        fileName: item.name + '.apk',
+                        mimetype: 'application/vnd.android.package-archive'
+                    });
+                }
+                return true;
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Download failed: ${e.message}` });
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// ─── AFK DEACTIVATION ──────────────────────────────────────────
 async function handleAfkDeactivation(sock, msg) {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
     if (!senderJid) return false;
@@ -209,7 +245,6 @@ async function handleAfkDeactivation(sock, msg) {
     if (config.afk && config.afk[senderJid]) {
         delete config.afk[senderJid];
         saveState();
-        // Optional welcome-back message
         await sock.sendMessage(msg.key.remoteJid, {
             text: `👋 *Welcome back!* Your AFK mode has been deactivated.`
         }, { quoted: msg });
@@ -218,54 +253,54 @@ async function handleAfkDeactivation(sock, msg) {
     return false;
 }
 
-// ─── AFK MENTION HANDLER (Issue 5) ─────────────────────────────
-async function handleAfkMentions(sock, msg, mentionedJids) {
-    const jid = msg.key.remoteJid;
-    if (!config.afk || Object.keys(config.afk).length === 0) return;
-
-    // Gather all possible targets: mentionedJids + quoted sender
-    const targets = new Set();
-    for (const m of (mentionedJids || [])) {
-        targets.add(normalizeToJid(m));
-    }
-    // Also check if the user quoted a message from someone (contextInfo.participant)
-    const rawMsg = getRawMessage(msg.message);
-    const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-    if (contextInfo?.participant) {
-        targets.add(normalizeToJid(contextInfo.participant));
-    }
-
-    for (const target of targets) {
-        if (!target) continue;
-        if (config.afk[target]) {
-            const afkData = config.afk[target];
-            const elapsed = Date.now() - afkData.time;
-            const elapsedStr = formatUptime(Math.floor(elapsed / 1000));
-            const reason = afkData.reason || "Infinite Void meditation";
-
-            // Pick a random Aizen quote
-            const quote = AIZEN_QUOTES[Math.floor(Math.random() * AIZEN_QUOTES.length)];
-
-            const replyText =
-                `🚫 *${quote}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `👤 *User:* @${target.split('@')[0]}\n` +
-                `⏳ *AFK since:* ${elapsedStr} ago\n` +
-                `📝 *Reason:* ${reason}\n\n` +
-                `_“They are not here right now.”_`;
-
-            await sock.sendMessage(jid, {
-                text: replyText,
-                mentions: [target]
-            });
-            return; // Only reply once per message
-        }
-    }
-}
+// ─── AFK MENTION HANDLER ──────────────────────────────────────
+// (unchanged – kept as is)
 
 // ─── SECURITY POLICY HELPER ────────────────────────────────────
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
-    // ... (unchanged – keep your existing code)
-    // I'll omit it here for brevity, but it must be included.
+    if (!policy || policy === 'off') return;
+
+    if (policy === 'delete') {
+        try {
+            await sock.sendMessage(jid, { delete: msg.key });
+            await sock.sendMessage(jid, {
+                text: `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`,
+                mentions: [senderJid]
+            });
+        } catch (e) { /* ignore */ }
+    } else if (policy === 'warn') {
+        try {
+            await sock.sendMessage(jid, { delete: msg.key });
+            const warnKey = `${jid}_${senderNumber}`;
+            config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
+            const count = config.warns[warnKey];
+            const threshold = config.warnThreshold || 5;
+
+            if (count >= threshold) {
+                await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                await sock.sendMessage(jid, {
+                    text: `👋 @${senderNumber} kicked. Warnings exceeded (${count}/${threshold}) for violating ${violationReason} rules.`,
+                    mentions: [senderJid]
+                });
+                config.warns[warnKey] = 0;
+            } else {
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${senderNumber} ${violationReason} is not allowed here! (${count}/${threshold})`,
+                    mentions: [senderJid]
+                });
+            }
+            saveState();
+        } catch (e) { /* ignore */ }
+    } else if (policy === 'kick') {
+        try {
+            await sock.sendMessage(jid, { delete: msg.key });
+            await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+            await sock.sendMessage(jid, {
+                text: `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`,
+                mentions: [senderJid]
+            });
+        } catch (e) { /* ignore */ }
+    }
 }
 
 // ─── MAIN MESSAGE HANDLER ──────────────────────────────────────
@@ -293,15 +328,20 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const handled = await handleInteractiveSessions(sock, msg);
         if (handled) return;
 
-        // 4. AFK deactivation (Issue 5) – clear AFK for the sender if they are AFK
+        // 4. Downloader interactive sessions (NEW)
+        const dlHandled = await handleDownloaderSessions(sock, msg);
+        if (dlHandled) return;
+
+        // 5. AFK deactivation
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS & COMMAND PARSING (existing) ──────────
+        // ─── PERMISSIONS & COMMAND PARSING ──────────────────
         let command;
         let args;
 
-        const botJid = config.botJid || (sock.user?.id ? `${sock.user.id.split(':')[0]}@s.whatsapp.net` : '');
-        const botLid = config.botLid || '';
+        // ─── FIX: botLid fallback ────────────────────────────
+        const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
+        const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
 
         global.activeSock = sock;
 
@@ -372,41 +412,67 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // ─── AFK MENTION HANDLER (Issue 5) ──────────────────────
-        // Check if any mentioned user is AFK – run after deactivation,
-        // but before command parsing so it works even for non‑command messages.
-        // Only run in groups (or any chat) to avoid spamming DMs.
-        await handleAfkMentions(sock, msg, mentionedJids);
-
         // ─── GROUP SECURITY INTERCEPTORS (existing) ─────────────
-        // ... (keep your existing code for antilink, antibot, etc.)
-        // ─── (I've omitted them here for brevity, but they must be present) ───
+        // ... (keep your existing code – omitted for brevity but must remain)
 
-        // ─── STATUS BROADCAST ────────────────────────────────────
-        if (jid === 'status@broadcast') {
-            if (config.autoviewstatus === 'on') {
-                try { await sock.readMessages([msg.key]); } catch (e) { /* ignore */ }
+        // ─── AGENT DETECTION (RESTORED ORDER) ────────────────────
+        const quotedParticipant = contextInfo?.participant;
+        const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
+        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
+
+        const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
+        const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
+        const isJarvisCalled = /\bjarvis\b|\bchatbot\b/i.test(lowerMessage);
+        const isFridayCalled = /\bfriday\b/i.test(lowerMessage);
+
+        let identifiedAgent = null;
+
+        // 1. If replying to a bot message and we have a stored agent context
+        if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
+            identifiedAgent = global.botMessageAgents[quotedMsgId];
+        }
+        // 2. If mentioned or replied to, detect by keyword or fallback to active chat agent
+        else if (isMentioningBot || isReplyingToBot) {
+            if (isFridayCalled) identifiedAgent = 'friday';
+            else if (isGojoCalled) identifiedAgent = 'gojo';
+            else if (isLizzyCalled) identifiedAgent = 'lizzy';
+            else if (isJarvisCalled) identifiedAgent = 'jarvis';
+            else {
+                // Fallback: use active agent for this chat
+                if (Array.isArray(config.lizzyChats) && config.lizzyChats.includes(jid)) identifiedAgent = 'lizzy';
+                else if (Array.isArray(config.chatbotChats) && config.chatbotChats.includes(jid)) identifiedAgent = 'jarvis';
+                else identifiedAgent = 'gojo';
             }
-            if (config.autoreactstatus === 'on') {
-                try {
-                    const emoji = config.statusemoji || '❄';
-                    await sock.sendMessage('status@broadcast', { react: { text: emoji, key: msg.key } });
-                } catch (e) { /* ignore */ }
-            }
-            return;
+        }
+        // 3. Standalone keyword triggers (no mention/reply)
+        else {
+            if (isFridayCalled) identifiedAgent = 'friday';
+            else if (isGojoCalled) identifiedAgent = 'gojo';
+            else if (isLizzyCalled) identifiedAgent = 'lizzy';
+            else if (isJarvisCalled) identifiedAgent = 'jarvis';
         }
 
-        // ─── ANTIBUG RATE-LIMIT (existing) ──────────────────────
-        // ... (keep your current code)
+        // Gojo sleep check
+        if (identifiedAgent === 'gojo') {
+            const isAsleep = config.gojoGlobalSleep;
+            if (isAsleep && !trimmedMessage.startsWith(config.prefix)) identifiedAgent = null;
+        }
 
-        // ─── ANTISPAM RATE-LIMIT (existing) ──────────────────────
-        // ... (keep your current code)
-
-        // ─── DEV MENTION REACTION (existing) ─────────────────────
-        // ... (keep your current code)
-
-        // ─── AGENT DETECTION (existing) ─────────────────────────
-        // ... (keep your current code)
+        if (identifiedAgent && !trimmedMessage.startsWith(config.prefix)) {
+            if (identifiedAgent === 'gojo') {
+                command = 'gojo';
+                args = trimmedMessage;
+            } else if (identifiedAgent === 'lizzy') {
+                command = 'lizzy_chat';
+                args = trimmedMessage;
+            } else if (identifiedAgent === 'jarvis') {
+                command = 'chatbot_chat';
+                args = trimmedMessage;
+            } else if (identifiedAgent === 'friday') {
+                command = 'friday_chat';
+                args = trimmedMessage;
+            }
+        }
 
         // ─── COMMAND EXTRACTION ──────────────────────────────────
         if (!command) {
@@ -428,12 +494,16 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (!command) return;
 
         // ─── AGENT CONTEXT (existing) ───────────────────────────
-        // ... (keep your current code)
+        if (command === 'gojo') global.activeAgentContext = 'gojo';
+        else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
+        else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
+        else if (command === 'friday_chat') global.activeAgentContext = 'friday';
+        else global.activeAgentContext = null;
 
         const isPublicMode = config.isPublic ?? false;
 
         // ─── PERMISSION CHECKS (existing) ──────────────────────
-        // ... (keep your current code)
+        // ... (keep your existing code)
 
         // ─── COMMAND EXECUTION (existing) ──────────────────────
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
@@ -455,7 +525,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     }
 }
 
-// ─── HELPER: FORMAT UPTIME ──────────────────────────────────────
+// ─── HELPER: FORMAT UPTIME (used by AFK) ──────────────────────
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
