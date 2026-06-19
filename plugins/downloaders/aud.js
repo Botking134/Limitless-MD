@@ -81,7 +81,8 @@ module.exports = [
                 let thumbnail = videos[0].thumbnail || "";
                 let duration = videos[0].duration?.timestamp || "N/A";
 
-                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(videoUrl)}`);
+                // UPDATED: new youtube-audio endpoint
+                const response = await fetch(`https://apis.prexzyvilla.site/download/youtube-audio?url=${encodeURIComponent(videoUrl)}`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.status && data.result) {
@@ -139,7 +140,8 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "YouTube Audio";
 
-                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(resolvedUrl)}`);
+                // UPDATED: new youtube-audio endpoint
+                const response = await fetch(`https://apis.prexzyvilla.site/download/youtube-audio?url=${encodeURIComponent(resolvedUrl)}`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.status && data.result) {
@@ -227,7 +229,8 @@ module.exports = [
                 const resolvedUrl = await resolveUrlOrSearch(query);
                 if (!resolvedUrl) throw new Error("Unable to resolve link.");
 
-                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(resolvedUrl)}`);
+                // UPDATED: new youtube-audio endpoint
+                const response = await fetch(`https://apis.prexzyvilla.site/download/youtube-audio?url=${encodeURIComponent(resolvedUrl)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
@@ -269,7 +272,8 @@ module.exports = [
 
                 const firstSong = videos[0];
 
-                const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(firstSong.url)}`);
+                // UPDATED: new youtube-audio endpoint
+                const response = await fetch(`https://apis.prexzyvilla.site/download/youtube-audio?url=${encodeURIComponent(firstSong.url)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
@@ -303,7 +307,8 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Searching Spotify track... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://david-cyril.net.ng/projects/spotify/api?query=${encodeURIComponent(args)}`);
+                // UPDATED: new spotify endpoint, using ?url= instead of ?query=
+                const response = await fetch(`https://apis.prexzyvilla.site/download/spotify?url=${encodeURIComponent(args)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
@@ -330,8 +335,4 @@ module.exports = [
     }
 ];
 
-const aliases = [];
-module.exports.forEach(cmd => {
-    if (cmd.name === 'play') aliases.push({ ...cmd, name: 'play' }); // no alias
-});
-module.exports.push(...aliases);
+// REMOVED: useless alias duplication block
