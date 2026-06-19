@@ -1,6 +1,6 @@
 // helpers/messageHandlers.js
 const config = require('../config');
-const { DEV_LIDS, DEV_JIDS } = require('../devs');
+const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
@@ -345,7 +345,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         global.activeSock = sock;
 
-        let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid);
+        // ─── DEV CHECK — NOW INCLUDES PHONE JIDs ──────────────
+        let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderJid);
+
         let isPrimaryOwner = senderJid === config.ownerJid ||
                              (config.ownerLid && senderJid === config.ownerLid);
         let isSecondaryOwner = Array.isArray(config.secondaryOwners) &&
@@ -364,7 +366,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
             if (senderPhoneJid) {
-                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid)) isDev = true;
+                // Re‑evaluate dev status using resolved phone JID
+                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderPhoneJid)) isDev = true;
                 if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
                 if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
                 if (Array.isArray(config.sudos) && config.sudos.includes(senderPhoneJid)) isSudo = true;
