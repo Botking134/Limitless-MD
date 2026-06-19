@@ -157,46 +157,50 @@ if (!global.reminderInterval) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // ─── 1. DIAGNOSE ─────────────────────────────────────────────────
+    // ─── DIAGNOSE (auto‑discovers all plugins) ─────────────────────
 {
-
     name: 'diagnose',
     isPrefixless: false,
     execute: async (sock, msg, args, { isOwner }) => {
         const jid = msg.key.remoteJid;
         if (!isOwner) return;
 
-        let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
-        const filesToTest = [
-            'plugins/owner.js',
-            'plugins/ai.js',
-            'plugins/fun.js',
-            'plugins/menu.js',
-            'plugins/games.js',
-            'plugins/games2.js',
-            'plugins/group/group_basic.js',
-            'plugins/group/group_security.js',
-            'plugins/group/group_advanced.js',
-            'plugins/tools.js',
-            'plugins/utilities.js',
-            'plugins/converter.js',
-            'plugins/dl.js'   // NEW
-        ];
+        const pluginsDir = path.join(__dirname, '..', 'plugins');
 
-        for (const file of filesToTest) {
-            const filePath = path.join(__dirname, '..', file);
-
-            if (!fs.existsSync(filePath)) {
-                report += `⚠️ *${file}*:\n• *Status:* Missing ❌\n\n`;
-                continue;
+        // Recursively find all .js files in plugins/
+        function getFilesRecursive(dir) {
+            let results = [];
+            if (!fs.existsSync(dir)) return results;
+            const list = fs.readdirSync(dir);
+            for (const file of list) {
+                const filePath = path.join(dir, file);
+                const stat = fs.statSync(filePath);
+                if (stat && stat.isDirectory()) {
+                    results = results.concat(getFilesRecursive(filePath));
+                } else if (file.endsWith('.js')) {
+                    results.push(filePath);
+                }
             }
+            return results;
+        }
+
+        const allPluginFiles = getFilesRecursive(pluginsDir);
+        if (allPluginFiles.length === 0) {
+            return await sock.sendMessage(jid, { text: "⚠️ No plugin files found." }, { quoted: msg });
+        }
+
+        let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
+
+        for (const filePath of allPluginFiles) {
+            const relativePath = path.relative(pluginsDir, filePath);
+            const displayPath = `plugins/${relativePath}`;
 
             try {
                 delete require.cache[require.resolve(filePath)];
                 require(filePath);
-                report += `✅ *${file}*:\n• *Status:* Loaded successfully!\n\n`;
+                report += `✅ *${displayPath}*:\n• Status: Loaded successfully!\n\n`;
             } catch (err) {
-                report += `❌ *${file}*:\n• *Status:* Failed to load\n• *Error:* \`${err.message}\`\n\n`;
+                report += `❌ *${displayPath}*:\n• Status: Failed to load\n• Error: \`${err.message}\`\n\n`;
             }
         }
 
