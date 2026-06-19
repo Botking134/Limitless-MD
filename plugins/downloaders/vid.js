@@ -65,7 +65,6 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "YouTube Video";
 
-                // KEEP OLD: no new video endpoint provided, stay with yt.david-cyril.net.ng
                 const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
                 if (response.ok) {
                     const data = await response.json();
@@ -108,7 +107,6 @@ module.exports = [
                 let downloadUrl = "";
                 let title = firstVideo.title || "YouTube Video";
 
-                // KEEP OLD: no new video endpoint
                 const response = await fetch(`https://yt.david-cyril.net.ng/api/download?url=${encodeURIComponent(videoUrl)}`);
                 if (response.ok) {
                     const data = await response.json();
@@ -150,8 +148,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Facebook video... 📥" }, { quoted: msg });
 
-                // UPDATED: new facebook endpoint
-                let response = await fetch(`https://apis.prexzyvilla.site/download/facebook?url=${encodeURIComponent(query)}`);
+                let response = await fetch(`https://fb.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 let data = await response.json();
@@ -159,7 +156,7 @@ module.exports = [
                 let retries = 0;
                 while ((!data.status || !data.video) && retries < 2) {
                     await new Promise(r => setTimeout(r, 1500));
-                    response = await fetch(`https://apis.prexzyvilla.site/download/facebook?url=${encodeURIComponent(query)}`);
+                    response = await fetch(`https://fb.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
                     data = await response.json();
                     retries++;
                 }
@@ -204,8 +201,7 @@ module.exports = [
                 let downloadUrl = "";
                 let title = "TikTok Video";
 
-                // UPDATED: new tiktok endpoint (primary)
-                const response = await fetch(`https://apis.prexzyvilla.site/download/tiktok?url=${encodeURIComponent(query)}`);
+                const response = await fetch(`https://tiksave.name.ng/api/download?url=${encodeURIComponent(query)}`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.status && data.result) {
@@ -214,7 +210,6 @@ module.exports = [
                     }
                 }
 
-                // Fallback to tikwm if prexzyvilla fails
                 if (!downloadUrl) {
                     const fbResponse = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(query)}`);
                     if (fbResponse.ok) {
@@ -260,8 +255,7 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Instagram media... 📥" }, { quoted: msg });
 
-                // UPDATED: new instagram endpoint
-                const response = await fetch(`https://apis.prexzyvilla.site/download/instagram?url=${encodeURIComponent(query)}`);
+                const response = await fetch(`https://apis.davidcyril.name.ng/instagram?url=${encodeURIComponent(query)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
@@ -307,8 +301,7 @@ module.exports = [
 
                 let downloadUrl = "";
 
-                // UPDATED: new twitter endpoint
-                const response = await fetch(`https://apis.prexzyvilla.site/download/twitter?url=${encodeURIComponent(query)}`);
+                const response = await fetch(`https://twitter.david-cyril.net.ng/api/download?url=${encodeURIComponent(query)}`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.status && data.result) {
@@ -328,6 +321,86 @@ module.exports = [
             } catch (error) {
                 logError("x2", query, error);
                 await sock.sendMessage(jid, { text: `❌ Failed to download Twitter/X media. Error: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 7. XVideos (.xvid)
+    {
+        name: 'xvid',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let query = args ? args.trim() : '';
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!query && quoted) {
+                const rawContent = getRawMessage(quoted);
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+            }
+
+            if (!query || !urlRegex.test(query)) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a valid XVideos link." }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Downloading XVideos... 📥" }, { quoted: msg });
+
+                const response = await fetch(`https://apis.prexzyvilla.site/nsfw/xvideos-dl?url=${encodeURIComponent(query)}`);
+                if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+
+                const data = await response.json();
+                if (!data.status || !data.result) throw new Error("XVideos downloader returned no results.");
+
+                const downloadUrl = data.result.url || data.result.video || data.result.download_url || data.result.link;
+                if (!downloadUrl) throw new Error("No download link resolved.");
+
+                const title = data.result.title || "XVideos Video";
+
+                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+            } catch (error) {
+                logError("xvid", query, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download XVideos. Error: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 8. XNXX (.xxx)
+    {
+        name: 'xxx',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let query = args ? args.trim() : '';
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!query && quoted) {
+                const rawContent = getRawMessage(quoted);
+                query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+            }
+
+            if (!query || !urlRegex.test(query)) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a valid XNXX link." }, { quoted: msg });
+            }
+
+            try {
+                await sock.sendMessage(jid, { text: "Downloading XNXX... 📥" }, { quoted: msg });
+
+                const response = await fetch(`https://apis.prexzyvilla.site/nsfw/xnxx-dl?url=${encodeURIComponent(query)}`);
+                if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+
+                const data = await response.json();
+                if (!data.status || !data.result) throw new Error("XNXX downloader returned no results.");
+
+                const downloadUrl = data.result.url || data.result.video || data.result.download_url || data.result.link;
+                if (!downloadUrl) throw new Error("No download link resolved.");
+
+                const title = data.result.title || "XNXX Video";
+
+                await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
+            } catch (error) {
+                logError("xxx", query, error);
+                await sock.sendMessage(jid, { text: `❌ Failed to download XNXX. Error: ${error.message}` }, { quoted: msg });
             }
         }
     }
