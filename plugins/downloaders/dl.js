@@ -141,7 +141,8 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Retrieving file parameters... 📥" }, { quoted: msg });
 
-                const response = await fetch(`https://apis.davidcyril.name.ng/mediafire?url=${encodeURIComponent(query)}`);
+                // UPDATED: new mediafire endpoint
+                const response = await fetch(`https://apis.prexzyvilla.site/download/mediafire?url=${encodeURIComponent(query)}`);
                 if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
 
                 const data = await response.json();
@@ -413,7 +414,7 @@ module.exports = [
         }
     },
 
-    // 8. PINTEREST
+    // 8. PINTEREST (download by URL)
     {
         name: 'pinterest',
         isPrefixless: false,
@@ -432,7 +433,8 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Downloading Pinterest media... 📥" }, { quoted: msg });
 
-                const resolvedUrl = await fetch(`https://api.kord.live/api/pinterest?url=${encodeURIComponent(query)}`);
+                // UPDATED: new pinterest download endpoint
+                const resolvedUrl = await fetch(`https://apis.prexzyvilla.site/download/pinterest?url=${encodeURIComponent(query)}`);
                 if (!resolvedUrl.ok) throw new Error(`HTTP Status ${resolvedUrl.status}`);
 
                 const json = await resolvedUrl.json();
