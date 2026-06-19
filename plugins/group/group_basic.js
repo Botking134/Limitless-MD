@@ -82,9 +82,11 @@ function isOwnerTarget(target) {
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
+    // 1. AUTHORIZATION CHECK
     const isAuthorized = isDev || isOwner || isSudo;
     if (!isAuthorized) return false;
 
+    // 2. EXEMPT COMMANDS
     const exemptCommands = [
         'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
         'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
@@ -94,6 +96,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return true;
     }
 
+    // 3. BOT ADMIN CHECK
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
@@ -115,10 +118,12 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
+    // 4. DEVELOPER BYPASS
     if (isDev) {
         return true;
     }
 
+    // 5. SENDER ADMIN CHECK
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
@@ -204,7 +209,7 @@ module.exports = [
         }
     },
 
-    // 2. KICK
+    // 2. KICK (with GIF fix)
     {
         name: 'kick',
         isPrefixless: false,
@@ -225,6 +230,19 @@ module.exports = [
 
             if (isOwnerTarget(target)) {
                 return await sock.sendMessage(jid, { text: "❌ Cannot kick a registered system owner." }, { quoted: msg });
+            }
+
+            // ─── Send Kick GIF (with try/catch) ──────────────────────
+            try {
+                await sock.sendMessage(jid, {
+                    video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzJmenhraWhkZHhsNHlnMmg2Z3hqM29pNHFvZ2dzNm53bXVnYjdoeiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QfCQQQAI860CXZY9qs/giphy.mp4" },
+                    gifPlayback: true,
+                    caption: "Kokeida Na.... Yare Yare"
+                });
+            } catch (gifErr) {
+                console.error("Failed to send kick GIF:", gifErr.message);
+                // Fallback: just send a text notification
+                await sock.sendMessage(jid, { text: `👋 Exorcising target from this domain...` }, { quoted: msg });
             }
 
             await sock.groupParticipantsUpdate(jid, [target], "remove");
@@ -288,7 +306,7 @@ module.exports = [
         }
     },
 
-    // 5. TAGALL (with Madara GIF as caption) 😈
+    // 5. TAGALL (with Madara GIF)
     {
         name: 'tagall',
         isPrefixless: false,
@@ -334,7 +352,6 @@ module.exports = [
                 });
             } catch (gifErr) {
                 console.error("Failed to send Madara GIF for tagall:", gifErr.message);
-                // Fallback: send just the text message
                 await sock.sendMessage(jid, {
                     text: text,
                     mentions: allJids
@@ -343,7 +360,7 @@ module.exports = [
         }
     },
 
-    // 6. TAG (with Madara GIF as caption) 😈
+    // 6. TAG (with Madara GIF)
     {
         name: 'tag',
         isPrefixless: false,
@@ -379,7 +396,6 @@ module.exports = [
                 });
             } catch (gifErr) {
                 console.error("Failed to send Madara GIF for tag:", gifErr.message);
-                // Fallback: send just the text message
                 await sock.sendMessage(jid, {
                     text: messageText,
                     mentions: participants
