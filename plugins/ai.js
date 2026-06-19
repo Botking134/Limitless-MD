@@ -138,7 +138,8 @@ module.exports = [
         name: 'gojo',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
+            // ─── FIX: Use fallback for JID ──────────────────────────
+            const jid = msg.remoteJid || msg.key.remoteJid;
             const cleanArgs = args || '';
 
             // Bypass if it's a prefixed command
@@ -388,7 +389,8 @@ module.exports = [
         name: 'lizzy_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
-            const jid = msg.key.remoteJid;
+            // ─── FIX: Use fallback for JID ──────────────────────────
+            const jid = msg.remoteJid || msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             const prefix = config.prefix || '⚡';
 
@@ -504,7 +506,8 @@ module.exports = [
         name: 'chatbot_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
+            // ─── FIX: Use fallback for JID ──────────────────────────
+            const jid = msg.remoteJid || msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
 
             if (lowerQuery.startsWith(config.prefix)) return;
@@ -610,7 +613,8 @@ module.exports = [
         name: 'friday_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
+            // ─── FIX: Use fallback for JID ──────────────────────────
+            const jid = msg.remoteJid || msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
 
             // Bypass if FRIDAY is off globally, or if it's a prefixed command
