@@ -60,7 +60,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { senderNumber }) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide an Instagram URL.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/download/instagram?url=${encodeURIComponent(url)}`);
@@ -82,7 +83,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Telegram sticker URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/telegram-sticker?url=${encodeURIComponent(url)}`);
@@ -102,7 +104,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Twitter URL.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/download/twitter?url=${encodeURIComponent(url)}`);
@@ -124,7 +127,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/download/ytmp3?url=${encodeURIComponent(url)}`);
@@ -149,7 +153,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(url)}`);
@@ -172,7 +177,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const query = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const query = safeArgs.join(' ');
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide a search query.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/search/pinterest?q=${encodeURIComponent(query)}`);
@@ -194,7 +200,8 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo && !isDev) return;
-            const repoUrl = args[0];
+            const safeArgs = Array.isArray(args) ? args : [];
+            const repoUrl = safeArgs[0];
             if (!repoUrl || !repoUrl.includes('github.com')) return await sock.sendMessage(jid, { text: 'Please provide a valid GitHub repo URL.' });
             try {
                 const cleanUrl = repoUrl.replace(/\/$/, '').replace('/tree', '');
@@ -232,7 +239,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const query = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const query = safeArgs.join(' ');
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song title.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/lyrics/search?q=${encodeURIComponent(query)}`);
@@ -255,7 +263,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const query = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const query = safeArgs.join(' ');
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song name.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/play?q=${encodeURIComponent(query)}`);
@@ -283,7 +292,8 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const userId = msg.key.participant || msg.key.remoteJid;
-            const query = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const query = safeArgs.join(' ');
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song name.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/song?q=${encodeURIComponent(query)}`);
@@ -302,7 +312,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a TikTok URL.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/download/tiktok?url=${encodeURIComponent(url)}`);
@@ -322,7 +333,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Facebook video URL.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/download/facebook?url=${encodeURIComponent(url)}`);
@@ -378,7 +390,8 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const userId = msg.key.participant || msg.key.remoteJid;
-            const query = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const query = safeArgs.join(' ');
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide an app name.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/endpoints/download/apk?q=${encodeURIComponent(query)}`);
@@ -397,7 +410,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args[0];
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs[0];
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a website URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/ssweb?url=${encodeURIComponent(url)}`);
@@ -418,7 +432,8 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo && !isDev) return;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Spotify track URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/spotifydl?url=${encodeURIComponent(url)}`);
@@ -443,7 +458,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
             try {
                 const { data } = await axios.get(`https://savetube.david-cyril.net.ng/?url=${encodeURIComponent(url)}`);
@@ -463,7 +479,8 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args.join(' ');
+            const safeArgs = Array.isArray(args) ? args : [];
+            const url = safeArgs.join(' ');
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Mediafire URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/mediafire?url=${encodeURIComponent(url)}`);
