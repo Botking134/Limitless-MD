@@ -483,14 +483,14 @@ if (!command) {
         const spaceIndex = trimmedMessage.indexOf(' ');
         if (spaceIndex === -1) {
             command = trimmedMessage.slice(config.prefix.length).toLowerCase();
-            args = [];
+            args = '';
         } else {
             command = trimmedMessage.slice(config.prefix.length, spaceIndex).toLowerCase();
-            args = trimmedMessage.slice(spaceIndex + 1).trim().split(/\s+/);
+            args = trimmedMessage.slice(spaceIndex + 1).trim(); // Returns a string, which is safe for all plugins
         }
     } else if (commands[trimmedMessage.toLowerCase()]) {
         command = trimmedMessage.toLowerCase();
-        args = [];
+        args = '';
     }
 }
 
@@ -519,7 +519,7 @@ if (!command) {
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
+                try { await sock.sendMessage(jid, { react: { text: "🙄", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         }
