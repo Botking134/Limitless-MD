@@ -339,28 +339,50 @@ module.exports = [
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            if (!query || !urlRegex.test(query)) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide a valid XVideos link." }, { quoted: msg });
+            if (!query) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide an XVideos search query or direct link." }, { quoted: msg });
             }
 
             try {
-                await sock.sendMessage(jid, { text: "Downloading XVideos... 📥" }, { quoted: msg });
+                let videoUrl = "";
+                let fallbackTitle = "";
 
-                const response = await fetch(`https://apis.prexzyvilla.site/nsfw/xvideos-dl?url=${encodeURIComponent(query)}`);
-                if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+                if (urlRegex.test(query)) {
+                    videoUrl = query;
+                } else {
+                    await sock.sendMessage(jid, { text: `Searching XVideos for "${query}"... 🔍` }, { quoted: msg });
+                    const searchResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xvideos-search?query=${encodeURIComponent(query)}`);
+                    if (!searchResponse.ok) throw new Error(`Search failed with status ${searchResponse.status}`);
 
-                const data = await response.json();
-                if (!data.status || !data.result) throw new Error("XVideos downloader returned no results.");
+                    const searchData = await searchResponse.json();
+                    if (!searchData.status || !searchData.result || searchData.result.length === 0) {
+                        throw new Error("No search results found.");
+                    }
 
-                const downloadUrl = data.result.url || data.result.video || data.result.download_url || data.result.link;
+                    const firstResult = searchData.result[0];
+                    videoUrl = firstResult.url || firstResult.link;
+                    fallbackTitle = firstResult.title || "";
+                }
+
+                if (!videoUrl) throw new Error("Could not resolve a valid video URL.");
+
+                await sock.sendMessage(jid, { text: "Downloading video... 📥" }, { quoted: msg });
+
+                const dlResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xvideos-dl?url=${encodeURIComponent(videoUrl)}`);
+                if (!dlResponse.ok) throw new Error(`Download API status ${dlResponse.status}`);
+
+                const dlData = await dlResponse.json();
+                if (!dlData.status || !dlData.result) throw new Error("Downloader API returned an empty status.");
+
+                const downloadUrl = dlData.result.url || dlData.result.video || dlData.result.download_url || dlData.result.link;
                 if (!downloadUrl) throw new Error("No download link resolved.");
 
-                const title = data.result.title || "XVideos Video";
+                const title = dlData.result.title || fallbackTitle || "XVideos Video";
 
                 await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
             } catch (error) {
                 logError("xvid", query, error);
-                await sock.sendMessage(jid, { text: `❌ Failed to download XVideos. Error: ${error.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `❌ Failed to process XVideos request. Error: ${error.message}` }, { quoted: msg });
             }
         }
     },
@@ -379,28 +401,50 @@ module.exports = [
                 query = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
             }
 
-            if (!query || !urlRegex.test(query)) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide a valid XNXX link." }, { quoted: msg });
+            if (!query) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide an XNXX search query or direct link." }, { quoted: msg });
             }
 
             try {
-                await sock.sendMessage(jid, { text: "Downloading XNXX... 📥" }, { quoted: msg });
+                let videoUrl = "";
+                let fallbackTitle = "";
 
-                const response = await fetch(`https://apis.prexzyvilla.site/nsfw/xnxx-dl?url=${encodeURIComponent(query)}`);
-                if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+                if (urlRegex.test(query)) {
+                    videoUrl = query;
+                } else {
+                    await sock.sendMessage(jid, { text: `Searching XNXX for "${query}"... 🔍` }, { quoted: msg });
+                    const searchResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xnxx-search?query=${encodeURIComponent(query)}`);
+                    if (!searchResponse.ok) throw new Error(`Search failed with status ${searchResponse.status}`);
 
-                const data = await response.json();
-                if (!data.status || !data.result) throw new Error("XNXX downloader returned no results.");
+                    const searchData = await searchResponse.json();
+                    if (!searchData.status || !searchData.result || searchData.result.length === 0) {
+                        throw new Error("No search results found.");
+                    }
 
-                const downloadUrl = data.result.url || data.result.video || data.result.download_url || data.result.link;
+                    const firstResult = searchData.result[0];
+                    videoUrl = firstResult.url || firstResult.link;
+                    fallbackTitle = firstResult.title || "";
+                }
+
+                if (!videoUrl) throw new Error("Could not resolve a valid video URL.");
+
+                await sock.sendMessage(jid, { text: "Downloading video... 📥" }, { quoted: msg });
+
+                const dlResponse = await fetch(`https://apis.prexzyvilla.site/nsfw/xnxx-dl?url=${encodeURIComponent(videoUrl)}`);
+                if (!dlResponse.ok) throw new Error(`Download API status ${dlResponse.status}`);
+
+                const dlData = await dlResponse.json();
+                if (!dlData.status || !dlData.result) throw new Error("Downloader API returned an empty status.");
+
+                const downloadUrl = dlData.result.url || dlData.result.video || dlData.result.download_url || dlData.result.link;
                 if (!downloadUrl) throw new Error("No download link resolved.");
 
-                const title = data.result.title || "XNXX Video";
+                const title = dlData.result.title || fallbackTitle || "XNXX Video";
 
                 await sock.sendMessage(jid, { video: { url: downloadUrl }, caption: `🎬 *Title:* ${title}`, mimetype: 'video/mp4' }, { quoted: msg });
             } catch (error) {
                 logError("xxx", query, error);
-                await sock.sendMessage(jid, { text: `❌ Failed to download XNXX. Error: ${error.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `❌ Failed to process XNXX request. Error: ${error.message}` }, { quoted: msg });
             }
         }
     }
