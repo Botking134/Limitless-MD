@@ -1387,7 +1387,7 @@ module.exports = [
                 }, { quoted: msg });
             }
         }
-    }
+    }, 
 
 // ─── SETCMD – Map a sticker to a command ───────────────────────
 {
