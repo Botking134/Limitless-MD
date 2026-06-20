@@ -1,6 +1,6 @@
 // helpers/messageHandlers.js
 const config = require('../config');
-const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../devs');
+const { DEV_LIDS, DEV_JIDS } = require('../devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
@@ -339,15 +339,13 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         let command;
         let args;
 
-        // ─── FIX: botLid fallback ────────────────────────────
-        const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
-        const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
+        // ─── FIX: Dynamic JID & LID fallback resolution ────────────────────────────
+        const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+        const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
 
         global.activeSock = sock;
 
-        // ─── DEV CHECK — NOW INCLUDES PHONE JIDs ──────────────
-        let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderJid);
-
+        let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid);
         let isPrimaryOwner = senderJid === config.ownerJid ||
                              (config.ownerLid && senderJid === config.ownerLid);
         let isSecondaryOwner = Array.isArray(config.secondaryOwners) &&
@@ -366,8 +364,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
             if (senderPhoneJid) {
-                // Re‑evaluate dev status using resolved phone JID
-                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderPhoneJid)) isDev = true;
+                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid)) isDev = true;
                 if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
                 if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
                 if (Array.isArray(config.sudos) && config.sudos.includes(senderPhoneJid)) isSudo = true;
@@ -416,12 +413,14 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const mentionedJids = contextInfo?.mentionedJid || [];
 
         // ─── GROUP SECURITY INTERCEPTORS (existing) ─────────────
-        // ... (keep your existing code – omitted for brevity but must remain)
+        // Ensure your group protection layout logic runs here
 
-        // ─── AGENT DETECTION (RESTORED ORDER) ────────────────────
-        const quotedParticipant = contextInfo?.participant;
-        const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
-        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
+        // ─── AGENT DETECTION (RESTORED ORDER & ALIGNED COMPARISONS) ────────────────────
+        const quotedParticipant = contextInfo?.participant ? normalizeToJid(contextInfo.participant) : '';
+        const isReplyingToBot = quotedParticipant && (quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId));
+        
+        const normalizedMentions = mentionedJids.map(m => normalizeToJid(m));
+        const isMentioningBot = normalizedMentions.includes(botJid) || (botLid && normalizedMentions.includes(botLid));
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
         const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
@@ -478,21 +477,21 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         // ─── COMMAND EXTRACTION ──────────────────────────────────
-if (!command) {
-    if (trimmedMessage.startsWith(config.prefix)) {
-        const spaceIndex = trimmedMessage.indexOf(' ');
-        if (spaceIndex === -1) {
-            command = trimmedMessage.slice(config.prefix.length).toLowerCase();
-            args = '';
-        } else {
-            command = trimmedMessage.slice(config.prefix.length, spaceIndex).toLowerCase();
-            args = trimmedMessage.slice(spaceIndex + 1).trim(); // Returns a string, which is safe for all plugins
+        if (!command) {
+            if (trimmedMessage.startsWith(config.prefix)) {
+                const spaceIndex = trimmedMessage.indexOf(' ');
+                if (spaceIndex === -1) {
+                    command = trimmedMessage.slice(config.prefix.length).toLowerCase();
+                    args = '';
+                } else {
+                    command = trimmedMessage.slice(config.prefix.length, spaceIndex).toLowerCase();
+                    args = trimmedMessage.slice(spaceIndex + 1);
+                }
+            } else if (commands[trimmedMessage.toLowerCase()]) {
+                command = trimmedMessage.toLowerCase();
+                args = '';
+            }
         }
-    } else if (commands[trimmedMessage.toLowerCase()]) {
-        command = trimmedMessage.toLowerCase();
-        args = '';
-    }
-}
 
         if (!command) return;
 
@@ -514,12 +513,12 @@ if (!command) {
 
         if (commands[cmdKey]) {
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "🥷", key: msg.key } }); } catch (err) { /* ignore */ }
+                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "🙄", key: msg.key } }); } catch (err) { /* ignore */ }
+                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         }
