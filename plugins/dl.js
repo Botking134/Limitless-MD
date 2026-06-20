@@ -1,56 +1,423 @@
 // plugins/dl.js
 const config = require('../config');
+const { normalizeToJid, saveState } = require('../stateManager');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const { tmpdir } = require('os');
-const { promisify } = require('util');
-const writeFile = promisify(fs.writeFile);
-const unlink = promisify(fs.unlink);
 const FormData = require('form-data');
-const { fileTypeFromBuffer } = require('file-type');
 
-// ─── GLOBAL SESSIONS ──────────────────────────────────────────────
-global.downloaderSessions = global.downloaderSessions || {};
+// ─── SESSION STORE ──────────────────────────────────────────────
+global.songSessions = global.songSessions || {};
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
-// Helper: download buffer from URL
-async function downloadBuffer(url) {
-    const res = await axios({ url, method: 'GET', responseType: 'arraybuffer' });
-    return Buffer.from(res.data);
+async function fetchBuffer(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
 }
 
-// Helper: send media (image/video/audio) to chat
-async function sendMedia(sock, jid, buffer, options = {}) {
-    const type = await fileTypeFromBuffer(buffer);
-    const mime = type?.mime || 'application/octet-stream';
-    if (mime.startsWith('image/')) {
-        return sock.sendMessage(jid, { image: buffer, caption: options.caption || '' });
-    } else if (mime.startsWith('video/')) {
-        return sock.sendMessage(jid, { video: buffer, caption: options.caption || '' });
-    } else if (mime.startsWith('audio/')) {
-        return sock.sendMessage(jid, { audio: buffer, mimetype: mime, ptt: false });
-    } else {
-        return sock.sendMessage(jid, { document: buffer, mimetype: mime, fileName: options.fileName || 'file' });
+async function downloadMedia(apiUrl, params = {}, method = 'GET') {
+    try {
+        const response = await axios({
+            method,
+            url: apiUrl,
+            params: method === 'GET' ? params : undefined,
+            data: method === 'POST' ? params : undefined,
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return response.data;
+    } catch (err) {
+        throw new Error(`API error: ${err.response?.status || err.message}`);
     }
 }
 
-// Helper: send list of suggestions and store pending state
-function sendSuggestions(sock, jid, userId, type, results) {
-    const lines = results.map((item, i) => `${i + 1}. ${item.title || item.name}`).join('\n');
-    sock.sendMessage(jid, { text: `*Select a number (1-${results.length}):*\n${lines}` });
-    if (global.downloaderSessions[userId]) {
-        clearTimeout(global.downloaderSessions[userId].timeout);
-        delete global.downloaderSessions[userId];
+// ─── EXPORT COMMANDS ────────────────────────────────────────────
+
+module.exports = [
+    // ─── FACEBOOK ────────────────────────────────────────────────
+    {
+        name: 'fb',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const url = args?.trim();
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Facebook video URL." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Fetching Facebook video..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://fb.david-cyril.net.ng/', { url });
+                if (!data || !data.download) throw new Error('No download link found');
+                const buffer = await fetchBuffer(data.download);
+                await sock.sendMessage(jid, { video: buffer, caption: data.title || 'Facebook video' });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+    {
+        name: 'facebook',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            // Alias for .fb
+            const cmd = module.exports.find(c => c.name === 'fb');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // ─── TIKTOK ──────────────────────────────────────────────────
+    {
+        name: 'tt',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const url = args?.trim();
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a TikTok video URL." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Fetching TikTok video (no watermark)..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://tiksave.name.ng/', { url });
+                if (!data || !data.download) throw new Error('No download link found');
+                const buffer = await fetchBuffer(data.download);
+                await sock.sendMessage(jid, { video: buffer, caption: data.title || 'TikTok video' });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+    {
+        name: 'tiktok',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const cmd = module.exports.find(c => c.name === 'tt');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // ─── YOUTUBE ──────────────────────────────────────────────────
+    {
+        name: 'yt',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const parts = args?.trim().split(' ') || [];
+            let url = parts[0];
+            let type = 'mp4'; // default
+
+            if (parts.length > 1) {
+                const last = parts[parts.length - 1].toLowerCase();
+                if (last === 'mp3' || last === 'audio') {
+                    type = 'mp3';
+                    url = parts.slice(0, -1).join(' ');
+                } else if (last === 'mp4' || last === 'video') {
+                    type = 'mp4';
+                    url = parts.slice(0, -1).join(' ');
+                }
+            }
+
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a YouTube URL.\nExample: `.yt https://youtu.be/xxx mp3`" }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: `⏳ Downloading YouTube ${type.toUpperCase()}...` }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://savetube.david-cyril.net.ng/', { url, format: type });
+                if (!data || !data.download) throw new Error('No download link found');
+                const buffer = await fetchBuffer(data.download);
+                if (type === 'mp3') {
+                    await sock.sendMessage(jid, {
+                        audio: buffer,
+                        mimetype: 'audio/mpeg',
+                        ptt: false,
+                        caption: data.title || 'YouTube audio'
+                    });
+                } else {
+                    await sock.sendMessage(jid, {
+                        video: buffer,
+                        caption: data.title || 'YouTube video'
+                    });
+                }
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+    {
+        name: 'youtube',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const cmd = module.exports.find(c => c.name === 'yt');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // ─── INSTAGRAM ──────────────────────────────────────────────
+    {
+        name: 'ig',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const url = args?.trim();
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide an Instagram post/reel URL." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Fetching Instagram media..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://insta.david-cyril.net.ng/', { url });
+                if (!data || !data.download) throw new Error('No download link found');
+                const buffer = await fetchBuffer(data.download);
+                // Determine if it's video or image
+                const isVideo = data.type === 'video' || data.download.match(/\.(mp4|mov)/i);
+                if (isVideo) {
+                    await sock.sendMessage(jid, { video: buffer, caption: data.caption || 'Instagram video' });
+                } else {
+                    await sock.sendMessage(jid, { image: buffer, caption: data.caption || 'Instagram image' });
+                }
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+    {
+        name: 'instagram',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const cmd = module.exports.find(c => c.name === 'ig');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // ─── TWITTER/X ──────────────────────────────────────────────
+    {
+        name: 'x',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const url = args?.trim();
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Twitter/X post URL." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Fetching Twitter/X media..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://xdl.david-cyril.net.ng/', { url });
+                if (!data || !data.download) throw new Error('No download link found');
+                const buffer = await fetchBuffer(data.download);
+                await sock.sendMessage(jid, { video: buffer, caption: data.title || 'Twitter video' });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+    {
+        name: 'xdl',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const cmd = module.exports.find(c => c.name === 'x');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // ─── OBFUSCATE ───────────────────────────────────────────────
+    {
+        name: 'obf',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            let code = args?.trim();
+            if (!code) {
+                // Check if replying to a message with code
+                const rawMsg = getRawMessage(msg.message);
+                const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+                if (contextInfo && contextInfo.quotedMessage) {
+                    const quoted = contextInfo.quotedMessage;
+                    const rawContent = getRawMessage(quoted);
+                    code = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+                }
+            }
+            if (!code) return await sock.sendMessage(jid, { text: "❌ Please provide JavaScript code to obfuscate, or reply to a message with code." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Obfuscating code..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://obfuscator.david-cyril.net.ng/', { code }, 'POST');
+                if (!data || !data.obfuscated) throw new Error('No obfuscated code returned');
+                // Send as document (text file)
+                const buffer = Buffer.from(data.obfuscated, 'utf-8');
+                await sock.sendMessage(jid, {
+                    document: buffer,
+                    fileName: 'obfuscated.js',
+                    mimetype: 'text/javascript',
+                    caption: '✅ Obfuscated code'
+                });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+
+    // ─── SONG (Interactive) ──────────────────────────────────────
+    {
+        name: 'song',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const query = args?.trim();
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a song name to search." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "🔍 Searching for songs..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 5 }, 'GET');
+                if (!data || !data.results || data.results.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ No songs found." }, { quoted: msg });
+                }
+
+                // Build selection message
+                let list = '🎵 *Song Search Results:*\n\n';
+                data.results.forEach((song, i) => {
+                    list += `${i + 1}. *${song.title}* - ${song.artist || 'Unknown artist'}\n`;
+                    if (song.duration) list += `   ⏱️ ${song.duration}\n`;
+                });
+                list += `\n📌 Reply to this message with the number (1-${data.results.length}) to download.`;
+
+                const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
+                global.songSessions[prompt.key.id] = {
+                    results: data.results,
+                    timestamp: Date.now()
+                };
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Search failed: ${err.message}` });
+            }
+        }
+    },
+
+    // ─── PLAY (Direct download) ──────────────────────────────────
+    {
+        name: 'play',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const query = args?.trim();
+            if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a song name to play directly." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Fetching first result..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 1 }, 'GET');
+                if (!data || !data.results || data.results.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ No song found." }, { quoted: msg });
+                }
+                const song = data.results[0];
+                if (!song.download) throw new Error('No download link found');
+
+                const audioBuffer = await fetchBuffer(song.download);
+                let thumbnailBuffer = null;
+                if (song.thumbnail) {
+                    try {
+                        thumbnailBuffer = await fetchBuffer(song.thumbnail);
+                    } catch (e) { /* ignore */ }
+                }
+
+                const caption = `🎵 *${song.title}*\n` +
+                              (song.artist ? `👤 ${song.artist}\n` : '') +
+                              (song.duration ? `⏱️ ${song.duration}` : '');
+
+                if (thumbnailBuffer) {
+                    // Send audio with thumbnail as image
+                    await sock.sendMessage(jid, {
+                        image: thumbnailBuffer,
+                        caption: caption,
+                        contextInfo: {
+                            externalAdReply: {
+                                title: song.title,
+                                body: song.artist || 'Song',
+                                thumbnail: thumbnailBuffer,
+                                mediaType: 1
+                            }
+                        }
+                    });
+                    await sock.sendMessage(jid, {
+                        audio: audioBuffer,
+                        mimetype: 'audio/mpeg',
+                        ptt: false,
+                        caption: caption
+                    });
+                } else {
+                    await sock.sendMessage(jid, {
+                        audio: audioBuffer,
+                        mimetype: 'audio/mpeg',
+                        ptt: false,
+                        caption: caption
+                    });
+                }
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
     }
-    const timeout = setTimeout(() => {
-        delete global.downloaderSessions[userId];
-    }, 60000);
-    global.downloaderSessions[userId] = { type, results, timeout };
+];
+
+// ─── INTERACTIVE SESSION HANDLER ────────────────────────────────
+// This is the handler for .song replies. It will be called from messageHandlers.js
+// We'll export a function that can be imported.
+
+async function handleSongReply(sock, msg, session, userReply) {
+    const jid = msg.key.remoteJid;
+    const num = parseInt(userReply);
+    if (isNaN(num) || num < 1 || num > session.results.length) {
+        return await sock.sendMessage(jid, { text: `❌ Invalid selection. Please choose a number between 1 and ${session.results.length}.` });
+    }
+
+    const song = session.results[num - 1];
+    if (!song.download) {
+        return await sock.sendMessage(jid, { text: "❌ This song has no download link." });
+    }
+
+    try {
+        const audioBuffer = await fetchBuffer(song.download);
+        let thumbnailBuffer = null;
+        if (song.thumbnail) {
+            try {
+                thumbnailBuffer = await fetchBuffer(song.thumbnail);
+            } catch (e) { /* ignore */ }
+        }
+
+        const caption = `🎵 *${song.title}*\n` +
+                      (song.artist ? `👤 ${song.artist}\n` : '') +
+                      (song.duration ? `⏱️ ${song.duration}` : '');
+
+        if (thumbnailBuffer) {
+            await sock.sendMessage(jid, {
+                image: thumbnailBuffer,
+                caption: caption,
+                contextInfo: {
+                    externalAdReply: {
+                        title: song.title,
+                        body: song.artist || 'Song',
+                        thumbnail: thumbnailBuffer,
+                        mediaType: 1
+                    }
+                }
+            });
+            await sock.sendMessage(jid, {
+                audio: audioBuffer,
+                mimetype: 'audio/mpeg',
+                ptt: false,
+                caption: caption
+            });
+        } else {
+            await sock.sendMessage(jid, {
+                audio: audioBuffer,
+                mimetype: 'audio/mpeg',
+                ptt: false,
+                caption: caption
+            });
+        }
+    } catch (err) {
+        await sock.sendMessage(jid, { text: `❌ Download failed: ${err.message}` });
+    }
 }
 
-// ─── NEW: Extract query from message text ──────────────────────
+// ─── REGISTER SESSION HANDLER ───────────────────────────────────
+// We need to register this handler with the interactive sessions system.
+// We'll add it to the global game sessions in messageHandlers.js
+
+// For now, we'll just export the handler so it can be imported.
+module.exports.handleSongReply = handleSongReply;
+
+// ─── HELPER (reuse from other plugins) ──────────────────────────
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -59,525 +426,4 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
     return message;
-}
-
-function getQueryFromMessage(msg, cmdName) {
-    const rawMsg = getRawMessage(msg.message);
-    let text = rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '';
-    const prefix = config.prefix || '.';
-    const regex = new RegExp(`^\\${prefix}${cmdName}\\s*`, 'i');
-    return text.replace(regex, '').trim();
-}
-
-// ─── COMMAND DEFINITIONS ─────────────────────────────────────────
-
-module.exports = [
-    {
-        name: 'ig',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { senderNumber }) => {
-            const jid = msg.key.remoteJid;
-            // FIXED: robust extraction
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'ig');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide an Instagram URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.prexzyvilla.site/download/instagram?url=${encodeURIComponent(url)}`);
-                if (data && data.media) {
-                    for (const m of data.media) {
-                        const buffer = await downloadBuffer(m.url);
-                        await sendMedia(sock, jid, buffer, { caption: 'Downloaded from Instagram' });
-                    }
-                } else {
-                    await sock.sendMessage(jid, { text: 'Failed to fetch media.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'tgs',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'tgs');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Telegram sticker URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/telegram-sticker?url=${encodeURIComponent(url)}`);
-                if (data && data.url) {
-                    const buffer = await downloadBuffer(data.url);
-                    await sock.sendMessage(jid, { sticker: buffer });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Failed to convert sticker.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'x',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'x');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Twitter URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.prexzyvilla.site/download/twitter?url=${encodeURIComponent(url)}`);
-                if (data && data.media) {
-                    for (const m of data.media) {
-                        const buffer = await downloadBuffer(m.url);
-                        await sendMedia(sock, jid, buffer);
-                    }
-                } else {
-                    await sock.sendMessage(jid, { text: 'No media found.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'ytmp3',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'ytmp3');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/download/ytmp3?url=${encodeURIComponent(url)}`);
-                if (data && data.download) {
-                    const buffer = await downloadBuffer(data.download);
-                    await sock.sendMessage(jid, {
-                        audio: buffer,
-                        mimetype: 'audio/mp4',
-                        ptt: false,
-                        caption: data.title || 'YouTube audio'
-                    });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Failed to download audio.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'ytmp4',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'ytmp4');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(url)}`);
-                if (data && data.download) {
-                    const buffer = await downloadBuffer(data.download);
-                    await sock.sendMessage(jid, {
-                        video: buffer,
-                        caption: data.title || 'YouTube video'
-                    });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Failed to download video.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'img',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!query.trim()) {
-                query = getQueryFromMessage(msg, 'img');
-            }
-            if (!query) return await sock.sendMessage(jid, { text: 'Please provide a search query.' });
-            try {
-                const { data } = await axios.get(`https://apis.prexzyvilla.site/search/pinterest?q=${encodeURIComponent(query)}`);
-                if (data && data.images && data.images.length) {
-                    const randomImg = data.images[Math.floor(Math.random() * data.images.length)];
-                    const buffer = await downloadBuffer(randomImg);
-                    await sock.sendMessage(jid, { image: buffer, caption: `Result for: ${query}` });
-                } else {
-                    await sock.sendMessage(jid, { text: 'No images found.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'gitclone',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo && !isDev) return;
-            // FIXED: robust extraction for first argument
-            let repoUrl = '';
-            if (Array.isArray(args) && args.length > 0) repoUrl = args[0];
-            else if (typeof args === 'string') repoUrl = args.split(' ')[0] || '';
-            if (!repoUrl.trim()) {
-                // also try from message text
-                const fullQuery = getQueryFromMessage(msg, 'gitclone');
-                repoUrl = fullQuery.split(' ')[0] || '';
-            }
-            if (!repoUrl || !repoUrl.includes('github.com')) return await sock.sendMessage(jid, { text: 'Please provide a valid GitHub repo URL.' });
-            try {
-                const cleanUrl = repoUrl.replace(/\/$/, '').replace('/tree', '');
-                const parts = cleanUrl.split('/');
-                const user = parts[parts.length - 2];
-                const repo = parts[parts.length - 1].replace('.git', '');
-                const zipUrl = `https://github.com/${user}/${repo}/archive/refs/heads/main.zip`;
-                const buffer = await downloadBuffer(zipUrl);
-                await sock.sendMessage(jid, {
-                    document: buffer,
-                    fileName: `${repo}-main.zip`,
-                    mimetype: 'application/zip'
-                });
-            } catch (e) {
-                try {
-                    const cleanUrl = repoUrl.replace(/\/$/, '').replace('/tree', '');
-                    const parts = cleanUrl.split('/');
-                    const user = parts[parts.length - 2];
-                    const repo = parts[parts.length - 1].replace('.git', '');
-                    const zipUrl = `https://github.com/${user}/${repo}/archive/refs/heads/master.zip`;
-                    const buffer = await downloadBuffer(zipUrl);
-                    await sock.sendMessage(jid, {
-                        document: buffer,
-                        fileName: `${repo}-master.zip`,
-                        mimetype: 'application/zip'
-                    });
-                } catch (e2) {
-                    await sock.sendMessage(jid, { text: 'Failed to download repo. Check the URL or branch name.' });
-                }
-            }
-        }
-    },
-    {
-        name: 'lyrics',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!query.trim()) {
-                query = getQueryFromMessage(msg, 'lyrics');
-            }
-            if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song title.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/lyrics/search?q=${encodeURIComponent(query)}`);
-                if (data && data.lyrics) {
-                    const text = `*${data.title}*\n\n${data.lyrics.substring(0, 3000)}`;
-                    await sock.sendMessage(jid, { text });
-                } else if (data && Array.isArray(data)) {
-                    const list = data.map((item, i) => `${i + 1}. ${item.title}`).join('\n');
-                    await sock.sendMessage(jid, { text: `*Select a song by replying with its number:*\n${list}` });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Lyrics not found.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'play',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            // FIXED: robust extraction
-            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!query.trim()) {
-                query = getQueryFromMessage(msg, 'play');
-            }
-            if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song name.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/play?q=${encodeURIComponent(query)}`);
-                if (data && data.download) {
-                    const buffer = await downloadBuffer(data.download);
-                    const thumb = data.thumbnail ? await downloadBuffer(data.thumbnail) : null;
-                    await sock.sendMessage(jid, {
-                        audio: buffer,
-                        mimetype: 'audio/mp4',
-                        ptt: false,
-                        ...(thumb ? { thumbnail: thumb } : {}),
-                        caption: data.title || 'Song'
-                    });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Song not found.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'song',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const userId = msg.key.participant || msg.key.remoteJid;
-            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!query.trim()) {
-                query = getQueryFromMessage(msg, 'song');
-            }
-            if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song name.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/song?q=${encodeURIComponent(query)}`);
-                if (Array.isArray(data) && data.length) {
-                    sendSuggestions(sock, jid, userId, 'song', data);
-                } else {
-                    await sock.sendMessage(jid, { text: 'No results found.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'tt',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'tt');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a TikTok URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.prexzyvilla.site/download/tiktok?url=${encodeURIComponent(url)}`);
-                if (data && data.download) {
-                    const buffer = await downloadBuffer(data.download);
-                    await sock.sendMessage(jid, { video: buffer, caption: 'TikTok video' });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Failed to download.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'fb',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'fb');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Facebook video URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.prexzyvilla.site/download/facebook?url=${encodeURIComponent(url)}`);
-                if (data && data.download) {
-                    const buffer = await downloadBuffer(data.download);
-                    await sock.sendMessage(jid, { video: buffer, caption: 'Facebook video' });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Failed to download.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'shazam',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quotedMsg || !quotedMsg.audioMessage) {
-                return await sock.sendMessage(jid, { text: 'Reply to an audio message with .shazam' });
-            }
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(quotedMsg.audioMessage, 'audio');
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) {
-                    buffer = Buffer.concat([buffer, chunk]);
-                }
-                const form = new FormData();
-                form.append('audio', buffer, { filename: 'audio.ogg' });
-                const { data } = await axios.post('https://apis.davidcyril.name.ng/shazam', form, {
-                    headers: form.getHeaders(),
-                    maxContentLength: Infinity,
-                    maxBodyLength: Infinity,
-                });
-                if (data && data.title) {
-                    await sock.sendMessage(jid, {
-                        text: `*Title:* ${data.title}\n*Artist:* ${data.artist || 'Unknown'}\n*Album:* ${data.album || 'Unknown'}`
-                    });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Song not identified.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'apk',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const userId = msg.key.participant || msg.key.remoteJid;
-            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!query.trim()) {
-                query = getQueryFromMessage(msg, 'apk');
-            }
-            if (!query) return await sock.sendMessage(jid, { text: 'Please provide an app name.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/endpoints/download/apk?q=${encodeURIComponent(query)}`);
-                if (Array.isArray(data) && data.length) {
-                    sendSuggestions(sock, jid, userId, 'apk', data);
-                } else {
-                    await sock.sendMessage(jid, { text: 'No APK results found.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'ss',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args[0] : (typeof args === 'string' ? args.split(' ')[0] : '');
-            if (!url.trim()) {
-                // try full message
-                const fullQuery = getQueryFromMessage(msg, 'ss');
-                url = fullQuery.split(' ')[0] || '';
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a website URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/ssweb?url=${encodeURIComponent(url)}`);
-                if (data && data.url) {
-                    const buffer = await downloadBuffer(data.url);
-                    await sock.sendMessage(jid, { image: buffer, caption: `Screenshot of ${url}` });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Screenshot failed.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'spotify',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo && !isDev) return;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'spotify');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Spotify track URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/spotifydl?url=${encodeURIComponent(url)}`);
-                if (data && data.download) {
-                    const buffer = await downloadBuffer(data.download);
-                    await sock.sendMessage(jid, {
-                        audio: buffer,
-                        mimetype: 'audio/mpeg',
-                        ptt: false,
-                        caption: data.title || 'Spotify track'
-                    });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Download failed.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'yt',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'yt');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
-            try {
-                const { data } = await axios.get(`https://savetube.david-cyril.net.ng/?url=${encodeURIComponent(url)}`);
-                if (data && data.download) {
-                    const buffer = await downloadBuffer(data.download);
-                    await sock.sendMessage(jid, { video: buffer, caption: 'YouTube video' });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Failed to get download link.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    },
-    {
-        name: 'mediafire',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
-            if (!url.trim()) {
-                url = getQueryFromMessage(msg, 'mediafire');
-            }
-            if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Mediafire URL.' });
-            try {
-                const { data } = await axios.get(`https://apis.davidcyril.name.ng/mediafire?url=${encodeURIComponent(url)}`);
-                if (data && data.download) {
-                    const buffer = await downloadBuffer(data.download);
-                    await sock.sendMessage(jid, {
-                        document: buffer,
-                        fileName: data.filename || 'mediafire_file',
-                        mimetype: 'application/octet-stream'
-                    });
-                } else {
-                    await sock.sendMessage(jid, { text: 'Download failed.' });
-                }
-            } catch (e) {
-                await sock.sendMessage(jid, { text: 'Error: ' + e.message });
-            }
-        }
-    }
-];
-
-// ─── ADD ALIASES ──────────────────────────────────────────────────
-const aliases = [
-    { name: 'instagram', target: 'ig' },
-    { name: 'tiktok', target: 'tt' },
-    { name: 'facebook', target: 'fb' },
-    { name: 'xdl', target: 'x' },
-    { name: 'youtube', target: 'yt' }
-];
-
-const mainCommands = module.exports;
-for (const alias of aliases) {
-    const targetCmd = mainCommands.find(c => c.name === alias.target);
-    if (targetCmd) {
-        mainCommands.push({
-            name: alias.name,
-            isPrefixless: false,
-            execute: targetCmd.execute
-        });
-    }
 }
