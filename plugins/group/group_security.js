@@ -703,25 +703,28 @@ module.exports = [
         }
     },
 
-    // 13. DELSPAM
-    {
-        name: 'delspam',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return;
+    // ─── DELSPAM ─────────────────────────────────────────────────────
+{
+    name: 'delspam',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+        if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delspam');
-            if (!isAuthorized) return;
+        const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delspam');
+        if (!isAuthorized) return;
 
-            const targetJid = parseTargetUser(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please mention a target user or reply to their message to delete their messages." }, { quoted: msg });
-            }
+        // Get target from mention/reply ONLY (ignore args for target)
+        const targetJid = parseTargetUser(msg, '');
+        if (!targetJid) {
+            return await sock.sendMessage(jid, { text: "❌ Please mention or reply to the target user." }, { quoted: msg });
+        }
 
-            const parts = args ? args.trim().split(' ') : [];
-            let count = 10;
+        // Parse count from args (if any number is provided)
+        let count = 10;
+        if (args) {
+            const parts = args.trim().split(/\s+/);
             for (const part of parts) {
                 const num = parseInt(part);
                 if (!isNaN(num) && num > 0) {
@@ -729,38 +732,46 @@ module.exports = [
                     break;
                 }
             }
+        }
 
-            const messages = await sock.loadMessages(jid, 50);
-            if (!messages || messages.length === 0) {
-                return await sock.sendMessage(jid, { text: "❌ Could not fetch recent messages." }, { quoted: msg });
-            }
+        // Fetch recent messages
+        const messages = await sock.loadMessages(jid, 50);
+        if (!messages || messages.length === 0) {
+            return await sock.sendMessage(jid, { text: "❌ Could not fetch recent messages." }, { quoted: msg });
+        }
 
-            const targetMessages = messages.filter(m => {
-                const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
-                return sender === targetJid;
-            });
+        // Filter messages from the target user
+        const targetMessages = messages.filter(m => {
+            const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
+            return sender === targetJid;
+        });
 
-            if (targetMessages.length === 0) {
-                return await sock.sendMessage(jid, { text: `❌ No recent messages found from @${targetJid.split('@')[0]}.`, mentions: [targetJid] }, { quoted: msg });
-            }
-
-            const toDelete = targetMessages.slice(0, Math.min(count, targetMessages.length));
-
-            let deletedCount = 0;
-            for (const msgToDelete of toDelete) {
-                try {
-                    await sock.sendMessage(jid, { delete: msgToDelete.key });
-                    deletedCount++;
-                    await delay(300);
-                } catch (e) { /* ignore */ }
-            }
-
-            await sock.sendMessage(jid, {
-                text: `🧹 *Spam Cleanup Complete!*\n\n👤 *Target:* @${targetJid.split('@')[0]}\n🗑️ *Deleted:* \`${deletedCount}/${toDelete.length}\` messages`,
+        if (targetMessages.length === 0) {
+            return await sock.sendMessage(jid, {
+                text: `❌ No recent messages found from @${targetJid.split('@')[0]}.`,
                 mentions: [targetJid]
             }, { quoted: msg });
         }
+
+        // Determine how many to delete
+        const toDelete = targetMessages.slice(0, Math.min(count, targetMessages.length));
+
+        let deletedCount = 0;
+        for (const msgToDelete of toDelete) {
+            try {
+                await sock.sendMessage(jid, { delete: msgToDelete.key });
+                deletedCount++;
+                await delay(300);
+            } catch (e) { /* ignore */ }
+        }
+
+        await sock.sendMessage(jid, {
+            text: `🧹 *Spam Cleanup Complete!*\n\n👤 *Target:* @${targetJid.split('@')[0]}\n🗑️ *Deleted:* \`${deletedCount}/${toDelete.length}\` messages`,
+            mentions: [targetJid]
+        }, { quoted: msg });
     }
+}
+
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
