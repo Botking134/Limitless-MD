@@ -2,7 +2,6 @@
 const config = require('../config');
 const { normalizeToJid, saveState } = require('../stateManager');
 const axios = require('axios');
-const FormData = require('form-data');
 
 // ─── SESSION STORE ──────────────────────────────────────────────
 global.songSessions = global.songSessions || {};
@@ -10,6 +9,7 @@ global.songSessions = global.songSessions || {};
 // ─── HELPERS ──────────────────────────────────────────────────────
 
 async function fetchBuffer(url) {
+    if (!url) throw new Error('No URL provided');
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const arrayBuffer = await response.arrayBuffer();
@@ -31,6 +31,40 @@ async function downloadMedia(apiUrl, params = {}, method = 'GET') {
     }
 }
 
+// ─── EXTRACT DOWNLOAD URL (handles multiple response structures) ──
+function extractDownloadUrl(data) {
+    if (!data) return null;
+    // Common paths
+    const paths = [
+        'data.download',
+        'data.url',
+        'data.hdplay',
+        'data.wmplay',
+        'data.play',
+        'download',
+        'url',
+        'hdplay',
+        'wmplay',
+        'play',
+        'data.data.download',
+        'data.data.url'
+    ];
+    for (const path of paths) {
+        const parts = path.split('.');
+        let value = data;
+        for (const part of parts) {
+            if (value && value[part] !== undefined) value = value[part];
+            else { value = undefined; break; }
+        }
+        if (value && typeof value === 'string') return value;
+    }
+    return null;
+}
+
+function extractTitle(data) {
+    return data?.title || data?.data?.title || data?.data?.author?.nickname || 'Media';
+}
+
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
@@ -45,10 +79,11 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "⏳ Fetching Facebook video..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://fb.david-cyril.net.ng/', { url });
-                if (!data || !data.download) throw new Error('No download link found');
-                const buffer = await fetchBuffer(data.download);
-                await sock.sendMessage(jid, { video: buffer, caption: data.title || 'Facebook video' });
+                const data = await downloadMedia('https://apis.prexzyvilla.site/download/facebook', { url });
+                const downloadUrl = extractDownloadUrl(data);
+                if (!downloadUrl) throw new Error('No download link found');
+                const buffer = await fetchBuffer(downloadUrl);
+                await sock.sendMessage(jid, { video: buffer, caption: extractTitle(data) });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
@@ -58,7 +93,6 @@ module.exports = [
         name: 'facebook',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            // Alias for .fb
             const cmd = module.exports.find(c => c.name === 'fb');
             if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
         }
@@ -75,10 +109,12 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "⏳ Fetching TikTok video (no watermark)..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://tiksave.name.ng/', { url });
-                if (!data || !data.download) throw new Error('No download link found');
-                const buffer = await fetchBuffer(data.download);
-                await sock.sendMessage(jid, { video: buffer, caption: data.title || 'TikTok video' });
+                const data = await downloadMedia('https://apis.prexzyvilla.site/download/tiktok', { url });
+                const downloadUrl = extractDownloadUrl(data);
+                if (!downloadUrl) throw new Error('No download link found');
+                const buffer = await fetchBuffer(downloadUrl);
+                const caption = extractTitle(data);
+                await sock.sendMessage(jid, { video: buffer, caption });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
@@ -101,38 +137,42 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const parts = args?.trim().split(' ') || [];
             let url = parts[0];
-            let type = 'mp4'; // default
+            let type = 'video';
 
             if (parts.length > 1) {
                 const last = parts[parts.length - 1].toLowerCase();
                 if (last === 'mp3' || last === 'audio') {
-                    type = 'mp3';
+                    type = 'audio';
                     url = parts.slice(0, -1).join(' ');
                 } else if (last === 'mp4' || last === 'video') {
-                    type = 'mp4';
+                    type = 'video';
                     url = parts.slice(0, -1).join(' ');
                 }
             }
 
             if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a YouTube URL.\nExample: `.yt https://youtu.be/xxx mp3`" }, { quoted: msg });
 
+            const endpoint = type === 'audio' 
+                ? 'https://apis.prexzyvilla.site/download/youtube-audio'
+                : 'https://apis.prexzyvilla.site/download/youtube-video';
+
             await sock.sendMessage(jid, { text: `⏳ Downloading YouTube ${type.toUpperCase()}...` }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://savetube.david-cyril.net.ng/', { url, format: type });
-                if (!data || !data.download) throw new Error('No download link found');
-                const buffer = await fetchBuffer(data.download);
-                if (type === 'mp3') {
+                const data = await downloadMedia(endpoint, { url });
+                const downloadUrl = extractDownloadUrl(data);
+                if (!downloadUrl) throw new Error('No download link found');
+                const buffer = await fetchBuffer(downloadUrl);
+                const caption = extractTitle(data) || 'YouTube ' + type;
+
+                if (type === 'audio') {
                     await sock.sendMessage(jid, {
                         audio: buffer,
                         mimetype: 'audio/mpeg',
                         ptt: false,
-                        caption: data.title || 'YouTube audio'
+                        caption
                     });
                 } else {
-                    await sock.sendMessage(jid, {
-                        video: buffer,
-                        caption: data.title || 'YouTube video'
-                    });
+                    await sock.sendMessage(jid, { video: buffer, caption });
                 }
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
@@ -159,15 +199,15 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "⏳ Fetching Instagram media..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://insta.david-cyril.net.ng/', { url });
-                if (!data || !data.download) throw new Error('No download link found');
-                const buffer = await fetchBuffer(data.download);
-                // Determine if it's video or image
-                const isVideo = data.type === 'video' || data.download.match(/\.(mp4|mov)/i);
+                const data = await downloadMedia('https://apis.prexzyvilla.site/download/ig2', { url });
+                const downloadUrl = extractDownloadUrl(data);
+                if (!downloadUrl) throw new Error('No download link found');
+                const buffer = await fetchBuffer(downloadUrl);
+                const isVideo = downloadUrl.match(/\.(mp4|mov|avi)/i);
                 if (isVideo) {
-                    await sock.sendMessage(jid, { video: buffer, caption: data.caption || 'Instagram video' });
+                    await sock.sendMessage(jid, { video: buffer, caption: extractTitle(data) });
                 } else {
-                    await sock.sendMessage(jid, { image: buffer, caption: data.caption || 'Instagram image' });
+                    await sock.sendMessage(jid, { image: buffer, caption: extractTitle(data) });
                 }
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
@@ -194,10 +234,11 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "⏳ Fetching Twitter/X media..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://xdl.david-cyril.net.ng/', { url });
-                if (!data || !data.download) throw new Error('No download link found');
-                const buffer = await fetchBuffer(data.download);
-                await sock.sendMessage(jid, { video: buffer, caption: data.title || 'Twitter video' });
+                const data = await downloadMedia('https://apis.prexzyvilla.site/download/twitter', { url });
+                const downloadUrl = extractDownloadUrl(data);
+                if (!downloadUrl) throw new Error('No download link found');
+                const buffer = await fetchBuffer(downloadUrl);
+                await sock.sendMessage(jid, { video: buffer, caption: extractTitle(data) });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
@@ -212,6 +253,93 @@ module.exports = [
         }
     },
 
+    // ─── SPOTIFY ──────────────────────────────────────────────────
+    {
+        name: 'spotify',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const url = args?.trim();
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Spotify track URL." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Fetching Spotify track..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://apis.prexzyvilla.site/download/spotify', { url });
+                const downloadUrl = extractDownloadUrl(data);
+                if (!downloadUrl) throw new Error('No download link found');
+                const buffer = await fetchBuffer(downloadUrl);
+                await sock.sendMessage(jid, {
+                    audio: buffer,
+                    mimetype: 'audio/mpeg',
+                    ptt: false,
+                    caption: extractTitle(data)
+                });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+
+    // ─── PINTEREST ────────────────────────────────────────────────
+    {
+        name: 'pinterest',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const url = args?.trim();
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Pinterest pin URL." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Fetching Pinterest media..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://apis.prexzyvilla.site/download/pinterest', { url });
+                const downloadUrl = extractDownloadUrl(data);
+                if (!downloadUrl) throw new Error('No download link found');
+                const buffer = await fetchBuffer(downloadUrl);
+                await sock.sendMessage(jid, { image: buffer, caption: extractTitle(data) });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+
+    // ─── MEDIAFIRE ────────────────────────────────────────────────
+    {
+        name: 'mediafire',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const url = args?.trim();
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a MediaFire link." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ Fetching MediaFire file..." }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://apis.prexzyvilla.site/download/mediafire', { url });
+                const downloadUrl = extractDownloadUrl(data);
+                if (!downloadUrl) throw new Error('No download link found');
+                const buffer = await fetchBuffer(downloadUrl);
+                // Attempt to guess file type from URL extension
+                const ext = downloadUrl.split('.').pop().split('?')[0] || 'bin';
+                const mime = {
+                    mp4: 'video/mp4',
+                    mp3: 'audio/mpeg',
+                    jpg: 'image/jpeg',
+                    jpeg: 'image/jpeg',
+                    png: 'image/png',
+                    pdf: 'application/pdf',
+                    zip: 'application/zip'
+                }[ext] || 'application/octet-stream';
+                await sock.sendMessage(jid, {
+                    document: buffer,
+                    fileName: `mediafire.${ext}`,
+                    mimetype: mime,
+                    caption: extractTitle(data)
+                });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            }
+        }
+    },
+
     // ─── OBFUSCATE ───────────────────────────────────────────────
     {
         name: 'obf',
@@ -220,7 +348,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let code = args?.trim();
             if (!code) {
-                // Check if replying to a message with code
                 const rawMsg = getRawMessage(msg.message);
                 const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
                 if (contextInfo && contextInfo.quotedMessage) {
@@ -233,10 +360,11 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "⏳ Obfuscating code..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://obfuscator.david-cyril.net.ng/', { code }, 'POST');
-                if (!data || !data.obfuscated) throw new Error('No obfuscated code returned');
-                // Send as document (text file)
-                const buffer = Buffer.from(data.obfuscated, 'utf-8');
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/obfuscate', { code }, 'POST');
+                // Expect response like { obfuscated: "..." } or { data: { obfuscated: "..." } }
+                let obfuscated = data?.obfuscated || data?.data?.obfuscated || data?.result;
+                if (!obfuscated) throw new Error('No obfuscated code returned');
+                const buffer = Buffer.from(obfuscated, 'utf-8');
                 await sock.sendMessage(jid, {
                     document: buffer,
                     fileName: 'obfuscated.js',
@@ -260,12 +388,11 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "🔍 Searching for songs..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 5 }, 'GET');
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { q: query, limit: 5 }, 'GET');
                 if (!data || !data.results || data.results.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No songs found." }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: "❌ No songs found. Please try a different search term." }, { quoted: msg });
                 }
 
-                // Build selection message
                 let list = '🎵 *Song Search Results:*\n\n';
                 data.results.forEach((song, i) => {
                     list += `${i + 1}. *${song.title}* - ${song.artist || 'Unknown artist'}\n`;
@@ -276,7 +403,8 @@ module.exports = [
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
                 global.songSessions[prompt.key.id] = {
                     results: data.results,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    handle: handleSongReply
                 };
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Search failed: ${err.message}` });
@@ -295,7 +423,7 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "⏳ Fetching first result..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 1 }, 'GET');
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { q: query, limit: 1 }, 'GET');
                 if (!data || !data.results || data.results.length === 0) {
                     return await sock.sendMessage(jid, { text: "❌ No song found." }, { quoted: msg });
                 }
@@ -315,7 +443,6 @@ module.exports = [
                               (song.duration ? `⏱️ ${song.duration}` : '');
 
                 if (thumbnailBuffer) {
-                    // Send audio with thumbnail as image
                     await sock.sendMessage(jid, {
                         image: thumbnailBuffer,
                         caption: caption,
@@ -350,9 +477,6 @@ module.exports = [
 ];
 
 // ─── INTERACTIVE SESSION HANDLER ────────────────────────────────
-// This is the handler for .song replies. It will be called from messageHandlers.js
-// We'll export a function that can be imported.
-
 async function handleSongReply(sock, msg, session, userReply) {
     const jid = msg.key.remoteJid;
     const num = parseInt(userReply);
@@ -411,13 +535,9 @@ async function handleSongReply(sock, msg, session, userReply) {
 }
 
 // ─── REGISTER SESSION HANDLER ───────────────────────────────────
-// We need to register this handler with the interactive sessions system.
-// We'll add it to the global game sessions in messageHandlers.js
-
-// For now, we'll just export the handler so it can be imported.
 module.exports.handleSongReply = handleSongReply;
 
-// ─── HELPER (reuse from other plugins) ──────────────────────────
+// ─── HELPER ──────────────────────────────────────────────────────
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
