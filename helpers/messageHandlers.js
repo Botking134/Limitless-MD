@@ -1,6 +1,6 @@
 // helpers/messageHandlers.js
 const config = require('../config');
-const { DEV_LIDS, DEV_JIDS } = require('../devs');
+const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
@@ -184,6 +184,40 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
+    // 5. GAME SESSIONS (Vault8, Trivia, Charade, Anagram, WCG, Millionaire, TORF, PVP, Escape)
+    const gameSessions = [
+        { name: 'vault8', obj: global.vault8Sessions },
+        { name: 'trivia', obj: global.triviaSessions },
+        { name: 'charade', obj: global.charadeSessions },
+        { name: 'anagram', obj: global.anagramSessions },
+        { name: 'wcg', obj: global.wcgSessions },
+        { name: 'millionaire', obj: global.millionaireSessions },
+        { name: 'torf', obj: global.torfSessions },
+        { name: 'pvp', obj: global.pvpSessions },
+        { name: 'escape', obj: global.escapeSessions }
+    ];
+
+    for (const game of gameSessions) {
+        if (game.obj && game.obj[quotedMsgId]) {
+            const session = game.obj[quotedMsgId];
+            const userReply = text.trim();
+
+            // Process the reply – either call session.handle or a custom handler
+            if (typeof session.handle === 'function') {
+                await session.handle(sock, msg, session, userReply);
+            } else if (typeof session.callback === 'function') {
+                await session.callback(sock, msg, session, userReply);
+            } else {
+                // Fallback: try to call a handler from the game's module (you can import them here)
+                console.warn(`⚠️ No handler for game session type: ${game.name}`);
+                await sock.sendMessage(jid, { text: `❌ Game session error. Please try starting the game again.` });
+            }
+
+            delete game.obj[quotedMsgId];
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -362,8 +396,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         global.activeSock = sock;
 
-        // ─── DEV DETECTION ─────────────────────────────────────
-        let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid);
+        // ─── DEV DETECTION (FIXED: includes PHONE JIDs) ──────
+        let isDev = DEV_LIDS.includes(senderJid) ||
+                    DEV_JIDS.includes(senderJid) ||
+                    DEV_PHONE_JIDS.includes(senderJid);
+                    
         let isPrimaryOwner = senderJid === config.ownerJid ||
                              (config.ownerLid && senderJid === config.ownerLid) ||
                              (Array.isArray(config.ownerLids) && config.ownerLids.includes(senderJid));
@@ -383,7 +420,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
             if (senderPhoneJid) {
-                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid)) isDev = true;
+                // Re‑evaluate roles with phone JID
+                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderPhoneJid)) isDev = true;
                 if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
                 if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
                 if (Array.isArray(config.sudos) && config.sudos.includes(senderPhoneJid)) isSudo = true;
@@ -604,33 +642,17 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
 
         if (commands[cmdKey]) {
-            // ─── AUTO-REACT ──────────────────────────────────────
-            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                let reaction = '';
-                if (isDev) {
-                    reaction = '☣️';
-                } else if (isOwner) {
-                    reaction = '☯️';
-                } else {
-                    reaction = REACT_EMOJIS[reactIndex % REACT_EMOJIS.length];
-                    reactIndex++;
-                }
+            // ─── AUTO-REACT (RESTRICTED TO OWNERS/DEVS) ──────
+            if (config.autoReact === 'cmd' && !msg.key.fromMe && (isDev || isOwner)) {
+                const reaction = isDev ? '☣️' : '☯️';
                 try {
                     await sock.sendMessage(jid, { react: { text: reaction, key: msg.key } });
                 } catch (err) { /* ignore */ }
             }
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
-            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                let reaction = '';
-                if (isDev) {
-                    reaction = '☣️';
-                } else if (isOwner) {
-                    reaction = '☯️';
-                } else {
-                    reaction = REACT_EMOJIS[reactIndex % REACT_EMOJIS.length];
-                    reactIndex++;
-                }
+            if (config.autoReact === 'cmd' && !msg.key.fromMe && (isDev || isOwner)) {
+                const reaction = isDev ? '☣️' : '☯️';
                 try {
                     await sock.sendMessage(jid, { react: { text: reaction, key: msg.key } });
                 } catch (err) { /* ignore */ }
