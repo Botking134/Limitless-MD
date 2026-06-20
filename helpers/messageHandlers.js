@@ -68,7 +68,7 @@ async function handleNoteSession(sock, msg) {
     return false;
 }
 
-// ─── INTERACTIVE SESSIONS HANDLER (Issue 1) ────────────────────
+// ─── INTERACTIVE SESSIONS HANDLER ──────────────────────────────
 async function handleInteractiveSessions(sock, msg) {
     const jid = msg.key.remoteJid;
     const rawMsg = getRawMessage(msg.message);
@@ -187,7 +187,7 @@ async function handleInteractiveSessions(sock, msg) {
     return false;
 }
 
-// ─── DOWNLOADER INTERACTIVE SESSIONS (NEW) ──────────────────────
+// ─── DOWNLOADER INTERACTIVE SESSIONS ──────────────────────────
 async function handleDownloaderSessions(sock, msg) {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
     if (!senderJid) return false;
@@ -195,7 +195,6 @@ async function handleDownloaderSessions(sock, msg) {
     const rawMsg = getRawMessage(msg.message);
     const text = rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '';
 
-    // Check if there's a pending downloader session for this user
     if (global.downloaderSessions && global.downloaderSessions[senderJid]) {
         const session = global.downloaderSessions[senderJid];
         const num = parseInt(text.trim());
@@ -203,7 +202,6 @@ async function handleDownloaderSessions(sock, msg) {
             const index = num - 1;
             const item = session.results[index];
 
-            // Clear the session
             clearTimeout(session.timeout);
             delete global.downloaderSessions[senderJid];
 
@@ -211,7 +209,6 @@ async function handleDownloaderSessions(sock, msg) {
 
             try {
                 if (session.type === 'song') {
-                    // item has download URL or we need to fetch
                     const buffer = await downloadBuffer(item.download || item.url);
                     await sock.sendMessage(jid, {
                         audio: buffer,
@@ -303,6 +300,10 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
     }
 }
 
+// ─── AUTO-REACT EMOJI CYCLE ────────────────────────────────────
+const REACT_EMOJIS = ['🔥', '⚡', '❄', '⚽', '⛩️', '🥷'];
+let reactIndex = 0;
+
 // ─── MAIN MESSAGE HANDLER ──────────────────────────────────────
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
@@ -324,11 +325,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // 2. ViewOnce
         await handleViewOnce(sock, msg);
 
-        // 3. Interactive sessions (Issue 1)
+        // 3. Interactive sessions
         const handled = await handleInteractiveSessions(sock, msg);
         if (handled) return;
 
-        // 4. Downloader interactive sessions (NEW)
+        // 4. Downloader interactive sessions
         const dlHandled = await handleDownloaderSessions(sock, msg);
         if (dlHandled) return;
 
@@ -339,22 +340,28 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         let command;
         let args;
 
-        // ─── FIX: Dynamic JID & LID fallback resolution ────────────────────────────
+        // ─── FIX: Dynamic JID & LID fallback resolution ────
         const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
         const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
 
         global.activeSock = sock;
 
+        // ─── DEV DETECTION (FIXED) ────────────────────────────
         let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid);
+        // If senderJid is phone number, check if it's in DEV_JIDS? DEV_JIDS currently has LIDs, but we can add phone numbers too.
+        // We'll also check after resolving LID→phone below.
+
+        // ─── OWNER DETECTION ──────────────────────────────────
         let isPrimaryOwner = senderJid === config.ownerJid ||
-                             (config.ownerLid && senderJid === config.ownerLid);
+                             (config.ownerLid && senderJid === config.ownerLid) ||
+                             (Array.isArray(config.ownerLids) && config.ownerLids.includes(senderJid));
         let isSecondaryOwner = Array.isArray(config.secondaryOwners) &&
                                config.secondaryOwners.includes(senderJid);
         let isOwner = isDev || isPrimaryOwner || isSecondaryOwner || msg.key.fromMe;
         let isSudo = (Array.isArray(config.sudos) && config.sudos.includes(senderJid)) ||
                      (Array.isArray(config.sudoLids) && config.sudoLids.includes(senderJid));
 
-        // ─── Fallback: Resolve LID → Phone JID ──────────────────
+        // ─── LID → PHONE JID RESOLUTION (for permissions) ──
         let senderPhoneJid = '';
         if (senderJid.endsWith('@lid')) {
             if (global.lidCache?.[senderJid]) {
@@ -364,7 +371,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
             if (senderPhoneJid) {
+                // Re-evaluate roles with phone JID
                 if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid)) isDev = true;
+                // Also check if phone is in DEV_LIDS? Not needed.
                 if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
                 if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
                 if (Array.isArray(config.sudos) && config.sudos.includes(senderPhoneJid)) isSudo = true;
@@ -412,10 +421,30 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // ─── GROUP SECURITY INTERCEPTORS (existing) ─────────────
-        // Ensure your group protection layout logic runs here
+        // ─── HANDLE BUTTON RESPONSES (Deactivate All) ──────────
+        const buttonResponse = msg.message?.buttonsResponseMessage;
+        if (buttonResponse) {
+            const selectedId = buttonResponse.selectedButtonId;
+            // Only owners/sudos/devs can deactivate
+            if (!isOwner && !isSudo && !isDev) {
+                await sock.sendMessage(jid, { text: '❌ Only owners/sudos/devs can deactivate chatbots.' });
+                return;
+            }
+            if (selectedId === 'deactivate_all') {
+                config.lizzyChats = (config.lizzyChats || []).filter(c => c !== jid);
+                config.chatbotChats = (config.chatbotChats || []).filter(c => c !== jid);
+                config.fridayChats = (config.fridayChats || []).filter(c => c !== jid);
+                saveState();
+                await sock.sendMessage(jid, { text: '🔴 *All chatbots deactivated in this chat.*' });
+                return; // stop further processing
+            }
+        }
 
-        // ─── AGENT DETECTION (RESTORED ORDER & ALIGNED COMPARISONS) ────────────────────
+        // ─── GROUP SECURITY INTERCEPTORS (placeholder) ─────────
+        // You can add your existing group protection logic here.
+
+        // ─── AGENT DETECTION ────────────────────────────────────
+        // Determine if user is mentioning/replying to bot
         const quotedParticipant = contextInfo?.participant ? normalizeToJid(contextInfo.participant) : '';
         const isReplyingToBot = quotedParticipant && (quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId));
         
@@ -429,35 +458,39 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         let identifiedAgent = null;
 
-        // 1. If replying to a bot message and we have a stored agent context
+        // 1. If replying to a bot message and we have stored agent context
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         }
-        // 2. If mentioned or replied to, detect by keyword or fallback to active chat agent
+        // 2. If mentioned or replied to, detect by keyword or fallback to active agent
         else if (isMentioningBot || isReplyingToBot) {
-            if (isFridayCalled) identifiedAgent = 'friday';
-            else if (isGojoCalled) identifiedAgent = 'gojo';
-            else if (isLizzyCalled) identifiedAgent = 'lizzy';
-            else if (isJarvisCalled) identifiedAgent = 'jarvis';
-            else {
-                // Fallback: use active agent for this chat
-                if (Array.isArray(config.lizzyChats) && config.lizzyChats.includes(jid)) identifiedAgent = 'lizzy';
-                else if (Array.isArray(config.chatbotChats) && config.chatbotChats.includes(jid)) identifiedAgent = 'jarvis';
-                else identifiedAgent = 'gojo';
+            if (isFridayCalled && config.fridayChats?.includes(jid)) {
+                identifiedAgent = 'friday';
+            } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
+                identifiedAgent = 'lizzy';
+            } else if (isJarvisCalled && config.chatbotChats?.includes(jid)) {
+                identifiedAgent = 'jarvis';
+            } else if (isGojoCalled && !config.gojoGlobalSleep) {
+                identifiedAgent = 'gojo';
+            } else {
+                // Fallback: use whichever chatbot is active in this chat (only one should be active)
+                if (config.lizzyChats?.includes(jid)) identifiedAgent = 'lizzy';
+                else if (config.chatbotChats?.includes(jid)) identifiedAgent = 'jarvis';
+                else if (config.fridayChats?.includes(jid)) identifiedAgent = 'friday';
+                else if (!config.gojoGlobalSleep) identifiedAgent = 'gojo';
             }
         }
         // 3. Standalone keyword triggers (no mention/reply)
         else {
-            if (isFridayCalled) identifiedAgent = 'friday';
-            else if (isGojoCalled) identifiedAgent = 'gojo';
-            else if (isLizzyCalled) identifiedAgent = 'lizzy';
-            else if (isJarvisCalled) identifiedAgent = 'jarvis';
-        }
-
-        // Gojo sleep check
-        if (identifiedAgent === 'gojo') {
-            const isAsleep = config.gojoGlobalSleep;
-            if (isAsleep && !trimmedMessage.startsWith(config.prefix)) identifiedAgent = null;
+            if (isFridayCalled && config.fridayChats?.includes(jid)) {
+                identifiedAgent = 'friday';
+            } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
+                identifiedAgent = 'lizzy';
+            } else if (isJarvisCalled && config.chatbotChats?.includes(jid)) {
+                identifiedAgent = 'jarvis';
+            } else if (isGojoCalled && !config.gojoGlobalSleep) {
+                identifiedAgent = 'gojo';
+            }
         }
 
         if (identifiedAgent && !trimmedMessage.startsWith(config.prefix)) {
@@ -495,7 +528,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!command) return;
 
-        // ─── AGENT CONTEXT (existing) ───────────────────────────
+        // ─── AGENT CONTEXT ───────────────────────────────────────
         if (command === 'gojo') global.activeAgentContext = 'gojo';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
         else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
@@ -504,21 +537,52 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const isPublicMode = config.isPublic ?? false;
 
-        // ─── PERMISSION CHECKS (existing) ──────────────────────
-        // ... (keep your existing code)
+        // ─── PERMISSION CHECKS ──────────────────────────────────
+        // If not public and not authorized, deny
+        if (!isPublicMode && !isOwner && !isSudo) {
+            await sock.sendMessage(jid, { text: "🔒 Bot is in private mode. Only owners and sudos can use commands." });
+            return;
+        }
 
-        // ─── COMMAND EXECUTION (existing) ──────────────────────
+        // ─── COMMAND EXECUTION ──────────────────────────────────
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
         const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
 
         if (commands[cmdKey]) {
+            // ─── AUTO-REACT ──────────────────────────────────────
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
+                let reaction = '';
+                if (isDev) {
+                    reaction = '☣️';
+                } else if (isOwner) {
+                    reaction = '☯️';
+                } else {
+                    // Cycle through the 6 emojis with 2-second interval
+                    reaction = REACT_EMOJIS[reactIndex % REACT_EMOJIS.length];
+                    reactIndex++;
+                }
+                try {
+                    await sock.sendMessage(jid, { react: { text: reaction, key: msg.key } });
+                    // Wait 2 seconds before next reaction (if multiple reactions in quick succession, we can simply cycle)
+                    // But we already increment index, so no need to delay here.
+                } catch (err) { /* ignore */ }
             }
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
+            // Same for prefixless commands
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
+                let reaction = '';
+                if (isDev) {
+                    reaction = '☣️';
+                } else if (isOwner) {
+                    reaction = '☯️';
+                } else {
+                    reaction = REACT_EMOJIS[reactIndex % REACT_EMOJIS.length];
+                    reactIndex++;
+                }
+                try {
+                    await sock.sendMessage(jid, { react: { text: reaction, key: msg.key } });
+                } catch (err) { /* ignore */ }
             }
             await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         }
@@ -527,7 +591,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     }
 }
 
-// ─── HELPER: FORMAT UPTIME (used by AFK) ──────────────────────
+// ─── HELPER: FORMAT UPTIME ──────────────────────────────────────
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
