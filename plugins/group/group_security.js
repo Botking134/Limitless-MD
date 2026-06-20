@@ -74,12 +74,16 @@ function parseDuration(str) {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// ─── UPDATED verifyPermissions (Issue 2) ──────────────────────
+// ─── UPDATED verifyPermissions ──────────────────────
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-    // 1. AUTHORIZATION CHECK
-    const isAuthorized = isDev || isOwner || isSudo;
+    // 1. AUTHORIZATION CHECK (Developers bypass all checks)
+    if (isDev) {
+        return true;
+    }
+
+    const isAuthorized = isOwner || isSudo;
     if (!isAuthorized) return false;
 
     // 2. EXEMPT COMMANDS
@@ -92,20 +96,18 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return true;
     }
 
-    // 3. BOT ADMIN CHECK
+    // 3. BOT ADMIN CHECK WITH JID & LID CO-EXISTENCE
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
-    const botJid = normalizeToJid(sock.user.id);
-    const botLid = config.botLid || '';
+    const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+    const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
 
     const botParticipant = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
-        return pId === botJid ||
-               (botLid && pId === botLid) ||
-               (botLid && pLid === botLid) ||
-               (pLid && pLid === botJid);
+        return (botJid && (pId === botJid || pLid === botJid)) ||
+               (botLid && (pId === botLid || pLid === botLid));
     });
     const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
@@ -114,12 +116,7 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    // 4. DEVELOPER BYPASS
-    if (isDev) {
-        return true;
-    }
-
-    // 5. SENDER ADMIN CHECK
+    // 4. SENDER ADMIN CHECK
     let sender = participants.find(p => {
         const pId = normalizeToJid(p.id);
         const pLid = p.lid ? normalizeToJid(p.lid) : '';
