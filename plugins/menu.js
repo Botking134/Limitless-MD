@@ -2,22 +2,20 @@
 const config = require('../config');
 const path = require('path');
 
-// ─── AUDIO ASSETS ────────────────────────────────────────────────
+// ─── AUDIO ASSETS ──────────────────────────────────────────────────
 
-// Combined audio pool for .menu (7 files – all original + menu2 audio)
+// Combined audio pool for .menu (7 files – updated with new URLs)
 const menuAudios = [
-    // Original 4
-    "https://github.com/Botking134/Limitless-MD/raw/refs/heads/master/plugins/AUD-20260604-WA0001.mp3",
-    "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/itamio%20shire.mp3",
-    "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/katon%20gokame.mp3",
-    "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/gojo.mp3",
-    // Added from menu2 (3 files)
-    "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/itachi.mp3",
-    "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/itamio2.mp3",
-    "https://raw.githubusercontent.com/Botking134/Limitless-MD/master/tools/sharingans.mp3"
+    "https://files.catbox.moe/5nku92.mp3",
+    "https://files.catbox.moe/pj7qrm.mp3",
+    "https://files.catbox.moe/4adjoq.mp3",
+    "https://files.catbox.moe/qpwydd.mp3",
+    "https://files.catbox.moe/8x6exq.mp3",
+    "https://files.catbox.moe/jkxbzh.mp3",
+    "https://files.catbox.moe/h75gjf.mp3"
 ];
 
-// ─── HELPER: FORMAT UPTIME ──────────────────────────────────────
+// ─── HELPER: FORMAT UPTIME ───────────────────────────────────────
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
     const h = Math.floor((seconds % (3600 * 24)) / 3600);
@@ -103,7 +101,7 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
     };
 }
 
-// ─── RENDER TEXT MENU ──────────────────────────────────────────
+// ─── RENDER TEXT MENU ────────────────────────────────────────────
 async function renderMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -111,240 +109,240 @@ async function renderMenu(sock, msg) {
     const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
 
     const menuText =
-`┌──────────────────┐
+`┌───────────────┐
 │   *Limitless-MD*   │
-└──────────────────┘
+└───────────────┘
 _Owner: ${config.ownerName}_
 _User: ${msg.pushName || 'User'}_
 _Uptime: ${uptime}_
 _Version: 1.0.0_
-══════════════════════
+═══════════════════
 _Throughout Heaven And Earth 🌏_
-┌────────────────────────────────────┐
+┌─────────────────────────────┐
 │ _I alone am the Honoured one_ │
-└────────────────────────────────────┘
+└─────────────────────────────┘
 ${readMore}
-_❖ ── [ AI & CHATBOT ] ── ❖_
-_┃ ⊱ ai_
-_┃ ⊱ groq_
-_┃ ⊱ gojo_ (rise/sleep)
-_┃ ⊱ debug_
-_┃ ⊱ summon_
-_┃ ⊱ read_
-_┃ ⊱ imagine_
-_┃ ⊱ lizzy_
-_┃ ⊱ chatbot_
-_┃ ⊱ say_
+_❖ ─── [ AI & CHATBOT ] ─── ❖_
+_│ ⊱ ai_
+_│ ⊱ groq_
+_│ ⊱ gojo_ (rise/sleep)
+_│ ⊱ debug_
+_│ ⊱ summon_
+_│ ⊱ read_
+_│ ⊱ imagine_
+_│ ⊱ lizzy_
+_│ ⊱ chatbot_
+_│ ⊱ say_
 
-_❖ ── [ INTERACTIVE GAMES ] ── ❖_
-_┃ ⊱ games_ (Unified Lobby)
-_┃ ⊱ ttt_
-_┃ ⊱ rps_
-_┃ ⊱ guess_
-_┃ ⊱ vault8_
-_┃ ⊱ trivia_
-_┃ ⊱ quiz_
-_┃ ⊱ charade_ / .sharade
-_┃ ⊱ anagram_
-_┃ ⊱ wcg_
-_┃ ⊱ millionaire_
-_┃ ⊱ torf_
-_┃ ⊱ pvp_
-_┃ ⊱ escape_
+_❖ ─── [ INTERACTIVE GAMES ] ─── ❖_
+_│ ⊱ games_ (Unified Lobby)
+_│ ⊱ ttt_
+_│ ⊱ rps_
+_│ ⊱ guess_
+_│ ⊱ vault8_
+_│ ⊱ trivia_
+_│ ⊱ quiz_
+_│ ⊱ charade_ / .sharade
+_│ ⊱ anagram_
+_│ ⊱ wcg_
+_│ ⊱ millionaire_
+_│ ⊱ torf_
+_│ ⊱ pvp_
+_│ ⊱ escape_
 
-_❖ ── [ GROUP MANAGEMENT ] ── ❖_
-_┃ ⊱ mute_
-_┃ ⊱ unmute_
-_┃ ⊱ open_
-_┃ ⊱ close_
-_┃ ⊱ lock_
-_┃ ⊱ unlock_
-_┃ ⊱ kick_
-_┃ ⊱ promote_
-_┃ ⊱ demote_
-_┃ ⊱ tagall_
-_┃ ⊱ tag_
-_┃ ⊱ link_
-_┃ ⊱ invite_
-_┃ ⊱ gclink_
-_┃ ⊱ antilink_
-_┃ ⊱ admins_
-_┃ ⊱ antitag_
-_┃ ⊱ antibot_
-_┃ ⊱ warn_
-_┃ ⊱ togcstatus_
-_┃ ⊱ getgpp_
-_┃ ⊱ setgpp_
-_┃ ⊱ welcome_
-_┃ ⊱ goodbye_
-_┃ ⊱ delwelcome_
-_┃ ⊱ delgoodbye_
-_┃ ⊱ poll_
-_┃ ⊱ antigm_
-_┃ ⊱ gclog_
-_┃ ⊱ creategc_
-_┃ ⊱ kickall_
-_┃ ⊱ stopkickall_
-_┃ ⊱ tkick_
-_┃ ⊱ gcjid_
-_┃ ⊱ antispam_
-_┃ ⊱ silence_
-_┃ ⊱ gcalerts_
-_┃ ⊱ antigcstatus_
-_┃ ⊱ spamtag_
-_┃ ⊱ antipromote_
-_┃ ⊱ antidemote_
+_❖ ─── [ GROUP MANAGEMENT ] ─── ❖_
+_│ ⊱ mute_
+_│ ⊱ unmute_
+_│ ⊱ open_
+_│ ⊱ close_
+_│ ⊱ lock_
+_│ ⊱ unlock_
+_│ ⊱ kick_
+_│ ⊱ promote_
+_│ ⊱ demote_
+_│ ⊱ tagall_
+_│ ⊱ tag_
+_│ ⊱ link_
+_│ ⊱ invite_
+_│ ⊱ gclink_
+_│ ⊱ antilink_
+_│ ⊱ admins_
+_│ ⊱ antitag_
+_│ ⊱ antibot_
+_│ ⊱ warn_
+_│ ⊱ togcstatus_
+_│ ⊱ getgpp_
+_│ ⊱ setgpp_
+_│ ⊱ welcome_
+_│ ⊱ goodbye_
+_│ ⊱ delwelcome_
+_│ ⊱ delgoodbye_
+_│ ⊱ poll_
+_│ ⊱ antigm_
+_│ ⊱ gclog_
+_│ ⊱ creategc_
+_│ ⊱ kickall_
+_│ ⊱ stopkickall_
+_│ ⊱ tkick_
+_│ ⊱ gcjid_
+_│ ⊱ antispam_
+_│ ⊱ silence_
+_│ ⊱ gcalerts_
+_│ ⊱ antigcstatus_
+_│ ⊱ spamtag_
+_│ ⊱ antipromote_
+_│ ⊱ antidemote_
 
-_❖ ── [ TOOLS ] ── ❖_
-_┃ ⊱ track_
-_┃ ⊱ getpp_
-_┃ ⊱ setname_
-_┃ ⊱ save_
-_┃ ⊱ tostatus_
-_┃ ⊱ fw_
-_┃ ⊱ presence_
-_┃ ⊱ autotyping_
-_┃ ⊱ autorecording_
-_┃ ⊱ alwaysonline_
-_┃ ⊱ autoread_
-_┃ ⊱ antidelete_
-_┃ ⊱ antiviewonce_
-_┃ ⊱ antibug_
-_┃ ⊱ clear_
-_┃ ⊱ archive_
-_┃ ⊱ unarchive_
-_┃ ⊱ autoviewstatus_ / .autovs
-_┃ ⊱ statusemoji_
-_┃ ⊱ autoreactstatus_ / .autors
-_┃ ⊱ block_
-_┃ ⊱ unblock_
-_┃ ⊱ aza_
-_┃ ⊱ time_
-_┃ ⊱ weather_ (AI Search)
-_┃ ⊱ device_
-_┃ ⊱ ss_
-_┃ ⊱ calc_
-_┃ ⊱ trt_ (AI dependent)
-_┃ ⊱ translate_
-_┃ ⊱ spam_
-_┃ ⊱ livescore_ / .live (AI Search)
-_┃ ⊱ score_ (AI Search)
+_❖ ─── [ TOOLS ] ─── ❖_
+_│ ⊱ track_
+_│ ⊱ getpp_
+_│ ⊱ setname_
+_│ ⊱ save_
+_│ ⊱ tostatus_
+_│ ⊱ fw_
+_│ ⊱ presence_
+_│ ⊱ autotyping_
+_│ ⊱ autorecording_
+_│ ⊱ alwaysonline_
+_│ ⊱ autoread_
+_│ ⊱ antidelete_
+_│ ⊱ antiviewonce_
+_│ ⊱ antibug_
+_│ ⊱ clear_
+_│ ⊱ archive_
+_│ ⊱ unarchive_
+_│ ⊱ autoviewstatus_ / .autovs
+_│ ⊱ statusemoji_
+_│ ⊱ autoreactstatus_ / .autors
+_│ ⊱ block_
+_│ ⊱ unblock_
+_│ ⊱ aza_
+_│ ⊱ time_
+_│ ⊱ weather_ (AI Search)
+_│ ⊱ device_
+_│ ⊱ ss_
+_│ ⊱ calc_
+_│ ⊱ trt_ (AI dependent)
+_│ ⊱ translate_
+_│ ⊱ spam_
+_│ ⊱ livescore_ / .live (AI Search)
+_│ ⊱ score_ (AI Search)
 
-_❖ ── [ DOWNLOADER ] ── ❖_
-_┃ ⊱ play_
-_┃ ⊱ ytmp3_
-_┃ ⊱ ytmp4_
-_┃ ⊱ yt_
-_┃ ⊱ tt2_
-_┃ ⊱ img_
-_┃ ⊱ song_
-_┃ ⊱ video_
-_┃ ⊱ fb_
-_┃ ⊱ tt_
-_┃ ⊱ mediafire_
-_┃ ⊱ apk_
-_┃ ⊱ apksearch_
-_┃ ⊱ shazam_
-_┃ ⊱ lyrics_
-_┃ ⊱ gdrive_
-_┃ ⊱ gitclone_
-_┃ ⊱ pinterest_
-_┃ ⊱ subtitle_
-_┃ ⊱ ytmp3doc_
-_┃ ⊱ playdoc_
-_┃ ⊱ spotify_
-_┃ ⊱ spotify2_
-_┃ ⊱ web_
-_┃ ⊱ x2_
-_┃ ⊱ pdf_
-_┃ ⊱ tgs_
-_┃ ⊱ ig_
+_❖ ─── [ DOWNLOADER ] ─── ❖_
+_│ ⊱ play_
+_│ ⊱ ytmp3_
+_│ ⊱ ytmp4_
+_│ ⊱ yt_
+_│ ⊱ tt2_
+_│ ⊱ img_
+_│ ⊱ song_
+_│ ⊱ video_
+_│ ⊱ fb_
+_│ ⊱ tt_
+_│ ⊱ mediafire_
+_│ ⊱ apk_
+_│ ⊱ apksearch_
+_│ ⊱ shazam_
+_│ ⊱ lyrics_
+_│ ⊱ gdrive_
+_│ ⊱ gitclone_
+_│ ⊱ pinterest_
+_│ ⊱ subtitle_
+_│ ⊱ ytmp3doc_
+_│ ⊱ playdoc_
+_│ ⊱ spotify_
+_│ ⊱ spotify2_
+_│ ⊱ web_
+_│ ⊱ x2_
+_│ ⊱ pdf_
+_│ ⊱ tgs_
+_│ ⊱ ig_
 
-_❖ ── [ FUN & ROLEPLAY ] ── ❖_
-_┃ ⊱ bankai_
-_┃ ⊱ dom-exp_
-_┃ ⊱ wyr_
-_┃ ⊱ joke_
-_┃ ⊱ insult_
-_┃ ⊱ roast_
-_┃ ⊱ ship_
-_┃ ⊱ wed_
-_┃ ⊱ propose_
-_┃ ⊱ askout_
-_┃ ⊱ hollow-purple_
-_┃ ⊱ hack_
-_┃ ⊱ arrest_
-_┃ ⊱ liedetector_
-_┃ ⊱ rizz_
-_┃ ⊱ speech_
-_┃ ⊱ slap_
-_┃ ⊱ kill_
-_┃ ⊱ kiss_
-_┃ ⊱ hug_
-_┃ ⊱ kik_
-_┃ ⊱ punch_
-_┃ ⊱ hifive_
-_┃ ⊱ bite_
-_┃ ⊱ poke_
-_┃ ⊱ dap_
-_┃ ⊱ dance_
-_┃ ⊱ aura_
-_┃ ⊱ lol_
+_❖ ─── [ FUN & ROLEPLAY ] ─── ❖_
+_│ ⊱ bankai_
+_│ ⊱ dom-exp_
+_│ ⊱ wyr_
+_│ ⊱ joke_
+_│ ⊱ insult_
+_│ ⊱ roast_
+_│ ⊱ ship_
+_│ ⊱ wed_
+_│ ⊱ propose_
+_│ ⊱ askout_
+_│ ⊱ hollow-purple_
+_│ ⊱ hack_
+_│ ⊱ arrest_
+_│ ⊱ liedetector_
+_│ ⊱ rizz_
+_│ ⊱ speech_
+_│ ⊱ slap_
+_│ ⊱ kill_
+_│ ⊱ kiss_
+_│ ⊱ hug_
+_│ ⊱ kik_
+_│ ⊱ punch_
+_│ ⊱ hifive_
+_│ ⊱ bite_
+_│ ⊱ poke_
+_│ ⊱ dap_
+_│ ⊱ dance_
+_│ ⊱ aura_
+_│ ⊱ lol_
 
-_❖ ── [ OWNER & DEV ] ── ❖_
-_┃ ⊱ diagnose_
-_┃ ⊱ update_
-_┃ ⊱ mode_
-_┃ ⊱ setsudo_
-_┃ ⊱ delsudo_
-_┃ ⊱ addowner_
-_┃ ⊱ delowner_
-_┃ ⊱ restart_
-_┃ ⊱ shutdown_
-_┃ ⊱ ban_
-_┃ ⊱ unban_
-_┃ ⊱ afk_
-_┃ ⊱ setvar_
-_┃ ⊱ settings_
-_┃ ⊱ antipm_
-_┃ ⊱ reminder_
-_┃ ⊱ remind_
-_┃ ⊱ games_closeall_
-_┃ ⊱ owner_
+_❖ ─── [ OWNER & DEV ] ─── ❖_
+_│ ⊱ diagnose_
+_│ ⊱ update_
+_│ ⊱ mode_
+_│ ⊱ setsudo_
+_│ ⊱ delsudo_
+_│ ⊱ addowner_
+_│ ⊱ delowner_
+_│ ⊱ restart_
+_│ ⊱ shutdown_
+_│ ⊱ ban_
+_│ ⊱ unban_
+_│ ⊱ afk_
+_│ ⊱ setvar_
+_│ ⊱ settings_
+_│ ⊱ antipm_
+_│ ⊱ reminder_
+_│ ⊱ remind_
+_│ ⊱ games_closeall_
+_│ ⊱ owner_
 
-_❖ ── [ UTILITIES ] ── ❖_
-_┃ ⊱ ping_
-_┃ ⊱ ping2_
-_┃ ⊱ alive_
-_┃ ⊱ delete_
-_┃ ⊱ tdelete_
-_┃ ⊱ autoreact_
-_┃ ⊱ speed_
-_┃ ⊱ vv_
-_┃ ⊱ sticker_
-_┃ ⊱ crop_
-_┃ ⊱ take_
-_┃ ⊱ setcmd_
-_┃ ⊱ delcmd_
-_┃ ⊱ tovv_
-_┃ ⊱ tourl_
-_┃ ⊱ kamui_
-_┃ ⊱ vvs_router_ (hidden)
-_┃ ⊱ emix_
-_┃ ⊱ smeme_
-_┃ ⊱ addnote_
-_┃ ⊱ delnote_
-_┃ ⊱ getnotes_
-_┃ ⊱ getnote_
-_┃ ⊱ toimg_
-_┃ ⊱ tomp3_
-_┃ ⊱ tomp4_
-_┃ ⊱ binary_
-_┃ ⊱ ocr_
-_┃ ⊱ qr_
-_┃ ⊱ readqr_
-_┃ ⊱ qty_
-_┃ ⊱ currency
+_❖ ─── [ UTILITIES ] ─── ❖_
+_│ ⊱ ping_
+_│ ⊱ ping2_
+_│ ⊱ alive_
+_│ ⊱ delete_
+_│ ⊱ tdelete_
+_│ ⊱ autoreact_
+_│ ⊱ speed_
+_│ ⊱ vv_
+_│ ⊱ sticker_
+_│ ⊱ crop_
+_│ ⊱ take_
+_│ ⊱ setcmd_
+_│ ⊱ delcmd_
+_│ ⊱ tovv_
+_│ ⊱ tourl_
+_│ ⊱ kamui_
+_│ ⊱ vvs_router_ (hidden)
+_│ ⊱ emix_
+_│ ⊱ smeme_
+_│ ⊱ addnote_
+_│ ⊱ delnote_
+_│ ⊱ getnotes_
+_│ ⊱ getnote_
+_│ ⊱ toimg_
+_│ ⊱ tomp3_
+_│ ⊱ tomp4_
+_│ ⊱ binary_
+_│ ⊱ ocr_
+_│ ⊱ qr_
+_│ ⊱ readqr_
+_│ ⊱ qty_
+_│ ⊱ currency
 `;
 
     try {
@@ -364,32 +362,32 @@ async function renderCarouselMenu(sock, msg) {
     const uptime = formatUptime(process.uptime());
 
     const headerText =
-`┌──────────────────┐
+`┌───────────────┐
 │   *Limitless-MD*   │
-└──────────────────┘
+└───────────────┘
 _Owner: ${config.ownerName}_
 _User: ${msg.pushName || 'User'}_
 _Uptime: ${uptime}_
 _Version: 1.0.0_
-══════════════════════
+═══════════════════
 _Throughout Heaven And Earth 🌏_
-┌────────────────────────────────────┐
+┌─────────────────────────────┐
 │ _I alone am the Honoured one_ │
-└────────────────────────────────────┘
+└─────────────────────────────┘
 
 _Swipe through the cards below to explore command categories._ 🔮`;
 
     try {
         const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
 
-        // Loading animation (kept – "too peak")
+        // Loading animation
         const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
 
         const frames = [
             { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 1000 },
             { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 1000 },
             { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 1000 },
-            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌀", delay: 1500 }
+            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌌", delay: 1500 }
         ];
 
         for (const frame of frames) {
@@ -403,17 +401,17 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             await sock.sendMessage(jid, { delete: loadingMsg.key });
         } catch (e) { /* ignore */ }
 
-        // Build carousel (unchanged)
+        // Build carousel
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
         const categories = [
             { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
             { name: "INTERACTIVE GAMES 🎮", desc: "Lobbies, turn-based puzzles, quizzes, and duels.", cmd: "menu_games" },
-            { name: "GROUP MANAGEMENT 👥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
+            { name: "GROUP MANAGEMENT 🔥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
             { name: "TOOLS ⚙️", desc: "Advanced Presence parameters & tracking tools.", cmd: "menu_tools" },
             { name: "DOWNLOADER 📥", desc: "High-speed multi-platform downloaders.", cmd: "menu_download" },
             { name: "FUN & ROLEPLAY 🎭", desc: "Monologues, animations, and interactive cards.", cmd: "menu_fun" },
-            { name: "OWNER & DEV 👑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
+            { name: "OWNER & DEV 🔑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
             { name: "UTILITIES 🛠️", desc: "Converter tools & network latencies.", cmd: "menu_utilities" }
         ];
 
@@ -486,7 +484,7 @@ module.exports = [
             // Show text menu (image + caption)
             await renderMenu(sock, msg);
 
-            // Send random audio from combined pool (7 files)
+            // Send random audio from the new pool (7 files)
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
             try {
                 const audioResponse = await fetch(randomAudio);
@@ -510,7 +508,7 @@ module.exports = [
         }
     },
 
-    // ─── .list alias for .menu ─────────────────────────────────
+    // ─── .list alias for .menu ────────────────────────────────
     {
         name: 'list',
         isPrefixless: false,
@@ -548,8 +546,6 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-
-            // Render carousel menu (includes loading animation)
             await renderCarouselMenu(sock, msg);
         }
     },
