@@ -31,23 +31,23 @@ async function downloadMedia(apiUrl, params = {}, method = 'GET') {
     }
 }
 
-// ─── EXTRACT DOWNLOAD URL (handles multiple response structures) ──
 function extractDownloadUrl(data) {
     if (!data) return null;
-    // Common paths
     const paths = [
+        'result.download_url',
+        'result.download',
+        'data.download_url',
         'data.download',
-        'data.url',
         'data.hdplay',
         'data.wmplay',
         'data.play',
+        'download_url',
         'download',
-        'url',
         'hdplay',
         'wmplay',
         'play',
-        'data.data.download',
-        'data.data.url'
+        'url',
+        'data.data.download'
     ];
     for (const path of paths) {
         const parts = path.split('.');
@@ -62,7 +62,11 @@ function extractDownloadUrl(data) {
 }
 
 function extractTitle(data) {
-    return data?.title || data?.data?.title || data?.data?.author?.nickname || 'Media';
+    if (data?.result?.title) return data.result.title;
+    if (data?.data?.title) return data.data.title;
+    if (data?.data?.author?.nickname) return data.data.author.nickname;
+    if (data?.title) return data.title;
+    return 'Media';
 }
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
@@ -113,8 +117,7 @@ module.exports = [
                 const downloadUrl = extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
                 const buffer = await fetchBuffer(downloadUrl);
-                const caption = extractTitle(data);
-                await sock.sendMessage(jid, { video: buffer, caption });
+                await sock.sendMessage(jid, { video: buffer, caption: extractTitle(data) });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
@@ -152,7 +155,7 @@ module.exports = [
 
             if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a YouTube URL.\nExample: `.yt https://youtu.be/xxx mp3`" }, { quoted: msg });
 
-            const endpoint = type === 'audio' 
+            const endpoint = type === 'audio'
                 ? 'https://apis.prexzyvilla.site/download/youtube-audio'
                 : 'https://apis.prexzyvilla.site/download/youtube-video';
 
@@ -317,7 +320,6 @@ module.exports = [
                 const downloadUrl = extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
                 const buffer = await fetchBuffer(downloadUrl);
-                // Attempt to guess file type from URL extension
                 const ext = downloadUrl.split('.').pop().split('?')[0] || 'bin';
                 const mime = {
                     mp4: 'video/mp4',
@@ -361,7 +363,6 @@ module.exports = [
             await sock.sendMessage(jid, { text: "⏳ Obfuscating code..." }, { quoted: msg });
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/obfuscate', { code }, 'POST');
-                // Expect response like { obfuscated: "..." } or { data: { obfuscated: "..." } }
                 let obfuscated = data?.obfuscated || data?.data?.obfuscated || data?.result;
                 if (!obfuscated) throw new Error('No obfuscated code returned');
                 const buffer = Buffer.from(obfuscated, 'utf-8');
@@ -388,21 +389,20 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: "🔍 Searching for songs..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { q: query, limit: 5 }, 'GET');
-                if (!data || !data.results || data.results.length === 0) {
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query }, 'GET');
+                if (!data || !data.result) {
                     return await sock.sendMessage(jid, { text: "❌ No songs found. Please try a different search term." }, { quoted: msg });
                 }
 
-                let list = '🎵 *Song Search Results:*\n\n';
-                data.results.forEach((song, i) => {
-                    list += `${i + 1}. *${song.title}* - ${song.artist || 'Unknown artist'}\n`;
-                    if (song.duration) list += `   ⏱️ ${song.duration}\n`;
-                });
-                list += `\n📌 Reply to this message with the number (1-${data.results.length}) to download.`;
+                const song = data.result;
+                let list = '🎵 *Song Found:*\n\n';
+                list += `1. *${song.title}*\n`;
+                if (song.duration) list += `   ⏱️ ${song.duration}\n`;
+                list += `\n📌 Reply to this message with the number **1** to download.`;
 
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
                 global.songSessions[prompt.key.id] = {
-                    results: data.results,
+                    results: [song],
                     timestamp: Date.now(),
                     handle: handleSongReply
                 };
@@ -421,16 +421,17 @@ module.exports = [
             const query = args?.trim();
             if (!query) return await sock.sendMessage(jid, { text: "❌ Please provide a song name to play directly." }, { quoted: msg });
 
-            await sock.sendMessage(jid, { text: "⏳ Fetching first result..." }, { quoted: msg });
+            await sock.sendMessage(jid, { text: "⏳ Fetching song..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { q: query, limit: 1 }, 'GET');
-                if (!data || !data.results || data.results.length === 0) {
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query }, 'GET');
+                if (!data || !data.result) {
                     return await sock.sendMessage(jid, { text: "❌ No song found." }, { quoted: msg });
                 }
-                const song = data.results[0];
-                if (!song.download) throw new Error('No download link found');
+                const song = data.result;
+                const downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
+                if (!downloadUrl) throw new Error('No download link found');
 
-                const audioBuffer = await fetchBuffer(song.download);
+                const audioBuffer = await fetchBuffer(downloadUrl);
                 let thumbnailBuffer = null;
                 if (song.thumbnail) {
                     try {
@@ -439,8 +440,9 @@ module.exports = [
                 }
 
                 const caption = `🎵 *${song.title}*\n` +
-                              (song.artist ? `👤 ${song.artist}\n` : '') +
-                              (song.duration ? `⏱️ ${song.duration}` : '');
+                              (song.duration ? `⏱️ ${song.duration}\n` : '') +
+                              (song.views ? `👁️ ${song.views}\n` : '') +
+                              (song.published ? `📅 ${song.published}` : '');
 
                 if (thumbnailBuffer) {
                     await sock.sendMessage(jid, {
@@ -449,7 +451,7 @@ module.exports = [
                         contextInfo: {
                             externalAdReply: {
                                 title: song.title,
-                                body: song.artist || 'Song',
+                                body: 'Song',
                                 thumbnail: thumbnailBuffer,
                                 mediaType: 1
                             }
@@ -485,12 +487,13 @@ async function handleSongReply(sock, msg, session, userReply) {
     }
 
     const song = session.results[num - 1];
-    if (!song.download) {
+    const downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
+    if (!downloadUrl) {
         return await sock.sendMessage(jid, { text: "❌ This song has no download link." });
     }
 
     try {
-        const audioBuffer = await fetchBuffer(song.download);
+        const audioBuffer = await fetchBuffer(downloadUrl);
         let thumbnailBuffer = null;
         if (song.thumbnail) {
             try {
@@ -499,8 +502,9 @@ async function handleSongReply(sock, msg, session, userReply) {
         }
 
         const caption = `🎵 *${song.title}*\n` +
-                      (song.artist ? `👤 ${song.artist}\n` : '') +
-                      (song.duration ? `⏱️ ${song.duration}` : '');
+                      (song.duration ? `⏱️ ${song.duration}\n` : '') +
+                      (song.views ? `👁️ ${song.views}\n` : '') +
+                      (song.published ? `📅 ${song.published}` : '');
 
         if (thumbnailBuffer) {
             await sock.sendMessage(jid, {
@@ -509,7 +513,7 @@ async function handleSongReply(sock, msg, session, userReply) {
                 contextInfo: {
                     externalAdReply: {
                         title: song.title,
-                        body: song.artist || 'Song',
+                        body: 'Song',
                         thumbnail: thumbnailBuffer,
                         mediaType: 1
                     }
