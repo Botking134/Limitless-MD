@@ -451,7 +451,7 @@ module.exports = [
         const jid = msg.key.remoteJid;
         await sock.sendMessage(jid, { text: jid }, { quoted: msg });
     }
-}
+}, 
 
 // ─── ACTIVE – List members who sent messages today ────────────
 {
