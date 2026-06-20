@@ -50,6 +50,25 @@ function sendSuggestions(sock, jid, userId, type, results) {
     global.downloaderSessions[userId] = { type, results, timeout };
 }
 
+// ─── NEW: Extract query from message text ──────────────────────
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
+function getQueryFromMessage(msg, cmdName) {
+    const rawMsg = getRawMessage(msg.message);
+    let text = rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '';
+    const prefix = config.prefix || '.';
+    const regex = new RegExp(`^\\${prefix}${cmdName}\\s*`, 'i');
+    return text.replace(regex, '').trim();
+}
+
 // ─── COMMAND DEFINITIONS ─────────────────────────────────────────
 
 module.exports = [
@@ -58,8 +77,11 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { senderNumber }) => {
             const jid = msg.key.remoteJid;
-            // ✅ FIXED: Handles both arrays (old) and strings (new parser)
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            // FIXED: robust extraction
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'ig');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide an Instagram URL.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/download/instagram?url=${encodeURIComponent(url)}`);
@@ -81,7 +103,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'tgs');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Telegram sticker URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/telegram-sticker?url=${encodeURIComponent(url)}`);
@@ -101,7 +126,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'x');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Twitter URL.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/download/twitter?url=${encodeURIComponent(url)}`);
@@ -123,7 +151,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'ytmp3');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/download/ytmp3?url=${encodeURIComponent(url)}`);
@@ -148,7 +179,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'ytmp4');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/download/ytmp4?url=${encodeURIComponent(url)}`);
@@ -171,7 +205,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!query.trim()) {
+                query = getQueryFromMessage(msg, 'img');
+            }
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide a search query.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/search/pinterest?q=${encodeURIComponent(query)}`);
@@ -193,8 +230,15 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo && !isDev) return;
-            // ✅ FIXED: Handles first word correctly for both array and string
-            const repoUrl = Array.isArray(args) ? args[0] : (typeof args === 'string' ? args.split(' ')[0] : '');
+            // FIXED: robust extraction for first argument
+            let repoUrl = '';
+            if (Array.isArray(args) && args.length > 0) repoUrl = args[0];
+            else if (typeof args === 'string') repoUrl = args.split(' ')[0] || '';
+            if (!repoUrl.trim()) {
+                // also try from message text
+                const fullQuery = getQueryFromMessage(msg, 'gitclone');
+                repoUrl = fullQuery.split(' ')[0] || '';
+            }
             if (!repoUrl || !repoUrl.includes('github.com')) return await sock.sendMessage(jid, { text: 'Please provide a valid GitHub repo URL.' });
             try {
                 const cleanUrl = repoUrl.replace(/\/$/, '').replace('/tree', '');
@@ -232,7 +276,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!query.trim()) {
+                query = getQueryFromMessage(msg, 'lyrics');
+            }
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song title.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/lyrics/search?q=${encodeURIComponent(query)}`);
@@ -255,8 +302,11 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            // ✅ FIXED: Now correctly gets "not like us" from a string
-            const query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            // FIXED: robust extraction
+            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!query.trim()) {
+                query = getQueryFromMessage(msg, 'play');
+            }
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song name.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/play?q=${encodeURIComponent(query)}`);
@@ -284,7 +334,10 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const userId = msg.key.participant || msg.key.remoteJid;
-            const query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!query.trim()) {
+                query = getQueryFromMessage(msg, 'song');
+            }
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide a song name.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/song?q=${encodeURIComponent(query)}`);
@@ -303,7 +356,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'tt');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a TikTok URL.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/download/tiktok?url=${encodeURIComponent(url)}`);
@@ -323,7 +379,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'fb');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Facebook video URL.' });
             try {
                 const { data } = await axios.get(`https://apis.prexzyvilla.site/download/facebook?url=${encodeURIComponent(url)}`);
@@ -379,7 +438,10 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const userId = msg.key.participant || msg.key.remoteJid;
-            const query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let query = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!query.trim()) {
+                query = getQueryFromMessage(msg, 'apk');
+            }
             if (!query) return await sock.sendMessage(jid, { text: 'Please provide an app name.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/endpoints/download/apk?q=${encodeURIComponent(query)}`);
@@ -398,8 +460,12 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            // ✅ FIXED: Gets first word correctly for both array and string
-            const url = Array.isArray(args) ? args[0] : (typeof args === 'string' ? args.split(' ')[0] : '');
+            let url = Array.isArray(args) ? args[0] : (typeof args === 'string' ? args.split(' ')[0] : '');
+            if (!url.trim()) {
+                // try full message
+                const fullQuery = getQueryFromMessage(msg, 'ss');
+                url = fullQuery.split(' ')[0] || '';
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a website URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/ssweb?url=${encodeURIComponent(url)}`);
@@ -420,7 +486,10 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo && !isDev) return;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'spotify');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Spotify track URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/spotifydl?url=${encodeURIComponent(url)}`);
@@ -445,7 +514,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'yt');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a YouTube URL.' });
             try {
                 const { data } = await axios.get(`https://savetube.david-cyril.net.ng/?url=${encodeURIComponent(url)}`);
@@ -465,7 +537,10 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            let url = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+            if (!url.trim()) {
+                url = getQueryFromMessage(msg, 'mediafire');
+            }
             if (!url) return await sock.sendMessage(jid, { text: 'Please provide a Mediafire URL.' });
             try {
                 const { data } = await axios.get(`https://apis.davidcyril.name.ng/mediafire?url=${encodeURIComponent(url)}`);
