@@ -1,0 +1,59 @@
+# ============================================
+# DEPENDENCIES
+# ============================================
+node_modules/
+package-lock.json
+yarn.lock
+
+# ============================================
+# ENVIRONMENT & SECRETS
+# ============================================
+.env
+.env.local
+.env.*.local
+
+# ============================================
+# PERSISTENCE & STORAGE (KEEP LOCAL)
+# ============================================
+storage/
+storage/*
+!storage/.gitkeep
+
+session_auth/
+session_auth/*
+!session_auth/.gitkeep
+
+*.json
+!package.json
+!package-lock.json
+
+# ============================================
+# LOGS
+# ============================================
+logs/
+logs/*
+!logs/.gitkeep
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ============================================
+# OS & EDITOR FILES
+# ============================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# ============================================
+# MISC
+# ============================================
+*.txt
+!quiz.txt
+!millionaire.txt
+*.bak
