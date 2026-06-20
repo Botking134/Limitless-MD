@@ -71,20 +71,24 @@ async function synthesizeFridayVoice(text) {
     return null;
 }
 
+// ─── FIX: Dual JID & LID Matching for replies/mentions ───
 function isBotAddressed(sock, msg) {
     const rawIncoming = getRawMessage(msg.message);
     const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
                         rawIncoming?.imageMessage?.contextInfo ||
                         rawIncoming?.videoMessage?.contextInfo;
 
-    const botJid = sock.user.id ? normalizeToJid(sock.user.id) : '';
+    const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+    const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
 
-    if (contextInfo?.participant && normalizeToJid(contextInfo.participant) === botJid) {
+    const quotedParticipant = contextInfo?.participant ? normalizeToJid(contextInfo.participant) : '';
+    if (quotedParticipant && (quotedParticipant === botJid || (botLid && quotedParticipant === botLid))) {
         return true;
     }
 
     const mentions = contextInfo?.mentionedJid || [];
-    if (mentions.map(m => normalizeToJid(m)).includes(botJid)) {
+    const normalizedMentions = mentions.map(m => normalizeToJid(m));
+    if (normalizedMentions.includes(botJid) || (botLid && normalizedMentions.includes(botLid))) {
         return true;
     }
 
@@ -138,8 +142,7 @@ module.exports = [
         name: 'gojo',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            // ─── FIX: Use fallback for JID ──────────────────────────
-            const jid = msg.remoteJid || msg.key.remoteJid;
+            const jid = msg.key.remoteJid;
             const cleanArgs = args || '';
 
             // Bypass if it's a prefixed command
@@ -389,8 +392,7 @@ module.exports = [
         name: 'lizzy_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
-            // ─── FIX: Use fallback for JID ──────────────────────────
-            const jid = msg.remoteJid || msg.key.remoteJid;
+            const jid = msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             const prefix = config.prefix || '⚡';
 
@@ -506,8 +508,7 @@ module.exports = [
         name: 'chatbot_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            // ─── FIX: Use fallback for JID ──────────────────────────
-            const jid = msg.remoteJid || msg.key.remoteJid;
+            const jid = msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
 
             if (lowerQuery.startsWith(config.prefix)) return;
@@ -613,8 +614,7 @@ module.exports = [
         name: 'friday_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            // ─── FIX: Use fallback for JID ──────────────────────────
-            const jid = msg.remoteJid || msg.key.remoteJid;
+            const jid = msg.key.remoteJid;
             const lowerQuery = args ? args.toLowerCase().trim() : '';
 
             // Bypass if FRIDAY is off globally, or if it's a prefixed command
