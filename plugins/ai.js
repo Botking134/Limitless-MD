@@ -362,7 +362,56 @@ module.exports = [
         }
     },
 
-    // 7. .lizzy — Toggle Lizzy Chatbot
+    // ─── NEW: .asst — Assistant Manager with Deactivate All Button ───
+    {
+        name: 'asst',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            const lizzyOn = config.lizzyChats?.includes(jid) || false;
+            const jarvisOn = config.chatbotChats?.includes(jid) || false;
+            const fridayOn = config.fridayChats?.includes(jid) || false;
+            const gojoOn = !config.gojoGlobalSleep;
+
+            let statusText = `🤖 *Active Chatbots in this chat:*\n\n`;
+            statusText += `${lizzyOn ? '✅' : '❌'} Lizzy\n`;
+            statusText += `${jarvisOn ? '✅' : '❌'} Jarvis\n`;
+            statusText += `${fridayOn ? '✅' : '❌'} Friday\n`;
+            statusText += `${gojoOn ? '✅' : '❌'} Gojo\n`;
+            if (config.gojoGlobalSleep) {
+                statusText += `\n⚠️ *Gojo is currently asleep globally*`;
+            }
+
+            if (isOwner || isSudo || isDev) {
+                await sock.sendMessage(jid, {
+                    text: statusText,
+                    interactive: {
+                        type: 'button_reply',
+                        header: { title: '🤖 Assistant Manager' },
+                        body: { text: 'Tap the button below to turn off ALL chatbots in this chat (except Gojo).' },
+                        footer: { text: 'Limitless-MD' },
+                        action: {
+                            buttons: [
+                                {
+                                    type: 'reply',
+                                    reply: {
+                                        id: 'deactivate_all',
+                                        title: '🔴 Deactivate All',
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }, { quoted: msg });
+            } else {
+                // For non-authorized users, show status without button
+                await sock.sendMessage(jid, { text: statusText }, { quoted: msg });
+            }
+        }
+    },
+
+    // ─── REWRITTEN .lizzy TOGGLE ───────────────────────────────
     {
         name: 'lizzy',
         isPrefixless: false,
@@ -370,49 +419,46 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo && !isDev) return;
 
-            if (!Array.isArray(config.lizzyChats)) config.lizzyChats = [];
+            const action = args?.trim().toLowerCase() || '';
+            // Toggle: if no arg, turn on if currently off, else off.
+            const isOn = action === 'on' || (!action && !config.lizzyChats?.includes(jid));
 
-            const action = args ? args.toLowerCase().trim() : '';
-            if (action === 'on') {
-                if (!config.lizzyChats.includes(jid)) config.lizzyChats.push(jid);
-                // Mutually exclude other chatbots from this chat
-                config.chatbotChats = config.chatbotChats.filter(chat => chat !== jid);
-
-                await sock.sendMessage(jid, { text: "🎀 *Lizzy activated in this chat!* (Jarvis has been deactivated here)" }, { quoted: msg });
-            } else if (action === 'off') {
-                config.lizzyChats = config.lizzyChats.filter(chat => chat !== jid);
-                await sock.sendMessage(jid, { text: "🎀 *Lizzy deactivated.*" }, { quoted: msg });
+            if (isOn) {
+                config.lizzyChats = [...new Set([...config.lizzyChats, jid])];
+                config.chatbotChats = (config.chatbotChats || []).filter(c => c !== jid);
+                config.fridayChats = (config.fridayChats || []).filter(c => c !== jid);
+                await sock.sendMessage(jid, { text: "🤖 Chatbot is now *on*" }, { quoted: msg });
+            } else {
+                config.lizzyChats = (config.lizzyChats || []).filter(c => c !== jid);
+                await sock.sendMessage(jid, { text: "🤖 Chatbot is now *off*" }, { quoted: msg });
             }
             saveState();
         }
     },
 
-    // 8. lizzy_chat (prefixless interceptor)
+    // ─── lizzy_chat (prefixless interceptor) ───────────────────
     {
         name: 'lizzy_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
+            // Only respond if Lizzy is active in this chat
+            if (!config.lizzyChats?.includes(jid)) return;
+
             const lowerQuery = args ? args.toLowerCase().trim() : '';
-            const prefix = config.prefix || '⚡';
-
-            // Bypass if it's a prefixed command
             if (lowerQuery.startsWith(config.prefix)) return;
-
-            // Check mutual exclusivity: if Jarvis is on, Lizzy stays silent
-            if (config.chatbotChats?.includes(jid)) return;
 
             // Intercept "close group" / "open group" for owners
             if (isOwner || isSudo || isDev) {
                 if (lowerQuery.includes('close group') || lowerQuery.includes('lock group')) {
                     const confirmText = isDev ? "Yes, Master! Locking the chat now! 💕" : "Understood. Locking the chat now.";
                     await sock.sendMessage(jid, { text: confirmText }, { quoted: msg });
-                    return await commands[`${prefix}mute`](sock, msg, 'close', { isOwner, isSudo, isDev, senderNumber });
+                    return await commands[`${config.prefix}mute`](sock, msg, 'close', { isOwner, isSudo, isDev, senderNumber });
                 }
                 if (lowerQuery.includes('open group') || lowerQuery.includes('unlock group')) {
                     const confirmText = isDev ? "Yes, Master! Opening the chat now! 💖" : "Understood. Opening the chat now.";
                     await sock.sendMessage(jid, { text: confirmText }, { quoted: msg });
-                    return await commands[`${prefix}mute`](sock, msg, 'open', { isOwner, isSudo, isDev, senderNumber });
+                    return await commands[`${config.prefix}mute`](sock, msg, 'open', { isOwner, isSudo, isDev, senderNumber });
                 }
             }
 
@@ -441,7 +487,6 @@ module.exports = [
                     { role: "user", content: args }
                 ];
 
-                // Trigger composing (typing...) presence
                 await sock.sendPresenceUpdate('composing', jid);
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
@@ -449,12 +494,10 @@ module.exports = [
                 global.aiMemory[jid].lizzy.push({ role: "user", content: args });
                 global.aiMemory[jid].lizzy.push({ role: "assistant", content: responseText });
 
-                // sliding 50-message context memory queue
                 while (global.aiMemory[jid].lizzy.length > 50) {
                     global.aiMemory[jid].lizzy.shift();
                 }
 
-                // Wait natural typing duration before sending
                 await handleNaturalDelay(sock, jid, responseText, 'composing');
 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
@@ -464,7 +507,7 @@ module.exports = [
         }
     },
 
-    // 9. .chatbot / .jarvis — Toggle JARVIS Chatbot
+    // ─── REWRITTEN .chatbot (Jarvis) TOGGLE ────────────────────
     {
         name: 'chatbot',
         isPrefixless: false,
@@ -472,13 +515,13 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo && !isDev) return;
 
-            if (!Array.isArray(config.chatbotChats)) config.chatbotChats = [];
+            const action = args?.trim().toLowerCase() || '';
+            const isOn = action === 'on' || (!action && !config.chatbotChats?.includes(jid));
 
-            const action = args ? args.toLowerCase().trim() : '';
-            if (action === 'on') {
-                if (!config.chatbotChats.includes(jid)) config.chatbotChats.push(jid);
-                // Mutually exclude other chatbots from this chat
-                config.lizzyChats = config.lizzyChats.filter(chat => chat !== jid);
+            if (isOn) {
+                config.chatbotChats = [...new Set([...config.chatbotChats, jid])];
+                config.lizzyChats = (config.lizzyChats || []).filter(c => c !== jid);
+                config.fridayChats = (config.fridayChats || []).filter(c => c !== jid);
 
                 const loadingMsg = await sock.sendMessage(jid, { text: "▮▮▮▮▮▮🔑 Establishing Connection..." }, { quoted: msg });
                 const frames = [
@@ -490,31 +533,28 @@ module.exports = [
                     await delay(800);
                     await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
                 }
-                const latency = Date.now() - msg.messageTimestamp * 1000;
                 await sock.sendMessage(jid, {
-                    text: `⚙️ *Systems are now online.* (Lizzy has been deactivated here)\n📶 *Network Latency:* \`${latency}ms\``,
+                    text: `⚙️ *Systems are now online.*\n📶 *Network Latency:* \`${Date.now() - msg.messageTimestamp * 1000}ms\``,
                     edit: loadingMsg.key
                 });
-            } else if (action === 'off') {
-                config.chatbotChats = config.chatbotChats.filter(chat => chat !== jid);
-                await sock.sendMessage(jid, { text: "🧠 *Limitless AI Chatbot deactivated.*" }, { quoted: msg });
+            } else {
+                config.chatbotChats = (config.chatbotChats || []).filter(c => c !== jid);
+                await sock.sendMessage(jid, { text: "🤖 Chatbot is now *off*" }, { quoted: msg });
             }
             saveState();
         }
     },
 
-    // 10. chatbot_chat (prefixless interceptor)
+    // ─── chatbot_chat (prefixless interceptor) ──────────────────
     {
         name: 'chatbot_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
+            if (!config.chatbotChats?.includes(jid)) return;
+
             const lowerQuery = args ? args.toLowerCase().trim() : '';
-
             if (lowerQuery.startsWith(config.prefix)) return;
-
-            // If Lizzy is on, Jarvis stays silent
-            if (config.lizzyChats?.includes(jid)) return;
 
             try {
                 let jarvisSystemPrompt =
@@ -563,67 +603,40 @@ module.exports = [
         }
     },
 
-    // 11. .friday — Toggle FRIDAY (voice-based)
+    // ─── REWRITTEN .friday TOGGLE ────────────────────────────────
     {
         name: 'friday',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const query = args ? args.toLowerCase().trim() : '';
+            if (!isOwner && !isSudo && !isDev) return;
 
-            const isAuthorized = isOwner || isSudo || isDev;
+            const action = args?.trim().toLowerCase() || '';
+            const isOn = action === 'on' || (!action && !config.fridayChats?.includes(jid));
 
-            // Power toggles
-            if (isAuthorized && (query === 'power on' || query === 'shutdown')) {
-                let statusText = "";
-                if (query === 'power on') {
-                    config.fridayActive = true;
-                    statusText = isDev
-                        ? "FRIDAY systems are now active. Iron Man combat suit fully online. Ready when you are, Mr. Isaac."
-                        : "FRIDAY systems online. Combat protocols active, Sir.";
-                } else {
-                    config.fridayActive = false;
-                    statusText = "Powering down Iron Man suit systems. Standing by on backup power, Sir.";
-                }
-
-                saveState();
-
-                const audioBuffer = await synthesizeFridayVoice(statusText);
-                if (audioBuffer) {
-                    return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-                } else {
-                    return await sock.sendMessage(jid, { text: `[Voice Fallback] ${statusText}` }, { quoted: msg });
-                }
+            if (isOn) {
+                config.fridayChats = [...new Set([...config.fridayChats, jid])];
+                config.lizzyChats = (config.lizzyChats || []).filter(c => c !== jid);
+                config.chatbotChats = (config.chatbotChats || []).filter(c => c !== jid);
+                await sock.sendMessage(jid, { text: "🤖 Chatbot is now *on*" }, { quoted: msg });
+            } else {
+                config.fridayChats = (config.fridayChats || []).filter(c => c !== jid);
+                await sock.sendMessage(jid, { text: "🤖 Chatbot is now *off*" }, { quoted: msg });
             }
-
-            // Standard query routing
-            if (!query) {
-                const defaultResponse = isDev
-                    ? "HUD systems online. Standing by for commands, Mr. Isaac."
-                    : "Combat parameters fully ready. Standing by, Sir.";
-                const audioBuffer = await synthesizeFridayVoice(defaultResponse);
-                return await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-            }
-
-            await commands[`${config.prefix}friday_chat`](sock, msg, args, { isOwner, isSudo, isDev });
+            saveState();
         }
     },
 
-    // 12. friday_chat (prefixless interceptor)
+    // ─── friday_chat (prefixless interceptor) ──────────────────
     {
         name: 'friday_chat',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
+            if (!config.fridayChats?.includes(jid)) return;
+
             const lowerQuery = args ? args.toLowerCase().trim() : '';
-
-            // Bypass if FRIDAY is off globally, or if it's a prefixed command
-            if (config.fridayActive === false || lowerQuery.startsWith(config.prefix)) {
-                return;
-            }
-
-            // Bypass if another chatbot (Lizzy or Jarvis) is toggled on in this chat
-            if (config.lizzyChats?.includes(jid) || config.chatbotChats?.includes(jid)) return;
+            if (lowerQuery.startsWith(config.prefix)) return;
 
             try {
                 let fridaySystemPrompt =
@@ -675,7 +688,7 @@ module.exports = [
         }
     },
 
-    // 13. .say — Text-to-Speech
+    // ─── .say — Text-to-Speech ──────────────────────────────────
     {
         name: 'say',
         isPrefixless: false,
@@ -711,6 +724,9 @@ module.exports = [
 const aliases = [];
 module.exports.forEach(cmd => {
     if (cmd.name === 'ai') aliases.push({ ...cmd, name: 'groq' });
-    if (cmd.name === 'chatbot') aliases.push({ ...cmd, name: 'jarvis' });
+    if (cmd.name === 'chatbot') {
+        aliases.push({ ...cmd, name: 'jarvis' });
+        aliases.push({ ...cmd, name: 'lizzy' }); // optional alias
+    }
 });
 module.exports.push(...aliases);
