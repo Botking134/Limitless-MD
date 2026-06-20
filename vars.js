@@ -24,6 +24,7 @@ const DEFAULT_VARS = {
     antipm: "off",
     lizzyChats: [],
     chatbotChats: [],
+    fridayChats: [],             // NEW: per-chat toggle for Friday
     gojoSleepChats: [],
     gojoGlobalSleep: false,
     antilink: {},
