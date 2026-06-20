@@ -715,13 +715,13 @@ module.exports = [
         const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delspam');
         if (!isAuthorized) return;
 
-        // Get target from mention/reply ONLY (ignore args for target)
+        // Get target from mention/reply ONLY
         const targetJid = parseTargetUser(msg, '');
         if (!targetJid) {
             return await sock.sendMessage(jid, { text: "❌ Please mention or reply to the target user." }, { quoted: msg });
         }
 
-        // Parse count from args (if any number is provided)
+        // Parse count from args
         let count = 10;
         if (args) {
             const parts = args.trim().split(/\s+/);
@@ -734,8 +734,21 @@ module.exports = [
             }
         }
 
-        // Fetch recent messages
-        const messages = await sock.loadMessages(jid, 50);
+        // Fetch recent messages – try multiple methods
+        let messages = [];
+        try {
+            if (typeof sock.loadMessages === 'function') {
+                messages = await sock.loadMessages(jid, 50);
+            } else if (typeof sock.getMessages === 'function') {
+                messages = await sock.getMessages(jid, 50);
+            } else {
+                throw new Error('No method to load messages available. Please update your Baileys version.');
+            }
+        } catch (fetchError) {
+            console.error('Failed to fetch messages:', fetchError.message);
+            return await sock.sendMessage(jid, { text: `❌ Failed to fetch messages: ${fetchError.message}` }, { quoted: msg });
+        }
+
         if (!messages || messages.length === 0) {
             return await sock.sendMessage(jid, { text: "❌ Could not fetch recent messages." }, { quoted: msg });
         }
