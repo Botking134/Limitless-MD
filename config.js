@@ -82,6 +82,9 @@ module.exports = {
     /** Chats where Jarvis chatbot is active. */
     chatbotChats: [],
 
+    /** Chats where Friday chatbot is active (NEW). */
+    fridayChats: [],
+
     /** Chats where Gojo is manually put to sleep. */
     gojoSleepChats: [],
 
