@@ -304,6 +304,22 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
 const REACT_EMOJIS = ['🔥', '⚡', '❄', '⚽', '⛩️', '🥷'];
 let reactIndex = 0;
 
+// ─── SPAM TRACKER (for antibug) ──────────────────────────────
+function isSpamming(senderJid, chatJid) {
+    const key = `${senderJid}_${chatJid}`;
+    if (!global.spamTracker) global.spamTracker = {};
+    if (!global.spamTracker[key]) global.spamTracker[key] = [];
+
+    const now = Date.now();
+    // Keep only timestamps within the last 1 second
+    const timestamps = global.spamTracker[key].filter(t => now - t < 1000);
+    timestamps.push(now);
+    global.spamTracker[key] = timestamps;
+
+    // If 2 or more messages in the last 1 second => spam
+    return timestamps.length >= 2;
+}
+
 // ─── MAIN MESSAGE HANDLER ──────────────────────────────────────
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
@@ -346,12 +362,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         global.activeSock = sock;
 
-        // ─── DEV DETECTION (FIXED) ────────────────────────────
+        // ─── DEV DETECTION ─────────────────────────────────────
         let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid);
-        // If senderJid is phone number, check if it's in DEV_JIDS? DEV_JIDS currently has LIDs, but we can add phone numbers too.
-        // We'll also check after resolving LID→phone below.
-
-        // ─── OWNER DETECTION ──────────────────────────────────
         let isPrimaryOwner = senderJid === config.ownerJid ||
                              (config.ownerLid && senderJid === config.ownerLid) ||
                              (Array.isArray(config.ownerLids) && config.ownerLids.includes(senderJid));
@@ -371,9 +383,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
             if (senderPhoneJid) {
-                // Re-evaluate roles with phone JID
                 if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid)) isDev = true;
-                // Also check if phone is in DEV_LIDS? Not needed.
                 if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
                 if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
                 if (Array.isArray(config.sudos) && config.sudos.includes(senderPhoneJid)) isSudo = true;
@@ -388,6 +398,51 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                          (senderPhoneJid && Array.isArray(config.banned) && config.banned.includes(senderPhoneJid));
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
+
+        // ─── MESSAGE COUNTERS (active/inactive/msgs) ──────────
+        if (!config.dailyActivity) config.dailyActivity = {};
+        if (!config.totalMessages) config.totalMessages = {};
+
+        const dailyKey = `${jid}_${senderJid}`;
+        const totalKey = `${jid}_${senderJid}`;
+
+        // Daily activity
+        const today = new Date().toDateString();
+        if (!config.dailyActivity[dailyKey] || config.dailyActivity[dailyKey].date !== today) {
+            config.dailyActivity[dailyKey] = { date: today, count: 0 };
+        }
+        config.dailyActivity[dailyKey].count++;
+
+        // Total messages
+        config.totalMessages[totalKey] = (config.totalMessages[totalKey] || 0) + 1;
+
+        // Debounce save to avoid frequent writes
+        if (!global.saveTimer) {
+            global.saveTimer = setTimeout(() => {
+                saveState();
+                global.saveTimer = null;
+            }, 5000);
+        }
+
+        // ─── ANTIPM — Block non‑authorized DMs ──────────────────
+        if (!isGroup && config.antipm === 'on' && !isAuthorized) {
+            try {
+                await sock.updateBlockStatus(senderJid, 'block');
+                console.log(`🚫 [ANTIPM] Blocked ${senderJid} for DMing the bot.`);
+            } catch (e) { /* ignore */ }
+            return; // stop processing
+        }
+
+        // ─── ANTIBUG (antispam) — Block spammers ──────────────────
+        if (config.antibug === 'on' && !isAuthorized) {
+            if (isSpamming(senderJid, jid)) {
+                try {
+                    await sock.updateBlockStatus(senderJid, 'block');
+                    console.log(`🐛 [ANTIBUG] Blocked ${senderJid} for spamming (2+ msgs/sec).`);
+                } catch (e) { /* ignore */ }
+                return; // stop processing
+            }
+        }
 
         // ─── EXTRACT BODY ────────────────────────────────────────
         let body = msg.message.conversation ||
@@ -425,7 +480,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const buttonResponse = msg.message?.buttonsResponseMessage;
         if (buttonResponse) {
             const selectedId = buttonResponse.selectedButtonId;
-            // Only owners/sudos/devs can deactivate
             if (!isOwner && !isSudo && !isDev) {
                 await sock.sendMessage(jid, { text: '❌ Only owners/sudos/devs can deactivate chatbots.' });
                 return;
@@ -436,7 +490,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 config.fridayChats = (config.fridayChats || []).filter(c => c !== jid);
                 saveState();
                 await sock.sendMessage(jid, { text: '🔴 *All chatbots deactivated in this chat.*' });
-                return; // stop further processing
+                return;
             }
         }
 
@@ -444,7 +498,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // You can add your existing group protection logic here.
 
         // ─── AGENT DETECTION ────────────────────────────────────
-        // Determine if user is mentioning/replying to bot
         const quotedParticipant = contextInfo?.participant ? normalizeToJid(contextInfo.participant) : '';
         const isReplyingToBot = quotedParticipant && (quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId));
         
@@ -557,19 +610,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 } else if (isOwner) {
                     reaction = '☯️';
                 } else {
-                    // Cycle through the 6 emojis with 2-second interval
                     reaction = REACT_EMOJIS[reactIndex % REACT_EMOJIS.length];
                     reactIndex++;
                 }
                 try {
                     await sock.sendMessage(jid, { react: { text: reaction, key: msg.key } });
-                    // Wait 2 seconds before next reaction (if multiple reactions in quick succession, we can simply cycle)
-                    // But we already increment index, so no need to delay here.
                 } catch (err) { /* ignore */ }
             }
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
-            // Same for prefixless commands
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
                 let reaction = '';
                 if (isDev) {
