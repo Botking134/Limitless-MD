@@ -443,15 +443,141 @@ module.exports = [
         }
     },
 
-    // 9. GCJID
-    {
-        name: 'gcjid',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            await sock.sendMessage(jid, { text: `🆔 *Group JID:* \`${jid}\`` }, { quoted: msg });
-        }
+    // ─── GCJID ──────────────────────────────────────────────────────
+{
+    name: 'gcjid',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        await sock.sendMessage(jid, { text: jid }, { quoted: msg });
     }
+}
+
+// ─── ACTIVE – List members who sent messages today ────────────
+{
+    name: 'active',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+        if (!isGroup) return;
+
+        const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'active');
+        if (!isAuthorized) return;
+
+        const groupMetadata = await sock.groupMetadata(jid);
+        const participants = groupMetadata.participants;
+
+        const today = new Date().toDateString();
+        let activeList = [];
+        let inactiveList = [];
+
+        for (const p of participants) {
+            const pJid = normalizeToJid(p.id);
+            const dailyKey = `${jid}_${pJid}`;
+            const dailyData = config.dailyActivity?.[dailyKey];
+            if (dailyData && dailyData.date === today && dailyData.count > 0) {
+                activeList.push(pJid);
+            } else {
+                inactiveList.push(pJid);
+            }
+        }
+
+        if (activeList.length === 0) {
+            return await sock.sendMessage(jid, { text: "📊 No active members today." }, { quoted: msg });
+        }
+
+        const activeMentions = activeList.map(j => `@${j.split('@')[0]}`).join(' ');
+        const inactiveCount = inactiveList.length;
+
+        await sock.sendMessage(jid, {
+            text: `📊 *Active Members Today:*\n\n${activeMentions}\n\n🔇 *Inactive:* ${inactiveCount} members`,
+            mentions: activeList
+        }, { quoted: msg });
+    }
+},
+
+// ─── INACTIVE – List members who haven't sent messages today ──
+{
+    name: 'inactive',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+        if (!isGroup) return;
+
+        const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'inactive');
+        if (!isAuthorized) return;
+
+        const groupMetadata = await sock.groupMetadata(jid);
+        const participants = groupMetadata.participants;
+
+        const today = new Date().toDateString();
+        let inactiveList = [];
+
+        for (const p of participants) {
+            const pJid = normalizeToJid(p.id);
+            const dailyKey = `${jid}_${pJid}`;
+            const dailyData = config.dailyActivity?.[dailyKey];
+            if (!dailyData || dailyData.date !== today || dailyData.count === 0) {
+                inactiveList.push(pJid);
+            }
+        }
+
+        if (inactiveList.length === 0) {
+            return await sock.sendMessage(jid, { text: "📊 Everyone has been active today!" }, { quoted: msg });
+        }
+
+        const inactiveMentions = inactiveList.map(j => `@${j.split('@')[0]}`).join(' ');
+
+        await sock.sendMessage(jid, {
+            text: `📊 *Inactive Members Today:*\n\n${inactiveMentions}`,
+            mentions: inactiveList
+        }, { quoted: msg });
+    }
+},
+
+// ─── MSGS – List members with total message counts ─────────────
+{
+    name: 'msgs',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+        if (!isGroup) return;
+
+        const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'msgs');
+        if (!isAuthorized) return;
+
+        const groupMetadata = await sock.groupMetadata(jid);
+        const participants = groupMetadata.participants;
+
+        let msgCounts = [];
+
+        for (const p of participants) {
+            const pJid = normalizeToJid(p.id);
+            const totalKey = `${jid}_${pJid}`;
+            const count = config.totalMessages?.[totalKey] || 0;
+            msgCounts.push({ jid: pJid, count });
+        }
+
+        // Sort descending by count
+        msgCounts.sort((a, b) => b.count - a.count);
+
+        let message = `📊 *Message Counts (All Time)*\n\n`;
+        for (const entry of msgCounts) {
+            const name = entry.jid.split('@')[0];
+            message += `• @${name} : \`${entry.count}\` messages\n`;
+        }
+
+        const mentions = msgCounts.map(e => e.jid);
+        await sock.sendMessage(jid, {
+            text: message,
+            mentions: mentions
+        }, { quoted: msg });
+    }
+}
+
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
