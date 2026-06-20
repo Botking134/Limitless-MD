@@ -592,7 +592,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── PERMISSION CHECKS ──────────────────────────────────
         // If not public and not authorized, deny
-        if (!isPublicMode && !isOwner && !isSudo) {
+        // EXCEPT: Allow chatbot interactions (gojo, lizzy, jarvis, friday) even in private mode
+        const isChatbotCommand = ['gojo', 'lizzy_chat', 'chatbot_chat', 'friday_chat'].includes(command);
+        if (!isPublicMode && !isOwner && !isSudo && !isChatbotCommand) {
             await sock.sendMessage(jid, { text: "🔒 Bot is in private mode. Only owners and sudos can use commands." });
             return;
         }
