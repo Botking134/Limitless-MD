@@ -734,46 +734,35 @@ module.exports = [
             }
         }
 
-        // Fetch recent messages – try multiple methods
-        let messages = [];
-        try {
-            if (typeof sock.loadMessages === 'function') {
-                messages = await sock.loadMessages(jid, 50);
-            } else if (typeof sock.getMessages === 'function') {
-                messages = await sock.getMessages(jid, 50);
-            } else {
-                throw new Error('No method to load messages available. Please update your Baileys version.');
-            }
-        } catch (fetchError) {
-            console.error('Failed to fetch messages:', fetchError.message);
-            return await sock.sendMessage(jid, { text: `❌ Failed to fetch messages: ${fetchError.message}` }, { quoted: msg });
-        }
+        // Get messages from global store for this chat and target sender
+        const store = global.messageStore || {};
+        const messages = Object.values(store)
+            .filter(m => {
+                const mJid = m.key.remoteJid;
+                const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
+                return mJid === jid && sender === targetJid;
+            })
+            .sort((a, b) => (a.messageTimestamp || 0) - (b.messageTimestamp || 0));
 
-        if (!messages || messages.length === 0) {
-            return await sock.sendMessage(jid, { text: "❌ Could not fetch recent messages." }, { quoted: msg });
-        }
-
-        // Filter messages from the target user
-        const targetMessages = messages.filter(m => {
-            const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
-            return sender === targetJid;
-        });
-
-        if (targetMessages.length === 0) {
+        if (messages.length === 0) {
             return await sock.sendMessage(jid, {
-                text: `❌ No recent messages found from @${targetJid.split('@')[0]}.`,
+                text: `❌ No recent messages found from @${targetJid.split('@')[0]} in the message store.`,
                 mentions: [targetJid]
             }, { quoted: msg });
         }
 
-        // Determine how many to delete
-        const toDelete = targetMessages.slice(0, Math.min(count, targetMessages.length));
+        // Determine how many to delete (most recent first)
+        const toDelete = messages.slice(-Math.min(count, messages.length));
 
         let deletedCount = 0;
         for (const msgToDelete of toDelete) {
             try {
                 await sock.sendMessage(jid, { delete: msgToDelete.key });
                 deletedCount++;
+                // Remove from store to avoid double deletion
+                if (global.messageStore && global.messageStore[msgToDelete.key.id]) {
+                    delete global.messageStore[msgToDelete.key.id];
+                }
                 await delay(300);
             } catch (e) { /* ignore */ }
         }
