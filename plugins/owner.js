@@ -10,7 +10,7 @@ const {
     addBan,
     removeBan
 } = require('../stateManager');
-const { setVar, loadVars, syncVarsToConfig } = require('../vars');
+const { setVar, loadVars, syncVarsToConfig, DEFAULT_VARS } = require('../vars');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -157,58 +157,57 @@ if (!global.reminderInterval) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // ─── DIAGNOSE (auto‑discovers all plugins) ─────────────────────
-{
-    name: 'diagnose',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner }) => {
-        const jid = msg.key.remoteJid;
-        if (!isOwner) return;
+    // ─── DIAGNOSE ────────────────────────────────────────────────
+    {
+        name: 'diagnose',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner) return;
 
-        const pluginsDir = path.join(__dirname, '..', 'plugins');
+            const pluginsDir = path.join(__dirname, '..', 'plugins');
 
-        // Recursively find all .js files in plugins/
-        function getFilesRecursive(dir) {
-            let results = [];
-            if (!fs.existsSync(dir)) return results;
-            const list = fs.readdirSync(dir);
-            for (const file of list) {
-                const filePath = path.join(dir, file);
-                const stat = fs.statSync(filePath);
-                if (stat && stat.isDirectory()) {
-                    results = results.concat(getFilesRecursive(filePath));
-                } else if (file.endsWith('.js')) {
-                    results.push(filePath);
+            function getFilesRecursive(dir) {
+                let results = [];
+                if (!fs.existsSync(dir)) return results;
+                const list = fs.readdirSync(dir);
+                for (const file of list) {
+                    const filePath = path.join(dir, file);
+                    const stat = fs.statSync(filePath);
+                    if (stat && stat.isDirectory()) {
+                        results = results.concat(getFilesRecursive(filePath));
+                    } else if (file.endsWith('.js')) {
+                        results.push(filePath);
+                    }
+                }
+                return results;
+            }
+
+            const allPluginFiles = getFilesRecursive(pluginsDir);
+            if (allPluginFiles.length === 0) {
+                return await sock.sendMessage(jid, { text: "⚠️ No plugin files found." }, { quoted: msg });
+            }
+
+            let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
+
+            for (const filePath of allPluginFiles) {
+                const relativePath = path.relative(pluginsDir, filePath);
+                const displayPath = `plugins/${relativePath}`;
+
+                try {
+                    delete require.cache[require.resolve(filePath)];
+                    require(filePath);
+                    report += `✅ *${displayPath}*:\n• Status: Loaded successfully!\n\n`;
+                } catch (err) {
+                    report += `❌ *${displayPath}*:\n• Status: Failed to load\n• Error: \`${err.message}\`\n\n`;
                 }
             }
-            return results;
+
+            await sock.sendMessage(jid, { text: report }, { quoted: msg });
         }
+    },
 
-        const allPluginFiles = getFilesRecursive(pluginsDir);
-        if (allPluginFiles.length === 0) {
-            return await sock.sendMessage(jid, { text: "⚠️ No plugin files found." }, { quoted: msg });
-        }
-
-        let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
-
-        for (const filePath of allPluginFiles) {
-            const relativePath = path.relative(pluginsDir, filePath);
-            const displayPath = `plugins/${relativePath}`;
-
-            try {
-                delete require.cache[require.resolve(filePath)];
-                require(filePath);
-                report += `✅ *${displayPath}*:\n• Status: Loaded successfully!\n\n`;
-            } catch (err) {
-                report += `❌ *${displayPath}*:\n• Status: Failed to load\n• Error: \`${err.message}\`\n\n`;
-            }
-        }
-
-        await sock.sendMessage(jid, { text: report }, { quoted: msg });
-    }
-}, 
-
-    // 2. UPDATE
+    // ─── UPDATE ──────────────────────────────────────────────────
     {
         name: 'update',
         isPrefixless: false,
@@ -339,7 +338,7 @@ module.exports = [
         }
     },
 
-    // 3. MODE (Public/Private)
+    // ─── MODE ────────────────────────────────────────────────────
     {
         name: 'mode',
         isPrefixless: false,
@@ -368,7 +367,7 @@ module.exports = [
         }
     },
 
-    // 4. SETSUDO
+    // ─── SETSUDO ─────────────────────────────────────────────────
     {
         name: 'setsudo',
         isPrefixless: false,
@@ -396,7 +395,7 @@ module.exports = [
         }
     },
 
-    // 5. DELSUDO
+    // ─── DELSUDO ─────────────────────────────────────────────────
     {
         name: 'delsudo',
         isPrefixless: false,
@@ -424,7 +423,7 @@ module.exports = [
         }
     },
 
-    // 6. ADDOWNER
+    // ─── ADDOWNER ────────────────────────────────────────────────
     {
         name: 'addowner',
         isPrefixless: false,
@@ -437,13 +436,11 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
             }
 
-            // Prevent adding Devs
             if (DEV_JIDS.includes(targetJid) || DEV_LIDS.includes(targetJid)) {
                 await sock.sendMessage(jid, { text: '❌ Cannot add a Developer as a secondary owner.' });
                 return;
             }
 
-            // Prevent adding Primary Owner
             if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
                 await sock.sendMessage(jid, { text: '❌ Cannot add the primary owner as a secondary owner.' });
                 return;
@@ -464,7 +461,7 @@ module.exports = [
         }
     },
 
-    // 7. DELOWNER
+    // ─── DELOWNER ────────────────────────────────────────────────
     {
         name: 'delowner',
         isPrefixless: false,
@@ -496,7 +493,7 @@ module.exports = [
         }
     },
 
-    // 8. RESTART
+    // ─── RESTART ─────────────────────────────────────────────────
     {
         name: 'restart',
         isPrefixless: false,
@@ -508,7 +505,7 @@ module.exports = [
         }
     },
 
-    // 9. SHUTDOWN
+    // ─── SHUTDOWN ────────────────────────────────────────────────
     {
         name: 'shutdown',
         isPrefixless: false,
@@ -520,7 +517,7 @@ module.exports = [
         }
     },
 
-    // 10. BAN
+    // ─── BAN ─────────────────────────────────────────────────────
     {
         name: 'ban',
         isPrefixless: false,
@@ -552,7 +549,7 @@ module.exports = [
         }
     },
 
-    // 11. UNBAN
+    // ─── UNBAN ───────────────────────────────────────────────────
     {
         name: 'unban',
         isPrefixless: false,
@@ -580,7 +577,7 @@ module.exports = [
         }
     },
 
-    // 12. AFK
+    // ─── AFK ─────────────────────────────────────────────────────
     {
         name: 'afk',
         isPrefixless: false,
@@ -611,7 +608,7 @@ module.exports = [
         }
     },
 
-    // 13. SETVAR
+    // ─── SETVAR ──────────────────────────────────────────────────
     {
         name: 'setvar',
         isPrefixless: false,
@@ -631,7 +628,6 @@ module.exports = [
 
             // ─── KEY MAPPING ──────────────────────────────────────
             const keyMapping = {
-                // Environment/Static (can be overridden via setvar)
                 bot_name: "botName",
                 owner_name: "ownerName",
                 owner_number: "ownerNumber",
@@ -639,8 +635,6 @@ module.exports = [
                 git_token: "githubToken",
                 groq_api_key: "groqApiKey",
                 gemini_api_key: "geminiApiKey",
-
-                // Dynamic (vars.json)
                 prefix: "prefix",
                 vvs: "vvs",
                 pack_name: "packName",
@@ -657,10 +651,8 @@ module.exports = [
                 }, { quoted: msg });
             }
 
-            // ─── SPECIAL HANDLING ────────────────────────────────
             let finalValue = valueStr;
 
-            // Boolean handling for isPublic (though it's managed via .mode, keeping for safety)
             if (mappedKey === 'isPublic') {
                 if (valueStr.toLowerCase() === 'true') finalValue = true;
                 else if (valueStr.toLowerCase() === 'false') finalValue = false;
@@ -669,7 +661,6 @@ module.exports = [
                 }
             }
 
-            // ─── MENU IMAGE: comma-separated URLs ──────────────
             if (mappedKey === 'menuImage') {
                 const urls = valueStr.split(',').map(u => u.trim()).filter(Boolean);
                 if (urls.length === 0) {
@@ -679,14 +670,12 @@ module.exports = [
             }
 
             // ─── SET THE VARIABLE ────────────────────────────────
-            // If it's a dynamic var (in vars.json), use setVar
             const dynamicKeys = ['prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode'];
             if (dynamicKeys.includes(mappedKey)) {
                 const success = setVar(mappedKey, finalValue);
                 if (!success) {
                     return await sock.sendMessage(jid, { text: `❌ Failed to save variable "${key}".` }, { quoted: msg });
                 }
-                // Reload commands if prefix changed
                 if (mappedKey === 'prefix') {
                     const commandsList = require('../commands');
                     commandsList.reload();
@@ -698,7 +687,6 @@ module.exports = [
                           `_Value has been persisted to vars.json and applied instantly._`
                 }, { quoted: msg });
             } else {
-                // Environment/static vars: update config directly
                 config[mappedKey] = finalValue;
                 console.log(`[SETVAR] Updated ${mappedKey} to ${finalValue} (in-memory only, restart will revert unless .env is updated manually)`);
                 await sock.sendMessage(jid, {
@@ -710,7 +698,7 @@ module.exports = [
         }
     },
 
-    // 14. SETTINGS
+    // ─── SETTINGS ────────────────────────────────────────────────
     {
         name: 'settings',
         isPrefixless: false,
@@ -763,7 +751,38 @@ module.exports = [
         }
     },
 
-    // 15. UPGRADE (Dev-only)
+    // ─── .vars – List all settable variables ──────────────────────
+    {
+        name: 'vars',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo && !isDev) {
+                return await sock.sendMessage(jid, { text: '❌ You are not authorized to view variables.' });
+            }
+
+            // Get all keys from DEFAULT_VARS and their current values from config
+            const keys = Object.keys(DEFAULT_VARS).sort();
+            let list = '📋 *Settable Variables (via .setvar)*\n\n';
+            for (const key of keys) {
+                const value = config[key] !== undefined ? config[key] : DEFAULT_VARS[key];
+                let display = typeof value === 'string' ? value : JSON.stringify(value);
+                if (display.length > 30) display = display.slice(0, 27) + '...';
+                list += `▪ *${key}* = \`${display}\`\n`;
+            }
+
+            if (list.length > 4096) {
+                const chunks = list.match(/.{1,4000}/g) || [];
+                for (const chunk of chunks) {
+                    await sock.sendMessage(jid, { text: chunk }, { quoted: msg });
+                }
+            } else {
+                await sock.sendMessage(jid, { text: list }, { quoted: msg });
+            }
+        }
+    },
+
+    // ─── UPGRADE ──────────────────────────────────────────────────
     {
         name: 'upgrade',
         isPrefixless: false,
@@ -856,7 +875,7 @@ module.exports = [
         }
     },
 
-    // 16. ANTIPM
+    // ─── ANTIPM ──────────────────────────────────────────────────
     {
         name: 'antipm',
         isPrefixless: false,
@@ -885,7 +904,7 @@ module.exports = [
         }
     },
 
-    // 17. REMINDER
+    // ─── REMINDER ─────────────────────────────────────────────────
     {
         name: 'reminder',
         isPrefixless: false,
@@ -932,7 +951,7 @@ module.exports = [
         }
     },
 
-    // 18. REMIND (List/Cancel)
+    // ─── REMIND ──────────────────────────────────────────────────
     {
         name: 'remind',
         isPrefixless: false,
@@ -1015,7 +1034,7 @@ module.exports = [
         }
     },
 
-    // 19. GAMES (List active games)
+    // ─── GAMES ───────────────────────────────────────────────────
     {
         name: 'games',
         isPrefixless: false,
@@ -1066,7 +1085,7 @@ module.exports = [
         }
     },
 
-    // 20. GAMES_CLOSEALL
+    // ─── GAMES_CLOSEALL ──────────────────────────────────────────
     {
         name: 'games_closeall',
         isPrefixless: false,
@@ -1074,7 +1093,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            // Clear all active game sessions
             global.gameSessions = {};
             global.vault8Sessions = {};
             global.vault8SavedStories = {};
@@ -1091,7 +1109,7 @@ module.exports = [
         }
     },
 
-    // 21. OWNER (List owners)
+    // ─── OWNER ───────────────────────────────────────────────────
     {
         name: 'owner',
         isPrefixless: false,
