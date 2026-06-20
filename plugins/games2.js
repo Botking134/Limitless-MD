@@ -823,6 +823,14 @@ module.exports = [
             const session = global.anagramSessions[sessionKey];
             if (!session) return;
 
+            // ─── REPLY GUARD ───
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+            if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) {
+                return; // Not a reply to the game prompt
+            }
+
             const isSingle = session.type === 'single';
             if (!isSingle) {
                 const activeTurnPlayer = session.players[session.turnIndex];
@@ -967,6 +975,14 @@ module.exports = [
             const session = global.wcgSessions[jid];
             if (!session || session.status !== 'playing') return;
 
+            // ─── REPLY GUARD ───
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+            if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) {
+                return; // Not a reply to the game prompt
+            }
+
             const activePlayer = session.players[session.turnIndex];
             if (activePlayer !== senderJid) return await sock.sendMessage(jid, { text: `⚠️ Wait your turn! Only @${activePlayer.split('@')[0]} is authorized to submit a word chain now.`, mentions: [activePlayer] }, { quoted: msg });
 
@@ -1068,6 +1084,14 @@ module.exports = [
             const session = global.torfSessions[sessionKey];
             if (!session) return;
 
+            // ─── REPLY GUARD ───
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+            if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) {
+                return; // Not a reply to the game prompt
+            }
+
             const userAns = args.trim().toLowerCase();
             const correct = session.correctAnswer;
 
@@ -1123,6 +1147,14 @@ module.exports = [
             const sessionKey = jid + '_' + senderJid;
             const session = global.millionaireSessions[sessionKey];
             if (!session) return;
+
+            // ─── REPLY GUARD ───
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+            if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) {
+                return; // Not a reply to the game prompt
+            }
 
             if (session.timerId) clearTimeout(session.timerId);
 
@@ -1332,6 +1364,14 @@ module.exports = [
             const sessionKey = jid + '_' + senderJid;
             const session = global.escapeSessions[sessionKey];
             if (!session) return;
+
+            // ─── REPLY GUARD ───
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+            if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) {
+                return; // Not a reply to the game prompt
+            }
 
             session.step++;
             await delay(1000);
