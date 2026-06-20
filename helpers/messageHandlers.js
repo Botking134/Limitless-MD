@@ -4,6 +4,7 @@ const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
+const { handleSongReply } = require('../plugins/dl');
 const fs = require('fs');
 const path = require('path');
 
@@ -184,7 +185,7 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
-    // 5. GAME SESSIONS (Vault8, Trivia, Charade, Anagram, WCG, Millionaire, TORF, PVP, Escape)
+    // 5. GAME SESSIONS (Vault8, Trivia, Charade, Anagram, WCG, Millionaire, TORF, PVP, Escape, Song)
     const gameSessions = [
         { name: 'vault8', obj: global.vault8Sessions },
         { name: 'trivia', obj: global.triviaSessions },
@@ -194,7 +195,8 @@ async function handleInteractiveSessions(sock, msg) {
         { name: 'millionaire', obj: global.millionaireSessions },
         { name: 'torf', obj: global.torfSessions },
         { name: 'pvp', obj: global.pvpSessions },
-        { name: 'escape', obj: global.escapeSessions }
+        { name: 'escape', obj: global.escapeSessions },
+        { name: 'song', obj: global.songSessions }
     ];
 
     for (const game of gameSessions) {
@@ -202,13 +204,14 @@ async function handleInteractiveSessions(sock, msg) {
             const session = game.obj[quotedMsgId];
             const userReply = text.trim();
 
-            // Process the reply – either call session.handle or a custom handler
-            if (typeof session.handle === 'function') {
+            // Process the reply
+            if (game.name === 'song') {
+                await handleSongReply(sock, msg, session, userReply);
+            } else if (typeof session.handle === 'function') {
                 await session.handle(sock, msg, session, userReply);
             } else if (typeof session.callback === 'function') {
                 await session.callback(sock, msg, session, userReply);
             } else {
-                // Fallback: try to call a handler from the game's module (you can import them here)
                 console.warn(`⚠️ No handler for game session type: ${game.name}`);
                 await sock.sendMessage(jid, { text: `❌ Game session error. Please try starting the game again.` });
             }
@@ -284,9 +287,6 @@ async function handleAfkDeactivation(sock, msg) {
     return false;
 }
 
-// ─── AFK MENTION HANDLER ──────────────────────────────────────
-// (unchanged – kept as is)
-
 // ─── SECURITY POLICY HELPER ────────────────────────────────────
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
     if (!policy || policy === 'off') return;
@@ -345,12 +345,10 @@ function isSpamming(senderJid, chatJid) {
     if (!global.spamTracker[key]) global.spamTracker[key] = [];
 
     const now = Date.now();
-    // Keep only timestamps within the last 1 second
     const timestamps = global.spamTracker[key].filter(t => now - t < 1000);
     timestamps.push(now);
     global.spamTracker[key] = timestamps;
 
-    // If 2 or more messages in the last 1 second => spam
     return timestamps.length >= 2;
 }
 
@@ -368,39 +366,33 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const isGroup = jid.endsWith('@g.us');
 
         // ─── HOOKS ──────────────────────────────────────────────
-        // 1. Note session
         const isNoteSaved = await handleNoteSession(sock, msg);
         if (isNoteSaved) return;
 
-        // 2. ViewOnce
         await handleViewOnce(sock, msg);
 
-        // 3. Interactive sessions
         const handled = await handleInteractiveSessions(sock, msg);
         if (handled) return;
 
-        // 4. Downloader interactive sessions
         const dlHandled = await handleDownloaderSessions(sock, msg);
         if (dlHandled) return;
 
-        // 5. AFK deactivation
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS & COMMAND PARSING ──────────────────
+        // ─── PERMISSIONS ──────────────────────────────────────
         let command;
         let args;
 
-        // ─── FIX: Dynamic JID & LID fallback resolution ────
         const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
         const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
 
         global.activeSock = sock;
 
-        // ─── DEV DETECTION (FIXED: includes PHONE JIDs) ──────
+        // ─── DEV DETECTION (FIXED) ──────────────────────────
         let isDev = DEV_LIDS.includes(senderJid) ||
                     DEV_JIDS.includes(senderJid) ||
                     DEV_PHONE_JIDS.includes(senderJid);
-                    
+
         let isPrimaryOwner = senderJid === config.ownerJid ||
                              (config.ownerLid && senderJid === config.ownerLid) ||
                              (Array.isArray(config.ownerLids) && config.ownerLids.includes(senderJid));
@@ -410,7 +402,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         let isSudo = (Array.isArray(config.sudos) && config.sudos.includes(senderJid)) ||
                      (Array.isArray(config.sudoLids) && config.sudoLids.includes(senderJid));
 
-        // ─── LID → PHONE JID RESOLUTION (for permissions) ──
+        // ─── LID → PHONE JID RESOLUTION ────────────────────
         let senderPhoneJid = '';
         if (senderJid.endsWith('@lid')) {
             if (global.lidCache?.[senderJid]) {
@@ -420,7 +412,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
             if (senderPhoneJid) {
-                // Re‑evaluate roles with phone JID
                 if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderPhoneJid)) isDev = true;
                 if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
                 if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
@@ -437,24 +428,20 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
 
-        // ─── MESSAGE COUNTERS (active/inactive/msgs) ──────────
+        // ─── MESSAGE COUNTERS ──────────────────────────────────
         if (!config.dailyActivity) config.dailyActivity = {};
         if (!config.totalMessages) config.totalMessages = {};
 
         const dailyKey = `${jid}_${senderJid}`;
         const totalKey = `${jid}_${senderJid}`;
 
-        // Daily activity
         const today = new Date().toDateString();
         if (!config.dailyActivity[dailyKey] || config.dailyActivity[dailyKey].date !== today) {
             config.dailyActivity[dailyKey] = { date: today, count: 0 };
         }
         config.dailyActivity[dailyKey].count++;
-
-        // Total messages
         config.totalMessages[totalKey] = (config.totalMessages[totalKey] || 0) + 1;
 
-        // Debounce save to avoid frequent writes
         if (!global.saveTimer) {
             global.saveTimer = setTimeout(() => {
                 saveState();
@@ -462,23 +449,23 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }, 5000);
         }
 
-        // ─── ANTIPM — Block non‑authorized DMs ──────────────────
+        // ─── ANTIPM ───────────────────────────────────────────────
         if (!isGroup && config.antipm === 'on' && !isAuthorized) {
             try {
                 await sock.updateBlockStatus(senderJid, 'block');
                 console.log(`🚫 [ANTIPM] Blocked ${senderJid} for DMing the bot.`);
             } catch (e) { /* ignore */ }
-            return; // stop processing
+            return;
         }
 
-        // ─── ANTIBUG (antispam) — Block spammers ──────────────────
+        // ─── ANTIBUG (antispam) ───────────────────────────────────
         if (config.antibug === 'on' && !isAuthorized) {
             if (isSpamming(senderJid, jid)) {
                 try {
                     await sock.updateBlockStatus(senderJid, 'block');
                     console.log(`🐛 [ANTIBUG] Blocked ${senderJid} for spamming (2+ msgs/sec).`);
                 } catch (e) { /* ignore */ }
-                return; // stop processing
+                return;
             }
         }
 
@@ -514,7 +501,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // ─── HANDLE BUTTON RESPONSES (Deactivate All) ──────────
+        // ─── HANDLE BUTTON RESPONSES ──────────────────────────
         const buttonResponse = msg.message?.buttonsResponseMessage;
         if (buttonResponse) {
             const selectedId = buttonResponse.selectedButtonId;
@@ -532,13 +519,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── GROUP SECURITY INTERCEPTORS (placeholder) ─────────
-        // You can add your existing group protection logic here.
-
         // ─── AGENT DETECTION ────────────────────────────────────
         const quotedParticipant = contextInfo?.participant ? normalizeToJid(contextInfo.participant) : '';
         const isReplyingToBot = quotedParticipant && (quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId));
-        
+
         const normalizedMentions = mentionedJids.map(m => normalizeToJid(m));
         const isMentioningBot = normalizedMentions.includes(botJid) || (botLid && normalizedMentions.includes(botLid));
 
@@ -549,12 +533,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         let identifiedAgent = null;
 
-        // 1. If replying to a bot message and we have stored agent context
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
-        }
-        // 2. If mentioned or replied to, detect by keyword or fallback to active agent
-        else if (isMentioningBot || isReplyingToBot) {
+        } else if (isMentioningBot || isReplyingToBot) {
             if (isFridayCalled && config.fridayChats?.includes(jid)) {
                 identifiedAgent = 'friday';
             } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
@@ -564,15 +545,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             } else if (isGojoCalled && !config.gojoGlobalSleep) {
                 identifiedAgent = 'gojo';
             } else {
-                // Fallback: use whichever chatbot is active in this chat (only one should be active)
                 if (config.lizzyChats?.includes(jid)) identifiedAgent = 'lizzy';
                 else if (config.chatbotChats?.includes(jid)) identifiedAgent = 'jarvis';
                 else if (config.fridayChats?.includes(jid)) identifiedAgent = 'friday';
                 else if (!config.gojoGlobalSleep) identifiedAgent = 'gojo';
             }
-        }
-        // 3. Standalone keyword triggers (no mention/reply)
-        else {
+        } else {
             if (isFridayCalled && config.fridayChats?.includes(jid)) {
                 identifiedAgent = 'friday';
             } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
@@ -629,8 +607,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const isPublicMode = config.isPublic ?? false;
 
         // ─── PERMISSION CHECKS ──────────────────────────────────
-        // If not public and not authorized, deny
-        // EXCEPT: Allow chatbot interactions (gojo, lizzy, jarvis, friday) even in private mode
         const isChatbotCommand = ['gojo', 'lizzy_chat', 'chatbot_chat', 'friday_chat'].includes(command);
         if (!isPublicMode && !isOwner && !isSudo && !isChatbotCommand) {
             await sock.sendMessage(jid, { text: "🔒 Bot is in private mode. Only owners and sudos can use commands." });
