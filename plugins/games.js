@@ -788,7 +788,7 @@ module.exports = [
                     `3. English 📚\n` +
                     `4. Biology 🧬\n` +
                     `5. General Knowledge 🧠\n` +
-                    `6. DC 🦇\n` +
+                    `6. DC 🏴\n` +
                     `7. Marvel 🟥\n` +
                     `8. All Sports ⚽\n\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -893,6 +893,14 @@ module.exports = [
             if (!session || session.status !== 'awaiting_category') return;
 
             if (session.type === 'multi' && session.player !== senderJid) return;
+
+            // ─── REPLY GUARD ───
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+            if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) {
+                return; // Not a reply to the game prompt
+            }
 
             const categoryChoice = args.trim().toLowerCase();
 
@@ -1052,6 +1060,14 @@ module.exports = [
 
             const session = global.charadeSessions[sessionKey];
             if (!session) return;
+
+            // ─── REPLY GUARD ───
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+            if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) {
+                return; // Not a reply to the game prompt
+            }
 
             const guess = args ? args.trim() : '';
             if (!guess) return;
