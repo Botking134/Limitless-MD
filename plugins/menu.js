@@ -484,27 +484,13 @@ module.exports = [
             // Show text menu (image + caption)
             await renderMenu(sock, msg);
 
-            // Send random audio from combined pool (7 files)
+            // Send random audio directly from URL (no fetch)
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
-            try {
-                const audioResponse = await fetch(randomAudio);
-                if (audioResponse.ok) {
-                    const arrayBuffer = await audioResponse.arrayBuffer();
-                    await sock.sendMessage(jid, {
-                        audio: Buffer.from(arrayBuffer),
-                        mimetype: "audio/mpeg",
-                        ptt: false
-                    });
-                } else {
-                    throw new Error();
-                }
-            } catch (audioErr) {
-                await sock.sendMessage(jid, {
-                    audio: { url: randomAudio },
-                    mimetype: "audio/mpeg",
-                    ptt: false
-                });
-            }
+            await sock.sendMessage(jid, {
+                audio: { url: randomAudio },
+                mimetype: "audio/mpeg",
+                ptt: false
+            });
         }
     },
 
@@ -518,25 +504,11 @@ module.exports = [
             await renderMenu(sock, msg);
 
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
-            try {
-                const audioResponse = await fetch(randomAudio);
-                if (audioResponse.ok) {
-                    const arrayBuffer = await audioResponse.arrayBuffer();
-                    await sock.sendMessage(jid, {
-                        audio: Buffer.from(arrayBuffer),
-                        mimetype: "audio/mpeg",
-                        ptt: false
-                    });
-                } else {
-                    throw new Error();
-                }
-            } catch (audioErr) {
-                await sock.sendMessage(jid, {
-                    audio: { url: randomAudio },
-                    mimetype: "audio/mpeg",
-                    ptt: false
-                });
-            }
+            await sock.sendMessage(jid, {
+                audio: { url: randomAudio },
+                mimetype: "audio/mpeg",
+                ptt: false
+            });
         }
     },
 
