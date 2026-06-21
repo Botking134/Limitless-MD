@@ -374,6 +374,28 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
+        // ─── QUIZ ANSWER INTERCEPTOR (NEW) ──────────────────────
+        const singleKey = jid + '_' + senderJid;
+        const multiKey = jid;
+        let activeQuizAnswerKey = '';
+
+        if (global.triviaSessions && global.triviaSessions[singleKey] && global.triviaSessions[singleKey].status === 'playing') {
+            activeQuizAnswerKey = singleKey;
+        } else if (global.triviaSessions && global.triviaSessions[multiKey] && global.triviaSessions[multiKey].status === 'playing') {
+            activeQuizAnswerKey = multiKey;
+        }
+
+        if (quotedMsgId && activeQuizAnswerKey && global.triviaSessions && global.triviaSessions[activeQuizAnswerKey]) {
+            const session = global.triviaSessions[activeQuizAnswerKey];
+            if (session.status === 'playing' && session.lastQuestionMsgId === quotedMsgId) {
+                const ans = trimmedMessage.toLowerCase().trim();
+                if (['a', 'b', 'c', 'd'].includes(ans)) {
+                    await commands[`${config.prefix}quiz_ans`](sock, msg, ans, { isOwner: false, isSudo: false, isDev: false, senderNumber });
+                    return;
+                }
+            }
+        }
+
         await handleAfkDeactivation(sock, msg);
 
         // ─── PERMISSIONS ──────────────────────────────────────────
@@ -506,7 +528,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (isDevMentioned && !msg.key.fromMe) {
             (async () => {
-                const reactionSequence = ["⚽", "🥷", "🪽", "🌪", "🧘‍"];
+                const reactionSequence = ["⚽", "🔥", "🪽", "❄", "🥷🏼"];
                 for (const emoji of reactionSequence) {
                     try {
                         await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
@@ -865,12 +887,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (commands[cmdKey]) {
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
+                try { await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
+                try { await sock.sendMessage(jid, { react: { text: "🔥", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         }
