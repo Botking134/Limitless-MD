@@ -529,7 +529,8 @@ module.exports = [
         }
     },
 
-    // 13. Telegram Stickers (interactive) - FIXED
+    
+// 13. Telegram Stickers (interactive) - FIXED (no token needed)
 {
     name: 'tgs',
     isPrefixless: false,
@@ -538,9 +539,9 @@ module.exports = [
         const url = args?.trim();
         if (!url) return await sock.sendMessage(jid, { text: "❌ Provide Telegram sticker pack URL.\nExample: `.tgs https://t.me/addstickers/doakesreactions`" }, { quoted: msg });
 
-        await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack..." }, { quoted: msg });
+        const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack..." }, { quoted: msg });
 
-        // Try multiple possible endpoints
+        // ─── TRY BOTH POSSIBLE ENDPOINTS ──────────────────────
         const endpoints = [
             'https://apis.davidcyril.name.ng/tools/telegram-sticker',
             'https://apis.davidcyril.name.ng/endpoints/tools/telegram-sticker'
@@ -548,34 +549,46 @@ module.exports = [
 
         let data = null;
         let usedEndpoint = null;
+
         for (const endpoint of endpoints) {
             try {
-                data = await downloadMedia(endpoint, { url });
-                if (data && data.status) {
+                console.log(`[TGS] Trying: ${endpoint}`);
+                const result = await downloadMedia(endpoint, { url }, 'GET');
+                if (result && result.status === true) {
+                    data = result;
                     usedEndpoint = endpoint;
+                    console.log(`[TGS] Success with: ${endpoint}`);
                     break;
                 }
             } catch (e) {
-                // continue to next endpoint
+                console.log(`[TGS] Failed: ${endpoint} - ${e.message}`);
             }
         }
 
         if (!data || !data.status) {
-            return await sock.sendMessage(jid, { 
-                text: "❌ Failed to fetch sticker pack. Please check the URL and try again.\n" +
-                      "Make sure the URL is a valid Telegram sticker pack link (e.g., https://t.me/addstickers/...)" 
-            }, { quoted: msg });
+            await sock.sendMessage(jid, { 
+                text: `❌ Failed to fetch sticker pack.\n\n` +
+                      `Make sure the URL is a valid Telegram sticker pack link.\n` +
+                      `Example: https://t.me/addstickers/doakesreactions\n\n` +
+                      `If the issue persists, the API might be temporarily down.`,
+                edit: statusMsg.key 
+            });
+            return;
         }
 
         const stickers = data?.result?.sticker || [];
-        if (stickers.length === 0) throw new Error('No stickers found');
+        if (stickers.length === 0) {
+            await sock.sendMessage(jid, { text: "❌ No stickers found in this pack.", edit: statusMsg.key });
+            return;
+        }
 
         if (stickers.length === 1) {
             try {
                 const buffer = await fetchBuffer(stickers[0].url);
                 await sock.sendMessage(jid, { sticker: buffer });
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed to download sticker: ${err.message}` });
+                await sock.sendMessage(jid, { text: `❌ Failed to download sticker: ${err.message}`, edit: statusMsg.key });
             }
             return;
         }
@@ -592,9 +605,9 @@ module.exports = [
         }
         list += `\n\n📌 Reply with number to download.`;
 
-        const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
-        global.tgsSessions[prompt.key.id] = { 
-            stickers, 
+        const prompt = await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
+        global.tgsSessions[prompt.key.id] = {
+            stickers,
             handle: handleTgsReply,
             timestamp: Date.now()
         };
