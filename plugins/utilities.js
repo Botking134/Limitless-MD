@@ -318,50 +318,81 @@ module.exports = [
         }
     },
 
-    // 7. GITCLONE (FIXED)
+    
+// 7. GITCLONE (FIXED - with permissions & error handling)
 {
     name: 'gitclone',
     isPrefixless: false,
-    execute: async (sock, msg, args) => {
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
         const jid = msg.key.remoteJid;
-        if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a public GitHub repository URL or shorthand. Example: `Botking134/Limitless.MD`" }, { quoted: msg });
+        
+        // ─── PERMISSION CHECK ──────────────────────────────
+        if (!isOwner && !isSudo && !isDev) {
+            return await sock.sendMessage(jid, { 
+                text: "❌ You are not authorized to use this command. Only owners, sudos, and devs can clone repositories." 
+            }, { quoted: msg });
+        }
+
+        if (!args) {
+            return await sock.sendMessage(jid, { 
+                text: "❌ Please provide a public GitHub repository URL or shorthand.\nExample: `Botking134/Limitless-MD`" 
+            }, { quoted: msg });
+        }
 
         let repoQuery = args.trim();
         let owner = "";
         let repo = "";
 
-        // Remove protocol and trailing slashes, and .git suffix
-        let cleaned = repoQuery
-            .replace(/^https?:\/\//i, '')
-            .replace(/^github\.com\//i, '')
-            .replace(/\.git$/i, '')
-            .replace(/\/+$/, '');
+        // ─── PARSE REPO ──────────────────────────────────────
+        try {
+            // Remove protocol, github.com/, trailing .git, and trailing slashes
+            let cleaned = repoQuery
+                .replace(/^https?:\/\//i, '')
+                .replace(/^github\.com\//i, '')
+                .replace(/\.git$/i, '')
+                .replace(/\/+$/, '');
 
-        // Split by '/' and take the last two parts (owner/repo)
-        const parts = cleaned.split('/');
-        if (parts.length >= 2) {
-            owner = parts[parts.length - 2].trim();
-            repo = parts[parts.length - 1].trim();
-        } else {
-            // If still not found, try regex fallback
-            const regex = /github\.com\/([^\/]+)\/([^\/]+)/i;
-            const match = repoQuery.match(regex);
-            if (match) {
-                owner = match[1];
-                repo = match[2].replace(/\.git$/i, '');
+            // Split by '/' and take the last two parts (owner/repo)
+            const parts = cleaned.split('/');
+            if (parts.length >= 2) {
+                owner = parts[parts.length - 2].trim();
+                repo = parts[parts.length - 1].trim();
+            } else {
+                // Fallback: try regex
+                const regex = /github\.com\/([^\/]+)\/([^\/]+)/i;
+                const match = repoQuery.match(regex);
+                if (match) {
+                    owner = match[1];
+                    repo = match[2].replace(/\.git$/i, '');
+                }
             }
+        } catch (parseErr) {
+            console.error("[GITCLONE] Parse error:", parseErr.message);
+            return await sock.sendMessage(jid, { 
+                text: "❌ Failed to parse repository URL. Please use format: `username/repo-name`" 
+            }, { quoted: msg });
         }
 
         if (!owner || !repo) {
-            return await sock.sendMessage(jid, { text: "❌ Invalid GitHub repository format. Use: `username/repo-name`" }, { quoted: msg });
+            return await sock.sendMessage(jid, { 
+                text: "❌ Invalid GitHub repository format. Use: `username/repo-name`\nExample: `Botking134/Limitless-MD`" 
+            }, { quoted: msg });
         }
 
-        const statusMsg = await sock.sendMessage(jid, { text: `📥 Fetching repository archive for *${owner}/${repo}...*` }, { quoted: msg });
+        const statusMsg = await sock.sendMessage(jid, { 
+            text: `📥 Fetching repository archive for *${owner}/${repo}...*` 
+        }, { quoted: msg });
 
         try {
             const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
+            console.log(`[GITCLONE] Fetching: ${zipUrl}`);
+            
             const res = await fetch(zipUrl);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) {
+                const errorText = await res.text();
+                console.error(`[GITCLONE] HTTP ${res.status}: ${errorText}`);
+                throw new Error(`GitHub API returned ${res.status} - Repository may be private or does not exist.`);
+            }
 
             const arrayBuffer = await res.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
@@ -372,14 +403,16 @@ module.exports = [
                 fileName: `${repo}-source.zip`,
                 caption: `📦 *REPOSITORY ARCHIVE READY* 📦\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
                          `• *Repository:* \`${owner}/${repo}\`\n` +
-                         `• *Branch:* \`Default\`\n\n` +
+                         `• *Branch:* \`Default\`\n` +
+                         `• *Size:* \`${(buffer.length / 1024 / 1024).toFixed(2)} MB\`\n\n` +
                          `_Downloaded directly from GitHub secure servers._ 🤞`
             }, { quoted: msg });
 
             try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
         } catch (err) {
+            console.error("[GITCLONE] Error:", err.message);
             await sock.sendMessage(jid, {
-                text: `❌ Failed to download archive. Make sure the repository is public and exists.`,
+                text: `❌ Failed to download repository: ${err.message}`,
                 edit: statusMsg.key
             });
         }
