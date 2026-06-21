@@ -660,7 +660,7 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         await sock.sendMessage(jid, { text: message }, { quoted: msg });
     }
 }, 
-    // ─── .runtime ──────────────────────────────────────────────────
+        // ─── .runtime ──────────────────────────────────────────────────
     {
         name: 'runtime',
         isPrefixless: false,
@@ -672,7 +672,6 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
             const dateStr = now.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
             const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
 
-            // Get RAM usage (if available)
             let ram = 'N/A';
             try {
                 const memoryUsage = process.memoryUsage();
@@ -680,6 +679,9 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
                 const total = (memoryUsage.heapTotal / 1024 / 1024).toFixed(1);
                 ram = `${used} MB / ${total} MB`;
             } catch (e) { /* ignore */ }
+
+            // Use sender's name or JID
+            const senderName = msg.pushName || normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
             const message =
 `⚡ *SYSTEM ONLINE*
@@ -689,7 +691,7 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
 ⏳ *Uptime:* ${uptime}
 💾 *RAM:* ${ram}
 🤖 *Bot:* Limitless-MD v1.0.0
-👑 *Owner:* Infinity
+👑 *Owner:* ${senderName}
 ────────────────────`;
 
             await sock.sendMessage(jid, { text: message }, { quoted: msg });
