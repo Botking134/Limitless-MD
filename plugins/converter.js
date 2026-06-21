@@ -57,6 +57,23 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("Catbox and qu.ax upload hosts failed.");
 }
 
+// ─── DOWNLOAD MEDIA HELPER (for API calls) ──────────────────────
+async function downloadMedia(apiUrl, params = {}, method = 'GET') {
+    try {
+        const response = await axios({
+            method,
+            url: apiUrl,
+            params: method === 'GET' ? params : undefined,
+            data: method === 'POST' ? params : undefined,
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return response.data;
+    } catch (err) {
+        throw new Error(`API error: ${err.response?.status || err.message}`);
+    }
+}
+
+// ─── LEGACY GEMINI HELPER (kept for other commands) ─────────────
 async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash", useSearch = true) {
     const apiKey = config.geminiApiKey;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
@@ -86,7 +103,7 @@ async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash", 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. TOURL / URL (Media to direct link)
+    // 1. TOURL / URL (via new upload API)
     {
         name: 'tourl',
         isPrefixless: false,
@@ -100,7 +117,7 @@ module.exports = [
 
             if (!mediaMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image, video, audio, or sticker to generate a link." }, { quoted: msg });
 
-            const statusMsg = await sock.sendMessage(jid, { text: "Uploading media to cloud... 🌐" }, { quoted: msg });
+            const statusMsg = await sock.sendMessage(jid, { text: "Uploading to cloud... 🌐" }, { quoted: msg });
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -108,10 +125,20 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const mimeType = mediaMessage.mimetype || "application/octet-stream";
-                const url = await uploadToCloud(buffer, mimeType);
+                // Use the new upload API
+                const form = new FormData();
+                const ext = mediaMessage.mimetype?.split('/')[1] || 'bin';
+                const filename = `file_${Date.now()}.${ext}`;
+                form.append('file', buffer, { filename, contentType: mediaMessage.mimetype });
 
-                await sock.sendMessage(jid, { text: `📦 *Limitless Direct URL* 🌐\n\nDirect Link: ${url}`, edit: statusMsg.key });
+                const response = await axios.post('https://apis.davidcyril.name.ng/uploader/catbox', form, {
+                    headers: { ...form.getHeaders() }
+                });
+
+                if (!response.data || !response.data.success) throw new Error(response.data?.message || 'Upload failed');
+
+                const url = response.data.url;
+                await sock.sendMessage(jid, { text: `📦 *Direct Link*: ${url}`, edit: statusMsg.key });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `❌ Upload failed: ${error.message}`, edit: statusMsg.key });
             }
@@ -213,25 +240,45 @@ module.exports = [
         }
     },
 
-    // 4. CURRENCY (Gemini Search)
+    // 4. CURRENCY (API-based)
     {
         name: 'currency',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .currency <amount> <source> to <target> (e.g. .currency 1000 naira to pounds)" }, { quoted: msg });
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Format: .currency <amount> <from> to <to>\nExample: .currency 100 USD to EUR" }, { quoted: msg });
 
+            // Parse args: e.g., "100 USD to EUR" or "100usd to eur"
+            const parts = args.trim().split(/\s+/);
+            let amount, from, to;
+            const toIndex = parts.indexOf('to');
+            if (toIndex > 1) {
+                amount = parseFloat(parts[0]);
+                from = parts[1].toUpperCase();
+                to = parts[toIndex + 1].toUpperCase();
+            } else {
+                // Fallback: try to parse with regex
+                const match = args.match(/([\d.]+)\s*([A-Za-z]{3})\s*to\s*([A-Za-z]{3})/i);
+                if (match) {
+                    amount = parseFloat(match[1]);
+                    from = match[2].toUpperCase();
+                    to = match[3].toUpperCase();
+                } else {
+                    return await sock.sendMessage(jid, { text: "❌ Invalid format. Use: .currency <amount> <from> to <to>" }, { quoted: msg });
+                }
+            }
+
+            if (isNaN(amount) || !from || !to) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid format. Use: .currency 100 USD to EUR" }, { quoted: msg });
+            }
+
+            await sock.sendMessage(jid, { text: `💱 Converting ${amount} ${from} to ${to}...` }, { quoted: msg });
             try {
-                await sock.sendMessage(jid, { text: "Calculating financial exchange rate... 💱" }, { quoted: msg });
-
-                const prompt = `You are a real-time financial converter. Perform a live Google Search to obtain the latest currency exchange rate for the following request: "${args}". ` +
-                               `Convert the amount precisely. Output the result in a clean, professional, and visually engaging card with appropriate country flags, the official currency codes (e.g. NGN, GBP, USD), ` +
-                               `the conversion formula, and a brief note about the live rate timestamp. Keep it highly organized. Do not add any conversational intro or filler.`;
-
-                const responseText = await queryGeminiText(prompt, args, "gemini-3.5-flash", true);
-                await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
-            } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Currency conversion failed." }, { quoted: msg });
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/tools/convert', { amount, from, to });
+                if (!data || !data.success) throw new Error(data?.message || 'API error');
+                await sock.sendMessage(jid, { text: data.result || 'Conversion failed' }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
         }
     },
