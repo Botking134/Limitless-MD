@@ -354,47 +354,82 @@ module.exports = [
         }
     },
 
-    // 7. FW (Forwarding)
-    {
-        name: 'fw',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isDev) return;
+    
+// 7. FW (Forwarding – Fixed)
+{
+    name: 'fw',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isDev }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner && !isDev) return;
 
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo ||
-                                rawMsg?.extendedTextMessage?.contextInfo ||
-                                rawMsg?.imageMessage?.contextInfo ||
-                                rawMsg?.videoMessage?.contextInfo ||
-                                rawMsg?.stickerMessage?.contextInfo ||
-                                rawMsg?.audioMessage?.contextInfo ||
-                                rawMsg?.documentMessage?.contextInfo;
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo ||
+                            rawMsg?.extendedTextMessage?.contextInfo ||
+                            rawMsg?.imageMessage?.contextInfo ||
+                            rawMsg?.videoMessage?.contextInfo ||
+                            rawMsg?.stickerMessage?.contextInfo ||
+                            rawMsg?.audioMessage?.contextInfo ||
+                            rawMsg?.documentMessage?.contextInfo;
 
-            if (contextInfo && contextInfo.stanzaId && !args) {
-                const prompt = await sock.sendMessage(jid, { text: "💬 Reply directly to this prompt with target country phone number JID." }, { quoted: msg });
-                global.forwardSessions[prompt.key.id] = {
-                    msgToForward: contextInfo.quotedMessage,
-                    originalMsgKey: contextInfo.stanzaId,
-                    originalParticipant: contextInfo.participant
-                };
-                return;
+        // ─── Mode 1: Direct forward with args (target JID) ──────────
+        if (args && !contextInfo?.stanzaId) {
+            const spaceIdx = args.indexOf(' ');
+            if (spaceIdx === -1) {
+                return await sock.sendMessage(jid, { text: "❌ Format: .fw <targetNumber> <text> or reply to a message and use .fw <targetNumber>" }, { quoted: msg });
             }
 
-            if (!contextInfo && args) {
-                const spaceIdx = args.indexOf(' ');
-                if (spaceIdx === -1) return;
+            const targetJid = args.slice(0, spaceIdx).replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+            const textToSend = args.slice(spaceIdx + 1).trim();
 
-                const targetJid = args.slice(0, spaceIdx).replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                const textToSend = args.slice(spaceIdx + 1).trim();
-
-                try {
-                    await sock.sendMessage(targetJid, { text: textToSend });
-                } catch (e) { /* ignore */ }
-                return;
+            try {
+                await sock.sendMessage(targetJid, { text: textToSend });
+                await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${e.message}` }, { quoted: msg });
             }
+            return;
         }
-    },
+
+        // ─── Mode 2: Reply to a message with .fw <targetNumber> ──────
+        if (contextInfo && contextInfo.stanzaId && args) {
+            const targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+            if (targetJid.length < 8) return await sock.sendMessage(jid, { text: "❌ Invalid target number." }, { quoted: msg });
+
+            try {
+                // Get the quoted message
+                const quotedMsg = contextInfo.quotedMessage;
+                if (!quotedMsg) return await sock.sendMessage(jid, { text: "❌ No quoted message found." }, { quoted: msg });
+
+                // Forward using Baileys' built-in forward
+                await sock.sendMessage(targetJid, { forward: quotedMsg });
+                await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Forward failed: ${e.message}` }, { quoted: msg });
+            }
+            return;
+        }
+
+        // ─── Mode 3: Interactive prompt (no args, reply to a message) ──
+        if (contextInfo && contextInfo.stanzaId && !args) {
+            const prompt = await sock.sendMessage(jid, {
+                text: "📤 *FORWARD WIZARD* 📤\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
+                      "Please reply directly to *this message* with the target phone number (e.g., 2348123456789)."
+            }, { quoted: msg });
+
+            global.forwardSessions[prompt.key.id] = {
+                msgToForward: contextInfo.quotedMessage,
+                originalMsgKey: contextInfo.stanzaId,
+                originalParticipant: contextInfo.participant
+            };
+            return;
+        }
+
+        // ─── Fallback ──────────────────────────────────────────────
+        await sock.sendMessage(jid, { text: "❌ Usage:\n• `.fw <targetNumber> <text>`\n• Reply to a message with `.fw <targetNumber>`\n• Reply to a message and use `.fw` (interactive)" }, { quoted: msg });
+    }
+}, 
+
 
     // 8. PRESENCE (Dashboard)
     {
