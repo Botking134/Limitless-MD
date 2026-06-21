@@ -1281,7 +1281,178 @@ module.exports = [
                 }
             }
         }
+    }, 
+
+// ─── GAYCHECK (like liedetector) ──────────────────────────────
+{
+    name: 'gaycheck',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo ||
+                            rawMsg?.extendedTextMessage?.contextInfo ||
+                            rawMsg?.imageMessage?.contextInfo ||
+                            rawMsg?.videoMessage?.contextInfo ||
+                            rawMsg?.stickerMessage?.contextInfo ||
+                            rawMsg?.audioMessage?.contextInfo ||
+                            rawMsg?.documentMessage?.contextInfo;
+
+        let targetJid = contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '';
+        const targetNum = targetJid.split('@')[0].split(':')[0];
+        targetJid = targetNum + (targetJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+
+        const loadingMsg = await sock.sendMessage(jid, { text: `🔍 Scanning @${targetNum}'s aura...`, mentions: [targetJid] }, { quoted: msg });
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const percentage = Math.floor(Math.random() * 101);
+        const isGay = percentage > 50;
+        const verdict = isGay
+            ? `🏳️‍🌈 *GAY DETECTED!* (${percentage}% certainty)`
+            : `🚫 *NOT GAY.* (${percentage}% certainty)`;
+
+        const messages = isGay
+            ? [
+                "The rainbow is strong with this one. 🌈",
+                "My six eyes have confirmed it. They're gay.",
+                "Not even Infinity can hide that much gay.",
+                "Domain Expansion: Gay Void. 💀",
+                "This one's been to the gay bar more than once."
+              ]
+            : [
+                "Safe. For now. 🚫",
+                "No gay detected here.",
+                "This one is straight as a ruler. Maybe.",
+                "Not gay. But the night is young.",
+                "My infinity sees no rainbow here."
+              ];
+
+        const randomMsg = messages[Math.floor(Math.random() * messages.length)];
+
+        await sock.sendMessage(jid, {
+            text: `🧬 *GAY DETECTOR* 🧬\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Subject:* @${targetNum}\n📊 *Verdict:* ${verdict}\n💬 *Gojo says:* "${randomMsg}"`,
+            edit: loadingMsg.key,
+            mentions: [targetJid]
+        });
     }
+},
+
+// ─── .GAY (Add user to gay list) ──────────────────────────────
+{
+    name: 'gay',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner && !isSudo && !isDev) return;
+
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo ||
+                            rawMsg?.extendedTextMessage?.contextInfo ||
+                            rawMsg?.imageMessage?.contextInfo ||
+                            rawMsg?.videoMessage?.contextInfo ||
+                            rawMsg?.stickerMessage?.contextInfo ||
+                            rawMsg?.audioMessage?.contextInfo ||
+                            rawMsg?.documentMessage?.contextInfo;
+
+        let targetJid = '';
+        let targetName = '';
+
+        // Try to get from mention
+        if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+            targetJid = normalizeToJid(contextInfo.mentionedJid[0]);
+        }
+        // Try to get from reply
+        else if (contextInfo?.participant) {
+            targetJid = normalizeToJid(contextInfo.participant);
+        }
+        // Try to get from args
+        else if (args) {
+            const cleanDigits = args.replace(/[^0-9]/g, '');
+            if (cleanDigits.length >= 7) {
+                targetJid = `${cleanDigits}@s.whatsapp.net`;
+            }
+        }
+
+        if (!targetJid) {
+            return await sock.sendMessage(jid, { text: "❌ Please mention or reply to a user." }, { quoted: msg });
+        }
+
+        // Get the user's name
+        try {
+            targetName = await sock.getName(targetJid) || targetJid.split('@')[0];
+        } catch (e) {
+            targetName = targetJid.split('@')[0];
+        }
+
+        if (!config.gayList) config.gayList = [];
+
+        // Check if already in list
+        const exists = config.gayList.some(entry => entry.lid.split('@')[0] === targetJid.split('@')[0]);
+        if (exists) {
+            return await sock.sendMessage(jid, { text: `⚠️ @${targetName} is already on the gay list.`, mentions: [targetJid] }, { quoted: msg });
+        }
+
+        config.gayList.push({ lid: targetJid, name: targetName });
+        saveState();
+
+        await sock.sendMessage(jid, {
+            text: `🏳️‍🌈 *GAY ADDED!* 🏳️‍🌈\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *User:* @${targetName}\n📌 *Status:* Added to the gay list.\n\n💀 *They will now be bullied.*`,
+            mentions: [targetJid]
+        }, { quoted: msg });
+    }
+},
+
+// ─── .ANTIGAY (Toggle on/off) ─────────────────────────────────
+{
+    name: 'antigay',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner && !isSudo && !isDev) return;
+
+        if (!config.antigay) config.antigay = {};
+
+        const action = args ? args.toLowerCase().trim() : '';
+
+        if (action === 'on') {
+            config.antigay[jid] = 'on';
+            saveState();
+            await sock.sendMessage(jid, { text: "🔒 *AntiGay activated!* Gay users will be bullied." }, { quoted: msg });
+        } else if (action === 'off') {
+            config.antigay[jid] = 'off';
+            saveState();
+            await sock.sendMessage(jid, { text: "🔓 *AntiGay deactivated.*" }, { quoted: msg });
+        } else {
+            const current = config.antigay[jid] || 'off';
+            await sock.sendMessage(jid, { text: `🛡️ *AntiGay Status:* \`${current.toUpperCase()}\`` }, { quoted: msg });
+        }
+    }
+},
+
+// ─── .GAYLIST (Show gay list) ──────────────────────────────────
+{
+    name: 'gaylist',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner && !isSudo && !isDev) return;
+
+        const list = config.gayList || [];
+        if (list.length === 0) {
+            return await sock.sendMessage(jid, { text: "📋 *Gay List is empty.*" }, { quoted: msg });
+        }
+
+        let text = `🏳️‍🌈 *GAY LIST* 🏳️‍🌈\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        list.forEach((entry, idx) => {
+            text += `${idx + 1}. @${entry.name} (${entry.lid.split('@')[0]})\n`;
+        });
+
+        const mentions = list.map(entry => entry.lid);
+        await sock.sendMessage(jid, { text, mentions }, { quoted: msg });
+    }
+}
+
+
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
