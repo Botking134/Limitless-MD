@@ -318,107 +318,100 @@ module.exports = [
         }
     },
 
-    
-// 7. GITCLONE (FIXED - with permissions & error handling)
-{
-    name: 'gitclone',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-        const jid = msg.key.remoteJid;
-        
-        // ─── PERMISSION CHECK ──────────────────────────────
-        if (!isOwner && !isSudo && !isDev) {
-            return await sock.sendMessage(jid, { 
-                text: "❌ You are not authorized to use this command. Only owners, sudos, and devs can clone repositories." 
-            }, { quoted: msg });
-        }
+    // 7. GITCLONE (FIXED)
+    {
+        name: 'gitclone',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
 
-        if (!args) {
-            return await sock.sendMessage(jid, { 
-                text: "❌ Please provide a public GitHub repository URL or shorthand.\nExample: `Botking134/Limitless-MD`" 
-            }, { quoted: msg });
-        }
+            if (!isOwner && !isSudo && !isDev) {
+                return await sock.sendMessage(jid, {
+                    text: "❌ You are not authorized to use this command. Only owners, sudos, and devs can clone repositories."
+                }, { quoted: msg });
+            }
 
-        let repoQuery = args.trim();
-        let owner = "";
-        let repo = "";
+            if (!args) {
+                return await sock.sendMessage(jid, {
+                    text: "❌ Please provide a public GitHub repository URL or shorthand.\nExample: `Botking134/Limitless-MD`"
+                }, { quoted: msg });
+            }
 
-        // ─── PARSE REPO ──────────────────────────────────────
-        try {
-            // Remove protocol, github.com/, trailing .git, and trailing slashes
-            let cleaned = repoQuery
-                .replace(/^https?:\/\//i, '')
-                .replace(/^github\.com\//i, '')
-                .replace(/\.git$/i, '')
-                .replace(/\/+$/, '');
+            let repoQuery = args.trim();
+            let owner = "";
+            let repo = "";
 
-            // Split by '/' and take the last two parts (owner/repo)
-            const parts = cleaned.split('/');
-            if (parts.length >= 2) {
-                owner = parts[parts.length - 2].trim();
-                repo = parts[parts.length - 1].trim();
-            } else {
-                // Fallback: try regex
-                const regex = /github\.com\/([^\/]+)\/([^\/]+)/i;
-                const match = repoQuery.match(regex);
-                if (match) {
-                    owner = match[1];
-                    repo = match[2].replace(/\.git$/i, '');
+            try {
+                let cleaned = repoQuery
+                    .replace(/^https?:\/\//i, '')
+                    .replace(/^github\.com\//i, '')
+                    .replace(/\.git$/i, '')
+                    .replace(/\/+$/, '');
+
+                const parts = cleaned.split('/');
+                if (parts.length >= 2) {
+                    owner = parts[parts.length - 2].trim();
+                    repo = parts[parts.length - 1].trim();
+                } else {
+                    const regex = /github\.com\/([^\/]+)\/([^\/]+)/i;
+                    const match = repoQuery.match(regex);
+                    if (match) {
+                        owner = match[1];
+                        repo = match[2].replace(/\.git$/i, '');
+                    }
                 }
-            }
-        } catch (parseErr) {
-            console.error("[GITCLONE] Parse error:", parseErr.message);
-            return await sock.sendMessage(jid, { 
-                text: "❌ Failed to parse repository URL. Please use format: `username/repo-name`" 
-            }, { quoted: msg });
-        }
-
-        if (!owner || !repo) {
-            return await sock.sendMessage(jid, { 
-                text: "❌ Invalid GitHub repository format. Use: `username/repo-name`\nExample: `Botking134/Limitless-MD`" 
-            }, { quoted: msg });
-        }
-
-        const statusMsg = await sock.sendMessage(jid, { 
-            text: `📥 Fetching repository archive for *${owner}/${repo}...*` 
-        }, { quoted: msg });
-
-        try {
-            const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
-            console.log(`[GITCLONE] Fetching: ${zipUrl}`);
-            
-            const res = await fetch(zipUrl);
-            if (!res.ok) {
-                const errorText = await res.text();
-                console.error(`[GITCLONE] HTTP ${res.status}: ${errorText}`);
-                throw new Error(`GitHub API returned ${res.status} - Repository may be private or does not exist.`);
+            } catch (parseErr) {
+                console.error("[GITCLONE] Parse error:", parseErr.message);
+                return await sock.sendMessage(jid, {
+                    text: "❌ Failed to parse repository URL. Please use format: `username/repo-name`"
+                }, { quoted: msg });
             }
 
-            const arrayBuffer = await res.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
+            if (!owner || !repo) {
+                return await sock.sendMessage(jid, {
+                    text: "❌ Invalid GitHub repository format. Use: `username/repo-name`\nExample: `Botking134/Limitless-MD`"
+                }, { quoted: msg });
+            }
 
-            await sock.sendMessage(jid, {
-                document: buffer,
-                mimetype: "application/zip",
-                fileName: `${repo}-source.zip`,
-                caption: `📦 *REPOSITORY ARCHIVE READY* 📦\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                         `• *Repository:* \`${owner}/${repo}\`\n` +
-                         `• *Branch:* \`Default\`\n` +
-                         `• *Size:* \`${(buffer.length / 1024 / 1024).toFixed(2)} MB\`\n\n` +
-                         `_Downloaded directly from GitHub secure servers._ 🤞`
+            const statusMsg = await sock.sendMessage(jid, {
+                text: `📥 Fetching repository archive for *${owner}/${repo}...*`
             }, { quoted: msg });
 
-            try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
-        } catch (err) {
-            console.error("[GITCLONE] Error:", err.message);
-            await sock.sendMessage(jid, {
-                text: `❌ Failed to download repository: ${err.message}`,
-                edit: statusMsg.key
-            });
-        }
-    }
-}, 
+            try {
+                const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
+                console.log(`[GITCLONE] Fetching: ${zipUrl}`);
 
+                const res = await fetch(zipUrl);
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    console.error(`[GITCLONE] HTTP ${res.status}: ${errorText}`);
+                    throw new Error(`GitHub API returned ${res.status} - Repository may be private or does not exist.`);
+                }
+
+                const arrayBuffer = await res.arrayBuffer();
+                const buffer = Buffer.from(arrayBuffer);
+
+                await sock.sendMessage(jid, {
+                    document: buffer,
+                    mimetype: "application/zip",
+                    fileName: `${repo}-source.zip`,
+                    caption: `📦 *REPOSITORY ARCHIVE READY* 📦\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                             `• *Repository:* \`${owner}/${repo}\`\n` +
+                             `• *Branch:* \`Default\`\n` +
+                             `• *Size:* \`${(buffer.length / 1024 / 1024).toFixed(2)} MB\`\n\n` +
+                             `_Downloaded directly from GitHub secure servers._ 🤞`
+                }, { quoted: msg });
+
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
+            } catch (err) {
+                console.error("[GITCLONE] Error:", err.message);
+                await sock.sendMessage(jid, {
+                    text: `❌ Failed to download repository: ${err.message}`,
+                    edit: statusMsg.key
+                });
+            }
+        }
+    },
 
     // 8. PING2 (different animation)
     {
@@ -576,6 +569,128 @@ module.exports = [
                 `🕒 *Saved:* \`${new Date(note.time).toLocaleString()}\``;
 
             await sock.sendMessage(jid, { text: noteCard }, { quoted: msg });
+        }
+    },
+
+    // ─── .sc / .repo / .script ──────────────────────────────────────
+    {
+        name: 'script',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            const images = [
+                "https://files.catbox.moe/gnp8q2.jpeg",
+                "https://files.catbox.moe/rmaqfn.jpeg"
+            ];
+            const randomImage = images[Math.floor(Math.random() * images.length)];
+
+            const messageText =
+`🤖 *Limitless-MD - AI Bot* 🤖
+
+I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My Creator *Infinity*
+
+{BOT INFORMATION}
+- *Creator* : Infinity
+- *Version* : 1.0.0
+- *Type* : Multi-Device (Baileys)
+- *Mode* : Public / Private
+- *Runtime* : ${formatUptime(process.uptime())}
+- *Commands* : 100+ Features
+
+© Limitless-MD 2026`;
+
+            await sock.sendMessage(jid, {
+                image: { url: randomImage },
+                caption: messageText,
+                buttons: [
+                    {
+                        buttonId: `${config.prefix}repo_zip`,
+                        buttonText: { displayText: '📦 Zip' },
+                        type: 1
+                    },
+                    {
+                        buttonId: `${config.prefix}repo_link`,
+                        buttonText: { displayText: '🔗 Repo' },
+                        type: 1
+                    }
+                ],
+                headerType: 1
+            }, { quoted: msg });
+        }
+    },
+
+    // ─── .sc alias ──────────────────────────────────────────────
+    {
+        name: 'sc',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const cmd = module.exports.find(c => c.name === 'script');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // ─── .repo alias ─────────────────────────────────────────────
+    {
+        name: 'repo',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const cmd = module.exports.find(c => c.name === 'script');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // ─── .uptime ──────────────────────────────────────────────────
+    {
+        name: 'uptime',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const uptime = formatUptime(process.uptime());
+            const boxWidth = uptime.length + 6; // ➢ + spaces + padding
+            const topLine = '╔' + '═'.repeat(boxWidth) + '╗';
+            const bottomLine = '╚' + '═'.repeat(boxWidth) + '╝';
+            const content = `║ ➢ ${uptime} ║`;
+            // Pad content to match box width
+            const paddedContent = `║ ➢ ${uptime} ${' '.repeat(boxWidth - uptime.length - 5)}║`;
+            const message = `${topLine}\n${paddedContent}\n${bottomLine}`;
+            await sock.sendMessage(jid, { text: message }, { quoted: msg });
+        }
+    },
+
+    // ─── .runtime ──────────────────────────────────────────────────
+    {
+        name: 'runtime',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const uptime = formatUptime(process.uptime());
+
+            const now = new Date();
+            const dateStr = now.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+            const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+
+            // Get RAM usage (if available)
+            let ram = 'N/A';
+            try {
+                const memoryUsage = process.memoryUsage();
+                const used = (memoryUsage.heapUsed / 1024 / 1024).toFixed(1);
+                const total = (memoryUsage.heapTotal / 1024 / 1024).toFixed(1);
+                ram = `${used} MB / ${total} MB`;
+            } catch (e) { /* ignore */ }
+
+            const message =
+`⚡ *SYSTEM ONLINE*
+────────────────────
+📅 *Date:* ${dateStr}
+⏰ *Time:* ${timeStr}
+⏳ *Uptime:* ${uptime}
+💾 *RAM:* ${ram}
+🤖 *Bot:* Limitless-MD v1.0.0
+👑 *Owner:* Infinity
+────────────────────`;
+
+            await sock.sendMessage(jid, { text: message }, { quoted: msg });
         }
     }
 ];
