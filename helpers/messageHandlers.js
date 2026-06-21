@@ -4,7 +4,12 @@ const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
-const { handleSongReply } = require('../plugins/dl');
+const {
+    handleSongReply,
+    handleTgsReply,
+    handleLyricsReply,
+    handleXvidReply
+} = require('../plugins/dl');
 const fs = require('fs');
 const path = require('path');
 
@@ -185,7 +190,7 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
-    // 5. GAME SESSIONS (Vault8, Trivia, Charade, Anagram, WCG, Millionaire, TORF, PVP, Escape, Song)
+    // 5. GAME SESSIONS (including new interactive ones)
     const gameSessions = [
         { name: 'vault8', obj: global.vault8Sessions },
         { name: 'trivia', obj: global.triviaSessions },
@@ -196,7 +201,10 @@ async function handleInteractiveSessions(sock, msg) {
         { name: 'torf', obj: global.torfSessions },
         { name: 'pvp', obj: global.pvpSessions },
         { name: 'escape', obj: global.escapeSessions },
-        { name: 'song', obj: global.songSessions }
+        { name: 'song', obj: global.songSessions },
+        { name: 'tgs', obj: global.tgsSessions },
+        { name: 'lyrics', obj: global.lyricsSessions },
+        { name: 'xvid', obj: global.xvidSessions }
     ];
 
     for (const game of gameSessions) {
@@ -204,16 +212,12 @@ async function handleInteractiveSessions(sock, msg) {
             const session = game.obj[quotedMsgId];
             const userReply = text.trim();
 
-            // Process the reply
-            if (game.name === 'song') {
-                await handleSongReply(sock, msg, session, userReply);
-            } else if (typeof session.handle === 'function') {
+            // Generic handler call
+            if (typeof session.handle === 'function') {
                 await session.handle(sock, msg, session, userReply);
-            } else if (typeof session.callback === 'function') {
-                await session.callback(sock, msg, session, userReply);
             } else {
-                console.warn(`⚠️ No handler for game session type: ${game.name}`);
-                await sock.sendMessage(jid, { text: `❌ Game session error. Please try starting the game again.` });
+                console.warn(`⚠️ No handler for session type: ${game.name}`);
+                await sock.sendMessage(jid, { text: `❌ Session error. Please try again.` });
             }
 
             delete game.obj[quotedMsgId];
@@ -388,7 +392,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         global.activeSock = sock;
 
-        // ─── DEV DETECTION (FIXED) ──────────────────────────
+        // ─── DEV DETECTION ─────────────────────────────────────
         let isDev = DEV_LIDS.includes(senderJid) ||
                     DEV_JIDS.includes(senderJid) ||
                     DEV_PHONE_JIDS.includes(senderJid);
