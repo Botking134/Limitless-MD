@@ -1,4 +1,7 @@
 // index.js
+
+require('./tools/converter.js') 
+
 require('dotenv').config();
 
 const { loadVars, syncVarsToConfig } = require('./vars');
