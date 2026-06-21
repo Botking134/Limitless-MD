@@ -744,7 +744,131 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
         }
+    }, 
+
+// ─── SHAZAM (supports URL + audio messages) ──────────────────────
+{
+    name: 'shazam',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        let audioUrl = args?.trim() || '';
+
+        // Helper to upload buffer (copied from tools.js)
+        async function uploadToCloud(buffer, mimeType) {
+            let ext = mimeType.split('/')[1] || 'bin';
+            ext = ext.split(';')[0].trim();
+            const filename = `file_${Date.now()}.${ext}`;
+
+            try {
+                const FormData = require('form-data');
+                const axios = require('axios');
+                const form = new FormData();
+                form.append('files[]', buffer, { filename, contentType: mimeType });
+                const response = await axios.post('https://qu.ax/upload.php', form, {
+                    headers: { ...form.getHeaders() }
+                });
+                if (response.data?.success && response.data.files?.[0]?.url) {
+                    return response.data.files[0].url.trim();
+                }
+            } catch (err) {
+                console.error("❌ [UPLOAD] qu.ax failed:", err.message);
+            }
+
+            try {
+                const FormData = require('form-data');
+                const axios = require('axios');
+                const form = new FormData();
+                form.append('reqtype', 'fileupload');
+                form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+                const response = await axios.post('https://catbox.moe/user/api.php', form, {
+                    headers: { ...form.getHeaders() }
+                });
+                if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
+                    return response.data.trim();
+                }
+            } catch (err) {
+                console.error("❌ [UPLOAD] catbox failed:", err.message);
+            }
+
+            throw new Error("Catbox and qu.ax upload hosts failed.");
+        }
+
+        // ─── 1. If no URL provided, check if replying to an audio message ───
+        if (!audioUrl) {
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            let audioBuffer = null;
+            let mimeType = null;
+
+            if (quoted) {
+                const rawContent = getRawMessage(quoted);
+                // Check for audio message (voice note or music)
+                const audioMsg = rawContent?.audioMessage || rawContent?.documentMessage?.mimetype?.startsWith('audio/') ? rawContent.documentMessage : null;
+                if (audioMsg) {
+                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                    const stream = await downloadContentFromMessage(audioMsg, 'audio');
+                    const chunks = [];
+                    for await (const chunk of stream) chunks.push(chunk);
+                    audioBuffer = Buffer.concat(chunks);
+                    mimeType = audioMsg.mimetype || 'audio/mpeg';
+                }
+            }
+
+            if (audioBuffer) {
+                try {
+                    await sock.sendMessage(jid, { text: "⏳ Uploading audio for Shazam..." }, { quoted: msg });
+                    audioUrl = await uploadToCloud(audioBuffer, mimeType);
+                } catch (uploadErr) {
+                    return await sock.sendMessage(jid, { text: `❌ Failed to upload audio: ${uploadErr.message}` }, { quoted: msg });
+                }
+            } else {
+                // Check if the quoted message contains a URL in text/caption
+                if (quoted) {
+                    const rawContent = getRawMessage(quoted);
+                    const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || rawContent?.videoMessage?.caption || '';
+                    const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
+                    if (urlMatch) audioUrl = urlMatch[1];
+                }
+            }
+        }
+
+        if (!audioUrl) {
+            return await sock.sendMessage(jid, {
+                text: "❌ Please provide an audio URL, reply to an audio message, or reply to a message containing a URL.\nExample: `.shazam https://example.com/song.mp3`"
+            }, { quoted: msg });
+        }
+
+        await sock.sendMessage(jid, { text: "🔍 Shazaming... 🎶" }, { quoted: msg });
+        try {
+            const data = await downloadMedia('https://apis.davidcyril.name.ng/shazam', { url: audioUrl });
+            if (!data || !data.success) {
+                throw new Error(data?.message || 'Shazam failed');
+            }
+            const result = data.result || data;
+            let responseText = `🎵 *Shazam Result*\n\n`;
+            responseText += `*Title:* ${result.title || 'Unknown'}\n`;
+            responseText += `*Artist:* ${result.artist || 'Unknown'}\n`;
+            if (result.album) responseText += `*Album:* ${result.album}\n`;
+            if (result.release_date) responseText += `*Released:* ${result.release_date}\n`;
+            if (result.genre) responseText += `*Genre:* ${result.genre}\n`;
+            if (result.cover) {
+                try {
+                    const thumbBuffer = await fetchBuffer(result.cover);
+                    await sock.sendMessage(jid, { image: thumbBuffer, caption: responseText });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: responseText });
+                }
+            } else {
+                await sock.sendMessage(jid, { text: responseText });
+            }
+        } catch (err) {
+            await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+        }
     }
+}
+
 ];
 
 // ─── EXPORT HANDLERS ─────────────────────────────────────────────
