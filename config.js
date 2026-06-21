@@ -25,7 +25,7 @@ module.exports = {
     groqApiKey: process.env.GROQ_API_KEY || "",
     githubToken: process.env.GITHUB_TOKEN || "",
     klipyApiKey: process.env.KLIPY_API_KEY || "",
-
+telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
 
     // ================================================================
     // ⚙️ 2. DYNAMIC BEHAVIOR VARS (loaded from vars.json)
