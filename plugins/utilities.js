@@ -318,65 +318,74 @@ module.exports = [
         }
     },
 
-    // 7. GITCLONE
-    {
-        name: 'gitclone',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a public GitHub repository URL or shorthand. Example: `Botking134/Limitless.MD`" }, { quoted: msg });
+    // 7. GITCLONE (FIXED)
+{
+    name: 'gitclone',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide a public GitHub repository URL or shorthand. Example: `Botking134/Limitless.MD`" }, { quoted: msg });
 
-            let repoQuery = args.trim();
-            let owner = "";
-            let repo = "";
+        let repoQuery = args.trim();
+        let owner = "";
+        let repo = "";
 
-            const regexFull = /github\.com\/([a-zA-Z0-9\-]+)\/([a-zA-Z0-9\-\._]+)/i;
-            const matchFull = repoQuery.match(regexFull);
+        // Remove protocol and trailing slashes, and .git suffix
+        let cleaned = repoQuery
+            .replace(/^https?:\/\//i, '')
+            .replace(/^github\.com\//i, '')
+            .replace(/\.git$/i, '')
+            .replace(/\/+$/, '');
 
-            if (matchFull) {
-                owner = matchFull[1];
-                repo = matchFull[2].replace(/\.git$/i, '');
-            } else {
-                const parts = repoQuery.split('/');
-                if (parts.length === 2) {
-                    owner = parts[0].trim();
-                    repo = parts[1].trim();
-                }
-            }
-
-            if (!owner || !repo) {
-                return await sock.sendMessage(jid, { text: "❌ Invalid GitHub repository format. Use: `username/repo-name`" }, { quoted: msg });
-            }
-
-            const statusMsg = await sock.sendMessage(jid, { text: `📥 Fetching repository archive for *${owner}/${repo}...*` }, { quoted: msg });
-
-            try {
-                const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
-                const res = await fetch(zipUrl);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-                const arrayBuffer = await res.arrayBuffer();
-                const buffer = Buffer.from(arrayBuffer);
-
-                await sock.sendMessage(jid, {
-                    document: buffer,
-                    mimetype: "application/zip",
-                    fileName: `${repo}-source.zip`,
-                    caption: `📦 *REPOSITORY ARCHIVE READY* 📦\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                             `• *Repository:* \`${owner}/${repo}\`\n` +
-                             `• *Branch:* \`Default\`\n\n` +
-                             `_Downloaded directly from GitHub secure servers._ 🤞`
-                }, { quoted: msg });
-
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
-            } catch (err) {
-                await sock.sendMessage(jid, {
-                    text: `❌ Failed to download archive. Make sure the repository is public and exists.`,
-                    edit: statusMsg.key
-                });
+        // Split by '/' and take the last two parts (owner/repo)
+        const parts = cleaned.split('/');
+        if (parts.length >= 2) {
+            owner = parts[parts.length - 2].trim();
+            repo = parts[parts.length - 1].trim();
+        } else {
+            // If still not found, try regex fallback
+            const regex = /github\.com\/([^\/]+)\/([^\/]+)/i;
+            const match = repoQuery.match(regex);
+            if (match) {
+                owner = match[1];
+                repo = match[2].replace(/\.git$/i, '');
             }
         }
-    },
+
+        if (!owner || !repo) {
+            return await sock.sendMessage(jid, { text: "❌ Invalid GitHub repository format. Use: `username/repo-name`" }, { quoted: msg });
+        }
+
+        const statusMsg = await sock.sendMessage(jid, { text: `📥 Fetching repository archive for *${owner}/${repo}...*` }, { quoted: msg });
+
+        try {
+            const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
+            const res = await fetch(zipUrl);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            const arrayBuffer = await res.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+
+            await sock.sendMessage(jid, {
+                document: buffer,
+                mimetype: "application/zip",
+                fileName: `${repo}-source.zip`,
+                caption: `📦 *REPOSITORY ARCHIVE READY* 📦\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                         `• *Repository:* \`${owner}/${repo}\`\n` +
+                         `• *Branch:* \`Default\`\n\n` +
+                         `_Downloaded directly from GitHub secure servers._ 🤞`
+            }, { quoted: msg });
+
+            try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
+        } catch (err) {
+            await sock.sendMessage(jid, {
+                text: `❌ Failed to download archive. Make sure the repository is public and exists.`,
+                edit: statusMsg.key
+            });
+        }
+    }
+}, 
+
 
     // 8. PING2 (different animation)
     {
