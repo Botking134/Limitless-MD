@@ -349,6 +349,31 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const dlHandled = await handleDownloaderSessions(sock, msg);
         if (dlHandled) return;
 
+        // ─── QUIZ CATEGORY SELECTION ────────────────────────────
+        const senderJidCat = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        const quizSingleKey = jid + '_' + senderJidCat;
+        const quizMultiKey = jid;
+        let activeQuizKey = '';
+
+        if (global.triviaSessions && global.triviaSessions[quizSingleKey] && global.triviaSessions[quizSingleKey].status === 'awaiting_category') {
+            activeQuizKey = quizSingleKey;
+        } else if (global.triviaSessions && global.triviaSessions[quizMultiKey] && global.triviaSessions[quizMultiKey].status === 'awaiting_category') {
+            activeQuizKey = quizMultiKey;
+        }
+
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+        const quotedMsgId = contextInfo?.stanzaId;
+        const trimmedMessage = (rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '').trim();
+
+        if (quotedMsgId && activeQuizKey && global.triviaSessions && global.triviaSessions[activeQuizKey]) {
+            const session = global.triviaSessions[activeQuizKey];
+            if (session.status === 'awaiting_category' && session.lastQuestionMsgId === quotedMsgId) {
+                await commands['quiz_cat'](sock, msg, trimmedMessage, { isOwner: false, isSudo: false, isDev: false, senderNumber });
+                return;
+            }
+        }
+
         await handleAfkDeactivation(sock, msg);
 
         // ─── PERMISSIONS ──────────────────────────────────────────
@@ -413,16 +438,13 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        const trimmedMessage = body.trim();
-        const lowerMessage = trimmedMessage.toLowerCase();
+        const trimmedMessageBody = body.trim();
+        const lowerMessage = trimmedMessageBody.toLowerCase();
 
         global.messageStore[msg.key.id] = msg;
         const storeKeys = Object.keys(global.messageStore);
         if (storeKeys.length > 1000) delete global.messageStore[storeKeys[0]];
 
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-        const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
         // ─── LID-SAFE SILENCE CHECK ──────────────────────────────
@@ -436,7 +458,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     shouldMute = true;
                 } else if (silenceData.type === 'message' && !isDev) {
                     const hasMedia = msg.message.imageMessage || msg.message.videoMessage || msg.message.audioMessage || msg.message.documentMessage;
-                    if (trimmedMessage || hasMedia) shouldMute = true;
+                    if (trimmedMessageBody || hasMedia) shouldMute = true;
                 }
 
                 if (shouldMute) {
@@ -452,12 +474,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const devLidsSet = new Set(DEV_LIDS);
         const devJidsSet = new Set(DEV_JIDS);
 
-        // Check if ANY developer is mentioned (by LID or phone JID)
         let isDevMentioned = false;
         for (const mention of mentionedJids) {
             const normalized = normalizeToJid(mention);
             const num = normalized.split('@')[0];
-            // Check if the numeric part matches any dev
             for (const dev of devLidsSet) {
                 if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
             }
@@ -469,8 +489,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (isDevMentioned) break;
         }
 
-        // Also check if any dev is tagged in the text (e.g., @123456)
-        const mentionMatches = trimmedMessage.match(/@([0-9]+)/g) || [];
+        const mentionMatches = trimmedMessageBody.match(/@([0-9]+)/g) || [];
         for (const match of mentionMatches) {
             const num = match.replace('@', '');
             for (const dev of devLidsSet) {
@@ -512,7 +531,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return;
         }
 
-        // ─── GROUP SECURITY INTERCEPTORS (existing) ─────────────
+        // ─── GROUP SECURITY INTERCEPTORS ─────────────────────────
         if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
             const antilinkPolicy = config.antilink?.[jid] || 'off';
             const hasLink = /(https?:\/\/)?(www\.)?(chat\.whatsapp\.com\/[a-zA-Z0-9]+|wa\.me\/[0-9]+)/i.test(body) || /https?:\/\/[^\s]+/i.test(body);
@@ -685,38 +704,38 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (identifiedAgent === 'gojo') {
             const isAsleep = config.gojoGlobalSleep;
-            if (isAsleep && !trimmedMessage.startsWith(config.prefix)) identifiedAgent = null;
+            if (isAsleep && !trimmedMessageBody.startsWith(config.prefix)) identifiedAgent = null;
         }
 
-        if (identifiedAgent && !trimmedMessage.startsWith(config.prefix)) {
+        if (identifiedAgent && !trimmedMessageBody.startsWith(config.prefix)) {
             if (identifiedAgent === 'gojo') {
                 command = 'gojo';
-                args = trimmedMessage;
+                args = trimmedMessageBody;
             } else if (identifiedAgent === 'lizzy') {
                 command = 'lizzy_chat';
-                args = trimmedMessage;
+                args = trimmedMessageBody;
             } else if (identifiedAgent === 'jarvis') {
                 command = 'chatbot_chat';
-                args = trimmedMessage;
+                args = trimmedMessageBody;
             } else if (identifiedAgent === 'friday') {
                 command = 'friday_chat';
-                args = trimmedMessage;
+                args = trimmedMessageBody;
             }
         }
 
         // ─── COMMAND EXTRACTION ──────────────────────────────────
         if (!command) {
-            if (trimmedMessage.startsWith(config.prefix)) {
-                const spaceIndex = trimmedMessage.indexOf(' ');
+            if (trimmedMessageBody.startsWith(config.prefix)) {
+                const spaceIndex = trimmedMessageBody.indexOf(' ');
                 if (spaceIndex === -1) {
-                    command = trimmedMessage.slice(config.prefix.length).toLowerCase();
+                    command = trimmedMessageBody.slice(config.prefix.length).toLowerCase();
                     args = '';
                 } else {
-                    command = trimmedMessage.slice(config.prefix.length, spaceIndex).toLowerCase();
-                    args = trimmedMessage.slice(spaceIndex + 1);
+                    command = trimmedMessageBody.slice(config.prefix.length, spaceIndex).toLowerCase();
+                    args = trimmedMessageBody.slice(spaceIndex + 1);
                 }
-            } else if (commands[trimmedMessage.toLowerCase()]) {
-                command = trimmedMessage.toLowerCase();
+            } else if (commands[trimmedMessageBody.toLowerCase()]) {
+                command = trimmedMessageBody.toLowerCase();
                 args = '';
             }
         }
