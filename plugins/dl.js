@@ -3,7 +3,7 @@ const config = require('../config');
 const { normalizeToJid, saveState } = require('../stateManager');
 const axios = require('axios');
 
-// ─── GLOBAL SESSIONS (initialized here) ────────────────────────
+// ─── GLOBAL SESSIONS ──────────────────────────────────────────────
 global.songSessions = global.songSessions || {};
 global.tgsSessions = global.tgsSessions || {};
 global.lyricsSessions = global.lyricsSessions || {};
@@ -147,8 +147,7 @@ async function handleLyricsReply(sock, msg, session, userReply) {
     const result = session.results[num - 1];
     const songUrl = result.url;
     try {
-        // Fetch lyrics from Genius URL (scraping or use another endpoint)
-        // For now, we'll send the URL and tell user to view it.
+        // For now, send the URL – you can implement scraping if needed
         await sock.sendMessage(jid, {
             text: `🎵 *${result.full_title}*\n\n📝 *Lyrics:* Please view at: ${songUrl}`
         });
@@ -164,17 +163,10 @@ async function handleXvidReply(sock, msg, session, userReply) {
         return await sock.sendMessage(jid, { text: `❌ Invalid selection. Please choose a number between 1 and ${session.results.length}.` });
     }
     const video = session.results[num - 1];
-    const videoUrl = video.url;
-    try {
-        // Use the same endpoint to get video download? The search API returns only metadata.
-        // We'll need to fetch the video from the URL (maybe use a different endpoint).
-        // For now, just send the URL.
-        await sock.sendMessage(jid, {
-            text: `🎥 *${video.title}*\n\n▶️ Watch at: ${videoUrl}`
-        });
-    } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
-    }
+    // For now, just send the URL – you can implement actual video download if needed
+    await sock.sendMessage(jid, {
+        text: `🎥 *${video.title}*\n\n▶️ Watch at: ${video.url}`
+    });
 }
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
@@ -497,7 +489,6 @@ module.exports = [
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 5 });
                 if (!data?.result) return await sock.sendMessage(jid, { text: "❌ No songs found." });
                 const song = data.result;
-                // For now, API returns single result; we'll show as one option.
                 let list = `🎵 *Song Found:*\n\n1. *${song.title}*\n`;
                 if (song.duration) list += `   ⏱️ ${song.duration}\n`;
                 list += `\n📌 Reply with **1** to download.`;
@@ -627,37 +618,7 @@ module.exports = [
         }
     },
 
-    // 16. GitClone (GitHub master zip)
-    {
-        name: 'gitclone',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            const repo = args?.trim();
-            if (!repo) return await sock.sendMessage(jid, { text: "❌ Provide GitHub repo (e.g., user/repo)." }, { quoted: msg });
-            const parts = repo.split('/');
-            if (parts.length !== 2) return await sock.sendMessage(jid, { text: "❌ Format: user/repo" });
-            const [owner, repoName] = parts;
-            await sock.sendMessage(jid, { text: "⏳ Fetching repository zip..." }, { quoted: msg });
-            try {
-                const apiUrl = `https://api.github.com/repos/${owner}/${repoName}/zipball`;
-                const response = await fetch(apiUrl);
-                if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
-                const arrayBuffer = await response.arrayBuffer();
-                const buffer = Buffer.from(arrayBuffer);
-                await sock.sendMessage(jid, {
-                    document: buffer,
-                    fileName: `${repoName}-master.zip`,
-                    mimetype: 'application/zip',
-                    caption: `📦 ${owner}/${repoName} master branch`
-                });
-            } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
-            }
-        }
-    },
-
-    // 17. Lyrics (interactive)
+    // 16. Lyrics (interactive)
     {
         name: 'lyrics',
         isPrefixless: false,
@@ -685,7 +646,7 @@ module.exports = [
         }
     },
 
-    // 18. Image Search (Pinterest)
+    // 17. Image Search (Pinterest)
     {
         name: 'img',
         isPrefixless: false,
@@ -694,7 +655,6 @@ module.exports = [
             const parts = args?.trim().split(' ') || [];
             let count = 1;
             let query = parts.join(' ');
-            // If first arg is a number, use as count
             const first = parts[0];
             if (first && !isNaN(first) && parseInt(first) > 0) {
                 count = Math.min(parseInt(first), 10);
@@ -718,7 +678,7 @@ module.exports = [
         }
     },
 
-    // 19. XVID (interactive)
+    // 18. XVID (interactive)
     {
         name: 'xvid',
         isPrefixless: false,
@@ -744,131 +704,128 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
         }
-    }, 
+    },
 
-// ─── SHAZAM (supports URL + audio messages) ──────────────────────
-{
-    name: 'shazam',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-        const jid = msg.key.remoteJid;
-        let audioUrl = args?.trim() || '';
+    // 19. Shazam (supports URL + audio messages)
+    {
+        name: 'shazam',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            let audioUrl = args?.trim() || '';
 
-        // Helper to upload buffer (copied from tools.js)
-        async function uploadToCloud(buffer, mimeType) {
-            let ext = mimeType.split('/')[1] || 'bin';
-            ext = ext.split(';')[0].trim();
-            const filename = `file_${Date.now()}.${ext}`;
+            // Helper to upload buffer
+            async function uploadToCloud(buffer, mimeType) {
+                let ext = mimeType.split('/')[1] || 'bin';
+                ext = ext.split(';')[0].trim();
+                const filename = `file_${Date.now()}.${ext}`;
 
-            try {
-                const FormData = require('form-data');
-                const axios = require('axios');
-                const form = new FormData();
-                form.append('files[]', buffer, { filename, contentType: mimeType });
-                const response = await axios.post('https://qu.ax/upload.php', form, {
-                    headers: { ...form.getHeaders() }
-                });
-                if (response.data?.success && response.data.files?.[0]?.url) {
-                    return response.data.files[0].url.trim();
-                }
-            } catch (err) {
-                console.error("❌ [UPLOAD] qu.ax failed:", err.message);
-            }
-
-            try {
-                const FormData = require('form-data');
-                const axios = require('axios');
-                const form = new FormData();
-                form.append('reqtype', 'fileupload');
-                form.append('fileToUpload', buffer, { filename, contentType: mimeType });
-                const response = await axios.post('https://catbox.moe/user/api.php', form, {
-                    headers: { ...form.getHeaders() }
-                });
-                if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
-                    return response.data.trim();
-                }
-            } catch (err) {
-                console.error("❌ [UPLOAD] catbox failed:", err.message);
-            }
-
-            throw new Error("Catbox and qu.ax upload hosts failed.");
-        }
-
-        // ─── 1. If no URL provided, check if replying to an audio message ───
-        if (!audioUrl) {
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-            let audioBuffer = null;
-            let mimeType = null;
-
-            if (quoted) {
-                const rawContent = getRawMessage(quoted);
-                // Check for audio message (voice note or music)
-                const audioMsg = rawContent?.audioMessage || rawContent?.documentMessage?.mimetype?.startsWith('audio/') ? rawContent.documentMessage : null;
-                if (audioMsg) {
-                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                    const stream = await downloadContentFromMessage(audioMsg, 'audio');
-                    const chunks = [];
-                    for await (const chunk of stream) chunks.push(chunk);
-                    audioBuffer = Buffer.concat(chunks);
-                    mimeType = audioMsg.mimetype || 'audio/mpeg';
-                }
-            }
-
-            if (audioBuffer) {
                 try {
-                    await sock.sendMessage(jid, { text: "⏳ Uploading audio for Shazam..." }, { quoted: msg });
-                    audioUrl = await uploadToCloud(audioBuffer, mimeType);
-                } catch (uploadErr) {
-                    return await sock.sendMessage(jid, { text: `❌ Failed to upload audio: ${uploadErr.message}` }, { quoted: msg });
+                    const FormData = require('form-data');
+                    const axios = require('axios');
+                    const form = new FormData();
+                    form.append('files[]', buffer, { filename, contentType: mimeType });
+                    const response = await axios.post('https://qu.ax/upload.php', form, {
+                        headers: { ...form.getHeaders() }
+                    });
+                    if (response.data?.success && response.data.files?.[0]?.url) {
+                        return response.data.files[0].url.trim();
+                    }
+                } catch (err) {
+                    console.error("❌ [UPLOAD] qu.ax failed:", err.message);
                 }
-            } else {
-                // Check if the quoted message contains a URL in text/caption
+
+                try {
+                    const FormData = require('form-data');
+                    const axios = require('axios');
+                    const form = new FormData();
+                    form.append('reqtype', 'fileupload');
+                    form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+                    const response = await axios.post('https://catbox.moe/user/api.php', form, {
+                        headers: { ...form.getHeaders() }
+                    });
+                    if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
+                        return response.data.trim();
+                    }
+                } catch (err) {
+                    console.error("❌ [UPLOAD] catbox failed:", err.message);
+                }
+
+                throw new Error("Catbox and qu.ax upload hosts failed.");
+            }
+
+            // ─── 1. If no URL provided, check if replying to an audio message ───
+            if (!audioUrl) {
+                const rawMsg = getRawMessage(msg.message);
+                const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+                const quoted = contextInfo?.quotedMessage;
+                let audioBuffer = null;
+                let mimeType = null;
+
                 if (quoted) {
                     const rawContent = getRawMessage(quoted);
-                    const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || rawContent?.videoMessage?.caption || '';
-                    const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
-                    if (urlMatch) audioUrl = urlMatch[1];
+                    const audioMsg = rawContent?.audioMessage || (rawContent?.documentMessage?.mimetype?.startsWith('audio/') ? rawContent.documentMessage : null);
+                    if (audioMsg) {
+                        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                        const stream = await downloadContentFromMessage(audioMsg, 'audio');
+                        const chunks = [];
+                        for await (const chunk of stream) chunks.push(chunk);
+                        audioBuffer = Buffer.concat(chunks);
+                        mimeType = audioMsg.mimetype || 'audio/mpeg';
+                    }
+                }
+
+                if (audioBuffer) {
+                    try {
+                        await sock.sendMessage(jid, { text: "⏳ Uploading audio for Shazam..." }, { quoted: msg });
+                        audioUrl = await uploadToCloud(audioBuffer, mimeType);
+                    } catch (uploadErr) {
+                        return await sock.sendMessage(jid, { text: `❌ Failed to upload audio: ${uploadErr.message}` }, { quoted: msg });
+                    }
+                } else {
+                    if (quoted) {
+                        const rawContent = getRawMessage(quoted);
+                        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || rawContent?.videoMessage?.caption || '';
+                        const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
+                        if (urlMatch) audioUrl = urlMatch[1];
+                    }
                 }
             }
-        }
 
-        if (!audioUrl) {
-            return await sock.sendMessage(jid, {
-                text: "❌ Please provide an audio URL, reply to an audio message, or reply to a message containing a URL.\nExample: `.shazam https://example.com/song.mp3`"
-            }, { quoted: msg });
-        }
-
-        await sock.sendMessage(jid, { text: "🔍 Shazaming... 🎶" }, { quoted: msg });
-        try {
-            const data = await downloadMedia('https://apis.davidcyril.name.ng/shazam', { url: audioUrl });
-            if (!data || !data.success) {
-                throw new Error(data?.message || 'Shazam failed');
+            if (!audioUrl) {
+                return await sock.sendMessage(jid, {
+                    text: "❌ Please provide an audio URL, reply to an audio message, or reply to a message containing a URL.\nExample: `.shazam https://example.com/song.mp3`"
+                }, { quoted: msg });
             }
-            const result = data.result || data;
-            let responseText = `🎵 *Shazam Result*\n\n`;
-            responseText += `*Title:* ${result.title || 'Unknown'}\n`;
-            responseText += `*Artist:* ${result.artist || 'Unknown'}\n`;
-            if (result.album) responseText += `*Album:* ${result.album}\n`;
-            if (result.release_date) responseText += `*Released:* ${result.release_date}\n`;
-            if (result.genre) responseText += `*Genre:* ${result.genre}\n`;
-            if (result.cover) {
-                try {
-                    const thumbBuffer = await fetchBuffer(result.cover);
-                    await sock.sendMessage(jid, { image: thumbBuffer, caption: responseText });
-                } catch (e) {
+
+            await sock.sendMessage(jid, { text: "🔍 Shazaming... 🎶" }, { quoted: msg });
+            try {
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/shazam', { url: audioUrl });
+                if (!data || !data.success) {
+                    throw new Error(data?.message || 'Shazam failed');
+                }
+                const result = data.result || data;
+                let responseText = `🎵 *Shazam Result*\n\n`;
+                responseText += `*Title:* ${result.title || 'Unknown'}\n`;
+                responseText += `*Artist:* ${result.artist || 'Unknown'}\n`;
+                if (result.album) responseText += `*Album:* ${result.album}\n`;
+                if (result.release_date) responseText += `*Released:* ${result.release_date}\n`;
+                if (result.genre) responseText += `*Genre:* ${result.genre}\n`;
+                if (result.cover) {
+                    try {
+                        const thumbBuffer = await fetchBuffer(result.cover);
+                        await sock.sendMessage(jid, { image: thumbBuffer, caption: responseText });
+                    } catch (e) {
+                        await sock.sendMessage(jid, { text: responseText });
+                    }
+                } else {
                     await sock.sendMessage(jid, { text: responseText });
                 }
-            } else {
-                await sock.sendMessage(jid, { text: responseText });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
-        } catch (err) {
-            await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
         }
     }
-}
-
 ];
 
 // ─── EXPORT HANDLERS ─────────────────────────────────────────────
