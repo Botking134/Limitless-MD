@@ -641,23 +641,25 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
     },
 
     // ─── .uptime ──────────────────────────────────────────────────
-    {
-        name: 'uptime',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const uptime = formatUptime(process.uptime());
-            const boxWidth = uptime.length + 6; // ➢ + spaces + padding
-            const topLine = '╔' + '═'.repeat(boxWidth) + '╗';
-            const bottomLine = '╚' + '═'.repeat(boxWidth) + '╝';
-            const content = `║ ➢ ${uptime} ║`;
-            // Pad content to match box width
-            const paddedContent = `║ ➢ ${uptime} ${' '.repeat(boxWidth - uptime.length - 5)}║`;
-            const message = `${topLine}\n${paddedContent}\n${bottomLine}`;
-            await sock.sendMessage(jid, { text: message }, { quoted: msg });
-        }
-    },
+{
+    name: 'uptime',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const uptime = formatUptime(process.uptime());
 
+        // Content with arrow and spaces
+        const content = ` ➢ ${uptime} `;
+        const width = content.length;
+
+        const topLine    = '╔' + '═'.repeat(width) + '╗';
+        const middleLine = '║' + content; // No right border
+        const bottomLine = '╚' + '═'.repeat(width) + '╝';
+
+        const message = `${topLine}\n${middleLine}\n${bottomLine}`;
+        await sock.sendMessage(jid, { text: message }, { quoted: msg });
+    }
+}, 
     // ─── .runtime ──────────────────────────────────────────────────
     {
         name: 'runtime',
