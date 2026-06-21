@@ -470,37 +470,41 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── DEV MENTION REACTION (LID-SAFE) ─────────────────────
+        // ─── DEV MENTION REACTION (LID-SAFE - Matches by numeric ID) ──
         const devLidsSet = new Set(DEV_LIDS);
         const devJidsSet = new Set(DEV_JIDS);
+        const devNums = new Set();
+
+        // Collect all dev numeric IDs
+        for (const dev of devLidsSet) {
+            devNums.add(dev.split('@')[0]);
+        }
+        for (const dev of devJidsSet) {
+            devNums.add(dev.split('@')[0]);
+        }
 
         let isDevMentioned = false;
+
+        // 1. Check mentionedJids (from contextInfo)
         for (const mention of mentionedJids) {
             const normalized = normalizeToJid(mention);
             const num = normalized.split('@')[0];
-            for (const dev of devLidsSet) {
-                if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
+            if (devNums.has(num)) {
+                isDevMentioned = true;
+                break;
             }
-            if (!isDevMentioned) {
-                for (const dev of devJidsSet) {
-                    if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
-                }
-            }
-            if (isDevMentioned) break;
         }
 
-        const mentionMatches = trimmedMessageBody.match(/@([0-9]+)/g) || [];
-        for (const match of mentionMatches) {
-            const num = match.replace('@', '');
-            for (const dev of devLidsSet) {
-                if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
-            }
-            if (!isDevMentioned) {
-                for (const dev of devJidsSet) {
-                    if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
+        // 2. Check text for @number patterns (fallback)
+        if (!isDevMentioned) {
+            const mentionMatches = trimmedMessageBody.match(/@([0-9]+)/g) || [];
+            for (const match of mentionMatches) {
+                const num = match.replace('@', '');
+                if (devNums.has(num)) {
+                    isDevMentioned = true;
+                    break;
                 }
             }
-            if (isDevMentioned) break;
         }
 
         if (isDevMentioned && !msg.key.fromMe) {
