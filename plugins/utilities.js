@@ -294,7 +294,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const { delay } = await import('@itsliaaa/baileys');
 
-            const emojis = ["⚡", "❄", "🤞"];
+            const emojis = ["5⃣", "4⃣", "3⃣", "2⃣", "1⃣", "🪽"];
             for (const emoji of emojis) {
                 try {
                     await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
