@@ -509,8 +509,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const buttonResponse = msg.message?.buttonsResponseMessage;
         if (buttonResponse) {
             const selectedId = buttonResponse.selectedButtonId;
+
+            // ─── Deactivate All (existing) ──────────────────────
             if (!isOwner && !isSudo && !isDev) {
-                await sock.sendMessage(jid, { text: '❌ Only owners/sudos/devs can deactivate chatbots.' });
+                await sock.sendMessage(jid, { text: '❌ Only owners/sudos/devs can use this.' });
                 return;
             }
             if (selectedId === 'deactivate_all') {
@@ -519,6 +521,32 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 config.fridayChats = (config.fridayChats || []).filter(c => c !== jid);
                 saveState();
                 await sock.sendMessage(jid, { text: '🔴 *All chatbots deactivated in this chat.*' });
+                return;
+            }
+
+            // ─── REPO / ZIP buttons (from .sc) ──────────────────
+            if (selectedId === `${config.prefix}repo_zip`) {
+                await sock.sendMessage(jid, { text: "⏳ Fetching bot ZIP file..." });
+                try {
+                    const zipUrl = 'https://github.com/Botking134/Limitless-MD/archive/refs/heads/master.zip';
+                    const response = await fetch(zipUrl);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const arrayBuffer = await response.arrayBuffer();
+                    const buffer = Buffer.from(arrayBuffer);
+                    await sock.sendMessage(jid, {
+                        document: buffer,
+                        fileName: 'Limitless-MD-master.zip',
+                        mimetype: 'application/zip',
+                        caption: '📦 *Limitless-MD Source Code*'
+                    });
+                } catch (err) {
+                    await sock.sendMessage(jid, { text: `❌ Failed to fetch ZIP: ${err.message}` });
+                }
+                return;
+            }
+
+            if (selectedId === `${config.prefix}repo_link`) {
+                await sock.sendMessage(jid, { text: "🔗 *GitHub Repository:*\nhttps://github.com/Botking134/Limitless-MD" });
                 return;
             }
         }
