@@ -529,39 +529,78 @@ module.exports = [
         }
     },
 
-    // 13. Telegram Stickers (interactive)
-    {
-        name: 'tgs',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Provide Telegram sticker pack URL." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack..." }, { quoted: msg });
+    // 13. Telegram Stickers (interactive) - FIXED
+{
+    name: 'tgs',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        const url = args?.trim();
+        if (!url) return await sock.sendMessage(jid, { text: "❌ Provide Telegram sticker pack URL.\nExample: `.tgs https://t.me/addstickers/doakesreactions`" }, { quoted: msg });
+
+        await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack..." }, { quoted: msg });
+
+        // Try multiple possible endpoints
+        const endpoints = [
+            'https://apis.davidcyril.name.ng/tools/telegram-sticker',
+            'https://apis.davidcyril.name.ng/endpoints/tools/telegram-sticker'
+        ];
+
+        let data = null;
+        let usedEndpoint = null;
+        for (const endpoint of endpoints) {
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/endpoints/tools/telegram-sticker', { url });
-                if (!data?.status) throw new Error(data?.message || 'API error');
-                const stickers = data?.result?.sticker || [];
-                if (stickers.length === 0) throw new Error('No stickers found');
-                if (stickers.length === 1) {
-                    const buffer = await fetchBuffer(stickers[0].url);
-                    await sock.sendMessage(jid, { sticker: buffer });
-                    return;
+                data = await downloadMedia(endpoint, { url });
+                if (data && data.status) {
+                    usedEndpoint = endpoint;
+                    break;
                 }
-                const maxShow = Math.min(stickers.length, 20);
-                let list = `📦 *${data.result.title || 'Stickers'}*\n\n`;
-                for (let i = 0; i < maxShow; i++) {
-                    list += `${i+1}. ${stickers[i].emoji || '📌'}\n`;
-                }
-                if (stickers.length > 20) list += `\n*Showing first 20 of ${stickers.length}*`;
-                list += `\n📌 Reply with number to download.`;
-                const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
-                global.tgsSessions[prompt.key.id] = { stickers, handle: handleTgsReply };
-            } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+            } catch (e) {
+                // continue to next endpoint
             }
         }
-    },
+
+        if (!data || !data.status) {
+            return await sock.sendMessage(jid, { 
+                text: "❌ Failed to fetch sticker pack. Please check the URL and try again.\n" +
+                      "Make sure the URL is a valid Telegram sticker pack link (e.g., https://t.me/addstickers/...)" 
+            }, { quoted: msg });
+        }
+
+        const stickers = data?.result?.sticker || [];
+        if (stickers.length === 0) throw new Error('No stickers found');
+
+        if (stickers.length === 1) {
+            try {
+                const buffer = await fetchBuffer(stickers[0].url);
+                await sock.sendMessage(jid, { sticker: buffer });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: `❌ Failed to download sticker: ${err.message}` });
+            }
+            return;
+        }
+
+        // Build selection list (max 20)
+        const maxShow = Math.min(stickers.length, 20);
+        let list = `📦 *${data.result.title || 'Stickers'}*\n\n`;
+        for (let i = 0; i < maxShow; i++) {
+            const sticker = stickers[i];
+            list += `${i+1}. ${sticker.emoji || '📌'} ${sticker.is_animated ? '🔄' : ''}\n`;
+        }
+        if (stickers.length > 20) {
+            list += `\n*Showing first 20 of ${stickers.length}*`;
+        }
+        list += `\n\n📌 Reply with number to download.`;
+
+        const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
+        global.tgsSessions[prompt.key.id] = { 
+            stickers, 
+            handle: handleTgsReply,
+            timestamp: Date.now()
+        };
+    }
+}, 
+
 
     // 14. APK
     {
