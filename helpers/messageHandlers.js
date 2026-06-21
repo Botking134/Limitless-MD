@@ -470,12 +470,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── DEV MENTION REACTION (LID-SAFE - Matches by numeric ID) ──
+        // ─── DEV MENTION REACTION ────────────────────────────────
         const devLidsSet = new Set(DEV_LIDS);
         const devJidsSet = new Set(DEV_JIDS);
         const devNums = new Set();
 
-        // Collect all dev numeric IDs
         for (const dev of devLidsSet) {
             devNums.add(dev.split('@')[0]);
         }
@@ -485,7 +484,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         let isDevMentioned = false;
 
-        // 1. Check mentionedJids (from contextInfo)
         for (const mention of mentionedJids) {
             const normalized = normalizeToJid(mention);
             const num = normalized.split('@')[0];
@@ -495,7 +493,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // 2. Check text for @number patterns (fallback)
         if (!isDevMentioned) {
             const mentionMatches = trimmedMessageBody.match(/@([0-9]+)/g) || [];
             for (const match of mentionMatches) {
@@ -519,6 +516,58 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
+        }
+
+        // ─── CHAT LOG RECORDING INTERCEPTOR (.gclog) ──────────────
+        if (isGroup && config.gclogActive?.[jid]) {
+            if (!config.conversationLogs) config.conversationLogs = {};
+            if (!config.conversationLogs[jid]) config.conversationLogs[jid] = [];
+
+            if (trimmedMessageBody && !trimmedMessageBody.startsWith(config.prefix)) {
+                const senderName = msg.pushName || senderNumber || 'Unknown';
+                config.conversationLogs[jid].push({
+                    sender: senderName,
+                    text: trimmedMessageBody,
+                    time: Date.now()
+                });
+
+                if (config.conversationLogs[jid].length > 1000) {
+                    config.conversationLogs[jid].shift();
+                }
+
+                saveState();
+            }
+
+            if (!global.gclogIntervals) global.gclogIntervals = {};
+            if (!global.gclogIntervals[jid]) {
+                global.gclogIntervals[jid] = setInterval(async () => {
+                    const logs = config.conversationLogs?.[jid] || [];
+                    if (logs.length === 0) return;
+
+                    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+                    const prompt = "Summarize this group conversation logs. You must output exactly 10 bullet points. Keep it concise and neutral. Do not include any intro, outro, or conversational filler.";
+
+                    try {
+                        const { GoogleGenAI } = await import('@google/genai');
+                        const apiKey = config.geminiApiKey;
+                        if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+                        const ai = new GoogleGenAI({ apiKey });
+                        const response = await ai.models.generateContent({
+                            model: "gemini-3.5-flash",
+                            contents: `${prompt}\n\nHere are the chat logs:\n${logString}`
+                        });
+                        const responseText = response.text || "Could not generate summary.";
+
+                        await sock.sendMessage(jid, { text: `📊 *LIMITLESS CONVERSATION SUMMARY (Last 3 Hours):*\n\n${responseText.trim()}` });
+                    } catch (err) {
+                        console.error("GCLOG summary error:", err.message);
+                    }
+
+                    if (config.conversationLogs) config.conversationLogs[jid] = [];
+                    saveState();
+                }, 3 * 60 * 60 * 1000);
+            }
         }
 
         // ─── STATUS BROADCAST ────────────────────────────────────
@@ -675,6 +724,35 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
+        // ─── ANTIGAY INTERCEPTOR ────────────────────────────────
+        const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
+        const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
+        const isGayCommand = gayCommands.includes(cleanCmd);
+
+        if (!isGayCommand && config.antigay?.[jid] === 'on' && config.gayList && config.gayList.length > 0) {
+            const senderNum = senderJid.split('@')[0];
+            const isGay = config.gayList.some(entry => entry.lid.split('@')[0] === senderNum);
+
+            if (isGay) {
+                const rudeMessages = [
+                    "Shut up, you gay fool. Don't tag my master.",
+                    "Back off, rainbow boy. You're not worthy.",
+                    "My Infinity rejects your gay energy. Stay away.",
+                    "You really think you can talk to my master? Gay. 💀",
+                    "Don't you have a boyfriend to annoy? Leave me alone.",
+                    "Master is busy. Go find your gay club.",
+                    "I'd say you're weak, but you're just... gay.",
+                    "You're not even worth my Six Eyes. Get lost.",
+                    "Master doesn't associate with gay peasants like you.",
+                    "Another gay trying to get attention. Blocked."
+                ];
+
+                const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
+                await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
+                return; // Stop processing this message
+            }
+        }
+
         // ─── AGENT DETECTION ──────────────────────────────────────
         const quotedParticipant = contextInfo?.participant;
         const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
@@ -754,11 +832,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         else global.activeAgentContext = null;
 
         const isPublicMode = config.isPublic ?? false;
-        const cleanCmd = command.startsWith(config.prefix) ? command.slice(config.prefix.length) : command;
+        const cleanCommand = command.startsWith(config.prefix) ? command.slice(config.prefix.length) : command;
 
         // ─── PERMISSION CHECKS ─────────────────────────────────────
-        const isOwnerCmd = ownerCommands.includes(cleanCmd);
-        const isDevOnlyCmd = devOnlyCommands.includes(cleanCmd);
+        const isOwnerCmd = ownerCommands.includes(cleanCommand);
+        const isDevOnlyCmd = devOnlyCommands.includes(cleanCommand);
 
         if (isOwnerCmd && isSudo && !isOwner && !isDev) {
             return;
