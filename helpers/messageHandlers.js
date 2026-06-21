@@ -1,15 +1,9 @@
 // helpers/messageHandlers.js
 const config = require('../config');
-const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../devs');
+const { DEV_LIDS, DEV_JIDS } = require('../devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
-const {
-    handleSongReply,
-    handleTgsReply,
-    handleLyricsReply,
-    handleXvidReply
-} = require('../plugins/dl');
 const fs = require('fs');
 const path = require('path');
 
@@ -85,7 +79,7 @@ async function handleInteractiveSessions(sock, msg) {
 
     const text = rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '';
 
-    // 1. AZA SESSION
+    // ─── 1. AZA SESSION ───────────────────────────────────────────
     if (global.azaSessions && global.azaSessions[quotedMsgId]) {
         const session = global.azaSessions[quotedMsgId];
         if (session.step === 1) {
@@ -133,7 +127,7 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
-    // 2. REMINDER SESSION
+    // ─── 2. REMINDER SESSION ──────────────────────────────────────
     if (global.reminderSessions && global.reminderSessions[quotedMsgId]) {
         const session = global.reminderSessions[quotedMsgId];
         const title = text.trim();
@@ -157,7 +151,7 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
-    // 3. CANCEL SESSION
+    // ─── 3. CANCEL SESSION ──────────────────────────────────────
     if (global.cancelSessions && global.cancelSessions[quotedMsgId]) {
         const num = parseInt(text.trim());
         if (isNaN(num)) {
@@ -177,7 +171,7 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
-    // 4. FORWARD SESSION
+    // ─── 4. FORWARD SESSION ──────────────────────────────────────
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
         const target = text.trim().replace(/[^0-9]/g, '');
         if (target.length < 7) {
@@ -185,50 +179,21 @@ async function handleInteractiveSessions(sock, msg) {
             return true;
         }
         const targetJid = `${target}@s.whatsapp.net`;
-        await sock.sendMessage(jid, { text: `✅ Forwarding to ${targetJid}...` });
-        delete global.forwardSessions[quotedMsgId];
-        return true;
-    }
-
-    // 5. GAME SESSIONS (including new interactive ones)
-    const gameSessions = [
-        { name: 'vault8', obj: global.vault8Sessions },
-        { name: 'trivia', obj: global.triviaSessions },
-        { name: 'charade', obj: global.charadeSessions },
-        { name: 'anagram', obj: global.anagramSessions },
-        { name: 'wcg', obj: global.wcgSessions },
-        { name: 'millionaire', obj: global.millionaireSessions },
-        { name: 'torf', obj: global.torfSessions },
-        { name: 'pvp', obj: global.pvpSessions },
-        { name: 'escape', obj: global.escapeSessions },
-        { name: 'song', obj: global.songSessions },
-        { name: 'tgs', obj: global.tgsSessions },
-        { name: 'lyrics', obj: global.lyricsSessions },
-        { name: 'xvid', obj: global.xvidSessions }
-    ];
-
-    for (const game of gameSessions) {
-        if (game.obj && game.obj[quotedMsgId]) {
-            const session = game.obj[quotedMsgId];
-            const userReply = text.trim();
-
-            // Generic handler call
-            if (typeof session.handle === 'function') {
-                await session.handle(sock, msg, session, userReply);
-            } else {
-                console.warn(`⚠️ No handler for session type: ${game.name}`);
-                await sock.sendMessage(jid, { text: `❌ Session error. Please try again.` });
-            }
-
-            delete game.obj[quotedMsgId];
-            return true;
+        const session = global.forwardSessions[quotedMsgId];
+        try {
+            await sock.sendMessage(targetJid, { forward: session.msgToForward });
+            await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` });
+            delete global.forwardSessions[quotedMsgId];
+        } catch (e) {
+            await sock.sendMessage(jid, { text: `❌ Forward failed: ${e.message}` });
         }
+        return true;
     }
 
     return false;
 }
 
-// ─── DOWNLOADER INTERACTIVE SESSIONS ──────────────────────────
+// ─── DOWNLOADER INTERACTIVE SESSIONS ────────────────────────────
 async function handleDownloaderSessions(sock, msg) {
     const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
     if (!senderJid) return false;
@@ -249,6 +214,11 @@ async function handleDownloaderSessions(sock, msg) {
             const jid = msg.key.remoteJid;
 
             try {
+                const axios = require('axios');
+                async function downloadBuffer(url) {
+                    const res = await axios({ url, method: 'GET', responseType: 'arraybuffer' });
+                    return Buffer.from(res.data);
+                }
                 if (session.type === 'song') {
                     const buffer = await downloadBuffer(item.download || item.url);
                     await sock.sendMessage(jid, {
@@ -261,7 +231,7 @@ async function handleDownloaderSessions(sock, msg) {
                     const buffer = await downloadBuffer(item.download || item.url);
                     await sock.sendMessage(jid, {
                         document: buffer,
-                        fileName: item.name + '.apk',
+                        fileName: (item.name || 'app') + '.apk',
                         mimetype: 'application/vnd.android.package-archive'
                     });
                 }
@@ -338,22 +308,20 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
     }
 }
 
-// ─── AUTO-REACT EMOJI CYCLE ────────────────────────────────────
-const REACT_EMOJIS = ['🔥', '⚡', '❄', '⚽', '⛩️', '🥷'];
-let reactIndex = 0;
+// ─── LID-SAFE SILENCE CHECK ─────────────────────────────────────
+function isUserSilenced(silencedUsers, jid, senderJid) {
+    if (!silencedUsers || !silencedUsers[jid]) return null;
 
-// ─── SPAM TRACKER (for antibug) ──────────────────────────────
-function isSpamming(senderJid, chatJid) {
-    const key = `${senderJid}_${chatJid}`;
-    if (!global.spamTracker) global.spamTracker = {};
-    if (!global.spamTracker[key]) global.spamTracker[key] = [];
+    const silencedEntries = silencedUsers[jid];
+    const senderNum = senderJid.split('@')[0];
 
-    const now = Date.now();
-    const timestamps = global.spamTracker[key].filter(t => now - t < 1000);
-    timestamps.push(now);
-    global.spamTracker[key] = timestamps;
-
-    return timestamps.length >= 2;
+    for (const [key, data] of Object.entries(silencedEntries)) {
+        const keyNum = key.split('@')[0];
+        if (keyNum === senderNum) {
+            return data;
+        }
+    }
+    return null;
 }
 
 // ─── MAIN MESSAGE HANDLER ──────────────────────────────────────
@@ -383,30 +351,24 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS ──────────────────────────────────────
+        // ─── PERMISSIONS ──────────────────────────────────────────
         let command;
         let args;
 
-        const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-        const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
+        const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
+        const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
 
         global.activeSock = sock;
 
-        // ─── DEV DETECTION ─────────────────────────────────────
-        let isDev = DEV_LIDS.includes(senderJid) ||
-                    DEV_JIDS.includes(senderJid) ||
-                    DEV_PHONE_JIDS.includes(senderJid);
-
+        let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid);
         let isPrimaryOwner = senderJid === config.ownerJid ||
-                             (config.ownerLid && senderJid === config.ownerLid) ||
-                             (Array.isArray(config.ownerLids) && config.ownerLids.includes(senderJid));
+                             (config.ownerLid && senderJid === config.ownerLid);
         let isSecondaryOwner = Array.isArray(config.secondaryOwners) &&
                                config.secondaryOwners.includes(senderJid);
         let isOwner = isDev || isPrimaryOwner || isSecondaryOwner || msg.key.fromMe;
         let isSudo = (Array.isArray(config.sudos) && config.sudos.includes(senderJid)) ||
                      (Array.isArray(config.sudoLids) && config.sudoLids.includes(senderJid));
 
-        // ─── LID → PHONE JID RESOLUTION ────────────────────
         let senderPhoneJid = '';
         if (senderJid.endsWith('@lid')) {
             if (global.lidCache?.[senderJid]) {
@@ -416,7 +378,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 senderPhoneJid = await getPhoneJid(sock, senderJid, jid);
             }
             if (senderPhoneJid) {
-                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderPhoneJid)) isDev = true;
+                if (DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid)) isDev = true;
                 if (senderPhoneJid === config.ownerJid) isPrimaryOwner = true;
                 if (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderPhoneJid)) isSecondaryOwner = true;
                 if (Array.isArray(config.sudos) && config.sudos.includes(senderPhoneJid)) isSudo = true;
@@ -426,52 +388,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const isAuthorized = isOwner || isSudo;
 
-        // ─── BAN CHECK ────────────────────────────────────────────
         const isBanned = (Array.isArray(config.banned) && config.banned.includes(senderJid)) ||
                          (senderPhoneJid && Array.isArray(config.banned) && config.banned.includes(senderPhoneJid));
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
-
-        // ─── MESSAGE COUNTERS ──────────────────────────────────
-        if (!config.dailyActivity) config.dailyActivity = {};
-        if (!config.totalMessages) config.totalMessages = {};
-
-        const dailyKey = `${jid}_${senderJid}`;
-        const totalKey = `${jid}_${senderJid}`;
-
-        const today = new Date().toDateString();
-        if (!config.dailyActivity[dailyKey] || config.dailyActivity[dailyKey].date !== today) {
-            config.dailyActivity[dailyKey] = { date: today, count: 0 };
-        }
-        config.dailyActivity[dailyKey].count++;
-        config.totalMessages[totalKey] = (config.totalMessages[totalKey] || 0) + 1;
-
-        if (!global.saveTimer) {
-            global.saveTimer = setTimeout(() => {
-                saveState();
-                global.saveTimer = null;
-            }, 5000);
-        }
-
-        // ─── ANTIPM ───────────────────────────────────────────────
-        if (!isGroup && config.antipm === 'on' && !isAuthorized) {
-            try {
-                await sock.updateBlockStatus(senderJid, 'block');
-                console.log(`🚫 [ANTIPM] Blocked ${senderJid} for DMing the bot.`);
-            } catch (e) { /* ignore */ }
-            return;
-        }
-
-        // ─── ANTIBUG (antispam) ───────────────────────────────────
-        if (config.antibug === 'on' && !isAuthorized) {
-            if (isSpamming(senderJid, jid)) {
-                try {
-                    await sock.updateBlockStatus(senderJid, 'block');
-                    console.log(`🐛 [ANTIBUG] Blocked ${senderJid} for spamming (2+ msgs/sec).`);
-                } catch (e) { /* ignore */ }
-                return;
-            }
-        }
 
         // ─── EXTRACT BODY ────────────────────────────────────────
         let body = msg.message.conversation ||
@@ -505,58 +425,237 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quotedMsgId = contextInfo?.stanzaId;
         const mentionedJids = contextInfo?.mentionedJid || [];
 
-        // ─── HANDLE BUTTON RESPONSES ──────────────────────────
-        const buttonResponse = msg.message?.buttonsResponseMessage;
-        if (buttonResponse) {
-            const selectedId = buttonResponse.selectedButtonId;
-
-            // ─── Deactivate All (existing) ──────────────────────
-            if (!isOwner && !isSudo && !isDev) {
-                await sock.sendMessage(jid, { text: '❌ Only owners/sudos/devs can use this.' });
-                return;
-            }
-            if (selectedId === 'deactivate_all') {
-                config.lizzyChats = (config.lizzyChats || []).filter(c => c !== jid);
-                config.chatbotChats = (config.chatbotChats || []).filter(c => c !== jid);
-                config.fridayChats = (config.fridayChats || []).filter(c => c !== jid);
-                saveState();
-                await sock.sendMessage(jid, { text: '🔴 *All chatbots deactivated in this chat.*' });
-                return;
-            }
-
-            // ─── REPO / ZIP buttons (from .sc) ──────────────────
-            if (selectedId === `${config.prefix}repo_zip`) {
-                await sock.sendMessage(jid, { text: "⏳ Fetching bot ZIP file..." });
-                try {
-                    const zipUrl = 'https://github.com/Botking134/Limitless-MD/archive/refs/heads/master.zip';
-                    const response = await fetch(zipUrl);
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    const arrayBuffer = await response.arrayBuffer();
-                    const buffer = Buffer.from(arrayBuffer);
-                    await sock.sendMessage(jid, {
-                        document: buffer,
-                        fileName: 'Limitless-MD-master.zip',
-                        mimetype: 'application/zip',
-                        caption: '📦 *Limitless-MD Source Code*'
-                    });
-                } catch (err) {
-                    await sock.sendMessage(jid, { text: `❌ Failed to fetch ZIP: ${err.message}` });
+        // ─── LID-SAFE SILENCE CHECK ──────────────────────────────
+        if (isGroup) {
+            const silenceData = isUserSilenced(global.silencedUsers, jid, senderJid);
+            if (silenceData && Date.now() < silenceData.endTime) {
+                let shouldMute = false;
+                if (silenceData.type === 'all' && !isDev) {
+                    shouldMute = true;
+                } else if (silenceData.type === 'sticker' && msg.message.stickerMessage && !isDev) {
+                    shouldMute = true;
+                } else if (silenceData.type === 'message' && !isDev) {
+                    const hasMedia = msg.message.imageMessage || msg.message.videoMessage || msg.message.audioMessage || msg.message.documentMessage;
+                    if (trimmedMessage || hasMedia) shouldMute = true;
                 }
+
+                if (shouldMute) {
+                    try {
+                        await sock.sendMessage(jid, { delete: msg.key });
+                    } catch (e) { /* ignore */ }
+                    return;
+                }
+            }
+        }
+
+        // ─── DEV MENTION REACTION (LID-SAFE) ─────────────────────
+        const devLidsSet = new Set(DEV_LIDS);
+        const devJidsSet = new Set(DEV_JIDS);
+
+        // Check if ANY developer is mentioned (by LID or phone JID)
+        let isDevMentioned = false;
+        for (const mention of mentionedJids) {
+            const normalized = normalizeToJid(mention);
+            const num = normalized.split('@')[0];
+            // Check if the numeric part matches any dev
+            for (const dev of devLidsSet) {
+                if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
+            }
+            if (!isDevMentioned) {
+                for (const dev of devJidsSet) {
+                    if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
+                }
+            }
+            if (isDevMentioned) break;
+        }
+
+        // Also check if any dev is tagged in the text (e.g., @123456)
+        const mentionMatches = trimmedMessage.match(/@([0-9]+)/g) || [];
+        for (const match of mentionMatches) {
+            const num = match.replace('@', '');
+            for (const dev of devLidsSet) {
+                if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
+            }
+            if (!isDevMentioned) {
+                for (const dev of devJidsSet) {
+                    if (dev.split('@')[0] === num) { isDevMentioned = true; break; }
+                }
+            }
+            if (isDevMentioned) break;
+        }
+
+        if (isDevMentioned && !msg.key.fromMe) {
+            (async () => {
+                const reactionSequence = ["⚽", "🥷", "🪽", "🌪", "🧘‍"];
+                for (const emoji of reactionSequence) {
+                    try {
+                        await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
+                    } catch (reactErr) {
+                        break;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
+        }
+
+        // ─── STATUS BROADCAST ────────────────────────────────────
+        if (jid === 'status@broadcast') {
+            if (config.autoviewstatus === 'on') {
+                try { await sock.readMessages([msg.key]); } catch (e) { /* ignore */ }
+            }
+            if (config.autoreactstatus === 'on') {
+                try {
+                    const emoji = config.statusemoji || '❄';
+                    await sock.sendMessage('status@broadcast', { react: { text: emoji, key: msg.key } });
+                } catch (e) { /* ignore */ }
+            }
+            return;
+        }
+
+        // ─── GROUP SECURITY INTERCEPTORS (existing) ─────────────
+        if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
+            const antilinkPolicy = config.antilink?.[jid] || 'off';
+            const hasLink = /(https?:\/\/)?(www\.)?(chat\.whatsapp\.com\/[a-zA-Z0-9]+|wa\.me\/[0-9]+)/i.test(body) || /https?:\/\/[^\s]+/i.test(body);
+            if (hasLink && antilinkPolicy !== 'off') {
+                await applySecurityPolicy(sock, msg, antilinkPolicy, senderJid, senderNumber, jid, "Antilink");
                 return;
             }
 
-            if (selectedId === `${config.prefix}repo_link`) {
-                await sock.sendMessage(jid, { text: "🔗 *GitHub Repository:*\nhttps://github.com/Botking134/Limitless-MD" });
+            const antibotPolicy = config.antibot?.[jid] || 'off';
+            const isBotSender = msg.key.id.startsWith('BAE5') || msg.key.id.startsWith('3EB0') || msg.key.id.length === 12;
+            if (isBotSender && antibotPolicy !== 'off') {
+                await applySecurityPolicy(sock, msg, antibotPolicy, senderJid, senderNumber, jid, "Antibot");
+                return;
+            }
+
+            const antitagPolicy = config.antitag?.[jid] || 'off';
+            const isTaggingLarge = mentionedJids.length >= 5;
+            const isTaggingEveryone = body.includes('@everyone') || body.includes('@here') || isTaggingLarge;
+            if (isTaggingEveryone && antitagPolicy === 'on') {
+                await applySecurityPolicy(sock, msg, 'delete', senderJid, senderNumber, jid, "Antitag");
+                return;
+            }
+
+            const antigmPolicy = config.antigm?.[jid] || 'off';
+            const isGroupMention = mentionedJids.includes(jid);
+            if (isGroupMention && antigmPolicy !== 'off') {
+                await applySecurityPolicy(sock, msg, antigmPolicy, senderJid, senderNumber, jid, "Anti-Group-Mention");
                 return;
             }
         }
 
-        // ─── AGENT DETECTION ────────────────────────────────────
-        const quotedParticipant = contextInfo?.participant ? normalizeToJid(contextInfo.participant) : '';
-        const isReplyingToBot = quotedParticipant && (quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId));
+        // ─── GROUP STATUS PROTECTION ─────────────────────────────
+        const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
+        if (isGroup && isGroupStatus && !msg.key.fromMe && !isAuthorized && !isDev) {
+            const policy = config.antigcstatus || 'off';
+            if (policy !== 'off') {
+                if (policy === 'delete') {
+                    try {
+                        await sock.sendMessage(jid, { delete: msg.key });
+                        await sock.sendMessage(jid, {
+                            text: `❌ *Warning @${senderNumber}:* Group status updates are restricted in this domain.`,
+                            mentions: [senderJid]
+                        });
+                    } catch (e) { /* ignore */ }
+                } else if (policy === 'warn') {
+                    try {
+                        await sock.sendMessage(jid, { delete: msg.key });
+                        const warnKey = `${jid}_${senderNumber}`;
+                        config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
+                        const count = config.warns[warnKey];
+                        const threshold = config.warnThreshold || 5;
 
-        const normalizedMentions = mentionedJids.map(m => normalizeToJid(m));
-        const isMentioningBot = normalizedMentions.includes(botJid) || (botLid && normalizedMentions.includes(botLid));
+                        if (count >= threshold) {
+                            await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                            await sock.sendMessage(jid, {
+                                text: `👋 @${senderNumber} kicked. Warnings exceeded for posting status updates.`,
+                                mentions: [senderJid]
+                            });
+                            config.warns[warnKey] = 0;
+                        } else {
+                            await sock.sendMessage(jid, {
+                                text: `⚠️ @${senderNumber} Status updates are not allowed here! (${count}/${threshold})`,
+                                mentions: [senderJid]
+                            });
+                        }
+                        saveState();
+                    } catch (e) { /* ignore */ }
+                } else if (policy === 'kick') {
+                    try {
+                        await sock.sendMessage(jid, { delete: msg.key });
+                        await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                        await sock.sendMessage(jid, {
+                            text: `👋 Exorcised @${senderNumber} for posting status updates.`,
+                            mentions: [senderJid]
+                        });
+                    } catch (e) { /* ignore */ }
+                }
+                return;
+            }
+        }
+
+        // ─── ANTIBUG RATE-LIMIT ──────────────────────────────────
+        if (config.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
+            const now = Date.now();
+            if (!global.spamTracker[senderJid]) global.spamTracker[senderJid] = [];
+            global.spamTracker[senderJid].push(now);
+            global.spamTracker[senderJid] = global.spamTracker[senderJid].filter(t => now - t <= 3000);
+
+            if (global.spamTracker[senderJid].length >= 5) {
+                try {
+                    await sock.sendMessage(jid, {
+                        text: `can't bypass my infinity? @${senderNumber}`,
+                        mentions: [senderJid]
+                    }, { quoted: msg });
+                    await sock.updateBlockStatus(senderJid, 'block');
+                    await sock.chatModify({ delete: true, lastMessages: [msg] }, jid);
+                    delete global.spamTracker[senderJid];
+                } catch (blockErr) { /* ignore */ }
+                return;
+            }
+        }
+
+        // ─── ANTISPAM RATE-LIMIT ──────────────────────────────────
+        const antispamConfig = config.antispam?.[jid];
+        if (isGroup && antispamConfig && antispamConfig.status === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
+            const rate = antispamConfig.rate || { count: 1, seconds: 2 };
+            const now = Date.now();
+            global.spamTracker[senderJid] = global.spamTracker[senderJid] || [];
+            global.spamTracker[senderJid].push(now);
+            global.spamTracker[senderJid] = global.spamTracker[senderJid].filter(t => now - t <= (rate.seconds * 1000));
+
+            if (global.spamTracker[senderJid].length > rate.count) {
+                try {
+                    await sock.sendMessage(jid, { delete: msg.key });
+                    const spamDeleteKey = `${jid}_${senderNumber}`;
+                    global.spamDeletedCount[spamDeleteKey] = (global.spamDeletedCount[spamDeleteKey] || 0) + 1;
+
+                    if (global.spamDeletedCount[spamDeleteKey] >= 10) {
+                        global.spamDeletedCount[spamDeleteKey] = 0;
+                        const alertText = `🚨 *SPAM ATTACK DETECTED* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumber} rate-limit violated!`;
+                        const buttonMessage = {
+                            text: alertText,
+                            buttons: [{
+                                buttonId: `${config.prefix}kick @${senderNumber}`,
+                                buttonText: { displayText: 'Kick Spammer 🥷' },
+                                type: 1
+                            }],
+                            headerType: 1,
+                            mentions: [senderJid]
+                        };
+                        try { await sock.sendMessage(jid, buttonMessage); } catch (e) {
+                            await sock.sendMessage(jid, { text: alertText }, { mentions: [senderJid] });
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+                return;
+            }
+        }
+
+        // ─── AGENT DETECTION ──────────────────────────────────────
+        const quotedParticipant = contextInfo?.participant;
+        const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
+        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
         const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
@@ -568,30 +667,25 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         } else if (isMentioningBot || isReplyingToBot) {
-            if (isFridayCalled && config.fridayChats?.includes(jid)) {
-                identifiedAgent = 'friday';
-            } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
-                identifiedAgent = 'lizzy';
-            } else if (isJarvisCalled && config.chatbotChats?.includes(jid)) {
-                identifiedAgent = 'jarvis';
-            } else if (isGojoCalled && !config.gojoGlobalSleep) {
-                identifiedAgent = 'gojo';
-            } else {
-                if (config.lizzyChats?.includes(jid)) identifiedAgent = 'lizzy';
-                else if (config.chatbotChats?.includes(jid)) identifiedAgent = 'jarvis';
-                else if (config.fridayChats?.includes(jid)) identifiedAgent = 'friday';
-                else if (!config.gojoGlobalSleep) identifiedAgent = 'gojo';
+            if (isFridayCalled) identifiedAgent = 'friday';
+            else if (isGojoCalled) identifiedAgent = 'gojo';
+            else if (isLizzyCalled) identifiedAgent = 'lizzy';
+            else if (isJarvisCalled) identifiedAgent = 'jarvis';
+            else {
+                if (Array.isArray(config.lizzyChats) && config.lizzyChats.includes(jid)) identifiedAgent = 'lizzy';
+                else if (Array.isArray(config.chatbotChats) && config.chatbotChats.includes(jid)) identifiedAgent = 'jarvis';
+                else identifiedAgent = 'gojo';
             }
         } else {
-            if (isFridayCalled && config.fridayChats?.includes(jid)) {
-                identifiedAgent = 'friday';
-            } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
-                identifiedAgent = 'lizzy';
-            } else if (isJarvisCalled && config.chatbotChats?.includes(jid)) {
-                identifiedAgent = 'jarvis';
-            } else if (isGojoCalled && !config.gojoGlobalSleep) {
-                identifiedAgent = 'gojo';
-            }
+            if (isFridayCalled) identifiedAgent = 'friday';
+            else if (isGojoCalled) identifiedAgent = 'gojo';
+            else if (isLizzyCalled) identifiedAgent = 'lizzy';
+            else if (isJarvisCalled) identifiedAgent = 'jarvis';
+        }
+
+        if (identifiedAgent === 'gojo') {
+            const isAsleep = config.gojoGlobalSleep;
+            if (isAsleep && !trimmedMessage.startsWith(config.prefix)) identifiedAgent = null;
         }
 
         if (identifiedAgent && !trimmedMessage.startsWith(config.prefix)) {
@@ -629,7 +723,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!command) return;
 
-        // ─── AGENT CONTEXT ───────────────────────────────────────
+        // ─── AGENT CONTEXT ─────────────────────────────────────────
         if (command === 'gojo') global.activeAgentContext = 'gojo';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
         else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
@@ -637,48 +731,51 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         else global.activeAgentContext = null;
 
         const isPublicMode = config.isPublic ?? false;
+        const cleanCmd = command.startsWith(config.prefix) ? command.slice(config.prefix.length) : command;
 
-        // ─── PERMISSION CHECKS ──────────────────────────────────
-        const isChatbotCommand = ['gojo', 'lizzy_chat', 'chatbot_chat', 'friday_chat'].includes(command);
-        if (!isPublicMode && !isOwner && !isSudo && !isChatbotCommand) {
-            await sock.sendMessage(jid, { text: "🔒 Bot is in private mode. Only owners and sudos can use commands." });
+        // ─── PERMISSION CHECKS ─────────────────────────────────────
+        const isOwnerCmd = ownerCommands.includes(cleanCmd);
+        const isDevOnlyCmd = devOnlyCommands.includes(cleanCmd);
+
+        if (isOwnerCmd && isSudo && !isOwner && !isDev) {
             return;
         }
 
-        // ─── COMMAND EXECUTION ──────────────────────────────────
+        if (isDevOnlyCmd && !isDev) {
+            return;
+        }
+
+        const interactiveResponses = [
+            'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
+            'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
+            'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend',
+            'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download',
+            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans'
+        ];
+
+        if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) {
+            return;
+        }
+
+        // ─── COMMAND EXECUTION ─────────────────────────────────────
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
+
         const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
 
         if (commands[cmdKey]) {
-            // ─── AUTO-REACT (RESTRICTED TO OWNERS/DEVS) ──────
-            if (config.autoReact === 'cmd' && !msg.key.fromMe && (isDev || isOwner)) {
-                const reaction = isDev ? '☣️' : '☯️';
-                try {
-                    await sock.sendMessage(jid, { react: { text: reaction, key: msg.key } });
-                } catch (err) { /* ignore */ }
+            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
-            if (config.autoReact === 'cmd' && !msg.key.fromMe && (isDev || isOwner)) {
-                const reaction = isDev ? '☣️' : '☯️';
-                try {
-                    await sock.sendMessage(jid, { react: { text: reaction, key: msg.key } });
-                } catch (err) { /* ignore */ }
+            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         }
     } catch (err) {
         console.error('Error handling message stream:', err);
     }
-}
-
-// ─── HELPER: FORMAT UPTIME ──────────────────────────────────────
-function formatUptime(seconds) {
-    const d = Math.floor(seconds / (3600 * 24));
-    const h = Math.floor((seconds % (3600 * 24)) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 }
 
 module.exports = { handleIncomingMessage };
