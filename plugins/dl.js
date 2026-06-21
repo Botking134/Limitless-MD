@@ -530,7 +530,7 @@ module.exports = [
     },
 
     
-// 13. Telegram Stickers (interactive) - FIXED (no token needed)
+// 13. Telegram Stickers (interactive) - DEBUGGING VERSION
 {
     name: 'tgs',
     isPrefixless: false,
@@ -541,76 +541,79 @@ module.exports = [
 
         const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack..." }, { quoted: msg });
 
-        // ─── TRY BOTH POSSIBLE ENDPOINTS ──────────────────────
-        const endpoints = [
-            'https://apis.davidcyril.name.ng/tools/telegram-sticker',
-            'https://apis.davidcyril.name.ng/endpoints/tools/telegram-sticker'
-        ];
+        // ─── USE THE EXACT ENDPOINT THAT WORKS ──────────────
+        // Based on your successful manual test, use this:
+        const endpoint = 'https://apis.davidcyril.name.ng/endpoints/tools/telegram-sticker';
 
-        let data = null;
-        let usedEndpoint = null;
+        try {
+            // Log the full URL being called
+            const fullUrl = `${endpoint}?url=${encodeURIComponent(url)}`;
+            console.log(`[TGS] Calling: ${fullUrl}`);
 
-        for (const endpoint of endpoints) {
-            try {
-                console.log(`[TGS] Trying: ${endpoint}`);
-                const result = await downloadMedia(endpoint, { url }, 'GET');
-                if (result && result.status === true) {
-                    data = result;
-                    usedEndpoint = endpoint;
-                    console.log(`[TGS] Success with: ${endpoint}`);
-                    break;
-                }
-            } catch (e) {
-                console.log(`[TGS] Failed: ${endpoint} - ${e.message}`);
-            }
-        }
-
-        if (!data || !data.status) {
-            await sock.sendMessage(jid, { 
-                text: `❌ Failed to fetch sticker pack.\n\n` +
-                      `Make sure the URL is a valid Telegram sticker pack link.\n` +
-                      `Example: https://t.me/addstickers/doakesreactions\n\n` +
-                      `If the issue persists, the API might be temporarily down.`,
-                edit: statusMsg.key 
+            // Use axios directly for better error visibility
+            const response = await axios.get(endpoint, {
+                params: { url },
+                headers: { 'Accept': 'application/json' }
             });
-            return;
-        }
 
-        const stickers = data?.result?.sticker || [];
-        if (stickers.length === 0) {
-            await sock.sendMessage(jid, { text: "❌ No stickers found in this pack.", edit: statusMsg.key });
-            return;
-        }
+            console.log(`[TGS] Response status: ${response.status}`);
+            console.log(`[TGS] Response data:`, JSON.stringify(response.data).slice(0, 200));
 
-        if (stickers.length === 1) {
-            try {
-                const buffer = await fetchBuffer(stickers[0].url);
-                await sock.sendMessage(jid, { sticker: buffer });
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
-            } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed to download sticker: ${err.message}`, edit: statusMsg.key });
+            const data = response.data;
+
+            if (!data || !data.status) {
+                throw new Error(data?.message || 'API returned error');
             }
-            return;
-        }
 
-        // Build selection list (max 20)
-        const maxShow = Math.min(stickers.length, 20);
-        let list = `📦 *${data.result.title || 'Stickers'}*\n\n`;
-        for (let i = 0; i < maxShow; i++) {
-            const sticker = stickers[i];
-            list += `${i+1}. ${sticker.emoji || '📌'} ${sticker.is_animated ? '🔄' : ''}\n`;
-        }
-        if (stickers.length > 20) {
-            list += `\n*Showing first 20 of ${stickers.length}*`;
-        }
-        list += `\n\n📌 Reply with number to download.`;
+            const stickers = data?.result?.sticker || [];
+            if (stickers.length === 0) {
+                await sock.sendMessage(jid, { text: "❌ No stickers found in this pack.", edit: statusMsg.key });
+                return;
+            }
 
-        const prompt = await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
-        global.tgsSessions[prompt.key.id] = {
-            stickers,
-            handle: handleTgsReply,
-            timestamp: Date.now()
-        };
+            if (stickers.length === 1) {
+                try {
+                    const buffer = await fetchBuffer(stickers[0].url);
+                    await sock.sendMessage(jid, { sticker: buffer });
+                    try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                } catch (err) {
+                    await sock.sendMessage(jid, { text: `❌ Failed to download sticker: ${err.message}`, edit: statusMsg.key });
+                }
+                return;
+            }
+
+            // Build selection list (max 20)
+            const maxShow = Math.min(stickers.length, 20);
+            let list = `📦 *${data.result.title || 'Stickers'}*\n\n`;
+            for (let i = 0; i < maxShow; i++) {
+                const sticker = stickers[i];
+                list += `${i+1}. ${sticker.emoji || '📌'} ${sticker.is_animated ? '🔄' : ''}\n`;
+            }
+            if (stickers.length > 20) {
+                list += `\n*Showing first 20 of ${stickers.length}*`;
+            }
+            list += `\n\n📌 Reply with number to download.`;
+
+            const prompt = await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
+            global.tgsSessions[prompt.key.id] = {
+                stickers,
+                handle: handleTgsReply,
+                timestamp: Date.now()
+            };
+        } catch (err) {
+            console.error(`[TGS] Error:`, err.message);
+            if (err.response) {
+                console.error(`[TGS] Status: ${err.response.status}`);
+                console.error(`[TGS] Data:`, err.response.data);
+            }
+            await sock.sendMessage(jid, {
+                text: `❌ Failed to fetch sticker pack.\n\n` +
+                      `Error: ${err.message}\n` +
+                      `URL tried: ${endpoint}\n\n` +
+                      `Please check the console logs for more details.`,
+                edit: statusMsg.key
+            });
+        }
     }
 }, 
 
