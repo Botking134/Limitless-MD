@@ -930,6 +930,7 @@ if (commands[cmdKey]) {
         try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
     }
     await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
+   }
 }
 
 module.exports = { handleIncomingMessage };
