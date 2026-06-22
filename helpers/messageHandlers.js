@@ -374,7 +374,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── QUIZ ANSWER INTERCEPTOR (NEW) ──────────────────────
+        // ─── QUIZ ANSWER INTERCEPTOR ────────────────────────────
         const singleKey = jid + '_' + senderJid;
         const multiKey = jid;
         let activeQuizAnswerKey = '';
@@ -396,43 +396,40 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        
+        // ─── PVP INTERCEPTOR ──────────────────────────────────────
+        const pvpSessionKey = jid;
+        if (quotedMsgId && global.pvpSessions && global.pvpSessions[pvpSessionKey]) {
+            const session = global.pvpSessions[pvpSessionKey];
+            if (session.lastQuestionMsgId === quotedMsgId) {
+                const ans = trimmedMessage.trim();
+                // Lobby: only the player who is NOT the creator can join
+                if (session.status === 'lobby' && senderJid !== session.p1) {
+                    command = 'pvp_lobby_accept';
+                    args = ans;
+                }
+                // Player 2 choosing their character
+                else if (session.status === 'p2_choosing' && senderJid === session.p2) {
+                    command = 'pvp_choose';
+                    args = ans;
+                }
+                // Fighting: current turn player attacks
+                else if (session.status === 'fighting' && senderJid === session.turn) {
+                    command = 'pvp_fight';
+                    args = ans;
+                }
+                // Defending: defender parries
+                else if (session.status === 'defending' && senderJid === session.defender) {
+                    command = 'pvp_defend';
+                    args = ans;
+                }
+            }
+        }
 
-// ─── PVP INTERCEPTOR ─────────────────────────────────────────────
-const pvpSessionKey = jid;
-if (quotedMsgId && global.pvpSessions && global.pvpSessions[pvpSessionKey]) {
-    const session = global.pvpSessions[pvpSessionKey];
-    if (session.lastQuestionMsgId === quotedMsgId) {
-        const ans = trimmedMessage.trim();
-        // Lobby: only the player who is NOT the creator can join
-        if (session.status === 'lobby' && senderJid !== session.p1) {
-            command = 'pvp_lobby_accept';
-            args = ans;
-        }
-        // Player 2 choosing their character
-        else if (session.status === 'p2_choosing' && senderJid === session.p2) {
-            command = 'pvp_choose';
-            args = ans;
-        }
-        // Fighting: current turn player attacks
-        else if (session.status === 'fighting' && senderJid === session.turn) {
-            command = 'pvp_fight';
-            args = ans;
-        }
-        // Defending: defender parries
-        else if (session.status === 'defending' && senderJid === session.defender) {
-            command = 'pvp_defend';
-            args = ans;
-        }
-    }
-}
-
-await handleAfkDeactivation(sock, msg);
-
+        await handleAfkDeactivation(sock, msg);
 
         // ─── PERMISSIONS ──────────────────────────────────────────
-        let command;
-        let args;
+        let command = command || null; // ensure command variable exists
+        let args = args || '';
 
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
@@ -924,7 +921,7 @@ await handleAfkDeactivation(sock, msg);
             await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         } else if (commands[command]) {
             if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "🔥", key: msg.key } }); } catch (err) { /* ignore */ }
+                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
             }
             await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
         }
