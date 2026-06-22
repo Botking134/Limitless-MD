@@ -231,139 +231,270 @@ async function handleMillionaireTimeout(sock, jid, sessionKey) {
     await sock.sendMessage(jid, { text: results, mentions: [session.player] });
 }
 
-// ─── PVP HELPERS ─────────────────────────────────────────────────
+// ─── PVP ─────────────────────────────────────────────────────────
 
-async function evaluatePvpAttack(attackerChar, move) {
-    const refereePrompt =
-        `You are the referee of an epic anime/comic 1v1 battle.\n` +
-        `The attacker "${attackerChar}" is attempting to execute: "${move}".\n\n` +
-        `Respond strictly with "INVALID_MOVE" or "VALID_MOVE" based on canonical techniques.`;
+// 15. PVP – Start a duel lobby
+{
+    name: 'pvp',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+        if (!isGroup) return await sock.sendMessage(jid, { text: "❌ PvP is group-only." }, { quoted: msg });
 
-    const decision = await queryLLM(refereePrompt, 0.1);
-    return decision ? decision.trim().toUpperCase() : "INVALID_MOVE";
-}
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        const senderPhone = await resolveToPhoneJid(sock, senderJid);
+        const senderNumber = senderPhone.split('@')[0];
 
-async function evaluatePvpClash(attackerChar, defenderChar, attackMove, defenseMove) {
-    const prompt =
-        `You are a combat referee evaluating a 1v1 battle.\n` +
-        `Attacker: "${attackerChar}" | Attack used: "${attackMove}"\n` +
-        `Defender: "${defenderChar}" | Defense used: "${defenseMove}"\n\n` +
-        `Write exactly 2 descriptive lines depicting the clash intensely in the active voice.\n` +
-        `End your response strictly with: "DAMAGE: [number]"`;
+        if (!args) return await sock.sendMessage(jid, { text: "❌ You must specify your character name.\nUsage: `.pvp <character>`" }, { quoted: msg });
 
-    const result = await queryLLM(prompt, 0.7);
-    return result ? result.trim() : null;
-}
+        if (global.pvpSessions[jid]) return await sock.sendMessage(jid, { text: "⚠️ A PvP session is already active in this group." }, { quoted: msg });
 
-async function evaluatePvpUnmitigated(attackerChar, defenderChar, attackMove) {
-    const prompt =
-        `You are an combat referee evaluating a 1v1 battle.\n` +
-        `Attacker: "${attackerChar}" | Attack used: "${attackMove}"\n` +
-        `Defender: "${defenderChar}" | Target is completely undefended!\n\n` +
-        `Write exactly 2 descriptive lines depicting the impact intensely.\n` +
-        `End your response strictly with: "DAMAGE: [number]"`;
+        const character = args.trim();
 
-    const result = await queryLLM(prompt, 0.7);
-    return result ? result.trim() : null;
-}
+        // Create lobby
+        global.pvpSessions[jid] = {
+            p1: senderJid,
+            p2: null,
+            p1Char: character,
+            p2Char: null,
+            p1HP: 100,
+            p2HP: 100,
+            movesLeft: { [senderJid]: 3 },
+            turn: null,
+            attacker: null,
+            defender: null,
+            status: 'lobby',
+            lastAttack: '',
+            lastQuestionMsgId: '',
+            timerId: null
+        };
 
-async function handlePvpDefenseTimeout(sock, jid) {
-    const session = global.pvpSessions[jid];
-    if (!session || session.status !== 'defending') return;
+        const lobbyText =
+            `⚔️ *PVP DUEL LOBBY* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `👤 *Player 1:* @${senderNumber} (${character})\n` +
+            `🌀 *Status:* Waiting for a challenger...\n\n` +
+            `👉 *To join, reply with:* \`${config.prefix}pvp_join <your character>\``;
 
-    const attacker = session.attacker;
-    const defender = session.defender;
-    const attackMove = session.lastAttack;
+        const prompt = await sock.sendMessage(jid, { text: lobbyText, mentions: [senderPhone] });
+        global.pvpSessions[jid].lastQuestionMsgId = prompt.key.id;
 
-    const attackerChar = attacker === session.p1 ? session.p1Char : session.p2Char;
-    const defenderChar = defender === session.p1 ? session.p2Char : session.p1Char;
-
-    const defenderPhone = await resolveToPhoneJid(sock, defender);
-
-    await sock.sendMessage(jid, { text: `⏰ *TIME IS UP!* @${defenderPhone.split('@')[0]} failed to defend in time!`, mentions: [defenderPhone] });
-
-    const evaluation = await evaluatePvpUnmitigated(attackerChar, defenderChar, attackMove);
-
-    let damage = 25;
-    if (evaluation) {
-        const match = evaluation.match(/DAMAGE:\s*(\d+)/i);
-        if (match) damage = parseInt(match[1]);
+        // Auto-close after 30 seconds
+        global.pvpSessions[jid].timerId = setTimeout(async () => {
+            const session = global.pvpSessions[jid];
+            if (session && session.status === 'lobby') {
+                delete global.pvpSessions[jid];
+                await sock.sendMessage(jid, { text: "🛑 *Lobby expired:* No challenger joined." });
+            }
+        }, 30000);
     }
+},
 
-    if (defender === session.p1) {
-        session.p1HP = Math.max(0, session.p1HP - damage);
-    } else {
-        session.p2HP = Math.max(0, session.p2HP - damage);
+// 16. PVP_JOIN – Join the lobby
+{
+    name: 'pvp_join',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        const senderPhone = await resolveToPhoneJid(sock, senderJid);
+        const senderNumber = senderPhone.split('@')[0];
+
+        const session = global.pvpSessions[jid];
+        if (!session || session.status !== 'lobby') return;
+        if (session.p2) return await sock.sendMessage(jid, { text: "❌ Already have a challenger." }, { quoted: msg });
+        if (senderJid === session.p1) return await sock.sendMessage(jid, { text: "❌ You are the host." }, { quoted: msg });
+
+        if (!args) return await sock.sendMessage(jid, { text: "❌ Specify your character name.\nUsage: `.pvp_join <character>`" }, { quoted: msg });
+
+        const character = args.trim();
+        session.p2 = senderJid;
+        session.p2Char = character;
+        session.movesLeft[senderJid] = 3;
+        session.status = 'fighting';
+        session.turn = session.p1; // p1 attacks first
+        session.attacker = session.p1;
+        session.defender = session.p2;
+        session.p1HP = 100;
+        session.p2HP = 100;
+
+        if (session.timerId) clearTimeout(session.timerId);
+
+        const p1Phone = await resolveToPhoneJid(sock, session.p1);
+        const p1Number = p1Phone.split('@')[0];
+        const p2Phone = senderPhone;
+        const p2Number = senderNumber;
+
+        const startText =
+            `⚔️ *BATTLE START!* ⚔️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `👤 ${session.p1Char} (@${p1Number}) vs ${session.p2Char} (@${p2Number})\n` +
+            `🛡️ *HP:* \`100/100\` each\n` +
+            `⏳ *Moves remaining:* \`3\` each\n\n` +
+            `👉 @${p1Number}, it's your turn to attack! Type your attack (any anime/comic move).\n` +
+            `📩 *Reply directly to this message with your attack!*`;
+
+        const prompt = await sock.sendMessage(jid, { text: startText, mentions: [p1Phone, p2Phone] });
+        session.lastQuestionMsgId = prompt.key.id;
     }
+},
 
-    session.movesLeft[attacker]--;
-
-    const p1Phone = await resolveToPhoneJid(sock, session.p1);
-    const p2Phone = await resolveToPhoneJid(sock, session.p2);
-
-    const report =
-        `💥 *DIRECT IMPACT REPORT!* 💥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `${evaluation ? evaluation.replace(/DAMAGE:\s*\d+/i, '').trim() : `No defense was activated.`}\n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `🛡️ *HP Status:*\n` +
-        `• *${session.p1Char}* (@${p1Phone.split('@')[0]}): \`${session.p1HP} HP\`\n` +
-        `• *${session.p2Char}* (@${p2Phone.split('@')[0]}): \`${session.p2HP} HP\``;
-
-    await sock.sendMessage(jid, { text: report, mentions: [p1Phone, p2Phone] });
-    await delay(2000);
-
-    if (await checkPvpGameOver(sock, jid, session)) return;
-
-    session.status = 'fighting';
-    session.turn = defender;
-    session.defender = attacker;
-
-    const turnPhone = await resolveToPhoneJid(sock, session.turn);
-    const nextStrikeText = `👉 It is now @${turnPhone.split('@')[0]}'s turn to strike!`;
-    const prompt = await sock.sendMessage(jid, { text: nextStrikeText, mentions: [turnPhone] });
-    session.lastQuestionMsgId = prompt.key.id;
-}
-
-async function checkPvpGameOver(sock, jid, session) {
-    const p1Phone = await resolveToPhoneJid(sock, session.p1);
-    const p2Phone = await resolveToPhoneJid(sock, session.p2);
-
-    if (session.p1HP <= 0 || session.p2HP <= 0) {
-        const winner = session.p1HP <= 0 ? session.p2 : session.p1;
-        const winPhone = session.p1HP <= 0 ? p2Phone : p1Phone;
-        const winChar = session.p1HP <= 0 ? session.p2Char : session.p1Char;
-        const victoryText = `🏆 *BATTLE RESOLVED: KNOCKOUT!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winPhone.split('@')[0]} (*${winChar}*) wins the duel!`;
-        delete global.pvpSessions[jid];
-        await sock.sendMessage(jid, { text: victoryText, mentions: [winPhone] });
-        return true;
+// 17. PVP_LOBBY_ACCEPT – Handler for join reply (fallback)
+{
+    name: 'pvp_lobby_accept',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        // This is handled by pvp_join logic above, but keep a dummy to avoid errors
+        return await sock.sendMessage(msg.key.remoteJid, { text: "Use `.pvp_join <character>` to join." }, { quoted: msg });
     }
+},
 
-    if (session.movesLeft[session.p1] === 0 && session.movesLeft[session.p2] === 0) {
-        let winner = session.p1;
-        let winPhone = p1Phone;
-        let winChar = session.p1Char;
-        let tie = false;
+// 18. PVP_CHOOSE – Not used directly; kept for compatibility
+{
+    name: 'pvp_choose',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        // This is handled by the fighting flow; fallback
+        return await sock.sendMessage(msg.key.remoteJid, { text: "Invalid command." }, { quoted: msg });
+    }
+},
 
-        if (session.p2HP > session.p1HP) {
-            winner = session.p2;
-            winPhone = p2Phone;
-            winChar = session.p2Char;
-        } else if (session.p1HP === session.p2HP) {
-            tie = true;
+// 19. PVP_FIGHT – Process an attack (called from interceptor)
+{
+    name: 'pvp_fight',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        const senderPhone = await resolveToPhoneJid(sock, senderJid);
+        const session = global.pvpSessions[jid];
+        if (!session || session.status !== 'fighting') return;
+
+        // ─── REPLY GUARD ───
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+        const quotedMsgId = contextInfo?.stanzaId;
+        if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) return;
+
+        // Ensure it's the attacker's turn
+        if (senderJid !== session.attacker) return await sock.sendMessage(jid, { text: `⏳ Wait your turn!`, mentions: [senderPhone] }, { quoted: msg });
+
+        if (session.timerId) clearTimeout(session.timerId);
+
+        const attackMove = args.trim();
+        if (!attackMove) return await sock.sendMessage(jid, { text: "❌ Enter an attack move." }, { quoted: msg });
+
+        // Validate move
+        const attackerChar = senderJid === session.p1 ? session.p1Char : session.p2Char;
+        const isValid = await evaluatePvpAttack(attackerChar, attackMove);
+        if (isValid !== "VALID_MOVE") {
+            return await sock.sendMessage(jid, { text: `❌ "${attackMove}" is not a valid attack for ${attackerChar}.` }, { quoted: msg });
         }
 
-        if (tie) {
-            delete global.pvpSessions[jid];
-            await sock.sendMessage(jid, { text: "🤝 *BATTLE ENDED: IT'S A TIE!* 🤝" });
+        session.lastAttack = attackMove;
+        session.status = 'defending';
+        session.defender = senderJid === session.p1 ? session.p2 : session.p1;
+        session.attacker = senderJid; // keep track
+
+        const defenderPhone = await resolveToPhoneJid(sock, session.defender);
+        const defenderNumber = defenderPhone.split('@')[0];
+        const attackerNumber = senderPhone.split('@')[0];
+
+        const defendPrompt =
+            `💥 *ATTACK INCOMING!* 💥\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `⚔️ *${attackerChar}* (@${attackerNumber}) uses *"${attackMove}"* on @${defenderNumber}!\n\n` +
+            `🛡️ *Defender's turn:* Reply with a defensive move (e.g., dodge, block, counter).\n` +
+            `⏳ *Timer:* 15 seconds.`;
+
+        const prompt = await sock.sendMessage(jid, { text: defendPrompt, mentions: [defenderPhone, senderPhone] });
+        session.lastQuestionMsgId = prompt.key.id;
+
+        // Set timer for defense timeout
+        session.timerId = setTimeout(async () => {
+            await handlePvpDefenseTimeout(sock, jid);
+        }, 15000);
+    }
+},
+
+// 20. PVP_DEFEND – Process a defense (called from interceptor)
+{
+    name: 'pvp_defend',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        const session = global.pvpSessions[jid];
+        if (!session || session.status !== 'defending') return;
+
+        // ─── REPLY GUARD ───
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+        const quotedMsgId = contextInfo?.stanzaId;
+        if (!quotedMsgId || quotedMsgId !== session.lastQuestionMsgId) return;
+
+        // Ensure it's the defender
+        if (senderJid !== session.defender) return await sock.sendMessage(jid, { text: `⏳ You are not the defender!` }, { quoted: msg });
+
+        if (session.timerId) clearTimeout(session.timerId);
+
+        const defenseMove = args.trim();
+        if (!defenseMove) return await sock.sendMessage(jid, { text: "❌ Enter a defense move." }, { quoted: msg });
+
+        const attacker = session.attacker;
+        const defender = session.defender;
+        const attackerChar = attacker === session.p1 ? session.p1Char : session.p2Char;
+        const defenderChar = defender === session.p1 ? session.p1Char : session.p2Char;
+
+        // Evaluate the clash
+        const evaluation = await evaluatePvpClash(attackerChar, defenderChar, session.lastAttack, defenseMove);
+
+        let damage = 0;
+        let report = evaluation ? evaluation.replace(/DAMAGE:\s*\d+/i, '').trim() : "The clash was intense!";
+
+        if (evaluation) {
+            const match = evaluation.match(/DAMAGE:\s*(\d+)/i);
+            if (match) damage = parseInt(match[1]);
+        }
+
+        // Apply damage to defender
+        if (defender === session.p1) {
+            session.p1HP = Math.max(0, session.p1HP - damage);
         } else {
-            const victoryText = `🏆 *BATTLE RESOLVED: TIME UP!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🎉 @${winPhone.split('@')[0]} (*${winChar}*) wins the match on health advantage!`;
-            delete global.pvpSessions[jid];
-            await sock.sendMessage(jid, { text: victoryText, mentions: [winPhone] });
+            session.p2HP = Math.max(0, session.p2HP - damage);
         }
-        return true;
+
+        session.movesLeft[attacker]--;
+
+        const p1Phone = await resolveToPhoneJid(sock, session.p1);
+        const p2Phone = await resolveToPhoneJid(sock, session.p2);
+
+        const statusReport =
+            `💢 *CLASH RESULT* 💢\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `${report}\n\n` +
+            `🛡️ *HP Status:*\n` +
+            `• ${session.p1Char} (@${p1Phone.split('@')[0]}): \`${session.p1HP} HP\`\n` +
+            `• ${session.p2Char} (@${p2Phone.split('@')[0]}): \`${session.p2HP} HP\``;
+
+        await sock.sendMessage(jid, { text: statusReport, mentions: [p1Phone, p2Phone] });
+
+        await delay(2000);
+
+        // Check for game over
+        if (await checkPvpGameOver(sock, jid, session)) return;
+
+        // Swap roles: defender becomes attacker for next round
+        session.status = 'fighting';
+        session.attacker = defender;
+        session.defender = attacker;
+        session.turn = defender;
+
+        const newAttackerPhone = await resolveToPhoneJid(sock, session.attacker);
+        const nextTurnText =
+            `👉 It is now @${newAttackerPhone.split('@')[0]}'s turn to attack! Reply to this message with your move.`;
+
+        const prompt = await sock.sendMessage(jid, { text: nextTurnText, mentions: [newAttackerPhone] });
+        session.lastQuestionMsgId = prompt.key.id;
     }
-    return false;
-}
+},
 
 // ─── ESCAPE ROOM HELPERS ─────────────────────────────────────────
 
