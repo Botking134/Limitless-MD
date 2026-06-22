@@ -394,89 +394,108 @@ module.exports = [
         }
     },
 
-    // 6. GCLOG
-    {
-        name: 'gclog',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return;
+    // 6. GCLOG (with button fix)
+{
+    name: 'gclog',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+        if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'gclog');
-            if (!isAuthorized) return;
+        const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'gclog');
+        if (!isAuthorized) return;
 
-            if (!config.gclogActive) config.gclogActive = {};
-            if (!config.conversationLogs) config.conversationLogs = {};
+        if (!config.gclogActive) config.gclogActive = {};
+        if (!config.conversationLogs) config.conversationLogs = {};
 
-            const action = args ? args.toLowerCase().trim() : '';
+        // ─── Extract action from button press (if any) ──────────
+        let action = args ? args.toLowerCase().trim() : '';
 
-            if (!action) {
-                const current = config.gclogActive[jid] ? 'on' : 'off';
-                const activeStatus = current === 'on' ? "Active 🟢" : "Inactive 💤";
-                const prompt = `📊 *Group Chat Log (GCLOG) Configuration:*\n\n` +
-                               `• *Status:* \`${activeStatus}\`\n\n` +
-                               `Select an option below to configure chat logs:`;
-                const buttonMessage = {
-                    text: prompt,
-                    buttons: [
-                        { buttonId: `${config.prefix}gclog on`, buttonText: { displayText: 'Turn On 🟢' }, type: 1 },
-                        { buttonId: `${config.prefix}gclog off`, buttonText: { displayText: 'Turn Off 💤' }, type: 1 },
-                        { buttonId: `${config.prefix}gclog check`, buttonText: { displayText: 'Check Log 📊' }, type: 1 }
-                    ],
-                    headerType: 1
-                };
-                try {
-                    return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-                } catch (e) {
-                    return await sock.sendMessage(jid, { text: `${prompt}\n\n• \`${config.prefix}gclog on\`\n• \`${config.prefix}gclog off\`\n• \`${config.prefix}gclog check\`` }, { quoted: msg });
-                }
-            }
-
-            if (action === 'on') {
-                config.gclogActive[jid] = true;
-
-                if (global.gclogIntervals[jid]) clearInterval(global.gclogIntervals[jid]);
-                global.gclogIntervals[jid] = setInterval(async () => {
-                    await triggerSummary(sock, jid);
-                }, 3 * 60 * 60 * 1000);
-
-                await sock.sendMessage(jid, { text: "🔒 *GCLOG Activated. Chat recordings have commenced. A 10-point summary will be generated every 3 hours.*" }, { quoted: msg });
-                saveState();
-                return;
-            }
-
-            if (action === 'off') {
-                if (global.gclogIntervals[jid]) {
-                    clearInterval(global.gclogIntervals[jid]);
-                    delete global.gclogIntervals[jid];
-                }
-                config.gclogActive[jid] = false;
-                if (config.conversationLogs[jid]) delete config.conversationLogs[jid];
-
-                await sock.sendMessage(jid, { text: "🔓 *GCLOG Deactivated and logs cleared.*" }, { quoted: msg });
-                saveState();
-                return;
-            }
-
-            if (action === 'check') {
-                const logs = config.conversationLogs[jid] || [];
-                if (logs.length === 0) return await sock.sendMessage(jid, { text: "📊 No logs found within the current 3-hour window." }, { quoted: msg });
-
-                await sock.sendMessage(jid, { text: "⏳ *Summarizing current logs...*" }, { quoted: msg });
-                const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
-
-                const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
-
-                try {
-                    const responseText = await queryGeminiText(prompt, logString);
-                    await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}` }, { quoted: msg });
-                } catch (err) {
-                    await sock.sendMessage(jid, { text: "❌ Summary generation failed." }, { quoted: msg });
-                }
+        if (!action) {
+            const rawMsg = getRawMessage(msg.message);
+            const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
+                             rawMsg?.templateButtonReplyMessage?.selectedId ||
+                             '';
+            if (buttonId) {
+                const parts = buttonId.split(' ');
+                if (parts.length > 1) action = parts[1]?.toLowerCase() || '';
             }
         }
-    },
+
+        // ─── No action: show menu ──────────────────────────────
+        if (!action) {
+            const current = config.gclogActive[jid] ? 'on' : 'off';
+            const activeStatus = current === 'on' ? "Active 🟢" : "Inactive 💤";
+            const prompt = `📊 *Group Chat Log (GCLOG) Configuration:*\n\n` +
+                           `• *Status:* \`${activeStatus}\`\n\n` +
+                           `Select an option below to configure chat logs:`;
+            const buttonMessage = {
+                text: prompt,
+                buttons: [
+                    { buttonId: `${config.prefix}gclog on`, buttonText: { displayText: 'Turn On 🟢' }, type: 1 },
+                    { buttonId: `${config.prefix}gclog off`, buttonText: { displayText: 'Turn Off 💤' }, type: 1 },
+                    { buttonId: `${config.prefix}gclog check`, buttonText: { displayText: 'Check Log 📊' }, type: 1 }
+                ],
+                headerType: 1
+            };
+            try {
+                return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+            } catch (e) {
+                return await sock.sendMessage(jid, { text: `${prompt}\n\n• \`${config.prefix}gclog on\`\n• \`${config.prefix}gclog off\`\n• \`${config.prefix}gclog check\`` }, { quoted: msg });
+            }
+        }
+
+        // ─── Handle actions ──────────────────────────────────────
+        if (action === 'on') {
+            config.gclogActive[jid] = true;
+
+            if (global.gclogIntervals[jid]) clearInterval(global.gclogIntervals[jid]);
+            global.gclogIntervals[jid] = setInterval(async () => {
+                await triggerSummary(sock, jid);
+            }, 3 * 60 * 60 * 1000);
+
+            await sock.sendMessage(jid, { text: "🔒 *GCLOG Activated. Chat recordings have commenced. A 10-point summary will be generated every 3 hours.*" }, { quoted: msg });
+            saveState();
+            return;
+        }
+
+        if (action === 'off') {
+            if (global.gclogIntervals[jid]) {
+                clearInterval(global.gclogIntervals[jid]);
+                delete global.gclogIntervals[jid];
+            }
+            config.gclogActive[jid] = false;
+            if (config.conversationLogs[jid]) delete config.conversationLogs[jid];
+
+            await sock.sendMessage(jid, { text: "🔓 *GCLOG Deactivated and logs cleared.*" }, { quoted: msg });
+            saveState();
+            return;
+        }
+
+        if (action === 'check') {
+            const logs = config.conversationLogs[jid] || [];
+            if (logs.length === 0) return await sock.sendMessage(jid, { text: "📊 No logs found within the current 3-hour window." }, { quoted: msg });
+
+            await sock.sendMessage(jid, { text: "⏳ *Summarizing current logs...*" }, { quoted: msg });
+            const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+
+            const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
+
+            try {
+                const responseText = await queryGeminiText(prompt, logString);
+                await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}` }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: "❌ Summary generation failed." }, { quoted: msg });
+            }
+            return;
+        }
+
+        // Fallback
+        await sock.sendMessage(jid, { text: `❌ Unknown action: ${action}` }, { quoted: msg });
+    }
+},
+
 
     // 7. CREATEGC
     {
