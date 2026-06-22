@@ -327,11 +327,6 @@ function isUserSilenced(silencedUsers, jid, senderJid) {
 // ─── MAIN MESSAGE HANDLER ──────────────────────────────────────
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
-        // ─── INITIALISE CONFIG DEFAULTS ──────────────────────────
-        config.gayList = config.gayList || [];
-        config.afk = config.afk || {};
-        global.gclogIntervals = global.gclogIntervals || {};
-
         if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
         const msg = chatUpdate.messages[0];
         if (!msg || !msg.message) return;
@@ -378,11 +373,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (quotedMsgId && activeQuizKey && global.triviaSessions && global.triviaSessions[activeQuizKey]) {
             const session = global.triviaSessions[activeQuizKey];
             if (session.status === 'awaiting_category' && session.lastQuestionMsgId === quotedMsgId) {
-                if (typeof commands['quiz_cat'] === 'function') {
-                    await commands['quiz_cat'](sock, msg, trimmedMessage, { isOwner: false, isSudo: false, isDev: false, senderNumber });
-                } else {
-                    console.error('❌ quiz_cat command not loaded');
-                }
+                await commands['quiz_cat'](sock, msg, trimmedMessage, { isOwner: false, isSudo: false, isDev: false, senderNumber });
                 return;
             }
         }
@@ -403,12 +394,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (session.status === 'playing' && session.lastQuestionMsgId === quotedMsgId) {
                 const ans = trimmedMessage.toLowerCase().trim();
                 if (['a', 'b', 'c', 'd'].includes(ans)) {
-                    const cmd = commands[`${config.prefix}quiz_ans`];
-                    if (typeof cmd === 'function') {
-                        await cmd(sock, msg, ans, { isOwner: false, isSudo: false, isDev: false, senderNumber });
-                    } else {
-                        console.error('❌ quiz_ans command not loaded');
-                    }
+                    await commands[`${config.prefix}quiz_ans`](sock, msg, ans, { isOwner: false, isSudo: false, isDev: false, senderNumber });
                     return;
                 }
             }
@@ -439,6 +425,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         await handleAfkDeactivation(sock, msg);
 
         // ─── PERMISSIONS ──────────────────────────────────────────
+        // (command and args already declared)
+
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
 
@@ -597,6 +585,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 saveState();
             }
 
+            if (!global.gclogIntervals) global.gclogIntervals = {};
             if (!global.gclogIntervals[jid]) {
                 global.gclogIntervals[jid] = setInterval(async () => {
                     const logs = config.conversationLogs?.[jid] || [];
@@ -782,42 +771,43 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── ANTIGAY INTERCEPTOR (REVISED) ─────────────────────────────
-const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
-const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
-const isGayCommand = gayCommands.includes(cleanCmd);
+        // ─── ANTIGAY INTERCEPTOR (FIXED) ─────────────────────────
+        const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
+        const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
+        const isGayCommand = gayCommands.includes(cleanCmd);
 
-if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList && config.gayList.length > 0) {
-    const senderNum = senderJid.split('@')[0];
-    const isGay = config.gayList.some(entry => entry.lid.split('@')[0] === senderNum);
+        if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList && config.gayList.length > 0) {
+            const senderNum = senderJid.split('@')[0];
+            const isGay = config.gayList.some(entry => entry.lid.split('@')[0] === senderNum);
 
-    if (isGay) {
-        // Get the user who activated antigay
-        const activatedBy = config.antigay[jid].activatedBy;
-        if (!activatedBy) return; // Should not happen
+            if (isGay) {
+                // Get the user who activated antigay
+                const activatedBy = config.antigay[jid].activatedBy;
+                if (!activatedBy) return;
 
-        // Check if the message mentions or replies to the activatedBy user
-        const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normalizeToJid(activatedBy));
-        const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normalizeToJid(activatedBy);
+                // Check if the message mentions or replies to the activatedBy user
+                const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normalizeToJid(activatedBy));
+                const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normalizeToJid(activatedBy);
 
-        if (isMentioningActivated || isReplyingToActivated) {
-            const rudeMessages = [
-                "Shut up, you gay fool. Don't tag my master.",
-                "Back off, rainbow boy. You're not worthy.",
-                "My Infinity rejects your gay energy. Stay away.",
-                "You really think you can talk to my master? Gay. 💀",
-                "Don't you have a boyfriend to annoy? Leave me alone.",
-                "Master is busy. Go find your gay club.",
-                "I'd say you're weak, but you're just... gay.",
-                "You're not even worth my Six Eyes. Get lost.",
-                "Master doesn't associate with gay peasants like you.",
-                "Another gay trying to get attention. Blocked."
-            ];
-            const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
-            await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
+                if (isMentioningActivated || isReplyingToActivated) {
+                    const rudeMessages = [
+                        "Shut up, you gay fool. Don't tag my master.",
+                        "Back off, rainbow boy. You're not worthy.",
+                        "My Infinity rejects your gay energy. Stay away.",
+                        "You really think you can talk to my master? Gay. 💀",
+                        "Don't you have a boyfriend to annoy? Leave me alone.",
+                        "Master is busy. Go find your gay club.",
+                        "I'd say you're weak, but you're just... gay.",
+                        "You're not even worth my Six Eyes. Get lost.",
+                        "Master doesn't associate with gay peasants like you.",
+                        "Another gay trying to get attention. Blocked."
+                    ];
+                    const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
+                    await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
+                }
+            }
         }
-    }
-}
+
         // ─── AGENT DETECTION ──────────────────────────────────────
         const quotedParticipant = contextInfo?.participant;
         const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
