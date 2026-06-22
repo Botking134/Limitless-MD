@@ -168,102 +168,140 @@ module.exports = [
         }
     },
 
-    // 3. DELETE (with Amaterasu GIF)
     {
-        name: 'delete',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-            if (!contextInfo || !contextInfo.stanzaId) return;
+    name: 'delete',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
 
-            try {
-                const botJid = config.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
-                const botLid = config.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
-
-                const isFromMe = contextInfo.participant === botJid || (botLid && contextInfo.participant === botLid);
-
-                const quotedKey = {
-                    remoteJid: jid,
-                    id: contextInfo.stanzaId,
-                    fromMe: isFromMe,
-                    participant: contextInfo.participant
-                };
-
-                // ─── Send Amaterasu GIF ──────────────────────────────
-                const gifMsg = await sock.sendMessage(jid, {
-                    video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
-                    gifPlayback: true,
-                    caption: "Amaterasu!!!!"
-                });
-
-                // ─── Delete the target message ──────────────────────
-                await sock.sendMessage(jid, { delete: quotedKey });
-                try { await sock.sendMessage(jid, { delete: msg.key }); } catch (err) { /* ignore */ }
-
-                // ─── Delete the GIF after 10 seconds ────────────────
-                setTimeout(async () => {
-                    try {
-                        await sock.sendMessage(jid, { delete: gifMsg.key });
-                    } catch (err) { /* ignore */ }
-                }, 10000);
-
-            } catch (error) { /* ignore */ }
+        if (!contextInfo || !contextInfo.stanzaId) {
+            return await sock.sendMessage(jid, { text: "❌ Reply to a message to delete." }, { quoted: msg });
         }
-    },
 
-    // 4. TDELETE (with Amaterasu GIF)
-    {
-        name: 'tdelete',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-            if (!contextInfo || !contextInfo.stanzaId || !args) return;
+        try {
+            const botJid = config.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
+            const botLid = config.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
 
-            const durationMs = parseDuration(args.trim());
-            if (!durationMs) return;
+            // Determine if the quoted message was sent by the bot
+            const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
+            const isFromMe = quotedSender === botJid || (botLid && quotedSender === botLid);
 
-            try {
-                const botJid = config.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
-                const botLid = config.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+            const quotedKey = {
+                remoteJid: jid,
+                id: contextInfo.stanzaId,
+                fromMe: isFromMe,
+                participant: contextInfo.participant || undefined // only needed for group messages
+            };
 
-                const isFromMe = contextInfo.participant === botJid || (botLid && contextInfo.participant === botLid);
-                const quotedKey = {
-                    remoteJid: jid,
-                    id: contextInfo.stanzaId,
-                    fromMe: isFromMe,
-                    participant: contextInfo.participant
-                };
+            // ─── 1. Send Amaterasu GIF ──────────────────────────────
+            const gifMsg = await sock.sendMessage(jid, {
+                video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
+                gifPlayback: true,
+                caption: "Amaterasu!!!!"
+            });
 
-                // ─── Send Amaterasu GIF ──────────────────────────────
-                const gifMsg = await sock.sendMessage(jid, {
-                    video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
-                    gifPlayback: true,
-                    caption: "Amaterasu!!!!"
-                });
+            // ─── 2. Delete the quoted (target) message ──────────────
+            await sock.sendMessage(jid, { delete: quotedKey });
 
-                const countdownMsg = await sock.sendMessage(jid, {
-                    text: `⏳ Message will be deleted in *${args.trim()}*...`
-                }, { quoted: msg });
+            // ─── 3. Delete the command message itself ───────────────
+            await sock.sendMessage(jid, { delete: msg.key });
 
-                setTimeout(async () => {
-                    try {
-                        await sock.sendMessage(jid, { delete: quotedKey });
-                        try { await sock.sendMessage(jid, { delete: countdownMsg.key }); } catch (e) { /* ignore */ }
-                        // ─── Delete the GIF after 10 seconds ────────
-                        setTimeout(async () => {
-                            try {
-                                await sock.sendMessage(jid, { delete: gifMsg.key });
-                            } catch (err) { /* ignore */ }
-                        }, 10000);
-                    } catch (err) { /* ignore */ }
-                }, durationMs);
-            } catch (error) { /* ignore */ }
+            // ─── 4. Schedule deletion of the GIF after 10 seconds ──
+            setTimeout(async () => {
+                try {
+                    await sock.sendMessage(jid, { delete: gifMsg.key });
+                } catch (err) {
+                    console.error("❌ [DELETE] Failed to delete GIF:", err.message);
+                }
+            }, 10000);
+
+        } catch (error) {
+            console.error("❌ [DELETE] Error:", error.message);
+            await sock.sendMessage(jid, { text: `❌ Delete failed: ${error.message}` }, { quoted: msg });
         }
-    },
+    }
+},
+
+
+                {
+    name: 'tdelete',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+
+        if (!contextInfo || !contextInfo.stanzaId) {
+            return await sock.sendMessage(jid, { text: "❌ Reply to a message and specify a duration." }, { quoted: msg });
+        }
+
+        if (!args) {
+            return await sock.sendMessage(jid, { text: "❌ Provide duration (e.g., `5s`, `2m`, `1h`)." }, { quoted: msg });
+        }
+
+        const durationMs = parseDuration(args.trim());
+        if (!durationMs) {
+            return await sock.sendMessage(jid, { text: "❌ Invalid duration format. Use `5s`, `2m`, `1h`." }, { quoted: msg });
+        }
+
+        try {
+            const botJid = config.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
+            const botLid = config.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+
+            const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
+            const isFromMe = quotedSender === botJid || (botLid && quotedSender === botLid);
+
+            const quotedKey = {
+                remoteJid: jid,
+                id: contextInfo.stanzaId,
+                fromMe: isFromMe,
+                participant: contextInfo.participant || undefined
+            };
+
+            // ─── 1. Send Amaterasu GIF ──────────────────────────────
+            const gifMsg = await sock.sendMessage(jid, {
+                video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
+                gifPlayback: true,
+                caption: "Amaterasu!!!!"
+            });
+
+            // ─── 2. Send countdown message ──────────────────────────
+            const countdownMsg = await sock.sendMessage(jid, {
+                text: `⏳ Message will be deleted in *${args.trim()}*...`
+            }, { quoted: msg });
+
+            // ─── 3. Schedule deletion after duration ────────────────
+            setTimeout(async () => {
+                try {
+                    // Delete the target message
+                    await sock.sendMessage(jid, { delete: quotedKey });
+                    // Delete the countdown message
+                    await sock.sendMessage(jid, { delete: countdownMsg.key });
+                    // Delete the command message (if still exists)
+                    try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
+
+                    // ─── 4. Schedule deletion of the GIF after 10 seconds ──
+                    setTimeout(async () => {
+                        try {
+                            await sock.sendMessage(jid, { delete: gifMsg.key });
+                        } catch (err) {
+                            console.error("❌ [TDELETE] Failed to delete GIF:", err.message);
+                        }
+                    }, 10000);
+
+                } catch (error) {
+                    console.error("❌ [TDELETE] Timed delete failed:", error.message);
+                }
+            }, durationMs);
+
+        } catch (error) {
+            console.error("❌ [TDELETE] Error:", error.message);
+            await sock.sendMessage(jid, { text: `❌ Timed delete failed: ${error.message}` }, { quoted: msg });
+        }
+    }
+},
 
     // 5. AUTOREACT
     {
