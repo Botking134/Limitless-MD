@@ -396,7 +396,39 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        await handleAfkDeactivation(sock, msg);
+        
+
+// ─── PVP INTERCEPTOR ─────────────────────────────────────────────
+const pvpSessionKey = jid;
+if (quotedMsgId && global.pvpSessions && global.pvpSessions[pvpSessionKey]) {
+    const session = global.pvpSessions[pvpSessionKey];
+    if (session.lastQuestionMsgId === quotedMsgId) {
+        const ans = trimmedMessage.trim();
+        // Lobby: only the player who is NOT the creator can join
+        if (session.status === 'lobby' && senderJid !== session.p1) {
+            command = 'pvp_lobby_accept';
+            args = ans;
+        }
+        // Player 2 choosing their character
+        else if (session.status === 'p2_choosing' && senderJid === session.p2) {
+            command = 'pvp_choose';
+            args = ans;
+        }
+        // Fighting: current turn player attacks
+        else if (session.status === 'fighting' && senderJid === session.turn) {
+            command = 'pvp_fight';
+            args = ans;
+        }
+        // Defending: defender parries
+        else if (session.status === 'defending' && senderJid === session.defender) {
+            command = 'pvp_defend';
+            args = ans;
+        }
+    }
+}
+
+await handleAfkDeactivation(sock, msg);
+
 
         // ─── PERMISSIONS ──────────────────────────────────────────
         let command;
