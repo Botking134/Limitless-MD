@@ -1,6 +1,5 @@
 // index.js
 
-require('./tools/converter.js') 
 
 require('dotenv').config();
 
