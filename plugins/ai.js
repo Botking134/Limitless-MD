@@ -98,9 +98,13 @@ function isBotAddressed(sock, msg) {
 async function handleNaturalDelay(sock, jid, responseText, presenceType = 'composing') {
     await sock.sendPresenceUpdate(presenceType, jid);
     const wordCount = responseText.split(/\s+/).length;
-    const estimatedTimeMs = (wordCount / 200) * 60 * 1000;
-    const finalDelay = Math.max(3000, estimatedTimeMs);
-    await delay(finalDelay);
+    let delayMs = 3000; // default 3 seconds
+
+    if (wordCount > 100) {
+        delayMs = 6000; // 6 seconds for longer responses
+    }
+    // For <=100 words, stays 3 seconds
+    await delay(delayMs);
 }
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
