@@ -1412,22 +1412,24 @@ module.exports = [
 
         if (!config.antigay) config.antigay = {};
 
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+
         const action = args ? args.toLowerCase().trim() : '';
 
         if (action === 'on') {
-            config.antigay[jid] = 'on';
+            config.antigay[jid] = { status: 'on', activatedBy: senderJid };
             saveState();
-            await sock.sendMessage(jid, { text: "🔒 *AntiGay activated!* Gay users will be bullied." }, { quoted: msg });
+            await sock.sendMessage(jid, { text: "🔒 *AntiGay activated!* Gay users will be bullied only when they mention or reply to you." }, { quoted: msg });
         } else if (action === 'off') {
-            config.antigay[jid] = 'off';
+            config.antigay[jid] = { status: 'off' };
             saveState();
             await sock.sendMessage(jid, { text: "🔓 *AntiGay deactivated.*" }, { quoted: msg });
         } else {
-            const current = config.antigay[jid] || 'off';
+            const current = config.antigay[jid]?.status || 'off';
             await sock.sendMessage(jid, { text: `🛡️ *AntiGay Status:* \`${current.toUpperCase()}\`` }, { quoted: msg });
         }
     }
-},
+}, 
 
 // ─── .GAYLIST (Show gay list) ──────────────────────────────────
 {
