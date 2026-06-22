@@ -1434,13 +1434,11 @@ module.exports = [
             return await sock.sendMessage(jid, { text: "❌ You are not authorized to use this command." }, { quoted: msg });
         }
 
-        // Get the command name from args
         const commandName = args ? args.trim() : '';
         if (!commandName) {
             return await sock.sendMessage(jid, { text: "❌ Please specify a command name. Example: `.setcmd ping`" }, { quoted: msg });
         }
 
-        // Get the sticker's SHA256 hash from the replied message
         const rawMsg = getRawMessage(msg.message);
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
         if (!contextInfo || !contextInfo.quotedMessage) {
@@ -1453,15 +1451,20 @@ module.exports = [
             return await sock.sendMessage(jid, { text: "❌ The replied message is not a sticker." }, { quoted: msg });
         }
 
-        const fileHash = stickerMsg.fileSha256?.toString('base64');
-        if (!fileHash) {
+        // Get hash – ensure it's a Buffer before converting
+        const hashBuffer = stickerMsg.fileSha256;
+        if (!hashBuffer) {
             return await sock.sendMessage(jid, { text: "❌ Could not read sticker hash." }, { quoted: msg });
         }
+        const fileHash = hashBuffer.toString('base64');
 
-        // Initialize stickerCommands if needed
+        // Optional: log the hash for debugging
+        console.log(`[SETCMD] Sticker hash: ${fileHash}`);
+
+        // Initialize config
         if (!config.stickerCommands) config.stickerCommands = {};
 
-        // Save the mapping
+        // Save mapping
         config.stickerCommands[fileHash] = commandName;
         const { setVar } = require('../vars');
         const success = setVar('stickerCommands', config.stickerCommands);
@@ -1469,9 +1472,58 @@ module.exports = [
             return await sock.sendMessage(jid, { text: "❌ Failed to save mapping." }, { quoted: msg });
         }
 
+        // Also save to config itself (double‑save for safety)
+        saveState();
+
         await sock.sendMessage(jid, { text: `✅ Sticker mapped to command: *${commandName}*` }, { quoted: msg });
     }
 },
+
+// ─── DELCMD – Remove sticker command mapping ───────────────────
+{
+    name: 'delcmd',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner && !isSudo && !isDev) {
+            return await sock.sendMessage(jid, { text: "❌ You are not authorized to use this command." }, { quoted: msg });
+        }
+
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+        if (!contextInfo || !contextInfo.quotedMessage) {
+            return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker to remove its mapping." }, { quoted: msg });
+        }
+
+        const quoted = contextInfo.quotedMessage;
+        const stickerMsg = quoted.stickerMessage || quoted.message?.stickerMessage;
+        if (!stickerMsg) {
+            return await sock.sendMessage(jid, { text: "❌ The replied message is not a sticker." }, { quoted: msg });
+        }
+
+        const hashBuffer = stickerMsg.fileSha256;
+        if (!hashBuffer) {
+            return await sock.sendMessage(jid, { text: "❌ Could not read sticker hash." }, { quoted: msg });
+        }
+        const fileHash = hashBuffer.toString('base64');
+
+        console.log(`[DELCMD] Sticker hash: ${fileHash}`);
+
+        if (!config.stickerCommands || !config.stickerCommands[fileHash]) {
+            return await sock.sendMessage(jid, { text: "❌ No command mapped to this sticker." }, { quoted: msg });
+        }
+
+        delete config.stickerCommands[fileHash];
+        const { setVar } = require('../vars');
+        const success = setVar('stickerCommands', config.stickerCommands);
+        if (!success) {
+            return await sock.sendMessage(jid, { text: "❌ Failed to remove mapping." }, { quoted: msg });
+        }
+        saveState();
+
+        await sock.sendMessage(jid, { text: "✅ Sticker command mapping removed." }, { quoted: msg });
+    }
+}
 
 // ─── DELCMD – Remove sticker command mapping ───────────────────
 {
