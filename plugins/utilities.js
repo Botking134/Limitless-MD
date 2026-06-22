@@ -168,71 +168,98 @@ module.exports = [
         }
     },
 
-    {
+// 3. delete
+
+   {
     name: 'delete',
     isPrefixless: false,
     execute: async (sock, msg, args) => {
         const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+
         const rawMsg = getRawMessage(msg.message);
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-
         if (!contextInfo || !contextInfo.stanzaId) {
             return await sock.sendMessage(jid, { text: "❌ Reply to a message to delete." }, { quoted: msg });
         }
 
         try {
-            const botJid = config.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
-            const botLid = config.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+            // ─── Bot admin check (group only) ──────────────────────
+            if (isGroup) {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+                const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
 
-            // Determine if the quoted message was sent by the bot
+                const isBotAdmin = groupMetadata.participants.some(p => {
+                    const pId = normalizeToJid(p.id);
+                    // Check if this participant matches either the bot's phone JID or LID
+                    return (botJid && (pId === botJid || (botLid && pId === botLid))) &&
+                           (p.admin === 'admin' || p.admin === 'superadmin');
+                });
+
+                if (!isBotAdmin) {
+                    return await sock.sendMessage(jid, {
+                        text: "❌ I need to be an admin to delete messages from other users."
+                    }, { quoted: msg });
+                }
+            }
+
+            // ─── Determine if quoted message was sent by the bot ──
+            const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+
+            // The sender of the quoted message (could be a participant or remoteJid)
             const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
-            const isFromMe = quotedSender === botJid || (botLid && quotedSender === botLid);
+            const normalizedSender = normalizeToJid(quotedSender);
 
+            const isFromMe = (botJid && normalizedSender === botJid) ||
+                             (botLid && normalizedSender === botLid);
+
+            // ─── Build the delete key ──────────────────────────────
             const quotedKey = {
                 remoteJid: jid,
                 id: contextInfo.stanzaId,
                 fromMe: isFromMe,
-                participant: contextInfo.participant || undefined // only needed for group messages
+                // For group messages that are NOT from the bot, we must include the participant
+                participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
             };
 
-            // ─── 1. Send Amaterasu GIF ──────────────────────────────
+            // ─── Send Amaterasu GIF ────────────────────────────────
             const gifMsg = await sock.sendMessage(jid, {
                 video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
                 gifPlayback: true,
                 caption: "Amaterasu!!!!"
             });
 
-            // ─── 2. Delete the quoted (target) message ──────────────
+            // ─── Delete the quoted message ─────────────────────────
             await sock.sendMessage(jid, { delete: quotedKey });
 
-            // ─── 3. Delete the command message itself ───────────────
+            // ─── Delete the command message itself ─────────────────
             await sock.sendMessage(jid, { delete: msg.key });
 
-            // ─── 4. Schedule deletion of the GIF after 10 seconds ──
+            // ─── Schedule deletion of the GIF after 10 seconds ──
             setTimeout(async () => {
-                try {
-                    await sock.sendMessage(jid, { delete: gifMsg.key });
-                } catch (err) {
-                    console.error("❌ [DELETE] Failed to delete GIF:", err.message);
-                }
+                try { await sock.sendMessage(jid, { delete: gifMsg.key }); } catch (err) { /* ignore */ }
             }, 10000);
 
         } catch (error) {
-            console.error("❌ [DELETE] Error:", error.message);
+            console.error("❌ [DELETE] Error:", error);
             await sock.sendMessage(jid, { text: `❌ Delete failed: ${error.message}` }, { quoted: msg });
         }
     }
-},
+}, 
 
 
-                {
+// 4. tdelete
+{
     name: 'tdelete',
     isPrefixless: false,
     execute: async (sock, msg, args) => {
         const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+
         const rawMsg = getRawMessage(msg.message);
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-
         if (!contextInfo || !contextInfo.stanzaId) {
             return await sock.sendMessage(jid, { text: "❌ Reply to a message and specify a duration." }, { quoted: msg });
         }
@@ -247,61 +274,80 @@ module.exports = [
         }
 
         try {
-            const botJid = config.botJid || (sock.user?.id ? (sock.user.id.includes('@lid') ? '' : sock.user.id.replace(/:.*/, '') + '@s.whatsapp.net') : '');
-            const botLid = config.botLid || (sock.user?.id ? (sock.user.id.includes('@lid') ? sock.user.id.replace(/:.*/, '') + '@lid' : '') : '');
+            // ─── Bot admin check (group only) ──────────────────────
+            if (isGroup) {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+                const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+
+                const isBotAdmin = groupMetadata.participants.some(p => {
+                    const pId = normalizeToJid(p.id);
+                    return (botJid && (pId === botJid || (botLid && pId === botLid))) &&
+                           (p.admin === 'admin' || p.admin === 'superadmin');
+                });
+
+                if (!isBotAdmin) {
+                    return await sock.sendMessage(jid, {
+                        text: "❌ I need to be an admin to delete messages from other users."
+                    }, { quoted: msg });
+                }
+            }
+
+            // ─── Determine if quoted message was sent by the bot ──
+            const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
 
             const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
-            const isFromMe = quotedSender === botJid || (botLid && quotedSender === botLid);
+            const normalizedSender = normalizeToJid(quotedSender);
 
+            const isFromMe = (botJid && normalizedSender === botJid) ||
+                             (botLid && normalizedSender === botLid);
+
+            // ─── Build the delete key ──────────────────────────────
             const quotedKey = {
                 remoteJid: jid,
                 id: contextInfo.stanzaId,
                 fromMe: isFromMe,
-                participant: contextInfo.participant || undefined
+                participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
             };
 
-            // ─── 1. Send Amaterasu GIF ──────────────────────────────
+            // ─── Send Amaterasu GIF ────────────────────────────────
             const gifMsg = await sock.sendMessage(jid, {
                 video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
                 gifPlayback: true,
                 caption: "Amaterasu!!!!"
             });
 
-            // ─── 2. Send countdown message ──────────────────────────
+            // ─── Send countdown message ────────────────────────────
             const countdownMsg = await sock.sendMessage(jid, {
                 text: `⏳ Message will be deleted in *${args.trim()}*...`
             }, { quoted: msg });
 
-            // ─── 3. Schedule deletion after duration ────────────────
+            // ─── Schedule deletion after the duration ──────────────
             setTimeout(async () => {
                 try {
-                    // Delete the target message
+                    // Delete the quoted message
                     await sock.sendMessage(jid, { delete: quotedKey });
                     // Delete the countdown message
                     await sock.sendMessage(jid, { delete: countdownMsg.key });
-                    // Delete the command message (if still exists)
+                    // Delete the command message (if still there)
                     try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
-
-                    // ─── 4. Schedule deletion of the GIF after 10 seconds ──
+                    // Schedule GIF deletion after 10s
                     setTimeout(async () => {
-                        try {
-                            await sock.sendMessage(jid, { delete: gifMsg.key });
-                        } catch (err) {
-                            console.error("❌ [TDELETE] Failed to delete GIF:", err.message);
-                        }
+                        try { await sock.sendMessage(jid, { delete: gifMsg.key }); } catch (err) { /* ignore */ }
                     }, 10000);
-
                 } catch (error) {
-                    console.error("❌ [TDELETE] Timed delete failed:", error.message);
+                    console.error("❌ [TDELETE] Timed delete failed:", error);
                 }
             }, durationMs);
 
         } catch (error) {
-            console.error("❌ [TDELETE] Error:", error.message);
+            console.error("❌ [TDELETE] Error:", error);
             await sock.sendMessage(jid, { text: `❌ Timed delete failed: ${error.message}` }, { quoted: msg });
         }
     }
 },
+
 
     // 5. AUTOREACT
     {
