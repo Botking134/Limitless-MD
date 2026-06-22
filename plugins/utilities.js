@@ -170,7 +170,7 @@ module.exports = [
 
 // 3. delete
 
-   {
+  {
     name: 'delete',
     isPrefixless: false,
     execute: async (sock, msg, args) => {
@@ -184,17 +184,27 @@ module.exports = [
         }
 
         try {
-            // ─── Bot admin check (group only) ──────────────────────
-            if (isGroup) {
+            // ─── Determine if quoted message was sent by the bot ──
+            const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+
+            // The sender of the quoted message (participant for groups, remoteJid for DM)
+            const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
+            const normalizedSender = normalizeToJid(quotedSender);
+
+            const isFromMe = (botJid && normalizedSender === botJid) ||
+                             (botLid && normalizedSender === botLid);
+
+            // ─── Admin check (only if message is NOT from bot and in a group) ──
+            if (isGroup && !isFromMe) {
                 const groupMetadata = await sock.groupMetadata(jid);
-                const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-                const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+                const botJidNorm = botJid;
+                const botLidNorm = botLid;
 
                 const isBotAdmin = groupMetadata.participants.some(p => {
                     const pId = normalizeToJid(p.id);
-                    // Check if this participant matches either the bot's phone JID or LID
-                    return (botJid && (pId === botJid || (botLid && pId === botLid))) &&
-                           (p.admin === 'admin' || p.admin === 'superadmin');
+                    return (botJidNorm && pId === botJidNorm) ||
+                           (botLidNorm && pId === botLidNorm);
                 });
 
                 if (!isBotAdmin) {
@@ -204,23 +214,12 @@ module.exports = [
                 }
             }
 
-            // ─── Determine if quoted message was sent by the bot ──
-            const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
-
-            // The sender of the quoted message (could be a participant or remoteJid)
-            const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
-            const normalizedSender = normalizeToJid(quotedSender);
-
-            const isFromMe = (botJid && normalizedSender === botJid) ||
-                             (botLid && normalizedSender === botLid);
-
             // ─── Build the delete key ──────────────────────────────
             const quotedKey = {
                 remoteJid: jid,
                 id: contextInfo.stanzaId,
                 fromMe: isFromMe,
-                // For group messages that are NOT from the bot, we must include the participant
+                // Only include participant for group messages that are NOT from the bot
                 participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
             };
 
@@ -247,10 +246,11 @@ module.exports = [
             await sock.sendMessage(jid, { text: `❌ Delete failed: ${error.message}` }, { quoted: msg });
         }
     }
-}, 
+},
 
 
-// 4. tdelete
+// 4. TDEL
+
 {
     name: 'tdelete',
     isPrefixless: false,
@@ -274,25 +274,6 @@ module.exports = [
         }
 
         try {
-            // ─── Bot admin check (group only) ──────────────────────
-            if (isGroup) {
-                const groupMetadata = await sock.groupMetadata(jid);
-                const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-                const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
-
-                const isBotAdmin = groupMetadata.participants.some(p => {
-                    const pId = normalizeToJid(p.id);
-                    return (botJid && (pId === botJid || (botLid && pId === botLid))) &&
-                           (p.admin === 'admin' || p.admin === 'superadmin');
-                });
-
-                if (!isBotAdmin) {
-                    return await sock.sendMessage(jid, {
-                        text: "❌ I need to be an admin to delete messages from other users."
-                    }, { quoted: msg });
-                }
-            }
-
             // ─── Determine if quoted message was sent by the bot ──
             const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
             const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
@@ -302,6 +283,25 @@ module.exports = [
 
             const isFromMe = (botJid && normalizedSender === botJid) ||
                              (botLid && normalizedSender === botLid);
+
+            // ─── Admin check (only if message is NOT from bot and in a group) ──
+            if (isGroup && !isFromMe) {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const botJidNorm = botJid;
+                const botLidNorm = botLid;
+
+                const isBotAdmin = groupMetadata.participants.some(p => {
+                    const pId = normalizeToJid(p.id);
+                    return (botJidNorm && pId === botJidNorm) ||
+                           (botLidNorm && pId === botLidNorm);
+                });
+
+                if (!isBotAdmin) {
+                    return await sock.sendMessage(jid, {
+                        text: "❌ I need to be an admin to delete messages from other users."
+                    }, { quoted: msg });
+                }
+            }
 
             // ─── Build the delete key ──────────────────────────────
             const quotedKey = {
@@ -326,13 +326,9 @@ module.exports = [
             // ─── Schedule deletion after the duration ──────────────
             setTimeout(async () => {
                 try {
-                    // Delete the quoted message
                     await sock.sendMessage(jid, { delete: quotedKey });
-                    // Delete the countdown message
                     await sock.sendMessage(jid, { delete: countdownMsg.key });
-                    // Delete the command message (if still there)
                     try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
-                    // Schedule GIF deletion after 10s
                     setTimeout(async () => {
                         try { await sock.sendMessage(jid, { delete: gifMsg.key }); } catch (err) { /* ignore */ }
                     }, 10000);
@@ -347,7 +343,6 @@ module.exports = [
         }
     }
 },
-
 
     // 5. AUTOREACT
     {
