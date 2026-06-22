@@ -117,7 +117,7 @@ _User: ${msg.pushName || 'User'}_
 _Uptime: ${uptime}_
 _Version: 1.0.0_
 ════════════════════════
-_Throughout Heaven And Earth 🌸_
+_Throughout Heaven And Earth _
 ┌────────────────────────────────────┐
 │ _I alone am the Honoured one_ │
 └────────────────────────────────────┘
