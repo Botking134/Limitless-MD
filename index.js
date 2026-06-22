@@ -11,6 +11,25 @@ const { startBot } = require('./pair');
 const config = require('./config');
 
 
+// ─── TEMPORARY LOG CAPTURE ──────────────────────────────────────
+global.recentLogs = global.recentLogs || [];
+const MAX_LOGS = 100;
+
+const origLog = console.log;
+const origWarn = console.warn;
+const origError = console.error;
+
+function pushLog(level, args) {
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    global.recentLogs.push({ time: new Date().toISOString(), level, message: msg });
+    if (global.recentLogs.length > MAX_LOGS) global.recentLogs.shift();
+}
+
+console.log = (...a) => { pushLog('INFO', a); origLog(...a); };
+console.warn = (...a) => { pushLog('WARN', a); origWarn(...a); };
+console.error = (...a) => { pushLog('ERROR', a); origError(...a); };
+
+
 
 // ─── LOAD PERSISTENT STATE ──────────────────────────────────────
 
