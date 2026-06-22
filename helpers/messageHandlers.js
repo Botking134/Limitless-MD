@@ -337,6 +337,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const senderNumber = senderJid.split('@')[0];
         const isGroup = jid.endsWith('@g.us');
 
+        // ─── DECLARE COMMAND AND ARGS EARLY ──────────────────────
+        let command;
+        let args;
+
         // ─── HOOKS ──────────────────────────────────────────────
         const isNoteSaved = await handleNoteSession(sock, msg);
         if (isNoteSaved) return;
@@ -402,23 +406,16 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             const session = global.pvpSessions[pvpSessionKey];
             if (session.lastQuestionMsgId === quotedMsgId) {
                 const ans = trimmedMessage.trim();
-                // Lobby: only the player who is NOT the creator can join
                 if (session.status === 'lobby' && senderJid !== session.p1) {
                     command = 'pvp_lobby_accept';
                     args = ans;
-                }
-                // Player 2 choosing their character
-                else if (session.status === 'p2_choosing' && senderJid === session.p2) {
+                } else if (session.status === 'p2_choosing' && senderJid === session.p2) {
                     command = 'pvp_choose';
                     args = ans;
-                }
-                // Fighting: current turn player attacks
-                else if (session.status === 'fighting' && senderJid === session.turn) {
+                } else if (session.status === 'fighting' && senderJid === session.turn) {
                     command = 'pvp_fight';
                     args = ans;
-                }
-                // Defending: defender parries
-                else if (session.status === 'defending' && senderJid === session.defender) {
+                } else if (session.status === 'defending' && senderJid === session.defender) {
                     command = 'pvp_defend';
                     args = ans;
                 }
@@ -428,8 +425,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         await handleAfkDeactivation(sock, msg);
 
         // ─── PERMISSIONS ──────────────────────────────────────────
-        let command = command || null; // ensure command variable exists
-        let args = args || '';
+        // (command and args already declared)
 
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
@@ -800,7 +796,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
                 const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
                 await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
-                return; // Stop processing this message
+                return;
             }
         }
 
@@ -909,28 +905,31 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return;
         }
 
-        // ─── COMMAND EXECUTION ─────────────────────────────────────────
-console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
+        // ─── COMMAND EXECUTION ─────────────────────────────────────
+        console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
-const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
+        const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
 
-// Determine reaction emoji based on role
-let reactEmoji = "☄️"; // fallback for normal users
-if (isDev) reactEmoji = "♾️";
-else if (isOwner) reactEmoji = "🪯";
-else if (isSudo) reactEmoji = "☸️";
+        // Determine reaction emoji based on role
+        let reactEmoji = "❄";
+        if (isDev) reactEmoji = "♾️";
+        else if (isOwner) reactEmoji = "🪯";
+        else if (isSudo) reactEmoji = "☸️";
 
-if (commands[cmdKey]) {
-    if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-        try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
+        if (commands[cmdKey]) {
+            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+                try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
+            }
+            await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
+        } else if (commands[command]) {
+            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+                try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
+            }
+            await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
+        }
+    } catch (err) {
+        console.error('Error handling message stream:', err);
     }
-    await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
-} else if (commands[command]) {
-    if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-        try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
-    }
-    await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
-   }
 }
 
 module.exports = { handleIncomingMessage };
