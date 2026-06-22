@@ -1153,7 +1153,37 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: list, mentions: mentionsList }, { quoted: msg });
         }
+    }, 
+
+{
+    name: 'logs',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        if (!global.recentLogs || global.recentLogs.length === 0) {
+            return await sock.sendMessage(jid, { text: "📋 No recent logs available." }, { quoted: msg });
+        }
+
+        let count = parseInt(args) || 20;
+        if (count > 100) count = 100;
+
+        const logs = global.recentLogs.slice(-count);
+        let text = `📋 *RECENT LOGS (Last ${logs.length})*\n━━━━━━━━━━━━━━━━━━━\n\n`;
+        logs.forEach(entry => {
+            const time = entry.time.split('T')[1].slice(0, 8); // HH:MM:SS
+            text += `[${time}] ${entry.level}: ${entry.message}\n`;
+        });
+
+        if (text.length > 65000) {
+            text = text.slice(0, 65000) + '\n... (truncated)';
+        }
+
+        await sock.sendMessage(jid, { text }, { quoted: msg });
     }
+}
+
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
