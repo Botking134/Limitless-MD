@@ -909,25 +909,27 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return;
         }
 
-        // ─── COMMAND EXECUTION ─────────────────────────────────────
-        console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
+        // ─── COMMAND EXECUTION ─────────────────────────────────────────
+console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
-        const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
+const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
 
-        if (commands[cmdKey]) {
-            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
-            }
-            await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
-        } else if (commands[command]) {
-            if (config.autoReact === 'cmd' && !msg.key.fromMe) {
-                try { await sock.sendMessage(jid, { react: { text: "❄", key: msg.key } }); } catch (err) { /* ignore */ }
-            }
-            await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
-        }
-    } catch (err) {
-        console.error('Error handling message stream:', err);
+// Determine reaction emoji based on role
+let reactEmoji = "☄️"; // fallback for normal users
+if (isDev) reactEmoji = "♾️";
+else if (isOwner) reactEmoji = "🪯";
+else if (isSudo) reactEmoji = "☸️";
+
+if (commands[cmdKey]) {
+    if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+        try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
     }
+    await commands[cmdKey](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
+} else if (commands[command]) {
+    if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+        try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
+    }
+    await commands[command](sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
 }
 
 module.exports = { handleIncomingMessage };
