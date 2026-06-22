@@ -163,58 +163,55 @@ module.exports = [
             await handleSticker(sock, msg, args, true);
         }
     },
-    // 3. TAKE / STEAL (metadata override)
-    {
-        name: 'take',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const rawContent = getRawMessage(quoted);
-            if (!rawContent?.stickerMessage) {
-                return await sock.sendMessage(jid, { text: "❌ Reply to a sticker to take its metadata." }, { quoted: msg });
-            }
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(rawContent.stickerMessage, 'sticker');
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                const parts = args ? args.split('|') : [];
-                const pack = parts[0] ? parts[0].trim() : config.packName;
-                const author = parts[1] ? parts[1].trim() : config.author;
-
-                // Try API first
-                let stickerBuffer = await convertViaApi(buffer, false);
-                if (!stickerBuffer) {
-                    // Fallback with custom metadata
-                    const sticker = new Sticker(buffer, {
-                        pack: pack,
-                        author: author,
-                        type: StickerTypes.FULL,
-                        quality: 40
-                    });
-                    stickerBuffer = await sticker.toBuffer();
-                } else {
-                    // If API worked, we need to re-apply metadata? API might ignore, so we re-convert locally with metadata.
-                    // Better to use local for take to ensure metadata is respected.
-                    const sticker = new Sticker(buffer, {
-                        pack: pack,
-                        author: author,
-                        type: StickerTypes.FULL,
-                        quality: 40
-                    });
-                    stickerBuffer = await sticker.toBuffer();
-                }
-
-                await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
-                await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } });
-            } catch (error) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}` }, { quoted: msg });
-            }
+   
+// 3. TAKE / STEAL (Metadata stealer – with animated support)
+{
+    name: 'take',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+        const rawContent = getRawMessage(quoted);
+        if (!rawContent?.stickerMessage) {
+            return await sock.sendMessage(jid, { text: "❌ Reply to a sticker to take its metadata." }, { quoted: msg });
         }
-    },
+
+        try {
+            const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+            const stream = await downloadContentFromMessage(rawContent.stickerMessage, 'sticker');
+            let buffer = Buffer.from([]);
+            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+            const parts = args ? args.split('|') : [];
+            const pack = parts[0] ? parts[0].trim() : config.packName;
+            const author = parts[1] ? parts[1].trim() : config.author;
+
+            // Detect if sticker is animated (has multiple frames)
+            let isAnimated = false;
+            try {
+                const metadata = await sharp(buffer).metadata();
+                if (metadata.pages && metadata.pages > 1) isAnimated = true;
+            } catch (e) { /* ignore */ }
+
+            const sticker = new Sticker(buffer, {
+                pack: pack,
+                author: author,
+                type: StickerTypes.FULL,
+                quality: isAnimated ? 30 : 40,
+                // If the library supports 'animated' option, uncomment:
+                // animated: isAnimated
+            });
+
+            const stickerBuffer = await sticker.toBuffer();
+            await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
+            await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } });
+        } catch (error) {
+            console.error("[TAKE] Error:", error);
+            await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}` }, { quoted: msg });
+        }
+    }
+},  
+
 
     // ─── OTHER COMMANDS (tourl, tomp3, etc.) remain unchanged ──
     // ... (include the rest of your commands: tourl, tomp3, tomp4, currency, binary, toimg, ocr, qr, readqr, quantity)
