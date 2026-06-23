@@ -8,16 +8,6 @@ yarn.lock
 pnpm-lock.yaml
 .npmrc
 
-# ─── Environment & Secrets ──────────────────────────────────────
-.env
-.env.local
-.env.*.local
-*.env
-*.env.local
-*.secret
-credentials.json
-*-credentials.json
-service-account.json
 
 # ─── Storage ──────────────────────────────────────────────────────
 storage/
