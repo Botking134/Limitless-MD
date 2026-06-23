@@ -207,136 +207,174 @@ module.exports = [
         }
     },
 
-    // ─── UPDATE ──────────────────────────────────────────────────
-    {
-        name: 'update',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isDev }) => {
-            const jid = msg.key.remoteJid;
+    
+    
+// ─── UPDATE ──────────────────────────────────────────────────────
+{
+    name: 'update',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isDev }) => {
+        const jid = msg.key.remoteJid;
 
-            const parts = args ? args.split(' ') : [];
-            const action = parts[0] ? parts[0].toLowerCase().trim() : '';
-            const option = parts[1] ? parts[1].toLowerCase().trim() : '';
-            const repoUrl = "https://github.com/Botking134/Limitless-MD.git";
+        const parts = args ? args.split(' ') : [];
+        const action = parts[0] ? parts[0].toLowerCase().trim() : '';
+        const option = parts[1] ? parts[1].toLowerCase().trim() : '';
 
-            if (action === 'install' || action === 'repair' || action === 'npm') {
-                if (!isDev) return;
-                await sock.sendMessage(jid, { text: "⏳ *Running npm install to download and repair missing packages...*" }, { quoted: msg });
-                exec('npm install', async (err, stdout, stderr) => {
-                    if (err) {
-                        return await sock.sendMessage(jid, {
-                            text: `❌ *Package Installation Failed:*\n\`${err.message}\``
-                        }, { quoted: msg });
-                    }
-                    await sock.sendMessage(jid, {
-                        text: `✅ *All packages successfully installed and repaired!*\n\n${stdout || 'Ready.'}\n\n🔄 _Restarting the system to load plugins..._`
-                    }, { quoted: msg });
-                    setTimeout(() => process.exit(1), 3000);
-                });
-                return;
-            }
-
-            if (!isOwner) return;
-
-            if (action === 'setup') {
-                await sock.sendMessage(jid, { text: "⏳ *Initializing Git tracking directly from the server...*" }, { quoted: msg });
-                const setupCommand = `git init && git remote add origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`;
-                exec(setupCommand, async (err, stdout, stderr) => {
-                    if (err) {
-                        if (err.message.includes('already exists')) {
-                            exec(`git remote set-url origin ${repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`, async (retryErr) => {
-                                if (retryErr) {
-                                    return await sock.sendMessage(jid, {
-                                        text: `❌ *Setup Retry Failed:*\n\`${retryErr.message}\``
-                                    }, { quoted: msg });
-                                }
-                                return await sock.sendMessage(jid, {
-                                    text: "✅ *Git tracking successfully initialized and linked!* You can now use standard `⚡ update` commands."
-                                }, { quoted: msg });
-                            });
-                            return;
-                        }
-                        return await sock.sendMessage(jid, {
-                            text: `❌ *Git Setup Failed:*\n\`${err.message}\``
-                        }, { quoted: msg });
-                    }
-                    return await sock.sendMessage(jid, {
-                        text: "✅ *Git tracking successfully initialized and linked!* You can now use standard `⚡ update` commands."
-                    }, { quoted: msg });
-                });
-                return;
-            }
-
-            const isForce = action === 'force' || option === 'force';
-
-            if (action === 'yes' || action === 'confirm' || action === 'force') {
-                if (isForce) {
-                    await sock.sendMessage(jid, { text: "⏳ *Force-pulling updates from upstream... Please wait.*" }, { quoted: msg });
-                    exec('git fetch --all && git reset --hard origin/master', async (err, stdout, stderr) => {
-                        if (err) {
-                            return await sock.sendMessage(jid, {
-                                text: `❌ *Force Update Failed!*\n\n\`${err.message}\``
-                            }, { quoted: msg });
-                        }
-                        await sock.sendMessage(jid, {
-                            text: `✅ *Force Update Successful!*\n\n${stdout || 'Sync complete.'}\n\n🔄 _Restarting system..._`
-                        }, { quoted: msg });
-                        setTimeout(() => process.exit(1), 3000);
-                    });
-                } else {
-                    await sock.sendMessage(jid, { text: "⏳ *Channelling dynamic updates from upstream... Please wait.*" }, { quoted: msg });
-                    exec('git pull', async (err, stdout, stderr) => {
-                        if (err) {
-                            return await sock.sendMessage(jid, {
-                                text: `❌ *Update Failed!*\n\n\`${err.message}\`\n\n💡 _If your uncommitted manual edits are preventing the update, run:_\n\`${config.prefix}update force\``
-                            }, { quoted: msg });
-                        }
-                        await sock.sendMessage(jid, {
-                            text: `✅ *Update Successful!*\n\n${stdout}\n\n🔄 _Restarting system..._`
-                        }, { quoted: msg });
-                        setTimeout(() => process.exit(1), 3000);
-                    });
-                }
-                return;
-            }
-
-            if (action === 'no' || action === 'cancel') {
-                return await sock.sendMessage(jid, { text: "🔮 *Process aborted.* Infinite Void update cancelled." }, { quoted: msg });
-            }
-
-            await sock.sendMessage(jid, { text: "🔍 *Checking for system updates...*" }, { quoted: msg });
-            exec('git fetch && git status -uno', async (err, stdout, stderr) => {
+        // ─── Developer-only actions ────────────────────────────
+        if (action === 'install' || action === 'repair' || action === 'npm') {
+            if (!isDev) return;
+            await sock.sendMessage(jid, { text: "⏳ *Running npm install to repair missing packages...*" }, { quoted: msg });
+            execWithTimeout('npm install', 120000, async (err, stdout, stderr) => {
                 if (err) {
-                    return await sock.sendMessage(jid, {
-                        text: `❌ *Error accessing source code:*\n\`${err.message}\`\n\n💡 _If Git tracking is not set up, run:_\n\`${config.prefix}update setup\``
-                    }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: `❌ *Package Installation Failed:*\n\`${err.message}\`` }, { quoted: msg });
                 }
-                const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
-                if (isBehind) {
-                    const promptText = `👁️ *My six eyes perceive an update.*\n\nWanna check it out?`;
-                    const buttonMessage = {
-                        text: promptText,
-                        buttons: [
-                            { buttonId: `${config.prefix}update yes`, buttonText: { displayText: 'Yes' }, type: 1 },
-                            { buttonId: `${config.prefix}update no`, buttonText: { displayText: 'No' }, type: 1 }
-                        ],
-                        headerType: 1
-                    };
-                    try {
-                        await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-                    } catch (buttonError) {
-                        await sock.sendMessage(jid, {
-                            text: `${promptText}\n\n_Reply with *${config.prefix}update yes* to apply._\n_Reply with *${config.prefix}update no* to cancel._\n_Reply with *${config.prefix}update force* to force-overwrite uncommitted changes._`
-                        }, { quoted: msg });
-                    }
-                } else {
-                    await sock.sendMessage(jid, {
-                        text: "❄️ *There's no Update available at the moment.*"
-                    }, { quoted: msg });
-                }
+                await sock.sendMessage(jid, { text: `✅ *Packages successfully installed!*\n\n${stdout || 'Ready.'}\n\n🔄 _Restarting system..._` }, { quoted: msg });
+                setTimeout(() => process.exit(1), 3000);
             });
+            return;
         }
-    },
+
+        // ─── Owner-only actions ────────────────────────────────
+        if (!isOwner) return;
+
+        // ─── SETUP ──────────────────────────────────────────────
+        if (action === 'setup') {
+            await sock.sendMessage(jid, { text: "⏳ *Setting up Git tracking...*" }, { quoted: msg });
+            const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+            execWithTimeout(setupCmd, 60000, async (err, stdout, stderr) => {
+                if (err) {
+                    if (err.message.includes('already exists')) {
+                        const retryCmd = `git remote set-url origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+                        execWithTimeout(retryCmd, 60000, async (retryErr) => {
+                            if (retryErr) {
+                                return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n\`${retryErr.message}\`` }, { quoted: msg });
+                            }
+                            await sock.sendMessage(jid, { text: "✅ *Git tracking successfully re-linked!*" }, { quoted: msg });
+                        });
+                        return;
+                    }
+                    return await sock.sendMessage(jid, { text: `❌ *Git Setup Failed:*\n\`${err.message}\`` }, { quoted: msg });
+                }
+                await sock.sendMessage(jid, { text: "✅ *Git tracking initialized!*" }, { quoted: msg });
+            });
+            return;
+        }
+
+        // ─── BRANCH ─────────────────────────────────────────────
+        if (action === 'branch') {
+            if (!option) {
+                return await sock.sendMessage(jid, { text: "❌ Please specify a branch name.\nExample: `.update branch dev`" }, { quoted: msg });
+            }
+            await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${option}"...*` }, { quoted: msg });
+            const branchCmd = `git fetch origin && git checkout ${option} && git pull origin ${option}`;
+            execWithTimeout(branchCmd, 60000, async (err, stdout, stderr) => {
+                if (err) {
+                    return await sock.sendMessage(jid, { text: `❌ *Branch switch failed:*\n\`${err.message}\`` }, { quoted: msg });
+                }
+                await sock.sendMessage(jid, { text: `✅ *Switched to branch "${option}".* Restarting...` }, { quoted: msg });
+                setTimeout(() => process.exit(1), 3000);
+            });
+            return;
+        }
+
+        // ─── ROLLBACK ────────────────────────────────────────────
+        if (action === 'revert') {
+            if (!option) {
+                // Show last 5 commits
+                execWithTimeout('git log --oneline -5', 10000, async (err, stdout) => {
+                    if (err) return await sock.sendMessage(jid, { text: `❌ *Failed to get commit log:*\n\`${err.message}\`` }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: `📋 *Recent commits:*\n\n${stdout}\n\nUse \`.update revert <commit-hash>\` to rollback.` }, { quoted: msg });
+                });
+                return;
+            }
+            const revertCmd = `git reset --hard ${option}`;
+            await sock.sendMessage(jid, { text: `⏳ *Reverting to commit ${option}...*` }, { quoted: msg });
+            execWithTimeout(revertCmd, 30000, async (err, stdout, stderr) => {
+                if (err) {
+                    return await sock.sendMessage(jid, { text: `❌ *Revert failed:*\n\`${err.message}\`` }, { quoted: msg });
+                }
+                await sock.sendMessage(jid, { text: `✅ *Reverted to commit ${option}.* Restarting...` }, { quoted: msg });
+                setTimeout(() => process.exit(1), 3000);
+            });
+            return;
+        }
+
+        // ─── MAIN UPDATE FLOW ────────────────────────────────────
+        const isForce = action === 'force' || option === 'force';
+        const isConfirm = action === 'yes' || action === 'confirm';
+
+        // Check if git is set up
+        execWithTimeout('git status', 10000, async (statusErr) => {
+            if (statusErr) {
+                return await sock.sendMessage(jid, {
+                    text: `❌ *Git not initialized.*\n\nPlease run: \`${config.prefix}update setup\``
+                }, { quoted: msg });
+            }
+
+            // Get current branch and commit
+            execWithTimeout('git rev-parse --abbrev-ref HEAD', 10000, async (branchErr, branch) => {
+                if (branchErr) branch = 'unknown';
+                branch = branch.trim();
+
+                // Fetch and check status
+                execWithTimeout('git fetch && git status -uno', 30000, async (fetchErr, stdout, stderr) => {
+                    if (fetchErr) {
+                        return await sock.sendMessage(jid, { text: `❌ *Error checking updates:*\n\`${fetchErr.message}\`` }, { quoted: msg });
+                    }
+
+                    const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
+
+                    // ─── SHOW STATUS ──────────────────────────────
+                    if (!isConfirm && action !== 'force') {
+                        if (!isBehind) {
+                            return await sock.sendMessage(jid, { text: "❄️ *No updates available.*" }, { quoted: msg });
+                        }
+
+                        // Show recent commits
+                        execWithTimeout('git log --oneline -5 HEAD..origin/' + branch, 10000, async (logErr, commitLog) => {
+                            const updateInfo = `👁️ *Updates available on branch "${branch}"*\n\n` +
+                                               `Recent commits:\n${commitLog || '  (no details)'}\n\n` +
+                                               `🔄 *Confirm update?* Use \`${config.prefix}update yes\` to apply.\n` +
+                                               `⚠️ *Force overwrite local changes:* \`${config.prefix}update force\``;
+                            await sock.sendMessage(jid, { text: updateInfo }, { quoted: msg });
+                        });
+                        return;
+                    }
+
+                    // ─── CONFIRM / FORCE UPDATE ──────────────────
+                    if (isForce) {
+                        // Backup before force
+                        await sock.sendMessage(jid, { text: "💾 *Backing up critical files...*" }, { quoted: msg });
+                        await backupCriticalFiles(jid, sock);
+
+                        await sock.sendMessage(jid, { text: "⏳ *Force‑pulling updates...*" }, { quoted: msg });
+                        execWithTimeout('git fetch --all && git reset --hard origin/' + branch, 60000, async (pullErr, pullOut, pullErrOut) => {
+                            if (pullErr) {
+                                return await sock.sendMessage(jid, { text: `❌ *Force Update Failed!*\n\n\`${pullErr.message}\`` }, { quoted: msg });
+                            }
+                            await sendUpdateSuccess(jid, sock, pullOut);
+                        });
+                    } else if (isConfirm) {
+                        await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+                        execWithTimeout('git pull', 60000, async (pullErr, pullOut, pullErrOut) => {
+                            if (pullErr) {
+                                return await sock.sendMessage(jid, {
+                                    text: `❌ *Update Failed!*\n\n\`${pullErr.message}\`\n\n💡 _If you have uncommitted changes, use:\n\`${config.prefix}update force\`_`
+                                }, { quoted: msg });
+                            }
+                            await sendUpdateSuccess(jid, sock, pullOut);
+                        });
+                    } else if (action === 'no' || action === 'cancel') {
+                        await sock.sendMessage(jid, { text: "🔮 *Update cancelled.*" }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(jid, { text: "❌ Unknown action. Use `yes`, `force`, or `no`." }, { quoted: msg });
+                    }
+                });
+            });
+        });
+    }
+},
+
 
     // ─── MODE ────────────────────────────────────────────────────
     {
