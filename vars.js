@@ -5,47 +5,38 @@ const config = require('./config');
 
 const VARS_PATH = path.join(__dirname, 'storage', 'vars.json');
 
-// ─── DEFAULT VALUES ──────────────────────────────────────────────
-// These are the fallback values if vars.json doesn't exist or is corrupted.
-
-const DEFAULT_VARS = {
-    // --- Behavior & Customization ---
-    prefix: "⚡",                // Empty/null → prefixless
-    vvs: "kamui",                // Custom ViewOnce trigger
-    packName: "♾️",              // Sticker pack name
-    author: "Infinity",          // Sticker author
-    menuImage: null,             // Comma-separated URLs to overwrite menu images
-    warnThreshold: 5,            // Warning count before auto-kick
-    presenceMode: null,          // e.g., "autotyping" → enables global presence
-
-    // --- Toggles (also modifiable via dedicated commands) ---
-    isPublic: false,
-    autoReact: "off",
-    antipm: "off",
-    lizzyChats: [],
-    chatbotChats: [],
-    fridayChats: [],             // NEW: per-chat toggle for Friday
-    gojoSleepChats: [],
-    gojoGlobalSleep: false,
-    antilink: {},
-    antitag: {},
-    antibot: {},
-    antispam: {},
-    antigm: {},
-    antigcstatus: "off",
-    antipromote: {},
-    antidemote: {},
-    stickerCommands: {},
-    welcome: {},
-    goodbye: {},
-    gcalerts: { promote: {}, demote: {}, welcome: {}, goodbye: {} },
-    presence: {
-        autotyping: { all: false, chats: [] },
-        autorecording: { all: false, chats: [] },
-        alwaysonline: { all: false, chats: [] },
-        autoread: { all: false, chats: [] }
-    }
-};
+// ─── LIST OF DYNAMIC KEYS (persisted in vars.json) ────────────
+// These are the keys that can be changed via .setvar and other commands.
+const DYNAMIC_KEYS = [
+    'prefix',
+    'vvs',
+    'packName',
+    'author',
+    'menuImage',
+    'warnThreshold',
+    'presenceMode',
+    'isPublic',
+    'autoReact',
+    'antipm',
+    'lizzyChats',
+    'chatbotChats',
+    'fridayChats',
+    'gojoSleepChats',
+    'gojoGlobalSleep',
+    'antilink',
+    'antitag',
+    'antibot',
+    'antispam',
+    'antigm',
+    'antigcstatus',
+    'antipromote',
+    'antidemote',
+    'stickerCommands',
+    'welcome',
+    'goodbye',
+    'gcalerts',
+    'presence'
+];
 
 // ─── LOAD VARS ────────────────────────────────────────────────────
 
@@ -62,21 +53,38 @@ function loadVars() {
             console.log('✅ [VARS] Loaded persistent variables');
             return data;
         } else {
-            // Create default vars file
-            fs.writeFileSync(VARS_PATH, JSON.stringify(DEFAULT_VARS, null, 2));
-            console.log('📝 [VARS] Created default vars.json');
-            return { ...DEFAULT_VARS };
+            // No vars.json → create it from current config
+            const initialVars = {};
+            for (const key of DYNAMIC_KEYS) {
+                if (config[key] !== undefined) {
+                    initialVars[key] = config[key];
+                }
+            }
+            fs.writeFileSync(VARS_PATH, JSON.stringify(initialVars, null, 2));
+            console.log('📝 [VARS] Created vars.json from current config');
+            return initialVars;
         }
     } catch (err) {
         console.error('❌ [VARS] Failed to load vars:', err);
-        return { ...DEFAULT_VARS };
+        // Return current config values as fallback
+        const fallback = {};
+        for (const key of DYNAMIC_KEYS) {
+            if (config[key] !== undefined) fallback[key] = config[key];
+        }
+        return fallback;
     }
 }
 
-// ─── SAVE VARS ────────────────────────────────────────────────────
+// ─── SAVE DYNAMIC VARS (reads from config, writes to vars.json) ──
 
-function saveVars(vars) {
+function saveDynamicVars() {
     try {
+        const vars = {};
+        for (const key of DYNAMIC_KEYS) {
+            if (config[key] !== undefined) {
+                vars[key] = config[key];
+            }
+        }
         const storageDir = path.dirname(VARS_PATH);
         if (!fs.existsSync(storageDir)) {
             fs.mkdirSync(storageDir, { recursive: true });
@@ -91,14 +99,10 @@ function saveVars(vars) {
 
 // ─── SYNC VARS → CONFIG ──────────────────────────────────────────
 
-/**
- * Overwrites config with values from vars.json.
- * Only updates keys that exist in DEFAULT_VARS.
- */
 function syncVarsToConfig(vars) {
-    const dynamicKeys = Object.keys(DEFAULT_VARS);
+    if (!vars || typeof vars !== 'object') return config;
 
-    for (const key of dynamicKeys) {
+    for (const key of DYNAMIC_KEYS) {
         if (vars[key] !== undefined) {
             config[key] = vars[key];
         }
@@ -128,7 +132,6 @@ function syncVarsToConfig(vars) {
         } else if (mode === 'autoread') {
             config.presence.autoread.all = true;
         }
-        // If multiple, we could extend later with comma-separated values.
         console.log(`🔄 [VARS] Presence mode applied: "${mode}"`);
     }
 
@@ -136,48 +139,38 @@ function syncVarsToConfig(vars) {
     return config;
 }
 
-// ─── GET / SET SINGLE VAR (CASE-INSENSITIVE) ────────────────────
+// ─── GET / SET SINGLE VAR ──────────────────────────────────────
 
 function getVar(key) {
-    const vars = loadVars();
-    const keyLower = key.toLowerCase();
-
-    // Find the actual key with correct casing
-    const actualKey = Object.keys(vars).find(k => k.toLowerCase() === keyLower);
-    if (!actualKey) return undefined;
-
-    return vars[actualKey];
+    // Return current value from config (which is already synced)
+    return config[key];
 }
 
 function setVar(key, value) {
-    const vars = loadVars();
     const keyLower = key.toLowerCase();
 
-    // Check if the key exists in DEFAULT_VARS (case-insensitive)
-    const matchingKey = Object.keys(DEFAULT_VARS).find(k => k.toLowerCase() === keyLower);
+    // Find the actual key in DYNAMIC_KEYS (case-insensitive)
+    const matchingKey = DYNAMIC_KEYS.find(k => k.toLowerCase() === keyLower);
     if (!matchingKey) {
         console.error(`❌ [VARS] Invalid key: "${key}"`);
         return false;
     }
 
-    // Use the correct casing from DEFAULT_VARS
-    vars[matchingKey] = value;
-    const saved = saveVars(vars);
-    if (saved) {
-        syncVarsToConfig(vars);
-        return true;
-    }
-    return false;
+    // Update config
+    config[matchingKey] = value;
+
+    // Save to vars.json (auto-update all dynamic keys)
+    return saveDynamicVars();
 }
 
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
 module.exports = {
     loadVars,
-    saveVars,
+    saveDynamicVars,
     syncVarsToConfig,
     getVar,
     setVar,
     VARS_PATH,
-    DEFAULT_VARS
+    DYNAMIC_KEYS
 };
