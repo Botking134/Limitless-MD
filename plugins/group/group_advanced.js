@@ -135,52 +135,41 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
-// ─── GEMINI SUMMARY ─────────────────────────────────────────────
-async function queryGeminiText(prompt, logString) {
+// ─── GEMINI SUMMARY ──────────────────────────────────────────────
+
+async function queryGeminiText(prompt, logString, model = "gemini-3.5-flash", useSearch = true) {
     const apiKey = config.geminiApiKey;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
+    if (!apiKey) {
+        console.warn("[GEMINI] No API key provided.");
+        return null;
+    }
 
     try {
         const { GoogleGenAI } = await import('@google/genai');
         const ai = new GoogleGenAI({ apiKey });
 
+        const fullPrompt = `${prompt}\n\nHere are the chat logs:\n${logString}`;
+
         try {
             const response = await ai.models.generateContent({
-                model: "gemini-3.5-flash",
-                contents: `${prompt}\n\nHere are the chat logs:\n${logString}`
+                model,
+                contents: fullPrompt,
+                config: useSearch ? { tools: [{ googleSearch: {} }] } : {}
             });
-            return response.text || "Could not generate summary.";
+            return response.text || null;
         } catch (sdkErr) {
-            const response = await ai.interactions.create({
-                model: "gemini-3.5-flash",
-                input: `${prompt}\n\nHere are the chat logs:\n${logString}`
+            // Fallback: try without search if that failed
+            const response = await ai.models.generateContent({
+                model,
+                contents: fullPrompt
             });
-            return response.text || response.output || "Could not generate summary.";
+            return response.text || null;
         }
-    } catch (e) {
-        throw new Error(`Gemini SDK error: ${e.message}`);
-    }
-}
-
-async function triggerSummary(sock, jid) {
-    const logs = config.conversationLogs?.[jid] || [];
-    if (logs.length === 0) return;
-
-    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
-    const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful, cocky, and engaging. Do not include any intro, outro, or conversational filler.";
-
-    try {
-        const responseText = await queryGeminiText(prompt, logString);
-        await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3-HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
-
-        if (config.conversationLogs) config.conversationLogs[jid] = [];
-        saveState();
     } catch (err) {
-        console.error("Auto summary failed:", err);
+        console.error("[GEMINI] Error:", err.message);
+        return null;
     }
 }
-
-// ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
     // 1. WELCOME
