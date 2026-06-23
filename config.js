@@ -1,23 +1,16 @@
 // config.js
-require('dotenv').config();
+require('dotenv').config(); // ← Load .env FIRST
 
 module.exports = {
 
     // ================================================================
-    // 🔐 1. ENVIRONMENT VARIABLES (from .env)
-    //    These override hardcoded defaults. Manual edit only.
+    // 🔑 1. ENVIRONMENT VARIABLES (from .env)
+    //    These are the source of truth for API keys and owner details.
     // ================================================================
 
-    /** Primary owner's phone number (without +). Used as fallback if .env missing. */
     ownerNumber: process.env.OWNER_NUMBER || "601129363700",
-
-    /** Primary owner's display name. */
     ownerName: process.env.OWNER_NAME || "Infinity",
-
-    /** Bot's display name. */
     botName: process.env.BOT_NAME || "Limitless",
-
-    /** Session ID (future feature – reserved). */
     sessionId: process.env.SESSION_ID || "",
 
     // API Keys
@@ -25,114 +18,48 @@ module.exports = {
     groqApiKey: process.env.GROQ_API_KEY || "",
     githubToken: process.env.GITHUB_TOKEN || "",
     klipyApiKey: process.env.KLIPY_API_KEY || "",
-telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
 
     // ================================================================
-    // ⚙️ 2. DYNAMIC BEHAVIOR VARS (loaded from vars.json)
-    //    Changeable via .setvar command. Survives restarts.
+    // ⚙️ 2. DYNAMIC BEHAVIOR VARS (from .env, overwritten by vars.json)
+    //    These are the defaults if vars.json doesn't exist.
     // ================================================================
 
-    /** Command prefix. If empty string or null → bot becomes prefixless. */
-    prefix: "⚡",
+    prefix: process.env.PREFIX || "⚡",
+    vvs: process.env.VVS || "wow",
+    packName: process.env.PACK_NAME || "♾️",
+    author: process.env.AUTHOR || "Infinity",
+    menuImage: process.env.MENU_IMAGE ? process.env.MENU_IMAGE.split(',') : null,
+    warnThreshold: parseInt(process.env.WARN_THRESHOLD) || 5,
+    presenceMode: process.env.PRESENCE_MODE || null,
+    isPublic: process.env.IS_PUBLIC === 'true' ? true : false,
+    autoReact: process.env.AUTO_REACT || "off",
+    antipm: process.env.ANTIPM || "off",
 
-    /** Custom prefixless ViewOnce decryption trigger (e.g., 'kamui' or '🔮'). */
-    vvs: "wow",
-
-    /** Sticker pack name (metadata). */
-    packName: "♾️",
-
-    /** Sticker author (metadata). */
-    author: "Infinity",
-
-    /**
-     * Custom menu image URLs. Comma-separated string.
-     * Example: "https://img1.com,https://img2.com,https://img3.com"
-     * If set, completely overwrites the hardcoded menuImages array in menu.js.
-     */
-    menuImage: null,
-
-    /** Warning threshold before auto-kick (default: 5). */
-    warnThreshold: 5,
-
-    /**
-     * Global presence mode. If set, overrides individual presence toggles.
-     * Example: "autotyping" → sets presence.autotyping.all = true.
-     * Example: "off" → disables all presence automation.
-     */
-    presenceMode: null,
-
+    // Chats (comma-separated strings from .env)
+    lizzyChats: process.env.LIZZY_CHATS ? process.env.LIZZY_CHATS.split(',') : [],
+    chatbotChats: process.env.CHATBOT_CHATS ? process.env.CHATBOT_CHATS.split(',') : [],
+    fridayChats: process.env.FRIDAY_CHATS ? process.env.FRIDAY_CHATS.split(',') : [],
+    gojoSleepChats: process.env.GOJO_SLEEP_CHATS ? process.env.GOJO_SLEEP_CHATS.split(',') : [],
+    gojoGlobalSleep: process.env.GOJO_GLOBAL_SLEEP === 'true' ? true : false,
 
     // ================================================================
-    // 🧬 3. BEHAVIOR TOGGLES (vars.json)
-    //    Changeable via dedicated commands (.mode, .antilink, etc.).
+    // 🧬 3. OTHER CONFIG OBJECTS (still in memory, saved via state.json)
+    //    These are not loaded from .env – they are set via commands.
     // ================================================================
 
-    /** Public mode: true = anyone can use, false = owners/sudos only. */
-    isPublic: false,
-
-    /** Auto-react mode: 'cmd' (react to commands), 'all' (react to everything), 'off'. */
-    autoReact: "off",
-
-    /** Anti-PM: blocks non-owners from DMing the bot. 'on' or 'off'. */
-    antipm: "off",
-
-    /** Chats where Lizzy chatbot is active. */
-    lizzyChats: [],
-
-    /** Chats where Jarvis chatbot is active. */
-    chatbotChats: [],
-
-    /** Chats where Friday chatbot is active (NEW). */
-    fridayChats: [],
-
-    /** Chats where Gojo is manually put to sleep. */
-    gojoSleepChats: [],
-
-    /** Global Gojo sleep toggle (true = prefixless Gojo is disabled everywhere). */
-    gojoGlobalSleep: false,
-
-    // --- Group Security Protections (per group JID) ---
-
-    /** Antilink policy: 'delete', 'warn', 'kick', or 'off'. */
     antilink: {},
-
-    /** Antitag policy: 'on' or 'off'. */
     antitag: {},
-
-    /** Antibot policy: 'delete', 'warn', 'kick', or 'off'. */
     antibot: {},
-
-    /** Antispam configuration: { status: 'on'|'off', rate: { count, seconds } }. */
     antispam: {},
-
-    /** Anti-group-mention policy: 'delete', 'warn', 'kick', or 'off'. */
     antigm: {},
-
-    /** Anti-status-update policy: 'delete', 'warn', 'kick', or 'off'. */
     antigcstatus: "off",
-
-    /** Antipromote protection: 'on' or 'off'. */
     antipromote: {},
-
-    /** Antidemote protection: 'on' or 'off'. */
     antidemote: {},
-
-    /** Sticker → command mapping (set via .setcmd / .delcmd). */
     stickerCommands: {},
-
-    /** Welcome message config per group: { active: bool, msg: string }. */
     welcome: {},
-
-    /** Goodbye message config per group: { active: bool, msg: string }. */
     goodbye: {},
-
-    /** Group event alerts: promote, demote, welcome, goodbye (each 'on' or 'off'). */
     gcalerts: { promote: {}, demote: {}, welcome: {}, goodbye: {} },
-
-    /**
-     * Presence automation settings.
-     * Each can be set to 'all' (global) or per chat via commands.
-     */
     presence: {
         autotyping: { all: false, chats: [] },
         autorecording: { all: false, chats: [] },
@@ -140,65 +67,33 @@ telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
         autoread: { all: false, chats: [] }
     },
 
-
     // ================================================================
     // 👑 4. PERMISSION LISTS (loaded from state.json)
-    //    Changeable via .addowner, .setsudo, .ban, etc.
     // ================================================================
 
-    /** Secondary owners (added via .addowner). */
     secondaryOwners: [],
-
-    /** Sudo users (added via .setsudo). */
     sudos: [],
-
-    /** Banned users (added via .ban). */
     banned: [],
-
-    /** Warning counts per user (key: `${jid}_${number}`). */
     warns: {},
-
-    /** Conversation logs for GCLOG feature. */
     conversationLogs: {},
-
-    /** Active GCLOG status per group JID. */
     gclogActive: {},
-
-    /** Bank account details (set via .aza). */
     aza: { set: false },
 
-
     // ================================================================
-    // 📦 5. STATIC DEFAULTS (manual edit only – no commands)
+    // 📦 5. STATIC DEFAULTS
     // ================================================================
 
-    /** Default welcome message when no custom is set. */
     defaultWelcome: "🔮 *DOMAIN EXPANSION: NEW INTRUDER* 🔮\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👋 Welcome @user to *{group}*!\n\n📝 *Bio:* \"{bio}\"\n🛡️ *Status:* Standard Sorcerer\n\n🤞 _\"I hope you can handle the gravity of this void. Follow the rules, or you will be exorcised!\"_",
 
-
     // ================================================================
-    // 🏃 6. RUNTIME POPULATED (set by pair.js on connection)
-    //    These are resolved from WhatsApp during boot.
+    // 🏃 6. RUNTIME POPULATED (set by pair.js / stateManager)
     // ================================================================
 
-    /** Primary owner's JID (phone-based). */
     ownerJid: "",
-
-    /** Primary owner's LID (resolved from phone JID). */
     ownerLid: "",
-
-    /** Primary owner's LIDs (array). */
     ownerLids: [],
-
-    /** Developer LIDs (resolved from hardcoded devs.js). */
     devLids: [],
-
-    /** Sudo LIDs (resolved from phone-based sudos). */
     sudoLids: [],
-
-    /** Bot's own JID. */
     botJid: "",
-
-    /** Bot's own LID. */
     botLid: ""
 };
