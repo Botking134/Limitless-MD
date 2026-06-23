@@ -771,42 +771,53 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── ANTIGAY INTERCEPTOR (FIXED) ─────────────────────────
-        const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
-        const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
-        const isGayCommand = gayCommands.includes(cleanCmd);
+        // ─── ANTIGAY INTERCEPTOR (FIXED) ──────────────────────────────
+const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
+const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
+const isGayCommand = gayCommands.includes(cleanCmd);
 
-        if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList && config.gayList.length > 0) {
-            const senderNum = senderJid.split('@')[0];
-            const isGay = config.gayList.some(entry => entry.lid.split('@')[0] === senderNum);
+if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList && config.gayList.length > 0) {
+    const senderNum = senderJid.split('@')[0];
+    const isGay = config.gayList.some(entry => normalizeToJid(entry.lid) === normalizeToJid(senderJid));
 
-            if (isGay) {
-                // Get the user who activated antigay
-                const activatedBy = config.antigay[jid].activatedBy;
-                if (!activatedBy) return;
-
-                // Check if the message mentions or replies to the activatedBy user
-                const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normalizeToJid(activatedBy));
-                const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normalizeToJid(activatedBy);
-
-                if (isMentioningActivated || isReplyingToActivated) {
-                    const rudeMessages = [
-                        "Shut up, you gay fool. Don't tag my master.",
-                        "Back off, rainbow boy. You're not worthy.",
-                        "My Infinity rejects your gay energy. Stay away.",
-                        "You really think you can talk to my master? Gay. 💀",
-                        "Don't you have a boyfriend to annoy? Leave me alone.",
-                        "Master is busy. Go find your gay club.",
-                        "I'd say you're weak, but you're just... gay.",
-                        "You're not even worth my Six Eyes. Get lost.",
-                        "Master doesn't associate with gay peasants like you.",
-                        "Another gay trying to get attention. Blocked."
-                    ];
-                    const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
-                    await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
-                }
-            }
+    if (isGay) {
+        const activatedBy = config.antigay[jid].activatedBy;
+        if (!activatedBy) {
+            console.log('[ANTIGAY] No activatedBy found for', jid);
+            return;
         }
+
+        const normActivatedBy = normalizeToJid(activatedBy);
+        const normSender = normalizeToJid(senderJid);
+
+        const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normActivatedBy);
+        const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normActivatedBy;
+
+        if (isMentioningActivated || isReplyingToActivated) {
+            const rudeMessages = [
+                "Shut up, you gay fool. Don't tag my master.",
+                "Back off, rainbow boy. You're not worthy.",
+                "My Infinity rejects your gay energy. Stay away.",
+                "You really think you can talk to my master? Gay. 💀",
+                "Don't you have a boyfriend to annoy? Leave me alone.",
+                "Master is busy. Go find your gay club.",
+                "I'd say you're weak, but you're just... gay.",
+                "You're not even worth my Six Eyes. Get lost.",
+                "Master doesn't associate with gay peasants like you.",
+                "Another gay trying to get attention. Blocked."
+            ];
+            const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
+            try {
+                await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
+                console.log('[ANTIGAY] Sent rude message to', senderJid);
+            } catch (err) {
+                console.error('[ANTIGAY] Failed to send message:', err);
+            }
+        } else {
+            console.log('[ANTIGAY] Gay user did not mention or reply to activator');
+        }
+    }
+}
 
         // ─── AGENT DETECTION ──────────────────────────────────────
         const quotedParticipant = contextInfo?.participant;
