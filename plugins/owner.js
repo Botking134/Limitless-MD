@@ -250,40 +250,197 @@ async function showGitHelp(sock, jid, msg) {
 │                                                            │
 │  📍 Basic Operations                                      │
 │  ├─ 🔄 Pull & Update                                     │
-│  │   → Stashes local changes, pulls latest, pops stash.  │
+│  │   → Pulls latest changes (only if working dir clean). │
 │  ├─ 📦 Stash & Pull                                      │
-│  │   → Same as above, but with explicit stash before.    │
+│  │   → Stash, pull, then pop stash.                     │
 │  ├─ 📊 Status                                            │
-│  │   → Shows current branch and uncommitted changes.     │
+│  │   → Shows detailed Git status.                       │
 │                                                            │
 │  💾 Commit & Push                                         │
 │  ├─ 💾 Commit Changes                                     │
-│  │   → Asks for a commit message, then commits all.      │
+│  │   → Asks for commit message, then commits all.       │
 │  ├─ ⬆️ Push Commits                                      │
-│  │   → Pushes committed changes to remote.               │
+│  │   → Pushes committed changes to remote.              │
 │  ├─ 📤 Commit & Push                                     │
-│  │   → Commit then push (two steps).                     │
+│  │   → Commit then push (interactive).                  │
 │                                                            │
 │  🌿 Branch Management                                     │
 │  ├─ 🌿 Show Branches                                     │
-│  │   → Lists all local and remote branches.              │
+│  │   → Lists all local and remote branches.             │
 │  ├─ 🌿 Switch Branch                                     │
-│  │   → Asks for branch name, switches to it.             │
+│  │   → Asks for branch name, switches to it.            │
 │  ├─ 🌿 New Branch                                        │
-│  │   → Asks for branch name, creates new branch.         │
+│  │   → Asks for branch name, creates new branch.        │
 │                                                            │
 │  ⚠️ Advanced (Dangerous)                                 │
 │  ├─ 🔁 Revert Commit                                     │
-│  │   → Shows last 5 commits, asks for number to revert.  │
+│  │   → Shows last 5 commits, asks for number to revert. │
 │  ├─ 🔄 Force Pull                                        │
-│  │   ⚠️ WARNING: Overwrites ALL local changes!            │
-│  │   → Requires typing "CONFIRM" to proceed.             │
+│  │   ⚠️ WARNING: Overwrites ALL local changes!           │
+│  │   → Requires typing "CONFIRM" to proceed.            │
 │  ├─ 🛠️ Setup Git                                        │
-│  │   → Initializes Git and links remote.                 │
+│  │   → Initializes Git and links remote.                │
 └─────────────────────────────────────────────────────────────┘
 
-👉 Use \`.git\` to open the control panel.`;
+👉 Use \`.git <subcommand>\` or select from menu.`;
+
     await sock.sendMessage(jid, { text: info }, { quoted: msg });
+}
+
+// ─── GIT SUBCOMMAND HANDLERS ──────────────────────────────────
+
+// 1. Git Pull (safe – checks for uncommitted changes)
+async function handleGitPull(sock, jid, msg) {
+    await sock.sendMessage(jid, { text: "⏳ *Checking status...*" }, { quoted: msg });
+    execWithTimeout('git status --porcelain', 10000, async (err, stdout) => {
+        if (err) return await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+        if (stdout.trim() !== '') {
+            return await sock.sendMessage(jid, {
+                text: `⚠️ *You have uncommitted changes.*\nPlease commit or stash them first.`
+            }, { quoted: msg });
+        }
+        await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+        execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
+            if (pullErr) return await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
+            await sendUpdateSuccess(jid, sock, pullOut, msg);
+        });
+    });
+}
+
+// 2. Git Stash + Pull + Pop
+async function handleGitStashPull(sock, jid, msg) {
+    await sock.sendMessage(jid, { text: "⏳ *Stashing changes...*" }, { quoted: msg });
+    execWithTimeout('git stash', 10000, async (stashErr) => {
+        if (stashErr && !stashErr.message.includes('No local changes')) {
+            return await sock.sendMessage(jid, { text: `⚠️ *Stash failed:* ${stashErr.message}` }, { quoted: msg });
+        }
+        await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+        execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
+            if (pullErr) {
+                await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}\n\n💡 Trying to recover...` }, { quoted: msg });
+                execWithTimeout('git stash pop', 10000, () => {});
+                return;
+            }
+            await sock.sendMessage(jid, { text: "⏳ *Restoring changes...*" }, { quoted: msg });
+            execWithTimeout('git stash pop', 10000, async (popErr) => {
+                if (popErr) {
+                    await sock.sendMessage(jid, { text: `⚠️ *Could not auto‑reapply stash. Check conflicts manually.` }, { quoted: msg });
+                } else {
+                    await sendUpdateSuccess(jid, sock, pullOut, msg);
+                }
+            });
+        });
+    });
+}
+
+// 3. Git Status
+async function handleGitStatus(sock, jid, msg) {
+    execWithTimeout('git status', 10000, async (err, stdout) => {
+        if (err) return await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+        await sock.sendMessage(jid, { text: `📊 *Git Status*\n\`\`\`\n${stdout}\n\`\`\`` }, { quoted: msg });
+    });
+}
+
+// 4. Git Commit (interactive)
+async function handleGitCommit(sock, jid, msg) {
+    const prompt = await sock.sendMessage(jid, {
+        text: "✏️ *Commit Changes*\n\nPlease reply with your commit message:"
+    }, { quoted: msg });
+    global.gitSessions = global.gitSessions || {};
+    global.gitSessions[prompt.key.id] = { action: 'commit', jid };
+}
+
+// 5. Git Push
+async function handleGitPush(sock, jid, msg) {
+    await sock.sendMessage(jid, { text: "⏳ *Pushing commits...*" }, { quoted: msg });
+    execWithTimeout('git push', 60000, async (err, stdout) => {
+        if (err) return await sock.sendMessage(jid, { text: `❌ *Push failed:* ${err.message}` }, { quoted: msg });
+        await sock.sendMessage(jid, { text: `✅ *Push successful!*\n\n${stdout}` }, { quoted: msg });
+    });
+}
+
+// 6. Git Commit + Push (interactive commit then push)
+async function handleGitCommitPush(sock, jid, msg) {
+    const prompt = await sock.sendMessage(jid, {
+        text: "✏️ *Commit & Push*\n\nPlease reply with your commit message:"
+    }, { quoted: msg });
+    global.gitSessions = global.gitSessions || {};
+    global.gitSessions[prompt.key.id] = { action: 'commitpush', jid };
+}
+
+// 7. Git Branch (list)
+async function handleGitBranch(sock, jid, msg) {
+    execWithTimeout('git branch -a', 10000, async (err, stdout) => {
+        if (err) return await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+        await sock.sendMessage(jid, { text: `🌿 *Branches*\n\`\`\`\n${stdout}\n\`\`\`` }, { quoted: msg });
+    });
+}
+
+// 8. Git Switch (interactive)
+async function handleGitSwitch(sock, jid, msg, branchName) {
+    if (branchName) {
+        // Direct switch with branch name
+        await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${branchName}"...*` }, { quoted: msg });
+        execWithTimeout(`git checkout ${branchName}`, 10000, async (err, stdout) => {
+            if (err) return await sock.sendMessage(jid, { text: `❌ *Switch failed:* ${err.message}` }, { quoted: msg });
+            await sock.sendMessage(jid, { text: `✅ *Switched to branch "${branchName}".*` }, { quoted: msg });
+        });
+    } else {
+        // Interactive: ask for branch name
+        const prompt = await sock.sendMessage(jid, {
+            text: "🌿 *Switch Branch*\n\nEnter the branch name you want to switch to:"
+        }, { quoted: msg });
+        global.gitSessions = global.gitSessions || {};
+        global.gitSessions[prompt.key.id] = { action: 'switch', jid };
+    }
+}
+
+// 9. Git New Branch (interactive)
+async function handleGitNewBranch(sock, jid, msg) {
+    const prompt = await sock.sendMessage(jid, {
+        text: "🌿 *New Branch*\n\nEnter the name for the new branch:"
+    }, { quoted: msg });
+    global.gitSessions = global.gitSessions || {};
+    global.gitSessions[prompt.key.id] = { action: 'newbranch', jid };
+}
+
+// 10. Git Revert (interactive)
+async function handleGitRevert(sock, jid, msg) {
+    // Show last 5 commits
+    execWithTimeout('git log --oneline -5', 10000, async (err, stdout) => {
+        if (err) return await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+        const prompt = await sock.sendMessage(jid, {
+            text: `🔁 *Revert Commit*\n\nRecent commits:\n${stdout}\n\nReply with the commit number (1-5) to revert:`
+        }, { quoted: msg });
+        global.gitSessions = global.gitSessions || {};
+        global.gitSessions[prompt.key.id] = { action: 'revert', jid, commits: stdout.split('\n').filter(Boolean) };
+    });
+}
+
+// 11. Git Force Pull (requires confirmation)
+async function handleGitForce(sock, jid, msg) {
+    const prompt = await sock.sendMessage(jid, {
+        text: `⚠️ *WARNING: Force Pull*\n\nThis will overwrite ALL local changes.\nType \`CONFIRM\` to proceed:`
+    }, { quoted: msg });
+    global.gitSessions = global.gitSessions || {};
+    global.gitSessions[prompt.key.id] = { action: 'force', jid };
+}
+
+// 12. Git Setup
+async function handleGitSetup(sock, jid, msg) {
+    await sock.sendMessage(jid, { text: "⏳ *Setting up Git...*" }, { quoted: msg });
+    const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+    execWithTimeout(setupCmd, 60000, async (err) => {
+        if (err && err.message.includes('already exists')) {
+            execWithTimeout(`git remote set-url origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`, 60000, async (retryErr) => {
+                if (retryErr) return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n${retryErr.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "✅ *Git re-linked!*" }, { quoted: msg });
+            });
+            return;
+        }
+        if (err) return await sock.sendMessage(jid, { text: `❌ *Setup Failed:*\n${err.message}` }, { quoted: msg });
+        await sock.sendMessage(jid, { text: "✅ *Git initialized!*" }, { quoted: msg });
+    });
 }
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
@@ -359,11 +516,45 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            // ─── If user typed .git info, show help ────────────────
-            if (args && args.toLowerCase().trim() === 'info') {
-                return await showGitHelp(sock, jid, msg);
+            // ─── If args provided, route to subcommand ──────────────
+            if (args && args.trim() !== '') {
+                const parts = args.trim().split(' ');
+                const subcmd = parts[0].toLowerCase();
+                const option = parts.slice(1).join(' ');
+
+                switch (subcmd) {
+                    case 'pull':
+                        return await handleGitPull(sock, jid, msg);
+                    case 'stashpull':
+                        return await handleGitStashPull(sock, jid, msg);
+                    case 'status':
+                        return await handleGitStatus(sock, jid, msg);
+                    case 'commit':
+                        return await handleGitCommit(sock, jid, msg);
+                    case 'push':
+                        return await handleGitPush(sock, jid, msg);
+                    case 'commitpush':
+                        return await handleGitCommitPush(sock, jid, msg);
+                    case 'branch':
+                        return await handleGitBranch(sock, jid, msg);
+                    case 'switch':
+                        return await handleGitSwitch(sock, jid, msg, option);
+                    case 'newbranch':
+                        return await handleGitNewBranch(sock, jid, msg);
+                    case 'revert':
+                        return await handleGitRevert(sock, jid, msg);
+                    case 'force':
+                        return await handleGitForce(sock, jid, msg);
+                    case 'setup':
+                        return await handleGitSetup(sock, jid, msg);
+                    case 'info':
+                        return await showGitHelp(sock, jid, msg);
+                    default:
+                        return await sock.sendMessage(jid, { text: `❌ Unknown subcommand: ${subcmd}` }, { quoted: msg });
+                }
             }
 
+            // ─── If no args, show the menu (list message) ────────────
             // ─── Check if Git is initialized ──────────────────────
             execWithTimeout('git status', 10000, async (err) => {
                 if (err) {
@@ -413,7 +604,7 @@ module.exports = [
                                 {
                                     title: "📍 Basic Operations",
                                     rows: [
-                                        { title: "🔄 Pull & Update", rowId: "git_pull", description: "Pull latest changes (auto-stash)" },
+                                        { title: "🔄 Pull & Update", rowId: "git_pull", description: "Pull latest changes (safe)" },
                                         { title: "📦 Stash & Pull", rowId: "git_stash_pull", description: "Stash, pull, and pop changes" },
                                         { title: "📊 Status", rowId: "git_status", description: "Show detailed Git status" }
                                     ]
@@ -580,47 +771,32 @@ module.exports = [
             }
 
             if (isConfirm) {
-                // ─── Safe pull with stash and conflict handling ───
-                const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Stashing local changes...*" }, { quoted: msg });
+                // ─── Simple git pull – no stash, no magic ───────────
+                await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
 
-                // 1. Stash
-                execWithTimeout('git stash', 10000, async (stashErr, stashOut) => {
-                    if (stashErr && !stashErr.message.includes('No local changes')) {
-                        return await sock.sendMessage(jid, { text: `⚠️ *Stash failed:* ${stashErr.message}` }, { quoted: msg });
+                // First, check if there are uncommitted changes that would be overwritten
+                execWithTimeout('git status --porcelain', 10000, async (statusErr, statusOut) => {
+                    if (statusErr) {
+                        return await sock.sendMessage(jid, { text: `❌ *Error checking status:* ${statusErr.message}` }, { quoted: msg });
                     }
-                    const hasStash = !stashErr || (stashErr && stashOut && stashOut.includes('Saved working directory'));
-                    await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+                    if (statusOut.trim() !== '') {
+                        return await sock.sendMessage(jid, {
+                            text: `⚠️ *You have uncommitted changes.*\nPlease commit or stash them first.\n\nUse \`${config.prefix}git stash\` to stash, or \`${config.prefix}git commit\` to commit.`
+                        }, { quoted: msg });
+                    }
 
-                    // 2. Pull
+                    // Now safe to pull
                     execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
                         if (pullErr) {
-                            // If pull fails, try to recover by popping stash
-                            await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}\n\n💡 Trying to recover...` }, { quoted: msg });
-                            if (hasStash) {
-                                execWithTimeout('git stash pop', 10000, async (popErr) => {
-                                    if (popErr) {
-                                        await sock.sendMessage(jid, { text: `⚠️ *Could not auto‑reapply stash. You may have conflicts.*\nRun \`${config.prefix}git status\` to resolve manually.` }, { quoted: msg });
-                                    } else {
-                                        await sock.sendMessage(jid, { text: "✅ *Stash reapplied.*" }, { quoted: msg });
-                                    }
-                                });
+                            // Check if it's a merge conflict
+                            if (pullErr.message.includes('CONFLICT')) {
+                                return await sock.sendMessage(jid, {
+                                    text: `❌ *Merge conflict detected!*\n\n${pullErr.message}\n\n💡 Resolve conflicts manually or use \`${config.prefix}git\` for advanced options.`
+                                }, { quoted: msg });
                             }
-                            return;
+                            return await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
                         }
-
-                        // 3. Pull succeeded – now pop stash
-                        await sock.sendMessage(jid, { text: "⏳ *Restoring local changes...*" }, { quoted: msg });
-                        if (hasStash) {
-                            execWithTimeout('git stash pop', 10000, async (popErr) => {
-                                if (popErr) {
-                                    await sock.sendMessage(jid, { text: `⚠️ *Local changes could not be automatically re-applied.*\nYou may have conflicts.\nCheck with \`${config.prefix}git status\` and resolve manually.` }, { quoted: msg });
-                                } else {
-                                    await sendUpdateSuccess(jid, sock, pullOut, msg);
-                                }
-                            });
-                        } else {
-                            await sendUpdateSuccess(jid, sock, pullOut, msg);
-                        }
+                        await sendUpdateSuccess(jid, sock, pullOut, msg);
                     });
                 });
             } else {
