@@ -462,28 +462,58 @@ module.exports = [
             return;
         }
 
-        if (action === 'check') {
-            const logs = config.conversationLogs[jid] || [];
-            if (logs.length === 0) return await sock.sendMessage(jid, { text: "📊 No logs found within the current 3-hour window." }, { quoted: msg });
-
-            await sock.sendMessage(jid, { text: "⏳ *Summarizing current logs...*" }, { quoted: msg });
-            const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
-
-            const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
-
-            try {
-                const responseText = await queryGeminiText(prompt, logString);
-                await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}` }, { quoted: msg });
-            } catch (err) {
-                await sock.sendMessage(jid, { text: "❌ Summary generation failed." }, { quoted: msg });
-            }
-            return;
-        }
-
-        // Fallback
-        await sock.sendMessage(jid, { text: `❌ Unknown action: ${action}` }, { quoted: msg });
+        
+if (action === 'check') {
+    const logs = config.conversationLogs[jid] || [];
+    if (logs.length === 0) {
+        return await sock.sendMessage(jid, { text: "📊 No logs found within the current 3-hour window." }, { quoted: msg });
     }
-},
+
+    const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Summarizing current logs...*" }, { quoted: msg });
+
+    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+    const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
+
+    try {
+        const responseText = await queryGeminiText(prompt, logString);
+        if (responseText) {
+            await sock.sendMessage(jid, {
+                text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}`,
+                edit: statusMsg.key
+            });
+        } else {
+            // Fallback: try using Groq if available
+            const groqKey = config.groqApiKey;
+            if (groqKey) {
+                try {
+                    const { queryLLM } = require('./games'); // or implement a simple Groq call
+                    const groqResponse = await queryLLM(`${prompt}\n\nHere are the chat logs:\n${logString}`, 0.7);
+                    if (groqResponse) {
+                        await sock.sendMessage(jid, {
+                            text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${groqResponse.trim()}`,
+                            edit: statusMsg.key
+                        });
+                        return;
+                    }
+                } catch (groqErr) {
+                    console.error("[GCLOG] Groq fallback failed:", groqErr.message);
+                }
+            }
+
+            // If all fail, show a friendly error
+            await sock.sendMessage(jid, {
+                text: "❌ *Summary generation failed.*\n\nPlease ensure the `GEMINI_API_KEY` is set and valid, or try again later.",
+                edit: statusMsg.key
+            });
+        }
+    } catch (err) {
+        console.error("[GCLOG] Summary error:", err);
+        await sock.sendMessage(jid, {
+            text: `❌ *Summary generation error:*\n${err.message}`,
+            edit: statusMsg.key
+        });
+    }
+}, 
 
 
     // 7. CREATEGC
