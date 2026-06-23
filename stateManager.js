@@ -1,9 +1,11 @@
-
 // stateManager.js
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const { DEV_LIDS } = require('./devs');
+
+// ─── Load vars module for dynamic variable persistence ─────────
+const { saveDynamicVars } = require('./vars');
 
 const STATE_PATH = path.join(__dirname, 'storage', 'state.json');
 
@@ -151,6 +153,14 @@ function saveState() {
         };
 
         fs.writeFileSync(STATE_PATH, JSON.stringify(stateData, null, 2), 'utf-8');
+
+        // ─── Also sync dynamic variables to vars.json ───────────
+        try {
+            saveDynamicVars();
+        } catch (e) {
+            console.warn('⚠️ [STATE] Could not save dynamic vars:', e.message);
+        }
+
         return true;
     } catch (err) {
         console.error('❌ [STATE] Failed to save state:', err.message);
