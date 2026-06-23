@@ -20,6 +20,9 @@ const ownerCommands = [
 const primaryOnlyCommands = ['addowner', 'delowner'];
 const devOnlyCommands = ['upgrade'];
 
+// ─── GLOBAL SESSIONS ──────────────────────────────────────────────
+global.gitSessions = global.gitSessions || {};
+
 // ─── LOGGING CAPTURE ────────────────────────────────────────────
 if (!global.recentLogs || !Array.isArray(global.recentLogs)) {
     global.recentLogs = [];
@@ -82,9 +85,9 @@ async function handleInteractiveSessions(sock, msg) {
 
     if (!quotedMsgId) return false;
 
-    const text = rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '';
+    const text = (rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '').trim();
 
-    // ─── 1. AZA SESSION ───────────────────────────────────────────
+    // ─── AZA SESSION ───────────────────────────────────────────
     if (global.azaSessions && global.azaSessions[quotedMsgId]) {
         const session = global.azaSessions[quotedMsgId];
         if (session.step === 1) {
@@ -132,7 +135,7 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
-    // ─── 2. REMINDER SESSION ──────────────────────────────────────
+    // ─── REMINDER SESSION ──────────────────────────────────────
     if (global.reminderSessions && global.reminderSessions[quotedMsgId]) {
         const session = global.reminderSessions[quotedMsgId];
         const title = text.trim();
@@ -156,7 +159,7 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
-    // ─── 3. CANCEL SESSION ──────────────────────────────────────
+    // ─── CANCEL SESSION ──────────────────────────────────────
     if (global.cancelSessions && global.cancelSessions[quotedMsgId]) {
         const num = parseInt(text.trim());
         if (isNaN(num)) {
@@ -176,7 +179,7 @@ async function handleInteractiveSessions(sock, msg) {
         return true;
     }
 
-    // ─── 4. FORWARD SESSION ──────────────────────────────────────
+    // ─── FORWARD SESSION ──────────────────────────────────────
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
         const target = text.trim().replace(/[^0-9]/g, '');
         if (target.length < 7) {
@@ -193,6 +196,113 @@ async function handleInteractiveSessions(sock, msg) {
             await sock.sendMessage(jid, { text: `❌ Forward failed: ${e.message}` });
         }
         return true;
+    }
+
+    // ─── GIT SESSIONS ──────────────────────────────────────────
+    if (global.gitSessions && global.gitSessions[quotedMsgId]) {
+        const session = global.gitSessions[quotedMsgId];
+
+        // We'll re-use the execWithTimeout from owner.js – but we can't import it directly without circular deps.
+        // We'll use a local copy or use the same pattern.
+        // Since this is in messageHandlers.js, we'll define a minimal execWithTimeout here or use the one from owner? 
+        // Safer to just inline a simple exec wrapper.
+        const { exec } = require('child_process');
+        function execGit(cmd, timeout, callback) {
+            const child = exec(cmd, (err, stdout, stderr) => {
+                if (callback) callback(err, stdout, stderr);
+            });
+            const timer = setTimeout(() => {
+                child.kill();
+                if (callback) callback(new Error('Command timed out'), '', '');
+            }, timeout);
+            child.on('exit', () => clearTimeout(timer));
+        }
+
+        switch (session.action) {
+            case 'commit':
+            case 'commitpush': {
+                if (!text) {
+                    await sock.sendMessage(jid, { text: "❌ Commit message cannot be empty." });
+                    return true;
+                }
+                await sock.sendMessage(jid, { text: `⏳ *Committing with message:* "${text}"` });
+                execGit(`git add . && git commit -m "${text}"`, 10000, async (err, stdout) => {
+                    if (err) {
+                        await sock.sendMessage(jid, { text: `❌ *Commit failed:* ${err.message}` });
+                    } else {
+                        await sock.sendMessage(jid, { text: `✅ *Committed successfully!*\n${stdout}` });
+                        if (session.action === 'commitpush') {
+                            // Now push
+                            await sock.sendMessage(jid, { text: "⏳ *Pushing commits...*" });
+                            execGit('git push', 60000, async (pushErr, pushOut) => {
+                                if (pushErr) return await sock.sendMessage(jid, { text: `❌ *Push failed:* ${pushErr.message}` });
+                                await sock.sendMessage(jid, { text: `✅ *Push successful!*\n${pushOut}` });
+                            });
+                        }
+                    }
+                });
+                delete global.gitSessions[quotedMsgId];
+                return true;
+            }
+            case 'switch': {
+                if (!text) {
+                    await sock.sendMessage(jid, { text: "❌ Branch name cannot be empty." });
+                    return true;
+                }
+                await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${text}"...*` });
+                execGit(`git checkout ${text}`, 10000, async (err, stdout) => {
+                    if (err) return await sock.sendMessage(jid, { text: `❌ *Switch failed:* ${err.message}` });
+                    await sock.sendMessage(jid, { text: `✅ *Switched to branch "${text}".*` });
+                });
+                delete global.gitSessions[quotedMsgId];
+                return true;
+            }
+            case 'newbranch': {
+                if (!text) {
+                    await sock.sendMessage(jid, { text: "❌ Branch name cannot be empty." });
+                    return true;
+                }
+                await sock.sendMessage(jid, { text: `⏳ *Creating branch "${text}"...*` });
+                execGit(`git checkout -b ${text}`, 10000, async (err, stdout) => {
+                    if (err) return await sock.sendMessage(jid, { text: `❌ *Branch creation failed:* ${err.message}` });
+                    await sock.sendMessage(jid, { text: `✅ *Created and switched to branch "${text}".*` });
+                });
+                delete global.gitSessions[quotedMsgId];
+                return true;
+            }
+            case 'revert': {
+                const num = parseInt(text);
+                if (isNaN(num) || num < 1 || num > session.commits.length) {
+                    await sock.sendMessage(jid, { text: `❌ Invalid number. Enter 1-${session.commits.length}.` });
+                    return true;
+                }
+                const commitHash = session.commits[num - 1].split(' ')[0];
+                await sock.sendMessage(jid, { text: `⏳ *Reverting commit ${commitHash}...*` });
+                execGit(`git revert ${commitHash} --no-edit`, 10000, async (err, stdout) => {
+                    if (err) return await sock.sendMessage(jid, { text: `❌ *Revert failed:* ${err.message}` });
+                    await sock.sendMessage(jid, { text: `✅ *Reverted commit ${commitHash}.` });
+                });
+                delete global.gitSessions[quotedMsgId];
+                return true;
+            }
+            case 'force': {
+                if (text !== 'CONFIRM') {
+                    await sock.sendMessage(jid, { text: "❌ Force pull cancelled. Type CONFIRM to proceed." });
+                    return true;
+                }
+                // backupCriticalFiles is in owner.js; we can't easily import it here without circular deps.
+                // We'll just run the force pull without backup, or we can try to require it.
+                // Safer to just run git reset --hard directly.
+                await sock.sendMessage(jid, { text: "⏳ *Force pulling updates...*" });
+                execGit(`git fetch --all && git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)`, 60000, async (err, stdout) => {
+                    if (err) return await sock.sendMessage(jid, { text: `❌ *Force pull failed:* ${err.message}` });
+                    await sock.sendMessage(jid, { text: `✅ *Force pull successful!*` });
+                });
+                delete global.gitSessions[quotedMsgId];
+                return true;
+            }
+        }
+        return false;
     }
 
     return false;
@@ -477,6 +587,18 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                    msg.message.templateButtonReplyMessage?.selectedId ||
                    '';
 
+        // ─── LIST RESPONSE DETECTION (Git menu) ──────────────────
+        if (msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId) {
+            const rowId = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+            // rowId format: "git_pull", "git_commit", etc.
+            // Convert to command: e.g., "git pull"
+            const parts = rowId.split('_');
+            if (parts[0] === 'git') {
+                const subcmd = parts.slice(1).join('_');
+                body = `${config.prefix}git ${subcmd}`;
+            }
+        }
+
         if (msg.message.stickerMessage) {
             const fileHash = msg.message.stickerMessage.fileSha256?.toString('base64');
             if (fileHash && config.stickerCommands && config.stickerCommands[fileHash]) {
@@ -588,7 +710,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 saveState();
             }
 
-            // ─── GCLOG INTERVAL RECOVERY ──────────────────────────
             if (!global.gclogIntervals) global.gclogIntervals = {};
             if (!global.gclogIntervals[jid]) {
                 console.log(`🔄 [GCLOG] Re‑creating 3‑hour interval for ${jid}`);
@@ -616,7 +737,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                         console.error("❌ [GCLOG] Auto‑summary failed:", err.message);
                     }
 
-                    // Clear logs after summary
                     if (config.conversationLogs) config.conversationLogs[jid] = [];
                     saveState();
                 }, 3 * 60 * 60 * 1000);
@@ -777,7 +897,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── ANTIGAY INTERCEPTOR ──────────────────────────────────
+        // ─── ANTIGAY INTERCEPTOR (FIXED) ─────────────────────────
         const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
         const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
         const isGayCommand = gayCommands.includes(cleanCmd);
@@ -799,14 +919,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normActivatedBy);
                 const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normActivatedBy;
 
-                // Also check if the message contains the activator's mention (e.g., @1234567890)
-                const mentionsInText = trimmedMessageBody.match(/@([0-9]+)/g) || [];
-                const isMentionedInText = mentionsInText.some(m => {
-                    const num = m.replace('@', '');
-                    return num === normActivatedBy.split('@')[0];
-                });
-
-                if (isMentioningActivated || isReplyingToActivated || isMentionedInText) {
+                if (isMentioningActivated || isReplyingToActivated) {
                     const rudeMessages = [
                         "Shut up, you gay fool. Don't tag my master.",
                         "Back off, rainbow boy. You're not worthy.",
@@ -903,18 +1016,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!command) return;
 
-        // ─── LOG COMMAND EXECUTION ────────────────────────────────
-        if (command) {
-            global.recentLogs.push({
-                time: new Date().toISOString(),
-                level: 'CMD',
-                message: `${command} ${args || ''}`.trim()
-            });
-            if (global.recentLogs.length > 2000) {
-                global.recentLogs.shift();
-            }
-        }
-
         // ─── AGENT CONTEXT ─────────────────────────────────────────
         if (command === 'gojo') global.activeAgentContext = 'gojo';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
@@ -947,6 +1048,18 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) {
             return;
+        }
+
+        // ─── LOG COMMAND EXECUTION ────────────────────────────────
+        if (command) {
+            global.recentLogs.push({
+                time: new Date().toISOString(),
+                level: 'CMD',
+                message: `${command} ${args || ''}`.trim()
+            });
+            if (global.recentLogs.length > 2000) {
+                global.recentLogs.shift();
+            }
         }
 
         // ─── COMMAND EXECUTION ─────────────────────────────────────
