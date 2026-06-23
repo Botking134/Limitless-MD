@@ -167,6 +167,7 @@ function execWithTimeout(cmd, timeoutMs, callback) {
     child.on('exit', () => clearTimeout(timer));
 }
 
+// ─── UPDATED: No .env fallback ──────────────────────────────────
 function getRepoUrl() {
     const token = config.githubToken;
     const baseUrl = 'https://github.com/Botking134/Limitless-MD.git';
@@ -175,13 +176,8 @@ function getRepoUrl() {
     }
     return baseUrl;
 }
-    const baseUrl = 'https://github.com/Botking134/Limitless-MD.git';
-    if (token) {
-        return `https://${token}@github.com/Botking134/Limitless-MD.git`;
-    }
-    return baseUrl;
-}
 
+// ─── UPDATED: Removed .env from backup ──────────────────────────
 async function backupCriticalFiles(jid, sock) {
     try {
         const backupDir = path.join(__dirname, '../storage/backups');
@@ -189,7 +185,6 @@ async function backupCriticalFiles(jid, sock) {
 
         const timestamp = Date.now();
         const filesToBackup = [
-           
             { src: path.join(__dirname, '../config.js'), dest: path.join(backupDir, `config.js.${timestamp}`) },
             { src: path.join(__dirname, '../storage'), dest: path.join(backupDir, `storage.${timestamp}`) }
         ];
@@ -289,7 +284,7 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
 
-            // ─── Extract action from args or button/interactive reply ───
+            // ─── Extract action from args or button ──────────────────
             let action = '';
             let option = '';
 
@@ -299,27 +294,13 @@ module.exports = [
                 option = parts[1]?.toLowerCase().trim() || '';
             } else {
                 const rawMsg = getRawMessage(msg.message);
-
-                // Extract selected ID from older styles
-                let listId = rawMsg?.listResponseMessage?.singleSelectReply?.selectedRowId ||
-                               rawMsg?.buttonsResponseMessage?.selectedButtonId ||
-                               rawMsg?.templateButtonReplyMessage?.selectedId ||
-                               '';
-
-                // Extract selected ID from modern interactive buttons
-                if (!listId && rawMsg?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
-                    try {
-                        const params = JSON.parse(rawMsg.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
-                        listId = params.id || '';
-                    } catch (e) {
-                        console.error('[UPDATE] Error parsing button response:', e);
-                    }
-                }
-
-                if (listId) {
-                    const parts = listId.split('_');
-                    if (parts[0] === 'update') {
-                        action = parts[1] || '';
+                const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
+                                 rawMsg?.templateButtonReplyMessage?.selectedId ||
+                                 '';
+                if (buttonId) {
+                    const parts = buttonId.trim().split(' ');
+                    if (parts.length > 1) {
+                        action = parts[1]?.toLowerCase().trim() || '';
                     }
                 }
             }
@@ -393,7 +374,6 @@ module.exports = [
             const isConfirm = action === 'yes' || action === 'confirm' || action === 'pull';
             const isCancel = action === 'no' || action === 'cancel';
 
-            // Check git status
             execWithTimeout('git status', 10000, async (statusErr) => {
                 if (statusErr) {
                     return await sock.sendMessage(jid, { text: `❌ *Git not initialized.*\nRun \`${config.prefix}update setup\`` }, { quoted: msg });
@@ -409,19 +389,16 @@ module.exports = [
 
                         const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
 
-                        // ─── If no update, show message ────────────────
                         if (!isBehind && !isConfirm && !isForce && !isCancel) {
                             return await sock.sendMessage(jid, { text: "❄️ *No updates available.*" }, { quoted: msg });
                         }
 
-                        // ─── If no update but user requested action ─────
                         if (!isBehind && (isConfirm || isForce)) {
                             return await sock.sendMessage(jid, { text: "❄️ *Already up to date.*" }, { quoted: msg });
                         }
 
-                        // ─── If update available, show interactive buttons menu ───
+                        // ─── If update available, show buttons menu ───
                         if (isBehind && !isConfirm && !isForce && !isCancel) {
-                            // Get commit log
                             execWithTimeout(`git log --oneline -5 HEAD..origin/${branch}`, 10000, async (logErr, commitLog) => {
                                 const commitCount = commitLog ? commitLog.split('\n').filter(Boolean).length : 0;
                                 const techMsg =
@@ -431,47 +408,30 @@ module.exports = [
                                     `🔀  Commits ahead: \`${commitCount}\`\n` +
                                     `📝  Latest:\n${commitLog || '  (no details)'}\n` +
                                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                    `Choose your action from the options below:`;
+                                    `Choose your action:`;
 
-                                // ─── FIXED: Send interactiveMessage directly (no viewOnce) ──
+                                // ─── STANDARD VERTICAL BUTTONS ──────────
                                 const buttonMessage = {
-                                    interactiveMessage: {
-                                        header: {
-                                            title: "📋 Update Options",
-                                            hasMediaAttachment: false
+                                    text: techMsg,
+                                    footer: "⚡ Limitless Update System",
+                                    buttons: [
+                                        {
+                                            buttonId: `${config.prefix}update pull`,
+                                            buttonText: { displayText: "🔄 Pull Updates" },
+                                            type: 1
                                         },
-                                        body: {
-                                            text: techMsg
+                                        {
+                                            buttonId: `${config.prefix}update force`,
+                                            buttonText: { displayText: "⚡ Force Update" },
+                                            type: 1
                                         },
-                                        footer: {
-                                            text: "⚡ Limitless Update System"
-                                        },
-                                        nativeFlowMessage: {
-                                            buttons: [
-                                                {
-                                                    name: "quick_reply",
-                                                    buttonParamsJson: JSON.stringify({
-                                                        display_text: "🔄 Pull Updates",
-                                                        id: "update_pull"
-                                                    })
-                                                },
-                                                {
-                                                    name: "quick_reply",
-                                                    buttonParamsJson: JSON.stringify({
-                                                        display_text: "⚡ Force Update",
-                                                        id: "update_force"
-                                                    })
-                                                },
-                                                {
-                                                    name: "quick_reply",
-                                                    buttonParamsJson: JSON.stringify({
-                                                        display_text: "❌ Cancel",
-                                                        id: "update_cancel"
-                                                    })
-                                                }
-                                            ]
+                                        {
+                                            buttonId: `${config.prefix}update cancel`,
+                                            buttonText: { displayText: "❌ Cancel" },
+                                            type: 1
                                         }
-                                    }
+                                    ],
+                                    headerType: 1
                                 };
 
                                 await sock.sendMessage(jid, buttonMessage, { quoted: msg });
@@ -966,7 +926,7 @@ module.exports = [
 
             const GITHUB_TOKEN = config.githubToken;
             if (!GITHUB_TOKEN) {
-                return await sock.sendMessage(jid, { text: "❌ GitHub token not configured. Please set GITHUB_TOKEN" }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ GitHub token not configured. Please set GITHUB_TOKEN in config.js" }, { quoted: msg });
             }
 
             const GITHUB_OWNER = "Botking134";
