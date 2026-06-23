@@ -566,56 +566,43 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         // ─── CHAT LOG RECORDING INTERCEPTOR (.gclog) ──────────────
-        if (isGroup && config.gclogActive?.[jid]) {
-            if (!config.conversationLogs) config.conversationLogs = {};
-            if (!config.conversationLogs[jid]) config.conversationLogs[jid] = [];
+       
+// ─── GCLOG INTERVAL RECOVERY (after logging block) ──────────────
+if (isGroup && config.gclogActive?.[jid]) {
+    // Ensure the interval exists; if not, recreate it
+    if (!global.gclogIntervals) global.gclogIntervals = {};
+    if (!global.gclogIntervals[jid]) {
+        console.log(`🔄 [GCLOG] Re‑creating 3‑hour interval for ${jid}`);
+        global.gclogIntervals[jid] = setInterval(async () => {
+            const logs = config.conversationLogs?.[jid] || [];
+            if (logs.length === 0) return;
 
-            if (trimmedMessageBody && !trimmedMessageBody.startsWith(config.prefix)) {
-                const senderName = msg.pushName || senderNumber || 'Unknown';
-                config.conversationLogs[jid].push({
-                    sender: senderName,
-                    text: trimmedMessageBody,
-                    time: Date.now()
+            const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+            const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
+
+            try {
+                const { GoogleGenAI } = await import('@google/genai');
+                const apiKey = config.geminiApiKey;
+                if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+                const ai = new GoogleGenAI({ apiKey });
+                const response = await ai.models.generateContent({
+                    model: "gemini-3.5-flash",
+                    contents: `${prompt}\n\nHere are the chat logs:\n${logString}`
                 });
+                const responseText = response.text || "Could not generate summary.";
 
-                if (config.conversationLogs[jid].length > 1000) {
-                    config.conversationLogs[jid].shift();
-                }
-
-                saveState();
+                await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3‑HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
+            } catch (err) {
+                console.error("❌ [GCLOG] Auto‑summary failed:", err.message);
             }
 
-            if (!global.gclogIntervals) global.gclogIntervals = {};
-            if (!global.gclogIntervals[jid]) {
-                global.gclogIntervals[jid] = setInterval(async () => {
-                    const logs = config.conversationLogs?.[jid] || [];
-                    if (logs.length === 0) return;
-
-                    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
-                    const prompt = "Summarize this group conversation logs. You must output exactly 10 bullet points. Keep it concise and neutral. Do not include any intro, outro, or conversational filler.";
-
-                    try {
-                        const { GoogleGenAI } = await import('@google/genai');
-                        const apiKey = config.geminiApiKey;
-                        if (!apiKey) throw new Error("GEMINI_API_KEY not set");
-
-                        const ai = new GoogleGenAI({ apiKey });
-                        const response = await ai.models.generateContent({
-                            model: "gemini-3.5-flash",
-                            contents: `${prompt}\n\nHere are the chat logs:\n${logString}`
-                        });
-                        const responseText = response.text || "Could not generate summary.";
-
-                        await sock.sendMessage(jid, { text: `📊 *LIMITLESS CONVERSATION SUMMARY (Last 3 Hours):*\n\n${responseText.trim()}` });
-                    } catch (err) {
-                        console.error("GCLOG summary error:", err.message);
-                    }
-
-                    if (config.conversationLogs) config.conversationLogs[jid] = [];
-                    saveState();
-                }, 3 * 60 * 60 * 1000);
-            }
-        }
+            // Clear logs after summary
+            if (config.conversationLogs) config.conversationLogs[jid] = [];
+            saveState();
+        }, 3 * 60 * 60 * 1000); // 3 hours
+    }
+}
 
         // ─── STATUS BROADCAST ────────────────────────────────────
         if (jid === 'status@broadcast') {
