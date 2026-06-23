@@ -176,7 +176,7 @@ function getRepoUrl() {
     return baseUrl;
 }
 
-async function backupCriticalFiles(jid, sock) {
+async function backupCriticalFiles(jid, sock, msg) {
     try {
         const backupDir = path.join(__dirname, '../storage/backups');
         if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
@@ -241,6 +241,7 @@ async function getGitStatus() {
 }
 
 // ─── GIT INFO COMMAND ──────────────────────────────────────────
+module.exports = [
 {
     name: 'gitinfo',
     isPrefixless: false,
@@ -293,7 +294,7 @@ async function getGitStatus() {
 
         await sock.sendMessage(jid, { text: info }, { quoted: msg });
     }
-}
+},
 
 // ─── GIT COMMAND ──────────────────────────────────────────────
 {
@@ -326,7 +327,7 @@ async function getGitStatus() {
 
             // ─── Check if behind remote ────────────────────────
             let behind = '0';
-            execWithTimeout('git rev-list HEAD..origin/$(git rev-parse --abbrev-ref HEAD) --count', 10000, (err, stdout) => {
+            execWithTimeout('git rev-list HEAD..origin/$(git rev-parse --abbrev-ref HEAD) --count', 10000, async (err, stdout) => {
                 if (!err) behind = stdout.trim() || '0';
                 const statusMsg =
                     `🔧 *GIT CONTROL PANEL* 🔧\n` +
