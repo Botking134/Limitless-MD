@@ -204,7 +204,8 @@ async function backupCriticalFiles(jid, sock) {
     }
 }
 
-async function sendUpdateSuccess(jid, sock, stdout) {
+// ─── SEND UPDATE SUCCESS ────────────────────────────────────────
+async function sendUpdateSuccess(jid, sock, stdout, quotedMsg) {
     let summary = stdout || 'Update complete.';
     const changed = summary.match(/(\d+) files changed/);
     const insertions = summary.match(/(\d+) insertions/);
@@ -218,7 +219,7 @@ async function sendUpdateSuccess(jid, sock, stdout) {
         `✅ *Update Successful!*\n\n` +
         `📊 *Summary:* ${changes.join(' • ') || 'No changes detected.'}\n\n` +
         `🔄 *Restarting system to load updates...*`;
-    await sock.sendMessage(jid, { text: finalMsg }, { quoted: msg });
+    await sock.sendMessage(jid, { text: finalMsg }, { quoted: quotedMsg });
     setTimeout(() => process.exit(1), 3000);
 }
 
