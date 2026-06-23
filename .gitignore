@@ -1,0 +1,192 @@
+# ─── Node.js ──────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+.npmrc
+
+# ─── Environment & Secrets ──────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+*.env.local
+*.secret
+credentials.json
+*-credentials.json
+service-account.json
+
+# ─── Storage ──────────────────────────────────────────────────────
+storage/
+!storage/README.md
+storage/state.json
+storage/vars.json
+storage/reminders.json
+storage/backups/
+storage/tmp_*
+storage/*.tmp
+storage/*.temp
+storage/*.log
+storage/*.pid
+storage/.cache/
+storage/*.cache
+
+# ─── Logs ─────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pm2-*.log
+pm2-*.err
+*.pid
+
+# ─── Temporary Files ─────────────────────────────────────────────
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── IDE / Editor ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+*.code-workspace
+*.code-snippets
+
+# ─── OS / System ──────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ─── Git ──────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+.gitkeep
+.gitignore.local
+.gitconfig
+
+# ─── Build / Dist ─────────────────────────────────────────────────
+dist/
+build/
+out/
+*.min.js
+*.map
+*.gz
+*.tgz
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+
+# ─── Testing ──────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+*.test.js
+*.spec.js
+__tests__/
+__mocks__/
+jest.config.js
+test-results.xml
+*.snap
+
+# ─── Misc ─────────────────────────────────────────────────────────
+*.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
+*.csr
+*.keystore
+*.jks
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+*.lock
+*.pid
+*.seed
+*.pid.lock
+*.backup
+*.bak
+*.old
+*.orig
+*.rej
+
+# ─── Project-Specific ─────────────────────────────────────────────
+# WhatsApp auth files
+creds.json
+auth_info_*
+sessions/
+session-*.json
+*.whatsapp*
+*.wa*
+
+# Backup files (manual)
+*.backup-*
+backup_*
+restore_*
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Docker ──────────────────────────────────────────────────────
+Dockerfile
+docker-compose.yml
+.dockerignore
+docker/
+*.docker
+Dockerfile.*
+*.dockerfile
+
+# ─── PM2 ──────────────────────────────────────────────────────────
+.pm2/
+pm2.json
+pm2-*.json
+ecosystem.config.js
+ecosystem.*.js
+
+# ─── Other ────────────────────────────────────────────────────────
+*.orig
+*.rej
+*.patch
+*.diff
+*.bak
+*.old
+*.swp
+*.swo
+*.~
+nohup.out
+*.out
+*.error
+core
+*.core
