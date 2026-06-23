@@ -1,5 +1,4 @@
 // index.js
-require('dotenv').config();
 
 const config = require('./config');
 const { loadVars, syncVarsToConfig } = require('./vars');
