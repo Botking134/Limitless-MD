@@ -397,11 +397,9 @@ module.exports = [
             if (targetJid.length < 8) return await sock.sendMessage(jid, { text: "❌ Invalid target number." }, { quoted: msg });
 
             try {
-                // Get the quoted message
                 const quotedMsg = contextInfo.quotedMessage;
                 if (!quotedMsg) return await sock.sendMessage(jid, { text: "❌ No quoted message found." }, { quoted: msg });
 
-                // Forward using Baileys' built-in forward
                 await sock.sendMessage(targetJid, { forward: quotedMsg });
                 await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
             } catch (e) {
@@ -428,8 +426,7 @@ module.exports = [
         // ─── Fallback ──────────────────────────────────────────────
         await sock.sendMessage(jid, { text: "❌ Usage:\n• `.fw <targetNumber> <text>`\n• Reply to a message with `.fw <targetNumber>`\n• Reply to a message and use `.fw` (interactive)" }, { quoted: msg });
     }
-}, 
-
+},
 
     // 8. PRESENCE (Dashboard)
     {
@@ -1479,51 +1476,7 @@ module.exports = [
     }
 },
 
-// ─── DELCMD – Remove sticker command mapping ───────────────────
-{
-    name: 'delcmd',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-        const jid = msg.key.remoteJid;
-        if (!isOwner && !isSudo && !isDev) {
-            return await sock.sendMessage(jid, { text: "❌ You are not authorized to use this command." }, { quoted: msg });
-        }
 
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-        if (!contextInfo || !contextInfo.quotedMessage) {
-            return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker to remove its mapping." }, { quoted: msg });
-        }
-
-        const quoted = contextInfo.quotedMessage;
-        const stickerMsg = quoted.stickerMessage || quoted.message?.stickerMessage;
-        if (!stickerMsg) {
-            return await sock.sendMessage(jid, { text: "❌ The replied message is not a sticker." }, { quoted: msg });
-        }
-
-        const hashBuffer = stickerMsg.fileSha256;
-        if (!hashBuffer) {
-            return await sock.sendMessage(jid, { text: "❌ Could not read sticker hash." }, { quoted: msg });
-        }
-        const fileHash = hashBuffer.toString('base64');
-
-        console.log(`[DELCMD] Sticker hash: ${fileHash}`);
-
-        if (!config.stickerCommands || !config.stickerCommands[fileHash]) {
-            return await sock.sendMessage(jid, { text: "❌ No command mapped to this sticker." }, { quoted: msg });
-        }
-
-        delete config.stickerCommands[fileHash];
-        const { setVar } = require('../vars');
-        const success = setVar('stickerCommands', config.stickerCommands);
-        if (!success) {
-            return await sock.sendMessage(jid, { text: "❌ Failed to remove mapping." }, { quoted: msg });
-        }
-        saveState();
-
-        await sock.sendMessage(jid, { text: "✅ Sticker command mapping removed." }, { quoted: msg });
-    }
-}, 
 
 // ─── DELCMD – Remove sticker command mapping ───────────────────
 {
