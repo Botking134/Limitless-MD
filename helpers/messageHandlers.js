@@ -777,7 +777,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── ANTIGAY INTERCEPTOR (FIXED) ─────────────────────────
+        // ─── ANTIGAY INTERCEPTOR ──────────────────────────────────
         const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
         const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
         const isGayCommand = gayCommands.includes(cleanCmd);
@@ -799,7 +799,14 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normActivatedBy);
                 const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normActivatedBy;
 
-                if (isMentioningActivated || isReplyingToActivated) {
+                // Also check if the message contains the activator's mention (e.g., @1234567890)
+                const mentionsInText = trimmedMessageBody.match(/@([0-9]+)/g) || [];
+                const isMentionedInText = mentionsInText.some(m => {
+                    const num = m.replace('@', '');
+                    return num === normActivatedBy.split('@')[0];
+                });
+
+                if (isMentioningActivated || isReplyingToActivated || isMentionedInText) {
                     const rudeMessages = [
                         "Shut up, you gay fool. Don't tag my master.",
                         "Back off, rainbow boy. You're not worthy.",
@@ -896,6 +903,18 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!command) return;
 
+        // ─── LOG COMMAND EXECUTION ────────────────────────────────
+        if (command) {
+            global.recentLogs.push({
+                time: new Date().toISOString(),
+                level: 'CMD',
+                message: `${command} ${args || ''}`.trim()
+            });
+            if (global.recentLogs.length > 2000) {
+                global.recentLogs.shift();
+            }
+        }
+
         // ─── AGENT CONTEXT ─────────────────────────────────────────
         if (command === 'gojo') global.activeAgentContext = 'gojo';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
@@ -928,18 +947,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) {
             return;
-        }
-
-        // ─── LOG COMMAND EXECUTION ────────────────────────────────
-        if (command) {
-            global.recentLogs.push({
-                time: new Date().toISOString(),
-                level: 'CMD',
-                message: `${command} ${args || ''}`.trim()
-            });
-            if (global.recentLogs.length > 2000) {
-                global.recentLogs.shift();
-            }
         }
 
         // ─── COMMAND EXECUTION ─────────────────────────────────────
