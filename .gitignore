@@ -1,3 +1,21 @@
+# ─── Secrets & Credentials ──────────────────────────────────────
+config.js                     # ← Ignored – contains API keys!
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.crt
+*.cer
+*.pfx
+*.p12
+*.csr
+*.keystore
+*.jks
+credentials.json
+*-credentials.json
+service-account.json
+
 # ─── Node.js ──────────────────────────────────────────────────────
 node_modules/
 npm-debug.log*
@@ -8,14 +26,11 @@ yarn.lock
 pnpm-lock.yaml
 .npmrc
 
-
 # ─── Storage ──────────────────────────────────────────────────────
+# vars.json and state.json are NOT ignored – they store persistent state
 storage/
 !storage/README.md
-storage/state.json
-storage/vars.json
-storage/reminders.json
-storage/backups/
+storage/backups/          # ← Ignore backups only
 storage/tmp_*
 storage/*.tmp
 storage/*.temp
@@ -107,19 +122,6 @@ test-results.xml
 *.snap
 
 # ─── Misc ─────────────────────────────────────────────────────────
-*.pem
-*.key
-*.crt
-*.cer
-*.pfx
-*.p12
-*.csr
-*.keystore
-*.jks
-*.json
-!package.json
-!package-lock.json
-!tsconfig.json
 *.lock
 *.pid
 *.seed
@@ -130,8 +132,7 @@ test-results.xml
 *.orig
 *.rej
 
-# ─── Project-Specific ─────────────────────────────────────────────
-# WhatsApp auth files
+# ─── WhatsApp Auth ────────────────────────────────────────────────
 creds.json
 auth_info_*
 sessions/
@@ -139,12 +140,13 @@ session-*.json
 *.whatsapp*
 *.wa*
 
-# Backup files (manual)
+# ─── Backup Files ────────────────────────────────────────────────
 *.backup-*
 backup_*
 restore_*
+storage/backups/
 
-# Database files
+# ─── Database Files ──────────────────────────────────────────────
 *.db
 *.sqlite
 *.sqlite3
