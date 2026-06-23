@@ -6,7 +6,6 @@ const config = require('./config');
 const VARS_PATH = path.join(__dirname, 'storage', 'vars.json');
 
 // ─── LIST OF DYNAMIC KEYS (persisted in vars.json) ────────────
-// These are the keys that can be changed via .setvar and other commands.
 const DYNAMIC_KEYS = [
     'prefix',
     'vvs',
@@ -38,41 +37,75 @@ const DYNAMIC_KEYS = [
     'presence'
 ];
 
-// ─── LOAD VARS ────────────────────────────────────────────────────
+// ─── LOAD VARS (BIDIRECTIONAL SYNC) ─────────────────────────────
 
 function loadVars() {
-    // Ensure storage directory exists
     const storageDir = path.dirname(VARS_PATH);
     if (!fs.existsSync(storageDir)) {
         fs.mkdirSync(storageDir, { recursive: true });
     }
 
-    try {
-        if (fs.existsSync(VARS_PATH)) {
+    // Get config.js modification time
+    const configPath = path.join(__dirname, 'config.js');
+    const configStat = fs.existsSync(configPath) ? fs.statSync(configPath) : null;
+    const configMtime = configStat ? configStat.mtimeMs : 0;
+
+    let vars = {};
+    let varsExist = false;
+
+    // Try to load vars.json
+    if (fs.existsSync(VARS_PATH)) {
+        try {
             const data = JSON.parse(fs.readFileSync(VARS_PATH, 'utf8'));
+            vars = data;
+            varsExist = true;
             console.log('✅ [VARS] Loaded persistent variables');
-            return data;
-        } else {
-            // No vars.json → create it from current config
-            const initialVars = {};
-            for (const key of DYNAMIC_KEYS) {
-                if (config[key] !== undefined) {
-                    initialVars[key] = config[key];
-                }
-            }
-            fs.writeFileSync(VARS_PATH, JSON.stringify(initialVars, null, 2));
-            console.log('📝 [VARS] Created vars.json from current config');
-            return initialVars;
+        } catch (err) {
+            console.error('❌ [VARS] Failed to parse vars.json:', err);
         }
-    } catch (err) {
-        console.error('❌ [VARS] Failed to load vars:', err);
-        // Return current config values as fallback
-        const fallback = {};
-        for (const key of DYNAMIC_KEYS) {
-            if (config[key] !== undefined) fallback[key] = config[key];
-        }
-        return fallback;
     }
+
+    // Get vars.json modification time
+    const varsStat = fs.existsSync(VARS_PATH) ? fs.statSync(VARS_PATH) : null;
+    const varsMtime = varsStat ? varsStat.mtimeMs : 0;
+
+    // ─── BIDIRECTIONAL SYNC LOGIC ──────────────────────────────
+
+    // If vars.json doesn't exist, create it from config
+    if (!varsExist) {
+        console.log('📝 [VARS] Creating vars.json from config.js...');
+        const initialVars = {};
+        for (const key of DYNAMIC_KEYS) {
+            if (config[key] !== undefined) {
+                initialVars[key] = config[key];
+            }
+        }
+        fs.writeFileSync(VARS_PATH, JSON.stringify(initialVars, null, 2));
+        return initialVars;
+    }
+
+    // If vars.json exists and config.js is newer, update vars.json from config.js
+    if (configMtime > varsMtime) {
+        console.log('🔄 [VARS] config.js is newer → updating vars.json from config.js...');
+        const updatedVars = {};
+        for (const key of DYNAMIC_KEYS) {
+            if (config[key] !== undefined) {
+                updatedVars[key] = config[key];
+            }
+        }
+        // Merge with existing vars.json for keys that exist there but not in config
+        for (const key of Object.keys(vars)) {
+            if (!(key in updatedVars)) {
+                updatedVars[key] = vars[key];
+            }
+        }
+        fs.writeFileSync(VARS_PATH, JSON.stringify(updatedVars, null, 2));
+        return updatedVars;
+    }
+
+    // If vars.json is newer, it will override config in syncVarsToConfig
+    console.log('🔄 [VARS] vars.json is newer → will override config.js values');
+    return vars;
 }
 
 // ─── SAVE DYNAMIC VARS (reads from config, writes to vars.json) ──
@@ -142,7 +175,7 @@ function syncVarsToConfig(vars) {
 // ─── GET / SET SINGLE VAR ──────────────────────────────────────
 
 function getVar(key) {
-    // Return current value from config (which is already synced)
+    // Return current value from config
     return config[key];
 }
 
