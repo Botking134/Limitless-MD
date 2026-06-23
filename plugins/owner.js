@@ -960,7 +960,7 @@ module.exports = [
 
             const GITHUB_TOKEN = config.githubToken;
             if (!GITHUB_TOKEN) {
-                return await sock.sendMessage(jid, { text: "❌ GitHub token not configured. Please set GITHUB_TOKEN in .env" }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ GitHub token not configured. Please set GITHUB_TOKEN" }, { quoted: msg });
             }
 
             const GITHUB_OWNER = "Botking134";
