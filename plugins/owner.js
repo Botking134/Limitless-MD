@@ -227,15 +227,16 @@ async function sendUpdateSuccess(jid, sock, stdout, quotedMsg) {
 // ─── Show git status (for the .git menu) ──────────────────────
 async function getGitStatus() {
     return new Promise((resolve) => {
-        execWithTimeout('git status -s && git rev-parse --abbrev-ref HEAD', 10000, (err, stdout) => {
-            if (err) {
-                resolve({ status: 'error', msg: err.message });
+        execWithTimeout('git rev-parse --abbrev-ref HEAD', 5000, (branchErr, branchOut) => {
+            if (branchErr) {
+                resolve({ status: 'error', msg: branchErr.message });
                 return;
             }
-            const lines = stdout.split('\n').filter(Boolean);
-            const branch = lines.find(l => l.includes('HEAD'))?.replace('HEAD', '').trim() || 'unknown';
-            const changes = lines.filter(l => !l.includes('HEAD')).length;
-            resolve({ branch, changes, output: stdout });
+            const branch = branchOut.trim() || 'unknown';
+            execWithTimeout('git status --porcelain', 5000, (statusErr, statusOut) => {
+                const changes = statusErr ? 0 : statusOut.split('\n').filter(Boolean).length;
+                resolve({ branch, changes, output: statusOut });
+            });
         });
     });
 }
@@ -380,7 +381,17 @@ module.exports = [
                     ]
                 };
 
-                await sock.sendMessage(jid, listMessage, { quoted: msg });
+                try {
+                    await sock.sendMessage(jid, listMessage, { quoted: msg });
+                } catch (sendErr) {
+                    // Fallback configuration for Baileys environments missing active interactive menu drivers
+                    const fallbackText = statusMsg + `\n\n` +
+                        `*📋 available commands:* \n` +
+                        `• \`${config.prefix}update pull\` - Fast-forward local branches\n` +
+                        `• \`${config.prefix}update setup\` - Initialize tracking parameters\n` +
+                        `• \`${config.prefix}gitinfo\` - Access command help sheet`;
+                    await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
+                }
             });
         });
     }
