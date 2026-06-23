@@ -1523,7 +1523,7 @@ module.exports = [
 
         await sock.sendMessage(jid, { text: "✅ Sticker command mapping removed." }, { quoted: msg });
     }
-}
+}, 
 
 // ─── DELCMD – Remove sticker command mapping ───────────────────
 {
