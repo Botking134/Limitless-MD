@@ -1,0 +1,9 @@
+# Create the file
+nano .gitattributes
+
+# Paste the content above, save, and exit.
+
+# Add, commit, and push
+git add .gitattributes
+git commit -m "Add .gitattributes to protect vars.json and state.json"
+git push
