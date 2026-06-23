@@ -20,6 +20,11 @@ const ownerCommands = [
 const primaryOnlyCommands = ['addowner', 'delowner'];
 const devOnlyCommands = ['upgrade'];
 
+// ─── LOGGING CAPTURE ────────────────────────────────────────────
+if (!global.recentLogs || !Array.isArray(global.recentLogs)) {
+    global.recentLogs = [];
+}
+
 // ─── NOTE HELPERS ───────────────────────────────────────────────
 
 function readNotes() {
@@ -425,8 +430,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         await handleAfkDeactivation(sock, msg);
 
         // ─── PERMISSIONS ──────────────────────────────────────────
-        // (command and args already declared)
-
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
 
@@ -566,43 +569,59 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         // ─── CHAT LOG RECORDING INTERCEPTOR (.gclog) ──────────────
-       
-// ─── GCLOG INTERVAL RECOVERY (after logging block) ──────────────
-if (isGroup && config.gclogActive?.[jid]) {
-    // Ensure the interval exists; if not, recreate it
-    if (!global.gclogIntervals) global.gclogIntervals = {};
-    if (!global.gclogIntervals[jid]) {
-        console.log(`🔄 [GCLOG] Re‑creating 3‑hour interval for ${jid}`);
-        global.gclogIntervals[jid] = setInterval(async () => {
-            const logs = config.conversationLogs?.[jid] || [];
-            if (logs.length === 0) return;
+        if (isGroup && config.gclogActive?.[jid]) {
+            if (!config.conversationLogs) config.conversationLogs = {};
+            if (!config.conversationLogs[jid]) config.conversationLogs[jid] = [];
 
-            const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
-            const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
-
-            try {
-                const { GoogleGenAI } = await import('@google/genai');
-                const apiKey = config.geminiApiKey;
-                if (!apiKey) throw new Error("GEMINI_API_KEY not set");
-
-                const ai = new GoogleGenAI({ apiKey });
-                const response = await ai.models.generateContent({
-                    model: "gemini-3.5-flash",
-                    contents: `${prompt}\n\nHere are the chat logs:\n${logString}`
+            if (trimmedMessageBody && !trimmedMessageBody.startsWith(config.prefix)) {
+                const senderName = msg.pushName || senderNumber || 'Unknown';
+                config.conversationLogs[jid].push({
+                    sender: senderName,
+                    text: trimmedMessageBody,
+                    time: Date.now()
                 });
-                const responseText = response.text || "Could not generate summary.";
 
-                await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3‑HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
-            } catch (err) {
-                console.error("❌ [GCLOG] Auto‑summary failed:", err.message);
+                if (config.conversationLogs[jid].length > 1000) {
+                    config.conversationLogs[jid].shift();
+                }
+
+                saveState();
             }
 
-            // Clear logs after summary
-            if (config.conversationLogs) config.conversationLogs[jid] = [];
-            saveState();
-        }, 3 * 60 * 60 * 1000); // 3 hours
-    }
-}
+            // ─── GCLOG INTERVAL RECOVERY ──────────────────────────
+            if (!global.gclogIntervals) global.gclogIntervals = {};
+            if (!global.gclogIntervals[jid]) {
+                console.log(`🔄 [GCLOG] Re‑creating 3‑hour interval for ${jid}`);
+                global.gclogIntervals[jid] = setInterval(async () => {
+                    const logs = config.conversationLogs?.[jid] || [];
+                    if (logs.length === 0) return;
+
+                    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+                    const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
+
+                    try {
+                        const { GoogleGenAI } = await import('@google/genai');
+                        const apiKey = config.geminiApiKey;
+                        if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+                        const ai = new GoogleGenAI({ apiKey });
+                        const response = await ai.models.generateContent({
+                            model: "gemini-3.5-flash",
+                            contents: `${prompt}\n\nHere are the chat logs:\n${logString}`
+                        });
+                        const responseText = response.text || "Could not generate summary.";
+
+                        await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3‑HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
+                    } catch (err) {
+                        console.error("❌ [GCLOG] Auto‑summary failed:", err.message);
+                    }
+
+                    // Clear logs after summary
+                    if (config.conversationLogs) config.conversationLogs[jid] = [];
+                    saveState();
+                }, 3 * 60 * 60 * 1000);
+            }
+        }
 
         // ─── STATUS BROADCAST ────────────────────────────────────
         if (jid === 'status@broadcast') {
@@ -758,53 +777,53 @@ if (isGroup && config.gclogActive?.[jid]) {
             }
         }
 
-        // ─── ANTIGAY INTERCEPTOR (FIXED) ──────────────────────────────
-const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
-const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
-const isGayCommand = gayCommands.includes(cleanCmd);
+        // ─── ANTIGAY INTERCEPTOR (FIXED) ─────────────────────────
+        const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
+        const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
+        const isGayCommand = gayCommands.includes(cleanCmd);
 
-if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList && config.gayList.length > 0) {
-    const senderNum = senderJid.split('@')[0];
-    const isGay = config.gayList.some(entry => normalizeToJid(entry.lid) === normalizeToJid(senderJid));
+        if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList && config.gayList.length > 0) {
+            const senderNum = senderJid.split('@')[0];
+            const isGay = config.gayList.some(entry => normalizeToJid(entry.lid) === normalizeToJid(senderJid));
 
-    if (isGay) {
-        const activatedBy = config.antigay[jid].activatedBy;
-        if (!activatedBy) {
-            console.log('[ANTIGAY] No activatedBy found for', jid);
-            return;
-        }
+            if (isGay) {
+                const activatedBy = config.antigay[jid].activatedBy;
+                if (!activatedBy) {
+                    console.log('[ANTIGAY] No activatedBy found for', jid);
+                    return;
+                }
 
-        const normActivatedBy = normalizeToJid(activatedBy);
-        const normSender = normalizeToJid(senderJid);
+                const normActivatedBy = normalizeToJid(activatedBy);
+                const normSender = normalizeToJid(senderJid);
 
-        const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normActivatedBy);
-        const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normActivatedBy;
+                const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normActivatedBy);
+                const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normActivatedBy;
 
-        if (isMentioningActivated || isReplyingToActivated) {
-            const rudeMessages = [
-                "Shut up, you gay fool. Don't tag my master.",
-                "Back off, rainbow boy. You're not worthy.",
-                "My Infinity rejects your gay energy. Stay away.",
-                "You really think you can talk to my master? Gay. 💀",
-                "Don't you have a boyfriend to annoy? Leave me alone.",
-                "Master is busy. Go find your gay club.",
-                "I'd say you're weak, but you're just... gay.",
-                "You're not even worth my Six Eyes. Get lost.",
-                "Master doesn't associate with gay peasants like you.",
-                "Another gay trying to get attention. Blocked."
-            ];
-            const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
-            try {
-                await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
-                console.log('[ANTIGAY] Sent rude message to', senderJid);
-            } catch (err) {
-                console.error('[ANTIGAY] Failed to send message:', err);
+                if (isMentioningActivated || isReplyingToActivated) {
+                    const rudeMessages = [
+                        "Shut up, you gay fool. Don't tag my master.",
+                        "Back off, rainbow boy. You're not worthy.",
+                        "My Infinity rejects your gay energy. Stay away.",
+                        "You really think you can talk to my master? Gay. 💀",
+                        "Don't you have a boyfriend to annoy? Leave me alone.",
+                        "Master is busy. Go find your gay club.",
+                        "I'd say you're weak, but you're just... gay.",
+                        "You're not even worth my Six Eyes. Get lost.",
+                        "Master doesn't associate with gay peasants like you.",
+                        "Another gay trying to get attention. Blocked."
+                    ];
+                    const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
+                    try {
+                        await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
+                        console.log('[ANTIGAY] Sent rude message to', senderJid);
+                    } catch (err) {
+                        console.error('[ANTIGAY] Failed to send message:', err);
+                    }
+                } else {
+                    console.log('[ANTIGAY] Gay user did not mention or reply to activator');
+                }
             }
-        } else {
-            console.log('[ANTIGAY] Gay user did not mention or reply to activator');
         }
-    }
-}
 
         // ─── AGENT DETECTION ──────────────────────────────────────
         const quotedParticipant = contextInfo?.participant;
@@ -911,6 +930,18 @@ if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList &&
             return;
         }
 
+        // ─── LOG COMMAND EXECUTION ────────────────────────────────
+        if (command) {
+            global.recentLogs.push({
+                time: new Date().toISOString(),
+                level: 'CMD',
+                message: `${command} ${args || ''}`.trim()
+            });
+            if (global.recentLogs.length > 2000) {
+                global.recentLogs.shift();
+            }
+        }
+
         // ─── COMMAND EXECUTION ─────────────────────────────────────
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
@@ -935,6 +966,11 @@ if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList &&
         }
     } catch (err) {
         console.error('Error handling message stream:', err);
+        global.recentLogs.push({
+            time: new Date().toISOString(),
+            level: 'ERROR',
+            message: err.message + '\n' + (err.stack || '')
+        });
     }
 }
 
