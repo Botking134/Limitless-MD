@@ -25,7 +25,7 @@ module.exports = {
     //    These are the defaults if vars.json doesn't exist.
     // ================================================================
 
-    prefix: process.env.PREFIX || ".",
+    prefix: process.env.PREFIX || "",
     vvs: process.env.VVS || "wow",
     packName: process.env.PACK_NAME || "♾️",
     author: process.env.AUTHOR || "Infinity",
