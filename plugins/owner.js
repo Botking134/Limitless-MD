@@ -1352,22 +1352,45 @@ module.exports = [
         const jid = msg.key.remoteJid;
         if (!isOwner) return;
 
-        if (!global.recentLogs || global.recentLogs.length === 0) {
+        // ─── Ensure global.recentLogs exists ──────────────────
+        if (!global.recentLogs || !Array.isArray(global.recentLogs)) {
+            global.recentLogs = [];
+        }
+
+        if (global.recentLogs.length === 0) {
             return await sock.sendMessage(jid, { text: "📋 No recent logs available." }, { quoted: msg });
         }
 
+        // ─── Parse count ────────────────────────────────────────
         let count = parseInt(args) || 20;
+        if (isNaN(count) || count < 1) count = 20;
         if (count > 100) count = 100;
 
         const logs = global.recentLogs.slice(-count);
-        let text = `📋 *RECENT LOGS (Last ${logs.length})*\n━━━━━━━━━━━━━━━━━━━\n\n`;
-        logs.forEach(entry => {
-            const time = entry.time.split('T')[1].slice(0, 8); // HH:MM:SS
-            text += `[${time}] ${entry.level}: ${entry.message}\n`;
-        });
 
-        if (text.length > 65000) {
-            text = text.slice(0, 65000) + '\n... (truncated)';
+        let text = `📋 *RECENT LOGS (Last ${logs.length})*\n━━━━━━━━━━━━━━━━━━━\n\n`;
+
+        for (const entry of logs) {
+            // Handle both string ISO and numeric timestamp
+            let timeStr = '??:??:??';
+            if (entry.time) {
+                try {
+                    const d = new Date(entry.time);
+                    if (!isNaN(d.getTime())) {
+                        timeStr = d.toTimeString().slice(0, 8);
+                    } else if (typeof entry.time === 'string') {
+                        timeStr = entry.time.slice(0, 8); // fallback
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
+            const level = entry.level || 'INFO';
+            const message = entry.message || entry || '';
+            text += `[${timeStr}] ${level}: ${message}\n`;
+        }
+
+        if (text.length > 60000) {
+            text = text.slice(0, 60000) + '\n... (truncated)';
         }
 
         await sock.sendMessage(jid, { text }, { quoted: msg });
