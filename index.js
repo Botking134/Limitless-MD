@@ -52,6 +52,10 @@ console.log(`📦 Owners  : ${config.secondaryOwners.length} secondary`);
 console.log(`🛡️ Sudos   : ${config.sudos.length} registered`);
 console.log(`========================================\n`);
 
+const { loadVars, syncVarsToConfig } = require('./vars');
+const vars = loadVars();
+syncVarsToConfig(vars);
+
 // ─── START THE BOT ──────────────────────────────────────────────
 
 startBot().catch((error) => {
