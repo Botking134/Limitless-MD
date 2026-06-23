@@ -168,7 +168,13 @@ function execWithTimeout(cmd, timeoutMs, callback) {
 }
 
 function getRepoUrl() {
-    const token = config.githubToken || process.env.GITHUB_TOKEN || '';
+    const token = config.githubToken;
+    const baseUrl = 'https://github.com/Botking134/Limitless-MD.git';
+    if (token) {
+        return `https://${token}@github.com/Botking134/Limitless-MD.git`;
+    }
+    return baseUrl;
+}
     const baseUrl = 'https://github.com/Botking134/Limitless-MD.git';
     if (token) {
         return `https://${token}@github.com/Botking134/Limitless-MD.git`;
@@ -183,7 +189,7 @@ async function backupCriticalFiles(jid, sock) {
 
         const timestamp = Date.now();
         const filesToBackup = [
-            { src: path.join(__dirname, '../.env'), dest: path.join(backupDir, `.env.${timestamp}`) },
+           
             { src: path.join(__dirname, '../config.js'), dest: path.join(backupDir, `config.js.${timestamp}`) },
             { src: path.join(__dirname, '../storage'), dest: path.join(backupDir, `storage.${timestamp}`) }
         ];
