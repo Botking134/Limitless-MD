@@ -1,4 +1,5 @@
 // index.js
+require('dotenv').config();
 
 const config = require('./config');
 const { loadVars, syncVarsToConfig } = require('./vars');
@@ -26,9 +27,9 @@ console.error = (...a) => { pushLog('ERROR', a); origError(...a); };
 
 // ─── LOAD PERSISTENT STATE ──────────────────────────────────────
 
-// 1. Load behavior toggles from vars.json → sync to config
-const vars = loadVars();
-syncVarsToConfig(vars);
+// 1. Load vars.json (bidirectional sync – compares timestamps)
+const vars = loadVars();            // ← NEW: auto-syncs config.js ↔ vars.json
+syncVarsToConfig(vars);             // ← Overrides config with vars.json values
 
 // 2. Load permission lists from state.json → merge into config
 loadState();
