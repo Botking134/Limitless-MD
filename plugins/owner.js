@@ -154,6 +154,82 @@ if (!global.reminderInterval) {
     }, 10000);
 }
 
+
+// ─── EXEC WITH TIMEOUT ──────────────────────────────────────────
+function execWithTimeout(cmd, timeoutMs, callback) {
+    const child = exec(cmd, (err, stdout, stderr) => {
+        if (callback) callback(err, stdout, stderr);
+    });
+    const timer = setTimeout(() => {
+        child.kill();
+        if (callback) callback(new Error('Command timed out'), '', '');
+    }, timeoutMs);
+    child.on('exit', () => clearTimeout(timer));
+}
+
+// ─── GET REPO URL (with token for private repos) ──────────────
+function getRepoUrl() {
+    const token = config.githubToken || process.env.GITHUB_TOKEN || '';
+    const baseUrl = 'https://github.com/Botking134/Limitless-MD.git';
+    if (token) {
+        return `https://${token}@github.com/Botking134/Limitless-MD.git`;
+    }
+    return baseUrl;
+}
+
+// ─── BACKUP CRITICAL FILES ──────────────────────────────────────
+async function backupCriticalFiles(jid, sock) {
+    try {
+        const backupDir = path.join(__dirname, '../storage/backups');
+        if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+
+        const timestamp = Date.now();
+        const filesToBackup = [
+            { src: path.join(__dirname, '../.env'), dest: path.join(backupDir, `.env.${timestamp}`) },
+            { src: path.join(__dirname, '../config.js'), dest: path.join(backupDir, `config.js.${timestamp}`) },
+            { src: path.join(__dirname, '../storage'), dest: path.join(backupDir, `storage.${timestamp}`) }
+        ];
+
+        for (const file of filesToBackup) {
+            if (fs.existsSync(file.src)) {
+                if (fs.lstatSync(file.src).isDirectory()) {
+                    // Copy entire directory
+                    const destDir = file.dest;
+                    fs.cpSync(file.src, destDir, { recursive: true, force: true });
+                } else {
+                    fs.copyFileSync(file.src, file.dest);
+                }
+            }
+        }
+        await sock.sendMessage(jid, { text: `✅ *Backup saved to:* \`${backupDir}\`` }, { quoted: msg });
+    } catch (err) {
+        console.error('Backup failed:', err);
+        await sock.sendMessage(jid, { text: `⚠️ *Backup failed:* ${err.message}` }, { quoted: msg });
+    }
+}
+
+// ─── SEND UPDATE SUCCESS ────────────────────────────────────────
+async function sendUpdateSuccess(jid, sock, stdout) {
+    let summary = stdout || 'Update complete.';
+    // Extract changed files if possible
+    const changed = summary.match(/(\d+) files changed/);
+    const insertions = summary.match(/(\d+) insertions/);
+    const deletions = summary.match(/(\d+) deletions/);
+    const changes = [];
+    if (changed) changes.push(changed[1] + ' files changed');
+    if (insertions) changes.push(insertions[1] + ' insertions');
+    if (deletions) changes.push(deletions[1] + ' deletions');
+
+    const finalMsg =
+        `✅ *Update Successful!*\n\n` +
+        `📊 *Summary:* ${changes.join(' • ') || 'No changes detected.'}\n\n` +
+        `🔄 *Restarting system to load updates...*`;
+    await sock.sendMessage(jid, { text: finalMsg }, { quoted: msg });
+    setTimeout(() => process.exit(1), 3000);
+
+}
+
+
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
