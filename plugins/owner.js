@@ -193,9 +193,7 @@ async function backupCriticalFiles(jid, sock) {
         for (const file of filesToBackup) {
             if (fs.existsSync(file.src)) {
                 if (fs.lstatSync(file.src).isDirectory()) {
-                    // Copy entire directory
-                    const destDir = file.dest;
-                    fs.cpSync(file.src, destDir, { recursive: true, force: true });
+                    fs.cpSync(file.src, file.dest, { recursive: true, force: true });
                 } else {
                     fs.copyFileSync(file.src, file.dest);
                 }
@@ -211,7 +209,6 @@ async function backupCriticalFiles(jid, sock) {
 // ─── SEND UPDATE SUCCESS ────────────────────────────────────────
 async function sendUpdateSuccess(jid, sock, stdout) {
     let summary = stdout || 'Update complete.';
-    // Extract changed files if possible
     const changed = summary.match(/(\d+) files changed/);
     const insertions = summary.match(/(\d+) insertions/);
     const deletions = summary.match(/(\d+) deletions/);
@@ -226,8 +223,8 @@ async function sendUpdateSuccess(jid, sock, stdout) {
         `🔄 *Restarting system to load updates...*`;
     await sock.sendMessage(jid, { text: finalMsg }, { quoted: msg });
     setTimeout(() => process.exit(1), 3000);
-
 }
+
 
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
