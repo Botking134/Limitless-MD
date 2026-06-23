@@ -609,6 +609,8 @@ module.exports = [
     },
 
    // ─── SETVAR ──────────────────────────────────────────────────
+
+// ─── SETVAR ──────────────────────────────────────────────────
 {
     name: 'setvar',
     isPrefixless: false,
@@ -626,7 +628,6 @@ module.exports = [
         let key = args.slice(0, eqIndex).trim();
         let valueStr = args.slice(eqIndex + 1).trim();
 
-        // ─── Normalise key to lowercase for lookups ──────────
         const keyLower = key.toLowerCase();
 
         // ─── Mapping from config/vars key to .env variable name ──
@@ -641,7 +642,6 @@ module.exports = [
             groqapikey: 'GROQ_API_KEY',
             geminiapikey: 'GEMINI_API_KEY',
             githubtoken: 'GITHUB_TOKEN',
-            // Add other environment variables as needed
         };
 
         // ─── Known dynamic keys that are NOT in .env ──────────
@@ -655,15 +655,11 @@ module.exports = [
             'presence'
         ];
 
-        // ─── Determine the target key for vars.json ────────────
-        // Try to match against known dynamic keys first (case-insensitive)
         let varKey = dynamicKeys.find(k => k.toLowerCase() === keyLower);
         let envVarName = envMapping[keyLower] || null;
 
-        // If not found in dynamic keys, check env mapping
         if (!varKey && envVarName) {
-            // It's an environment variable; we'll store it in vars.json as well
-            varKey = keyLower; // use lowercase as the key in vars
+            varKey = keyLower;
         }
 
         if (!varKey) {
@@ -710,7 +706,6 @@ module.exports = [
                     const updatedLines = lines.map(line => {
                         if (line.trim().startsWith(`${envVarName}=`)) {
                             found = true;
-                            // For boolean or array, we store as string
                             let envValue = typeof finalValue === 'boolean' ? (finalValue ? 'true' : 'false') : String(finalValue);
                             return `${envVarName}=${envValue}`;
                         }
@@ -730,14 +725,33 @@ module.exports = [
                 console.log(`✅ [SETVAR] Updated .env: ${envVarName}=${finalValue}`);
             } catch (envErr) {
                 console.error('❌ [SETVAR] Failed to update .env:', envErr.message);
-                // We still consider the operation successful because vars.json is updated.
-                // We'll warn the user.
                 await sock.sendMessage(jid, {
                     text: `✅ Variable updated in vars.json, but could not update .env file.\nThe change will persist in config/vars but will revert on restart unless .env is fixed.`
                 }, { quoted: msg });
                 return;
             }
         }
+
+        // ─── 3. Special handling for prefix ─────────────────────
+        if (varKey === 'prefix') {
+            try {
+                const commandsList = require('../commands');
+                if (commandsList.reload) commandsList.reload();
+            } catch (e) { /* ignore */ }
+        }
+
+        // ─── 4. Send success message ────────────────────────────
+        const displayValue = Array.isArray(finalValue) ? finalValue.join(', ') : finalValue;
+        await sock.sendMessage(jid, {
+            text: `✅ *Variable Configured Successfully!*\n\n` +
+                  `• *Key:* \`${varKey}\`\n` +
+                  `• *Value:* \`${displayValue}\`\n\n` +
+                  `_Value has been persisted to vars.json and ${envVarName ? '.env' : 'config'}._`
+        }, { quoted: msg });
+
+    }
+},
+
 
         // ─── 3. Special handling for prefix ─────────────────────
         if (varKey === 'prefix') {
