@@ -608,95 +608,157 @@ module.exports = [
         }
     },
 
-    // ─── SETVAR ──────────────────────────────────────────────────
-    {
-        name: 'setvar',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
+   // ─── SETVAR ──────────────────────────────────────────────────
+{
+    name: 'setvar',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
 
-            const eqIndex = args.indexOf('=');
-            if (eqIndex === -1) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ Invalid format.\nUsage: \`${config.prefix}setvar KEY=VALUE\`\nExample: \`${config.prefix}setvar prefix=!\``
-                }, { quoted: msg });
-            }
+        const eqIndex = args.indexOf('=');
+        if (eqIndex === -1) {
+            return await sock.sendMessage(jid, {
+                text: `❌ Invalid format.\nUsage: \`${config.prefix}setvar KEY=VALUE\`\nExample: \`${config.prefix}setvar prefix=!\``
+            }, { quoted: msg });
+        }
 
-            const key = args.slice(0, eqIndex).trim();
-            const valueStr = args.slice(eqIndex + 1).trim();
+        let key = args.slice(0, eqIndex).trim();
+        let valueStr = args.slice(eqIndex + 1).trim();
 
-            // ─── KEY MAPPING ──────────────────────────────────────
-            const keyMapping = {
-                bot_name: "botName",
-                owner_name: "ownerName",
-                owner_number: "ownerNumber",
-                session_id: "sessionId",
-                git_token: "githubToken",
-                groq_api_key: "groqApiKey",
-                gemini_api_key: "geminiApiKey",
-                prefix: "prefix",
-                vvs: "vvs",
-                pack_name: "packName",
-                author: "author",
-                menu_image: "menuImage",
-                warn: "warnThreshold",
-                presence: "presenceMode"
-            };
+        // ─── Normalise key to lowercase for lookups ──────────
+        const keyLower = key.toLowerCase();
 
-            const mappedKey = keyMapping[key.toLowerCase()];
-            if (!mappedKey) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ Variable "${key}" cannot be configured dynamically.`
-                }, { quoted: msg });
-            }
+        // ─── Mapping from config/vars key to .env variable name ──
+        const envMapping = {
+            prefix: 'PREFIX',
+            botname: 'BOT_NAME',
+            ownername: 'OWNER_NAME',
+            ownernumber: 'OWNER_NUMBER',
+            ownerjid: 'OWNER_JID',
+            packname: 'PACK_NAME',
+            author: 'AUTHOR',
+            groqapikey: 'GROQ_API_KEY',
+            geminiapikey: 'GEMINI_API_KEY',
+            githubtoken: 'GITHUB_TOKEN',
+            // Add other environment variables as needed
+        };
 
-            let finalValue = valueStr;
+        // ─── Known dynamic keys that are NOT in .env ──────────
+        const dynamicKeys = [
+            'prefix', 'vvs', 'packname', 'author', 'menuimage', 
+            'warnthreshold', 'presencemode', 'ispublic', 'autoreact',
+            'antipm', 'lizzychats', 'chatbotchats', 'fridaychats',
+            'gojosleepchats', 'gojoglobalsleep', 'antilink', 'antitag',
+            'antibot', 'antispam', 'antigm', 'antigcstatus', 'antipromote',
+            'antidemote', 'stickercommands', 'welcome', 'goodbye', 'gcalerts',
+            'presence'
+        ];
 
-            if (mappedKey === 'isPublic') {
-                if (valueStr.toLowerCase() === 'true') finalValue = true;
-                else if (valueStr.toLowerCase() === 'false') finalValue = false;
-                else {
-                    return await sock.sendMessage(jid, { text: "❌ isPublic must be either `true` or `false`." }, { quoted: msg });
-                }
-            }
+        // ─── Determine the target key for vars.json ────────────
+        // Try to match against known dynamic keys first (case-insensitive)
+        let varKey = dynamicKeys.find(k => k.toLowerCase() === keyLower);
+        let envVarName = envMapping[keyLower] || null;
 
-            if (mappedKey === 'menuImage') {
-                const urls = valueStr.split(',').map(u => u.trim()).filter(Boolean);
-                if (urls.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ menu_image requires at least one URL. Use comma-separated values." }, { quoted: msg });
-                }
-                finalValue = urls;
-            }
+        // If not found in dynamic keys, check env mapping
+        if (!varKey && envVarName) {
+            // It's an environment variable; we'll store it in vars.json as well
+            varKey = keyLower; // use lowercase as the key in vars
+        }
 
-            // ─── SET THE VARIABLE ────────────────────────────────
-            const dynamicKeys = ['prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode'];
-            if (dynamicKeys.includes(mappedKey)) {
-                const success = setVar(mappedKey, finalValue);
-                if (!success) {
-                    return await sock.sendMessage(jid, { text: `❌ Failed to save variable "${key}".` }, { quoted: msg });
-                }
-                if (mappedKey === 'prefix') {
-                    const commandsList = require('../commands');
-                    commandsList.reload();
-                }
-                await sock.sendMessage(jid, {
-                    text: `✅ *Variable Configured Successfully!*\n\n` +
-                          `• *Key:* \`${mappedKey}\`\n` +
-                          `• *Value:* \`${Array.isArray(finalValue) ? finalValue.join(', ') : finalValue}\`\n\n` +
-                          `_Value has been persisted to vars.json and applied instantly._`
-                }, { quoted: msg });
-            } else {
-                config[mappedKey] = finalValue;
-                console.log(`[SETVAR] Updated ${mappedKey} to ${finalValue} (in-memory only, restart will revert unless .env is updated manually)`);
-                await sock.sendMessage(jid, {
-                    text: `✅ *${mappedKey} updated to:* \`${finalValue}\`\n\n` +
-                          `⚠️ *Note:* This variable is from .env. To make it permanent, edit your .env file manually.\n` +
-                          `_The change is active until the next restart._`
-                }, { quoted: msg });
+        if (!varKey) {
+            return await sock.sendMessage(jid, {
+                text: `❌ Unknown variable "${key}".\nUse \`.vars\` to list all settable keys.`
+            }, { quoted: msg });
+        }
+
+        // ─── Handle special types ──────────────────────────────
+        let finalValue = valueStr;
+
+        if (varKey === 'ispublic') {
+            if (valueStr.toLowerCase() === 'true') finalValue = true;
+            else if (valueStr.toLowerCase() === 'false') finalValue = false;
+            else {
+                return await sock.sendMessage(jid, { text: "❌ isPublic must be either `true` or `false`." }, { quoted: msg });
             }
         }
-    },
+
+        if (varKey === 'menuimage') {
+            const urls = valueStr.split(',').map(u => u.trim()).filter(Boolean);
+            if (urls.length === 0) {
+                return await sock.sendMessage(jid, { text: "❌ menuImage requires at least one URL. Use comma-separated values." }, { quoted: msg });
+            }
+            finalValue = urls;
+        }
+
+        // ─── 1. Update vars.json and config via setVar ──────────
+        const success = setVar(varKey, finalValue);
+        if (!success) {
+            return await sock.sendMessage(jid, { text: `❌ Failed to save variable "${key}".` }, { quoted: msg });
+        }
+
+        // ─── 2. If this key corresponds to an environment variable, update .env ──
+        if (envVarName) {
+            try {
+                const envPath = path.join(__dirname, '../.env');
+                let envContent = '';
+                let found = false;
+
+                if (fs.existsSync(envPath)) {
+                    envContent = fs.readFileSync(envPath, 'utf-8');
+                    const lines = envContent.split('\n');
+                    const updatedLines = lines.map(line => {
+                        if (line.trim().startsWith(`${envVarName}=`)) {
+                            found = true;
+                            // For boolean or array, we store as string
+                            let envValue = typeof finalValue === 'boolean' ? (finalValue ? 'true' : 'false') : String(finalValue);
+                            return `${envVarName}=${envValue}`;
+                        }
+                        return line;
+                    });
+                    if (!found) {
+                        let envValue = typeof finalValue === 'boolean' ? (finalValue ? 'true' : 'false') : String(finalValue);
+                        updatedLines.push(`${envVarName}=${envValue}`);
+                    }
+                    envContent = updatedLines.join('\n');
+                } else {
+                    let envValue = typeof finalValue === 'boolean' ? (finalValue ? 'true' : 'false') : String(finalValue);
+                    envContent = `${envVarName}=${envValue}\n`;
+                }
+
+                fs.writeFileSync(envPath, envContent, 'utf-8');
+                console.log(`✅ [SETVAR] Updated .env: ${envVarName}=${finalValue}`);
+            } catch (envErr) {
+                console.error('❌ [SETVAR] Failed to update .env:', envErr.message);
+                // We still consider the operation successful because vars.json is updated.
+                // We'll warn the user.
+                await sock.sendMessage(jid, {
+                    text: `✅ Variable updated in vars.json, but could not update .env file.\nThe change will persist in config/vars but will revert on restart unless .env is fixed.`
+                }, { quoted: msg });
+                return;
+            }
+        }
+
+        // ─── 3. Special handling for prefix ─────────────────────
+        if (varKey === 'prefix') {
+            // Reload commands to pick up new prefix (if needed)
+            try {
+                const commandsList = require('../commands');
+                if (commandsList.reload) commandsList.reload();
+            } catch (e) { /* ignore */ }
+        }
+
+        // ─── 4. Send success message ────────────────────────────
+        const displayValue = Array.isArray(finalValue) ? finalValue.join(', ') : finalValue;
+        await sock.sendMessage(jid, {
+            text: `✅ *Variable Configured Successfully!*\n\n` +
+                  `• *Key:* \`${varKey}\`\n` +
+                  `• *Value:* \`${displayValue}\`\n\n` +
+                  `_Value has been persisted to vars.json and ${envVarName ? '.env' : 'config'}._`
+        }, { quoted: msg });
+
+    }
+},
 
     // ─── SETTINGS ────────────────────────────────────────────────
     {
