@@ -1343,7 +1343,13 @@ module.exports = [
     isPrefixless: false,
     execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
         const jid = msg.key.remoteJid;
-        if (!isOwner && !isSudo && !isDev) return;
+        console.log('[GAY] Command triggered by', jid);
+
+        // ─── Permission check ──────────────────────────────────
+        if (!isOwner && !isSudo && !isDev) {
+            console.log('[GAY] Permission denied');
+            return await sock.sendMessage(jid, { text: "❌ You are not authorized." }, { quoted: msg });
+        }
 
         const rawMsg = getRawMessage(msg.message);
         const contextInfo = rawMsg?.contextInfo ||
@@ -1355,18 +1361,13 @@ module.exports = [
                             rawMsg?.documentMessage?.contextInfo;
 
         let targetJid = '';
-        let targetName = '';
 
-        // Try to get from mention
+        // ─── Extract target ────────────────────────────────────
         if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
             targetJid = normalizeToJid(contextInfo.mentionedJid[0]);
-        }
-        // Try to get from reply
-        else if (contextInfo?.participant) {
+        } else if (contextInfo?.participant) {
             targetJid = normalizeToJid(contextInfo.participant);
-        }
-        // Try to get from args
-        else if (args) {
+        } else if (args) {
             const cleanDigits = args.replace(/[^0-9]/g, '');
             if (cleanDigits.length >= 7) {
                 targetJid = `${cleanDigits}@s.whatsapp.net`;
@@ -1374,60 +1375,70 @@ module.exports = [
         }
 
         if (!targetJid) {
+            console.log('[GAY] No target found');
             return await sock.sendMessage(jid, { text: "❌ Please mention or reply to a user." }, { quoted: msg });
         }
 
-        // Get the user's name
-        try {
-            targetName = await sock.getName(targetJid) || targetJid.split('@')[0];
-        } catch (e) {
-            targetName = targetJid.split('@')[0];
-        }
+        // ─── Get name ──────────────────────────────────────────
+        let targetName = targetJid.split('@')[0];
+        try { targetName = msg.pushName || targetName; } catch (e) { /* ignore */ }
 
+        // ─── Initialise gayList ───────────────────────────────
         if (!config.gayList) config.gayList = [];
 
-        // Check if already in list
-        const exists = config.gayList.some(entry => entry.lid.split('@')[0] === targetJid.split('@')[0]);
+        // ─── Check if already gay ──────────────────────────────
+        const exists = config.gayList.some(entry => normalizeToJid(entry.lid) === normalizeToJid(targetJid));
         if (exists) {
+            console.log('[GAY] User already gay');
             return await sock.sendMessage(jid, { text: `⚠️ @${targetName} is already on the gay list.`, mentions: [targetJid] }, { quoted: msg });
         }
 
-        config.gayList.push({ lid: targetJid, name: targetName });
+        // ─── Add to list ────────────────────────────────────────
+        config.gayList.push({ lid: normalizeToJid(targetJid), name: targetName });
         saveState();
 
-        await sock.sendMessage(jid, {
-            text: `🏳️‍🌈 *GAY ADDED!* 🏳️‍🌈\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *User:* @${targetName}\n📌 *Status:* Added to the gay list.\n\n💀 *They will now be bullied.*`,
-            mentions: [targetJid]
-        }, { quoted: msg });
+        const successMsg = `🏳️‍🌈 *GAY ADDED!* 🏳️‍🌈\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *User:* @${targetName}\n📌 *Status:* Added to the gay list.\n\n💀 *They will now be bullied when they mention or reply to the activator.*`;
+        console.log('[GAY] Sending confirmation');
+        await sock.sendMessage(jid, { text: successMsg, mentions: [targetJid] }, { quoted: msg });
+        console.log('[GAY] Done');
     }
-},
+}, 
 
-// ─── .ANTIGAY (Toggle on/off) ─────────────────────────────────
+ // ─── .ANTIGAY (Toggle on/off) ─────────────────────────────────
 {
     name: 'antigay',
     isPrefixless: false,
     execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
         const jid = msg.key.remoteJid;
-        if (!isOwner && !isSudo && !isDev) return;
+        console.log('[ANTIGAY] Command triggered by', jid);
+
+        // ─── Permission check ──────────────────────────────────
+        if (!isOwner && !isSudo && !isDev) {
+            console.log('[ANTIGAY] Permission denied');
+            return await sock.sendMessage(jid, { text: "❌ You are not authorized." }, { quoted: msg });
+        }
 
         if (!config.antigay) config.antigay = {};
 
         const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-
         const action = args ? args.toLowerCase().trim() : '';
 
         if (action === 'on') {
             config.antigay[jid] = { status: 'on', activatedBy: senderJid };
             saveState();
+            console.log('[ANTIGAY] Activated for group', jid, 'by', senderJid);
             await sock.sendMessage(jid, { text: "🔒 *AntiGay activated!* Gay users will be bullied only when they mention or reply to you." }, { quoted: msg });
         } else if (action === 'off') {
             config.antigay[jid] = { status: 'off' };
             saveState();
+            console.log('[ANTIGAY] Deactivated for group', jid);
             await sock.sendMessage(jid, { text: "🔓 *AntiGay deactivated.*" }, { quoted: msg });
         } else {
             const current = config.antigay[jid]?.status || 'off';
+            console.log('[ANTIGAY] Status check:', current);
             await sock.sendMessage(jid, { text: `🛡️ *AntiGay Status:* \`${current.toUpperCase()}\`` }, { quoted: msg });
         }
+        console.log('[ANTIGAY] Done');
     }
 }, 
 
