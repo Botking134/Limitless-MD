@@ -1,5 +1,5 @@
 # ─── Secrets & Credentials ──────────────────────────────────────
-config.js                     # ← Ignored – contains API keys!
+config.js                     # ← Ignored – contains API keys & owner details
 .env
 .env.*
 *.env
