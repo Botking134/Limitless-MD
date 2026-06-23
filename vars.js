@@ -136,23 +136,32 @@ function syncVarsToConfig(vars) {
     return config;
 }
 
-// ─── GET / SET SINGLE VAR ──────────────────────────────────────
+// ─── GET / SET SINGLE VAR (CASE-INSENSITIVE) ────────────────────
 
 function getVar(key) {
     const vars = loadVars();
-    return vars[key];
+    const keyLower = key.toLowerCase();
+
+    // Find the actual key with correct casing
+    const actualKey = Object.keys(vars).find(k => k.toLowerCase() === keyLower);
+    if (!actualKey) return undefined;
+
+    return vars[actualKey];
 }
 
 function setVar(key, value) {
     const vars = loadVars();
+    const keyLower = key.toLowerCase();
 
-    // Validate key exists in defaults
-    if (!(key in DEFAULT_VARS)) {
+    // Check if the key exists in DEFAULT_VARS (case-insensitive)
+    const matchingKey = Object.keys(DEFAULT_VARS).find(k => k.toLowerCase() === keyLower);
+    if (!matchingKey) {
         console.error(`❌ [VARS] Invalid key: "${key}"`);
         return false;
     }
 
-    vars[key] = value;
+    // Use the correct casing from DEFAULT_VARS
+    vars[matchingKey] = value;
     const saved = saveVars(vars);
     if (saved) {
         syncVarsToConfig(vars);
