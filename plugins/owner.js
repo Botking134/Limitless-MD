@@ -167,7 +167,6 @@ function execWithTimeout(cmd, timeoutMs, callback) {
     child.on('exit', () => clearTimeout(timer));
 }
 
-// ─── UPDATED: No .env fallback ──────────────────────────────────
 function getRepoUrl() {
     const token = config.githubToken;
     const baseUrl = 'https://github.com/Botking134/Limitless-MD.git';
@@ -177,7 +176,6 @@ function getRepoUrl() {
     return baseUrl;
 }
 
-// ─── UPDATED: Removed .env from backup ──────────────────────────
 async function backupCriticalFiles(jid, sock) {
     try {
         const backupDir = path.join(__dirname, '../storage/backups');
@@ -224,1101 +222,1186 @@ async function sendUpdateSuccess(jid, sock, stdout, quotedMsg) {
     setTimeout(() => process.exit(1), 3000);
 }
 
-// ─── EXPORT COMMANDS ────────────────────────────────────────────
+// ─── GIT COMMAND HELPERS ────────────────────────────────────────
 
-module.exports = [
-    // ─── DIAGNOSE ────────────────────────────────────────────────
-    {
-        name: 'diagnose',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const pluginsDir = path.join(__dirname, '..', 'plugins');
-
-            function getFilesRecursive(dir) {
-                let results = [];
-                if (!fs.existsSync(dir)) return results;
-                const list = fs.readdirSync(dir);
-                for (const file of list) {
-                    const filePath = path.join(dir, file);
-                    const stat = fs.statSync(filePath);
-                    if (stat && stat.isDirectory()) {
-                        results = results.concat(getFilesRecursive(filePath));
-                    } else if (file.endsWith('.js')) {
-                        results.push(filePath);
-                    }
-                }
-                return results;
+// ─── Show git status (for the .git menu) ──────────────────────
+async function getGitStatus() {
+    return new Promise((resolve) => {
+        execWithTimeout('git status -s && git rev-parse --abbrev-ref HEAD', 10000, (err, stdout) => {
+            if (err) {
+                resolve({ status: 'error', msg: err.message });
+                return;
             }
+            const lines = stdout.split('\n').filter(Boolean);
+            const branch = lines.find(l => l.includes('HEAD'))?.replace('HEAD', '').trim() || 'unknown';
+            const changes = lines.filter(l => !l.includes('HEAD')).length;
+            resolve({ branch, changes, output: stdout });
+        });
+    });
+}
 
-            const allPluginFiles = getFilesRecursive(pluginsDir);
-            if (allPluginFiles.length === 0) {
-                return await sock.sendMessage(jid, { text: "⚠️ No plugin files found." }, { quoted: msg });
-            }
+// ─── GIT INFO COMMAND ──────────────────────────────────────────
+{
+    name: 'gitinfo',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
 
-            let report = "🔍 *Limitless System Diagnosis:*\n━━━━━━━━━━━━━━━━━━━\n\n";
+        const info = `
+┌─────────────────────────────────────────────────────────────┐
+│  ℹ️  GIT CONTROL PANEL – HELP                             │
+│  ─────────────────────────────────────────────────────      │
+│  Here's what each option does:                            │
+│                                                            │
+│  📍 Basic Operations                                      │
+│  ├─ 🔄 Pull & Update                                     │
+│  │   → Stashes local changes, pulls latest, pops stash.  │
+│  ├─ 📦 Stash & Pull                                      │
+│  │   → Same as above, but with explicit stash before.    │
+│  ├─ 📊 Status                                            │
+│  │   → Shows current branch and uncommitted changes.     │
+│                                                            │
+│  💾 Commit & Push                                         │
+│  ├─ 💾 Commit Changes                                     │
+│  │   → Asks for a commit message, then commits all.      │
+│  ├─ ⬆️ Push Commits                                      │
+│  │   → Pushes committed changes to remote.               │
+│  ├─ 📤 Commit & Push                                     │
+│  │   → Commit then push (two steps).                     │
+│                                                            │
+│  🌿 Branch Management                                     │
+│  ├─ 🌿 Show Branches                                     │
+│  │   → Lists all local and remote branches.              │
+│  ├─ 🌿 Switch Branch                                     │
+│  │   → Asks for branch name, switches to it.             │
+│  ├─ 🌿 New Branch                                        │
+│  │   → Asks for branch name, creates new branch.         │
+│                                                            │
+│  ⚠️ Advanced (Dangerous)                                 │
+│  ├─ 🔁 Revert Commit                                     │
+│  │   → Shows last 5 commits, asks for number to revert.  │
+│  ├─ 🔄 Force Pull                                        │
+│  │   ⚠️ WARNING: Overwrites ALL local changes!            │
+│  │   → Requires typing "CONFIRM" to proceed.             │
+│  ├─ 🛠️ Setup Git                                        │
+│  │   → Initializes Git and links remote.                 │
+└─────────────────────────────────────────────────────────────┘
 
-            for (const filePath of allPluginFiles) {
-                const relativePath = path.relative(pluginsDir, filePath);
-                const displayPath = `plugins/${relativePath}`;
+👉 Use \`.git\` to open the control panel.
+`;
 
-                try {
-                    delete require.cache[require.resolve(filePath)];
-                    require(filePath);
-                    report += `✅ *${displayPath}*:\n• Status: Loaded successfully!\n\n`;
-                } catch (err) {
-                    report += `❌ *${displayPath}*:\n• Status: Failed to load\n• Error: \`${err.message}\`\n\n`;
-                }
-            }
+        await sock.sendMessage(jid, { text: info }, { quoted: msg });
+    }
+}
 
-            await sock.sendMessage(jid, { text: report }, { quoted: msg });
+// ─── GIT COMMAND ──────────────────────────────────────────────
+{
+    name: 'git',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        // ─── If user typed .git info, show help ────────────────
+        if (args && args.toLowerCase().trim() === 'info') {
+            // Redirect to gitinfo command
+            const cmd = module.exports.find(c => c.name === 'gitinfo');
+            if (cmd) return cmd.execute(sock, msg, '', { isOwner });
         }
-    },
 
-    // ─── UPDATE ──────────────────────────────────────────────────
-    {
-        name: 'update',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isDev }) => {
-            const jid = msg.key.remoteJid;
+        // ─── Check if Git is initialized ──────────────────────
+        execWithTimeout('git status', 10000, async (err) => {
+            if (err) {
+                return await sock.sendMessage(jid, {
+                    text: `❌ *Git not initialized.*\nRun \`${config.prefix}git setup\` first.`
+                }, { quoted: msg });
+            }
 
-            // ─── Extract action from args or button ──────────────────
-            let action = '';
-            let option = '';
+            // ─── Get current status ─────────────────────────────
+            const gitInfo = await getGitStatus();
+            if (gitInfo.status === 'error') {
+                return await sock.sendMessage(jid, { text: `❌ Error: ${gitInfo.msg}` }, { quoted: msg });
+            }
 
-            if (args && args.trim() !== '') {
-                const parts = args.split(' ');
-                action = parts[0]?.toLowerCase().trim() || '';
-                option = parts[1]?.toLowerCase().trim() || '';
-            } else {
-                const rawMsg = getRawMessage(msg.message);
-                const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
-                                 rawMsg?.templateButtonReplyMessage?.selectedId ||
-                                 '';
-                if (buttonId) {
-                    const parts = buttonId.trim().split(' ');
-                    if (parts.length > 1) {
-                        action = parts[1]?.toLowerCase().trim() || '';
-                    }
+            // ─── Check if behind remote ────────────────────────
+            let behind = '0';
+            execWithTimeout('git rev-list HEAD..origin/$(git rev-parse --abbrev-ref HEAD) --count', 10000, (err, stdout) => {
+                if (!err) behind = stdout.trim() || '0';
+                const statusMsg =
+                    `🔧 *GIT CONTROL PANEL* 🔧\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `📡  Branch: \`${gitInfo.branch}\`\n` +
+                    `📦  Behind remote: \`${behind}\` commits\n` +
+                    `📝  Uncommitted changes: \`${gitInfo.changes}\`\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `Select an action from the menu below:`;
+
+                const listMessage = {
+                    text: statusMsg,
+                    footer: "⚡ Limitless Git Control",
+                    title: "📋 Git Actions",
+                    buttonText: "📋 Select Action",
+                    sections: [
+                        {
+                            title: "📍 Basic Operations",
+                            rows: [
+                                { title: "🔄 Pull & Update", rowId: "git_pull", description: "Pull latest changes (auto-stash)" },
+                                { title: "📦 Stash & Pull", rowId: "git_stash_pull", description: "Stash, pull, and pop changes" },
+                                { title: "📊 Status", rowId: "git_status", description: "Show detailed Git status" }
+                            ]
+                        },
+                        {
+                            title: "💾 Commit & Push",
+                            rows: [
+                                { title: "💾 Commit Changes", rowId: "git_commit", description: "Commit all local changes" },
+                                { title: "⬆️ Push Commits", rowId: "git_push", description: "Push commits to remote" },
+                                { title: "📤 Commit & Push", rowId: "git_commit_push", description: "Commit and push together" }
+                            ]
+                        },
+                        {
+                            title: "🌿 Branch Management",
+                            rows: [
+                                { title: "🌿 Show Branches", rowId: "git_branch", description: "List all branches" },
+                                { title: "🌿 Switch Branch", rowId: "git_switch", description: "Switch to another branch" },
+                                { title: "🌿 New Branch", rowId: "git_new_branch", description: "Create a new branch" }
+                            ]
+                        },
+                        {
+                            title: "⚠️ Advanced (Dangerous)",
+                            rows: [
+                                { title: "🔁 Revert Commit", rowId: "git_revert", description: "Revert to a previous commit" },
+                                { title: "🔄 Force Pull", rowId: "git_force", description: "⚠️ Overwrites local changes!" },
+                                { title: "🛠️ Setup Git", rowId: "git_setup", description: "Initialize Git tracking" },
+                                { title: "ℹ️ Help / Info", rowId: "git_info", description: "Explanation of all actions" }
+                            ]
+                        }
+                    ]
+                };
+
+                await sock.sendMessage(jid, listMessage, { quoted: msg });
+            });
+        });
+    }
+},
+
+// ─── UPDATE ──────────────────────────────────────────────────────
+{
+    name: 'update',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isDev }) => {
+        const jid = msg.key.remoteJid;
+
+        // ─── Extract action from args or button ──────────────────
+        let action = '';
+        let option = '';
+
+        if (args && args.trim() !== '') {
+            const parts = args.split(' ');
+            action = parts[0]?.toLowerCase().trim() || '';
+            option = parts[1]?.toLowerCase().trim() || '';
+        } else {
+            const rawMsg = getRawMessage(msg.message);
+            const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
+                             rawMsg?.templateButtonReplyMessage?.selectedId ||
+                             '';
+            if (buttonId) {
+                const parts = buttonId.trim().split(' ');
+                if (parts.length > 1) {
+                    action = parts[1]?.toLowerCase().trim() || '';
                 }
             }
+        }
 
-            console.log(`[UPDATE] Action: "${action}"`);
+        console.log(`[UPDATE] Action: "${action}"`);
 
-            // ─── Developer-only actions ────────────────────────────
-            if (action === 'install' || action === 'repair' || action === 'npm') {
-                if (!isDev) return;
-                await sock.sendMessage(jid, { text: "⏳ *Running npm install...*" }, { quoted: msg });
-                execWithTimeout('npm install', 120000, async (err, stdout) => {
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Failed:*\n${err.message}` }, { quoted: msg });
-                    await sock.sendMessage(jid, { text: `✅ *Installed!*\n${stdout || 'Ready.'}\n\n🔄 Restarting...` }, { quoted: msg });
-                    setTimeout(() => process.exit(1), 3000);
-                });
-                return;
-            }
+        // ─── Developer-only actions ────────────────────────────
+        if (action === 'install' || action === 'repair' || action === 'npm') {
+            if (!isDev) return;
+            await sock.sendMessage(jid, { text: "⏳ *Running npm install...*" }, { quoted: msg });
+            execWithTimeout('npm install', 120000, async (err, stdout) => {
+                if (err) return await sock.sendMessage(jid, { text: `❌ *Failed:*\n${err.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `✅ *Installed!*\n${stdout || 'Ready.'}\n\n🔄 Restarting...` }, { quoted: msg });
+                setTimeout(() => process.exit(1), 3000);
+            });
+            return;
+        }
 
-            if (!isOwner) return;
+        if (!isOwner) return;
 
-            // ─── SETUP ──────────────────────────────────────────────
-            if (action === 'setup') {
-                await sock.sendMessage(jid, { text: "⏳ *Setting up Git...*" }, { quoted: msg });
-                const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
-                execWithTimeout(setupCmd, 60000, async (err) => {
-                    if (err && err.message.includes('already exists')) {
-                        execWithTimeout(`git remote set-url origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`, 60000, async (retryErr) => {
-                            if (retryErr) return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n${retryErr.message}` }, { quoted: msg });
-                            await sock.sendMessage(jid, { text: "✅ *Git re-linked!*" }, { quoted: msg });
-                        });
-                        return;
-                    }
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Setup Failed:*\n${err.message}` }, { quoted: msg });
-                    await sock.sendMessage(jid, { text: "✅ *Git initialized!*" }, { quoted: msg });
-                });
-                return;
-            }
-
-            // ─── BRANCH ─────────────────────────────────────────────
-            if (action === 'branch') {
-                if (!option) return await sock.sendMessage(jid, { text: "❌ Specify a branch name.\nExample: `.update branch dev`" }, { quoted: msg });
-                await sock.sendMessage(jid, { text: `⏳ *Switching to "${option}"...*` }, { quoted: msg });
-                execWithTimeout(`git fetch origin && git checkout ${option} && git pull origin ${option}`, 60000, async (err) => {
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Branch switch failed:*\n${err.message}` }, { quoted: msg });
-                    await sock.sendMessage(jid, { text: `✅ *Switched to "${option}".* Restarting...` }, { quoted: msg });
-                    setTimeout(() => process.exit(1), 3000);
-                });
-                return;
-            }
-
-            // ─── ROLLBACK ────────────────────────────────────────────
-            if (action === 'revert') {
-                if (!option) {
-                    execWithTimeout('git log --oneline -5', 10000, async (err, stdout) => {
-                        if (err) return await sock.sendMessage(jid, { text: `❌ *Failed to get log:*\n${err.message}` }, { quoted: msg });
-                        await sock.sendMessage(jid, { text: `📋 *Recent commits:*\n\n${stdout}\n\nUse \`.update revert <hash>\` to rollback.` }, { quoted: msg });
+        // ─── SETUP ──────────────────────────────────────────────
+        if (action === 'setup') {
+            await sock.sendMessage(jid, { text: "⏳ *Setting up Git...*" }, { quoted: msg });
+            const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+            execWithTimeout(setupCmd, 60000, async (err) => {
+                if (err && err.message.includes('already exists')) {
+                    execWithTimeout(`git remote set-url origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`, 60000, async (retryErr) => {
+                        if (retryErr) return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n${retryErr.message}` }, { quoted: msg });
+                        await sock.sendMessage(jid, { text: "✅ *Git re-linked!*" }, { quoted: msg });
                     });
                     return;
                 }
-                await sock.sendMessage(jid, { text: `⏳ *Reverting to ${option}...*` }, { quoted: msg });
-                execWithTimeout(`git reset --hard ${option}`, 30000, async (err) => {
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Revert failed:*\n${err.message}` }, { quoted: msg });
-                    await sock.sendMessage(jid, { text: `✅ *Reverted to ${option}.* Restarting...` }, { quoted: msg });
-                    setTimeout(() => process.exit(1), 3000);
-                });
-                return;
+                if (err) return await sock.sendMessage(jid, { text: `❌ *Setup Failed:*\n${err.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "✅ *Git initialized!*" }, { quoted: msg });
+            });
+            return;
+        }
+
+        // ─── MAIN UPDATE FLOW (only pull) ──────────────────────
+        const isConfirm = action === 'yes' || action === 'confirm' || action === 'pull';
+        const isCancel = action === 'no' || action === 'cancel';
+
+        execWithTimeout('git status', 10000, async (statusErr) => {
+            if (statusErr) {
+                return await sock.sendMessage(jid, { text: `❌ *Git not initialized.*\nRun \`${config.prefix}update setup\`` }, { quoted: msg });
             }
 
-            // ─── MAIN UPDATE FLOW ────────────────────────────────────
-            const isForce = action === 'force';
-            const isConfirm = action === 'yes' || action === 'confirm' || action === 'pull';
-            const isCancel = action === 'no' || action === 'cancel';
+            execWithTimeout('git rev-parse --abbrev-ref HEAD', 10000, async (branchErr, branch) => {
+                branch = (branch || 'master').trim();
 
-            execWithTimeout('git status', 10000, async (statusErr) => {
-                if (statusErr) {
-                    return await sock.sendMessage(jid, { text: `❌ *Git not initialized.*\nRun \`${config.prefix}update setup\`` }, { quoted: msg });
-                }
+                execWithTimeout('git fetch && git status -uno', 30000, async (fetchErr, stdout) => {
+                    if (fetchErr) {
+                        return await sock.sendMessage(jid, { text: `❌ *Error checking updates:*\n${fetchErr.message}` }, { quoted: msg });
+                    }
 
-                execWithTimeout('git rev-parse --abbrev-ref HEAD', 10000, async (branchErr, branch) => {
-                    branch = (branch || 'master').trim();
+                    const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
 
-                    execWithTimeout('git fetch && git status -uno', 30000, async (fetchErr, stdout) => {
-                        if (fetchErr) {
-                            return await sock.sendMessage(jid, { text: `❌ *Error checking updates:*\n${fetchErr.message}` }, { quoted: msg });
-                        }
+                    if (!isBehind && !isConfirm && !isCancel) {
+                        return await sock.sendMessage(jid, { text: "❄️ *No updates available.*" }, { quoted: msg });
+                    }
 
-                        const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
+                    if (!isBehind && isConfirm) {
+                        return await sock.sendMessage(jid, { text: "❄️ *Already up to date.*" }, { quoted: msg });
+                    }
 
-                        if (!isBehind && !isConfirm && !isForce && !isCancel) {
-                            return await sock.sendMessage(jid, { text: "❄️ *No updates available.*" }, { quoted: msg });
-                        }
+                    // ─── If update available, show buttons menu ───
+                    if (isBehind && !isConfirm && !isCancel) {
+                        execWithTimeout(`git log --oneline -5 HEAD..origin/${branch}`, 10000, async (logErr, commitLog) => {
+                            const commitCount = commitLog ? commitLog.split('\n').filter(Boolean).length : 0;
+                            const techMsg =
+                                `🖥️  *SYSTEM UPDATE DETECTED*  🖥️\n` +
+                                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                `📡  Branch: \`${branch}\`\n` +
+                                `🔀  Commits ahead: \`${commitCount}\`\n` +
+                                `📝  Latest:\n${commitLog || '  (no details)'}\n` +
+                                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                `Choose your action:`;
 
-                        if (!isBehind && (isConfirm || isForce)) {
-                            return await sock.sendMessage(jid, { text: "❄️ *Already up to date.*" }, { quoted: msg });
-                        }
+                            const buttonMessage = {
+                                text: techMsg,
+                                footer: "⚡ Limitless Update System",
+                                buttons: [
+                                    {
+                                        buttonId: `${config.prefix}update pull`,
+                                        buttonText: { displayText: "🔄 Pull Updates" },
+                                        type: 1
+                                    },
+                                    {
+                                        buttonId: `${config.prefix}update cancel`,
+                                        buttonText: { displayText: "❌ Cancel" },
+                                        type: 1
+                                    }
+                                ],
+                                headerType: 1
+                            };
 
-                        // ─── If update available, show buttons menu ───
-                        if (isBehind && !isConfirm && !isForce && !isCancel) {
-                            execWithTimeout(`git log --oneline -5 HEAD..origin/${branch}`, 10000, async (logErr, commitLog) => {
-                                const commitCount = commitLog ? commitLog.split('\n').filter(Boolean).length : 0;
-                                const techMsg =
-                                    `🖥️  *SYSTEM UPDATE DETECTED*  🖥️\n` +
-                                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                    `📡  Branch: \`${branch}\`\n` +
-                                    `🔀  Commits ahead: \`${commitCount}\`\n` +
-                                    `📝  Latest:\n${commitLog || '  (no details)'}\n` +
-                                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                                    `Choose your action:`;
+                            await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                        });
+                        return;
+                    }
 
-                                // ─── STANDARD VERTICAL BUTTONS ──────────
-                                const buttonMessage = {
-                                    text: techMsg,
-                                    footer: "⚡ Limitless Update System",
-                                    buttons: [
-                                        {
-                                            buttonId: `${config.prefix}update pull`,
-                                            buttonText: { displayText: "🔄 Pull Updates" },
-                                            type: 1
-                                        },
-                                        {
-                                            buttonId: `${config.prefix}update force`,
-                                            buttonText: { displayText: "⚡ Force Update" },
-                                            type: 1
-                                        },
-                                        {
-                                            buttonId: `${config.prefix}update cancel`,
-                                            buttonText: { displayText: "❌ Cancel" },
-                                            type: 1
-                                        }
-                                    ],
-                                    headerType: 1
-                                };
+                    // ─── Handle actions ──────────────────────────────
+                    if (isCancel) {
+                        return await sock.sendMessage(jid, { text: "🔮 *Update cancelled.*" }, { quoted: msg });
+                    }
 
-                                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-                            });
-                            return;
-                        }
-
-                        // ─── Handle actions ──────────────────────────────
-                        if (isCancel) {
-                            return await sock.sendMessage(jid, { text: "🔮 *Update cancelled.*" }, { quoted: msg });
-                        }
-
-                        if (isForce) {
-                            await sock.sendMessage(jid, { text: "💾 *Backing up critical files...*" }, { quoted: msg });
-                            await backupCriticalFiles(jid, sock);
-
-                            await sock.sendMessage(jid, { text: "⏳ *Force‑pulling updates...*" }, { quoted: msg });
-                            execWithTimeout(`git fetch --all && git reset --hard origin/${branch}`, 60000, async (pullErr, pullOut) => {
-                                if (pullErr) return await sock.sendMessage(jid, { text: `❌ *Force Update Failed!*\n${pullErr.message}` }, { quoted: msg });
-                                await sendUpdateSuccess(jid, sock, pullOut, msg);
-                            });
-                        } else if (isConfirm) {
+                    if (isConfirm) {
+                        // ─── Auto-stash & pull (safe) ──────────────
+                        await sock.sendMessage(jid, { text: "⏳ *Stashing local changes...*" }, { quoted: msg });
+                        execWithTimeout('git stash', 10000, async (stashErr) => {
+                            if (stashErr) {
+                                // If no changes to stash, it's not an error
+                                if (!stashErr.message.includes('No local changes')) {
+                                    return await sock.sendMessage(jid, { text: `⚠️ *Stash failed:* ${stashErr.message}` }, { quoted: msg });
+                                }
+                            }
                             await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
                             execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
                                 if (pullErr) {
-                                    return await sock.sendMessage(jid, {
-                                        text: `❌ *Update Failed!*\n${pullErr.message}\n\n💡 _Use \`${config.prefix}update force\` to overwrite local changes._`
-                                    }, { quoted: msg });
+                                    // Try to recover: git stash pop to restore changes
+                                    await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}\n\n💡 Trying to recover...` }, { quoted: msg });
+                                    execWithTimeout('git stash pop', 10000, () => {});
+                                    return;
                                 }
-                                await sendUpdateSuccess(jid, sock, pullOut, msg);
+                                await sock.sendMessage(jid, { text: "⏳ *Restoring local changes...*" }, { quoted: msg });
+                                execWithTimeout('git stash pop', 10000, async (popErr) => {
+                                    if (popErr) {
+                                        // Conflict or error
+                                        await sock.sendMessage(jid, {
+                                            text: `⚠️ *Local changes could not be automatically re-applied.*\nYou may have conflicts in your working directory.\n\nCheck with \`${config.prefix}git status\` and resolve manually.`
+                                        }, { quoted: msg });
+                                    } else {
+                                        await sendUpdateSuccess(jid, sock, pullOut, msg);
+                                    }
+                                });
                             });
-                        } else {
-                            await sock.sendMessage(jid, { text: "❌ Unknown action." }, { quoted: msg });
-                        }
-                    });
-                });
-            });
-        }
-    },
-
-    // ─── MODE ────────────────────────────────────────────────────
-    {
-        name: 'mode',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!args) {
-                return await sock.sendMessage(jid, {
-                    text: `💻 *Current Bot Mode:* ${config.isPublic ? 'Public 🌐' : 'Private 🛡️'}\n\n` +
-                          `Use \`${config.prefix}mode public\` or \`${config.prefix}mode private\` to change it.`
-                }, { quoted: msg });
-            }
-
-            const targetMode = args.toLowerCase().trim();
-            if (targetMode === 'public') {
-                config.isPublic = true;
-                await sock.sendMessage(jid, { text: `🌐 *Limitless Mode Updated:* Public\n_Everyone can now interact._` }, { quoted: msg });
-            } else if (targetMode === 'private') {
-                config.isPublic = false;
-                await sock.sendMessage(jid, { text: `🛡️ *Limitless Mode Updated:* Private\n_Only authorized owners and sudoers can interact._` }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, { text: `❌ Invalid option. Use \`public\` or \`private\`.` }, { quoted: msg });
-            }
-            saveState();
-        }
-    },
-
-    // ─── SETSUDO ─────────────────────────────────────────────────
-    {
-        name: 'setsudo',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const targetJid = parseTarget(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user (@user), or type their number." }, { quoted: msg });
-            }
-
-            const added = addSudo(targetJid);
-            if (added) {
-                await sock.sendMessage(jid, {
-                    text: `👑 Added @${targetJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is already a sudo user.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── DELSUDO ─────────────────────────────────────────────────
-    {
-        name: 'delsudo',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const targetJid = parseTarget(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            const removed = removeSudo(targetJid);
-            if (removed) {
-                await sock.sendMessage(jid, {
-                    text: `👋 Removed @${targetJid.split('@')[0]} from the sudo list.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is not in the sudo list.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── ADDOWNER ────────────────────────────────────────────────
-    {
-        name: 'addowner',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isDev, isPrimaryOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isDev && !isPrimaryOwner) return;
-
-            const targetJid = parseTarget(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            if (DEV_JIDS.includes(targetJid) || DEV_LIDS.includes(targetJid)) {
-                await sock.sendMessage(jid, { text: '❌ Cannot add a Developer as a secondary owner.' });
-                return;
-            }
-
-            if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
-                await sock.sendMessage(jid, { text: '❌ Cannot add the primary owner as a secondary owner.' });
-                return;
-            }
-
-            const added = addSecondaryOwner(targetJid);
-            if (added) {
-                await sock.sendMessage(jid, {
-                    text: `👑 Added @${targetJid.split('@')[0]} as a secondary owner.\n_They now possess full system administrative capabilities._`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is already a secondary owner.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── DELOWNER ────────────────────────────────────────────────
-    {
-        name: 'delowner',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isDev, isPrimaryOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isDev && !isPrimaryOwner) return;
-
-            const targetJid = parseTarget(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
-                return await sock.sendMessage(jid, { text: "❌ You cannot remove the primary Bot Owner." }, { quoted: msg });
-            }
-
-            const removed = removeSecondaryOwner(targetJid);
-            if (removed) {
-                await sock.sendMessage(jid, {
-                    text: `👋 Removed @${targetJid.split('@')[0]} from the secondary owners list.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is not a registered secondary owner.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── RESTART ─────────────────────────────────────────────────
-    {
-        name: 'restart',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-            await sock.sendMessage(jid, { text: "🔄 _Rebooting Satoru Gojo's visual and physical engines..._" }, { quoted: msg });
-            process.exit(1);
-        }
-    },
-
-    // ─── SHUTDOWN ────────────────────────────────────────────────
-    {
-        name: 'shutdown',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-            await sock.sendMessage(jid, { text: "💤 _Deactivating Infinite Void. System shutting down..._" }, { quoted: msg });
-            process.exit(0);
-        }
-    },
-
-    // ─── BAN ─────────────────────────────────────────────────────
-    {
-        name: 'ban',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const targetJid = parseTarget(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
-                return await sock.sendMessage(jid, { text: "❌ You cannot blacklist Satoru Gojo's creator." }, { quoted: msg });
-            }
-
-            const added = addBan(targetJid);
-            if (added) {
-                await sock.sendMessage(jid, {
-                    text: `🚫 Blacklisted @${targetJid.split('@')[0]}.\n_They can no longer interact with any Satoru Gojo systems._`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is already blacklisted.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── UNBAN ───────────────────────────────────────────────────
-    {
-        name: 'unban',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const targetJid = parseTarget(msg, args);
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
-            }
-
-            const removed = removeBan(targetJid);
-            if (removed) {
-                await sock.sendMessage(jid, {
-                    text: `✅ Restored access for @${targetJid.split('@')[0]}.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is not on the blacklist.`,
-                    mentions: [targetJid]
-                }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── AFK ─────────────────────────────────────────────────────
-    {
-        name: 'afk',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, senderNumber }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!config.afk) config.afk = {};
-
-            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const isAlreadyAfk = config.afk[senderJid];
-
-            if (isAlreadyAfk) {
-                delete config.afk[senderJid];
-                await sock.sendMessage(jid, {
-                    text: `👋 *Welcome Back!* AFK mode has been deactivated.`
-                }, { quoted: msg });
-            } else {
-                config.afk[senderJid] = {
-                    time: Date.now(),
-                    reason: args || "Infinite Void meditation"
-                };
-                await sock.sendMessage(jid, {
-                    text: `💤 *AFK Mode Activated.* Mentions of your name in group chats will be auto-replied by my infinity.`
-                }, { quoted: msg });
-            }
-            saveState();
-        }
-    },
-
-    // ─── SETVAR ──────────────────────────────────────────────────
-    {
-        name: 'setvar',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const eqIndex = args.indexOf('=');
-            if (eqIndex === -1) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ Invalid format.\nUsage: \`${config.prefix}setvar KEY=VALUE\`\nExample: \`${config.prefix}setvar prefix=!\``
-                }, { quoted: msg });
-            }
-
-            const key = args.slice(0, eqIndex).trim();
-            const valueStr = args.slice(eqIndex + 1).trim();
-
-            // ─── KEY MAPPING ──────────────────────────────────────
-            const keyMapping = {
-                bot_name: "botName",
-                owner_name: "ownerName",
-                owner_number: "ownerNumber",
-                session_id: "sessionId",
-                git_token: "githubToken",
-                groq_api_key: "groqApiKey",
-                gemini_api_key: "geminiApiKey",
-                prefix: "prefix",
-                vvs: "vvs",
-                pack_name: "packName",
-                author: "author",
-                menu_image: "menuImage",
-                warn: "warnThreshold",
-                presence: "presenceMode"
-            };
-
-            const mappedKey = keyMapping[key.toLowerCase()];
-            if (!mappedKey) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ Variable "${key}" cannot be configured dynamically.`
-                }, { quoted: msg });
-            }
-
-            let finalValue = valueStr;
-
-            if (mappedKey === 'isPublic') {
-                if (valueStr.toLowerCase() === 'true') finalValue = true;
-                else if (valueStr.toLowerCase() === 'false') finalValue = false;
-                else {
-                    return await sock.sendMessage(jid, { text: "❌ isPublic must be either `true` or `false`." }, { quoted: msg });
-                }
-            }
-
-            if (mappedKey === 'menuImage') {
-                const urls = valueStr.split(',').map(u => u.trim()).filter(Boolean);
-                if (urls.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ menu_image requires at least one URL. Use comma-separated values." }, { quoted: msg });
-                }
-                finalValue = urls;
-            }
-
-            // ─── SET THE VARIABLE ────────────────────────────────
-            const dynamicKeys = ['prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode'];
-            if (dynamicKeys.includes(mappedKey)) {
-                const success = setVar(mappedKey, finalValue);
-                if (!success) {
-                    return await sock.sendMessage(jid, { text: `❌ Failed to save variable "${key}".` }, { quoted: msg });
-                }
-                if (mappedKey === 'prefix') {
-                    const commandsList = require('../commands');
-                    commandsList.reload();
-                }
-                await sock.sendMessage(jid, {
-                    text: `✅ *Variable Configured Successfully!*\n\n` +
-                          `• *Key:* \`${mappedKey}\`\n` +
-                          `• *Value:* \`${Array.isArray(finalValue) ? finalValue.join(', ') : finalValue}\`\n\n` +
-                          `_Value has been persisted to vars.json and applied instantly._`
-                }, { quoted: msg });
-            } else {
-                config[mappedKey] = finalValue;
-                console.log(`[SETVAR] Updated ${mappedKey} to ${finalValue} (in-memory only, restart will revert unless .env is updated manually)`);
-                await sock.sendMessage(jid, {
-                    text: `✅ *${mappedKey} updated to:* \`${finalValue}\`\n\n` +
-                          `⚠️ *Note:* This variable is from .env. To make it permanent, edit your .env file manually.\n` +
-                          `_The change is active until the next restart._`
-                }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── SETTINGS ────────────────────────────────────────────────
-    {
-        name: 'settings',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const ownersList = (config.secondaryOwners || []).length > 0 ?
-                config.secondaryOwners.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
-            const sudoList = (config.sudos || []).length > 0 ?
-                config.sudos.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
-            const bannedList = (config.banned || []).length > 0 ?
-                config.banned.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
-
-            const antilinkCount = Object.keys(config.antilink || {}).filter(k => config.antilink[k] !== 'off').length;
-            const antitagCount = Object.keys(config.antitag || {}).filter(k => config.antitag[k] !== 'off').length;
-            const antibotCount = Object.keys(config.antibot || {}).filter(k => config.antibot[k] !== 'off').length;
-
-            const settingsText =
-                `💻 *${config.botName.toUpperCase()} SYSTEM SETTINGS* 💻\n` +
-                `━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🤖 *Bot Name:* \`${config.botName}\`\n` +
-                `👑 *Owner:* \`${config.ownerName}\`\n` +
-                `⚡ *Prefix:* \`${config.prefix || '(prefixless)'}\`\n` +
-                `🌐 *Mode:* \`${config.isPublic ? 'Public' : 'Private'}\`\n` +
-                `📱 *Owner Number:* \`${config.ownerNumber}\`\n\n` +
-                `📦 *Sticker Pack:* \`${config.packName}\`\n` +
-                `🎨 *Sticker Author:* \`${config.author}\`\n` +
-                `🔮 *VVS Trigger:* \`${config.vvs || 'kamui'}\`\n` +
-                `⚠️ *Warn Threshold:* \`${config.warnThreshold || 5}\`\n\n` +
-                `👥 *Secondary Owners:* ${ownersList}\n` +
-                `🛡️ *Sudos:* ${sudoList}\n` +
-                `🚫 *Banned:* ${bannedList}\n\n` +
-                `🛡️ *Active Protections:*\n` +
-                `• *Antilink:* \`${antilinkCount}\` groups\n` +
-                `• *Antitag:* \`${antitagCount}\` groups\n` +
-                `• *Antibot:* \`${antibotCount}\` groups\n\n` +
-                `🧠 *Gojo Sleep:* \`${config.gojoGlobalSleep ? '💤' : '🟢'}\``;
-
-            const allMentions = [
-                ...(config.secondaryOwners || []),
-                ...(config.sudos || []),
-                ...(config.banned || [])
-            ];
-
-            await sock.sendMessage(jid, {
-                text: settingsText,
-                mentions: allMentions
-            }, { quoted: msg });
-        }
-    },
-
-    // ─── .vars – List all settable variables ──────────────────────
-    {
-        name: 'vars',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isSudo && !isDev) {
-                return await sock.sendMessage(jid, { text: '❌ You are not authorized to view variables.' });
-            }
-
-            // Get all keys from DEFAULT_VARS and their current values from config
-            const keys = Object.keys(DEFAULT_VARS).sort();
-            let list = '📋 *Settable Variables (via .setvar)*\n\n';
-            for (const key of keys) {
-                const value = config[key] !== undefined ? config[key] : DEFAULT_VARS[key];
-                let display = typeof value === 'string' ? value : JSON.stringify(value);
-                if (display.length > 30) display = display.slice(0, 27) + '...';
-                list += `▪ *${key}* = \`${display}\`\n`;
-            }
-
-            if (list.length > 4096) {
-                const chunks = list.match(/.{1,4000}/g) || [];
-                for (const chunk of chunks) {
-                    await sock.sendMessage(jid, { text: chunk }, { quoted: msg });
-                }
-            } else {
-                await sock.sendMessage(jid, { text: list }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── UPGRADE ──────────────────────────────────────────────────
-    {
-        name: 'upgrade',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isDev) return;
-
-            const GITHUB_TOKEN = config.githubToken;
-            if (!GITHUB_TOKEN) {
-                return await sock.sendMessage(jid, { text: "❌ GitHub token not configured. Please set GITHUB_TOKEN in config.js" }, { quoted: msg });
-            }
-
-            const GITHUB_OWNER = "Botking134";
-            const GITHUB_REPO = "Limitless-MD";
-            const GITHUB_BRANCH = "master";
-
-            const spaceIndex = args ? args.indexOf(' ') : -1;
-            if (spaceIndex === -1) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ Invalid upgrade format.\nUsage: \`${config.prefix}upgrade <file_path> <entire_code>\``
-                }, { quoted: msg });
-            }
-
-            const relativePathInput = args.slice(0, spaceIndex).trim();
-            const fileContent = args.slice(spaceIndex + 1).trim();
-
-            await sock.sendMessage(jid, { text: `📡 *Connecting to source to upgrade master files...*` }, { quoted: msg });
-
-            try {
-                const getUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePathInput}?ref=${GITHUB_BRANCH}`;
-                let currentSha = null;
-
-                const getResponse = await fetch(getUrl, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${GITHUB_TOKEN}`,
-                        'Accept': 'application/vnd.github+json',
-                        'X-GitHub-Api-Version': '2022-11-28'
+                        });
+                    } else {
+                        await sock.sendMessage(jid, { text: "❌ Unknown action." }, { quoted: msg });
                     }
                 });
+            });
+        });
+    }
+},
 
-                if (getResponse.ok) {
-                    const fileData = await getResponse.json();
-                    currentSha = fileData.sha;
-                }
+// ─── MODE ────────────────────────────────────────────────────
+{
+    name: 'mode',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
 
-                const base64Content = Buffer.from(fileContent, 'utf-8').toString('base64');
+        if (!args) {
+            return await sock.sendMessage(jid, {
+                text: `💻 *Current Bot Mode:* ${config.isPublic ? 'Public 🌐' : 'Private 🛡️'}\n\n` +
+                      `Use \`${config.prefix}mode public\` or \`${config.prefix}mode private\` to change it.`
+            }, { quoted: msg });
+        }
 
-                const putUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePathInput}`;
-                const bodyPayload = {
-                    message: `Upgrade file: ${relativePathInput}`,
-                    content: base64Content,
-                    branch: GITHUB_BRANCH
-                };
+        const targetMode = args.toLowerCase().trim();
+        if (targetMode === 'public') {
+            config.isPublic = true;
+            await sock.sendMessage(jid, { text: `🌐 *Limitless Mode Updated:* Public\n_Everyone can now interact._` }, { quoted: msg });
+        } else if (targetMode === 'private') {
+            config.isPublic = false;
+            await sock.sendMessage(jid, { text: `🛡️ *Limitless Mode Updated:* Private\n_Only authorized owners and sudoers can interact._` }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, { text: `❌ Invalid option. Use \`public\` or \`private\`.` }, { quoted: msg });
+        }
+        saveState();
+    }
+},
 
-                if (currentSha) {
-                    bodyPayload.sha = currentSha;
-                }
+// ─── SETSUDO ─────────────────────────────────────────────────
+{
+    name: 'setsudo',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
 
-                const putResponse = await fetch(putUrl, {
-                    method: 'PUT',
-                    headers: {
-                        'Authorization': `Bearer ${GITHUB_TOKEN}`,
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/vnd.github+json',
-                        'X-GitHub-Api-Version': '2022-11-28'
-                    },
-                    body: JSON.stringify(bodyPayload)
-                });
+        const targetJid = parseTarget(msg, args);
+        if (!targetJid) {
+            return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user (@user), or type their number." }, { quoted: msg });
+        }
 
-                if (!putResponse.ok) {
-                    const errorText = await putResponse.text();
-                    throw new Error(`GitHub API Error ${putResponse.status}: ${errorText}`);
-                }
+        const added = addSudo(targetJid);
+        if (added) {
+            await sock.sendMessage(jid, {
+                text: `👑 Added @${targetJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, {
+                text: `⚠️ @${targetJid.split('@')[0]} is already a sudo user.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
+    }
+},
 
-                const putData = await putResponse.json();
+// ─── DELSUDO ─────────────────────────────────────────────────
+{
+    name: 'delsudo',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
 
-                await sock.sendMessage(jid, {
-                    text: `✅ *Master Files Upgraded!*\n\n` +
-                          `• *Branch:* \`${GITHUB_BRANCH}\`\n` +
-                          `• *Path:* \`${relativePathInput}\`\n` +
-                          `• *Commit SHA:* \`${putData.commit?.sha?.slice(0, 7) || 'N/A'}\`\n` +
-                          `• *Status:* Pushed directly to source successfully! 🚀`
-                }, { quoted: msg });
+        const targetJid = parseTarget(msg, args);
+        if (!targetJid) {
+            return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
+        }
 
-            } catch (error) {
-                console.error("Upgrade Command Error:", error);
-                await sock.sendMessage(jid, { text: `❌ Upgrade failed: ${error.message}` }, { quoted: msg });
+        const removed = removeSudo(targetJid);
+        if (removed) {
+            await sock.sendMessage(jid, {
+                text: `👋 Removed @${targetJid.split('@')[0]} from the sudo list.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, {
+                text: `⚠️ @${targetJid.split('@')[0]} is not in the sudo list.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
+    }
+},
+
+// ─── ADDOWNER ────────────────────────────────────────────────
+{
+    name: 'addowner',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isDev, isPrimaryOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isDev && !isPrimaryOwner) return;
+
+        const targetJid = parseTarget(msg, args);
+        if (!targetJid) {
+            return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
+        }
+
+        if (DEV_JIDS.includes(targetJid) || DEV_LIDS.includes(targetJid)) {
+            await sock.sendMessage(jid, { text: '❌ Cannot add a Developer as a secondary owner.' });
+            return;
+        }
+
+        if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
+            await sock.sendMessage(jid, { text: '❌ Cannot add the primary owner as a secondary owner.' });
+            return;
+        }
+
+        const added = addSecondaryOwner(targetJid);
+        if (added) {
+            await sock.sendMessage(jid, {
+                text: `👑 Added @${targetJid.split('@')[0]} as a secondary owner.\n_They now possess full system administrative capabilities._`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, {
+                text: `⚠️ @${targetJid.split('@')[0]} is already a secondary owner.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
+    }
+},
+
+// ─── DELOWNER ────────────────────────────────────────────────
+{
+    name: 'delowner',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isDev, isPrimaryOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isDev && !isPrimaryOwner) return;
+
+        const targetJid = parseTarget(msg, args);
+        if (!targetJid) {
+            return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
+        }
+
+        if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
+            return await sock.sendMessage(jid, { text: "❌ You cannot remove the primary Bot Owner." }, { quoted: msg });
+        }
+
+        const removed = removeSecondaryOwner(targetJid);
+        if (removed) {
+            await sock.sendMessage(jid, {
+                text: `👋 Removed @${targetJid.split('@')[0]} from the secondary owners list.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, {
+                text: `⚠️ @${targetJid.split('@')[0]} is not a registered secondary owner.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
+    }
+},
+
+// ─── RESTART ─────────────────────────────────────────────────
+{
+    name: 'restart',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+        await sock.sendMessage(jid, { text: "🔄 _Rebooting Satoru Gojo's visual and physical engines..._" }, { quoted: msg });
+        process.exit(1);
+    }
+},
+
+// ─── SHUTDOWN ────────────────────────────────────────────────
+{
+    name: 'shutdown',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+        await sock.sendMessage(jid, { text: "💤 _Deactivating Infinite Void. System shutting down..._" }, { quoted: msg });
+        process.exit(0);
+    }
+},
+
+// ─── BAN ─────────────────────────────────────────────────────
+{
+    name: 'ban',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        const targetJid = parseTarget(msg, args);
+        if (!targetJid) {
+            return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
+        }
+
+        if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
+            return await sock.sendMessage(jid, { text: "❌ You cannot blacklist Satoru Gojo's creator." }, { quoted: msg });
+        }
+
+        const added = addBan(targetJid);
+        if (added) {
+            await sock.sendMessage(jid, {
+                text: `🚫 Blacklisted @${targetJid.split('@')[0]}.\n_They can no longer interact with any Satoru Gojo systems._`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, {
+                text: `⚠️ @${targetJid.split('@')[0]} is already blacklisted.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
+    }
+},
+
+// ─── UNBAN ───────────────────────────────────────────────────
+{
+    name: 'unban',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        const targetJid = parseTarget(msg, args);
+        if (!targetJid) {
+            return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
+        }
+
+        const removed = removeBan(targetJid);
+        if (removed) {
+            await sock.sendMessage(jid, {
+                text: `✅ Restored access for @${targetJid.split('@')[0]}.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, {
+                text: `⚠️ @${targetJid.split('@')[0]} is not on the blacklist.`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
+    }
+},
+
+// ─── AFK ─────────────────────────────────────────────────────
+{
+    name: 'afk',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, senderNumber }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        if (!config.afk) config.afk = {};
+
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        const isAlreadyAfk = config.afk[senderJid];
+
+        if (isAlreadyAfk) {
+            delete config.afk[senderJid];
+            await sock.sendMessage(jid, {
+                text: `👋 *Welcome Back!* AFK mode has been deactivated.`
+            }, { quoted: msg });
+        } else {
+            config.afk[senderJid] = {
+                time: Date.now(),
+                reason: args || "Infinite Void meditation"
+            };
+            await sock.sendMessage(jid, {
+                text: `💤 *AFK Mode Activated.* Mentions of your name in group chats will be auto-replied by my infinity.`
+            }, { quoted: msg });
+        }
+        saveState();
+    }
+},
+
+// ─── SETVAR ──────────────────────────────────────────────────
+{
+    name: 'setvar',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        const eqIndex = args.indexOf('=');
+        if (eqIndex === -1) {
+            return await sock.sendMessage(jid, {
+                text: `❌ Invalid format.\nUsage: \`${config.prefix}setvar KEY=VALUE\`\nExample: \`${config.prefix}setvar prefix=!\``
+            }, { quoted: msg });
+        }
+
+        const key = args.slice(0, eqIndex).trim();
+        const valueStr = args.slice(eqIndex + 1).trim();
+
+        // ─── KEY MAPPING ──────────────────────────────────────
+        const keyMapping = {
+            bot_name: "botName",
+            owner_name: "ownerName",
+            owner_number: "ownerNumber",
+            session_id: "sessionId",
+            git_token: "githubToken",
+            groq_api_key: "groqApiKey",
+            gemini_api_key: "geminiApiKey",
+            prefix: "prefix",
+            vvs: "vvs",
+            pack_name: "packName",
+            author: "author",
+            menu_image: "menuImage",
+            warn: "warnThreshold",
+            presence: "presenceMode"
+        };
+
+        const mappedKey = keyMapping[key.toLowerCase()];
+        if (!mappedKey) {
+            return await sock.sendMessage(jid, {
+                text: `❌ Variable "${key}" cannot be configured dynamically.`
+            }, { quoted: msg });
+        }
+
+        let finalValue = valueStr;
+
+        if (mappedKey === 'isPublic') {
+            if (valueStr.toLowerCase() === 'true') finalValue = true;
+            else if (valueStr.toLowerCase() === 'false') finalValue = false;
+            else {
+                return await sock.sendMessage(jid, { text: "❌ isPublic must be either `true` or `false`." }, { quoted: msg });
             }
         }
-    },
 
-    // ─── ANTIPM ──────────────────────────────────────────────────
-    {
-        name: 'antipm',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!args) {
-                const current = config.antipm || 'off';
-                return await sock.sendMessage(jid, {
-                    text: `💻 *Anti-PM Protection status:* \`${current.toUpperCase()}\`\n\nUse \`${config.prefix}antipm on\` or \`off\` to configure.`
-                }, { quoted: msg });
+        if (mappedKey === 'menuImage') {
+            const urls = valueStr.split(',').map(u => u.trim()).filter(Boolean);
+            if (urls.length === 0) {
+                return await sock.sendMessage(jid, { text: "❌ menu_image requires at least one URL. Use comma-separated values." }, { quoted: msg });
             }
-
-            const mode = args.toLowerCase().trim();
-            if (mode === 'on') {
-                config.antipm = 'on';
-                await sock.sendMessage(jid, { text: "🔒 *Anti-PM Autoblocker activated!* Non-owners sending direct messages to the bot number will be blocked instantly." }, { quoted: msg });
-            } else if (mode === 'off') {
-                config.antipm = 'off';
-                await sock.sendMessage(jid, { text: "🔓 *Anti-PM Autoblocker deactivated completely.*" }, { quoted: msg });
-            } else {
-                await sock.sendMessage(jid, { text: "❌ Invalid option. Use `on` or `off`." }, { quoted: msg });
-            }
-            saveState();
+            finalValue = urls;
         }
-    },
 
-    // ─── REMINDER ─────────────────────────────────────────────────
-    {
-        name: 'reminder',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!args) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ Please provide a timer and the reminder text.\nExample: \`${config.prefix}reminder 10m study Jujutsu history\``
-                }, { quoted: msg });
+        // ─── SET THE VARIABLE ────────────────────────────────
+        const dynamicKeys = ['prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode'];
+        if (dynamicKeys.includes(mappedKey)) {
+            const success = setVar(mappedKey, finalValue);
+            if (!success) {
+                return await sock.sendMessage(jid, { text: `❌ Failed to save variable "${key}".` }, { quoted: msg });
             }
-
-            global.activeSock = sock;
-
-            const parts = args.trim().split(' ');
-            const durationString = parts[0] || '';
-            const textContent = parts.slice(1).join(' ').trim();
-
-            const durationMs = parseDuration(durationString);
-            if (!durationMs) {
-                return await sock.sendMessage(jid, { text: "❌ Invalid duration parameter. Use formats like `10s`, `5m`, `2h`." }, { quoted: msg });
+            if (mappedKey === 'prefix') {
+                const commandsList = require('../commands');
+                commandsList.reload();
             }
-
-            if (!textContent) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide a text description for your reminder." }, { quoted: msg });
-            }
-
-            try {
-                const prompt = await sock.sendMessage(jid, {
-                    text: `⏳ *Reminder Scheduled!*\n\n• *Duration:* \`${durationString}\`\n• *Note:* _"${textContent}"_\n\n⚠️ *Action Required:* Please reply directly to *this message* with a short *Title* to complete the setup.`
-                }, { quoted: msg });
-
-                global.reminderSessions[prompt.key.id] = {
-                    jid: jid,
-                    durationMs: durationMs,
-                    durationStr: durationString,
-                    text: textContent,
-                    timeSet: Date.now()
-                };
-            } catch (err) {
-                console.error("Reminder setup error:", err.message);
-            }
+            await sock.sendMessage(jid, {
+                text: `✅ *Variable Configured Successfully!*\n\n` +
+                      `• *Key:* \`${mappedKey}\`\n` +
+                      `• *Value:* \`${Array.isArray(finalValue) ? finalValue.join(', ') : finalValue}\`\n\n` +
+                      `_Value has been persisted to vars.json and applied instantly._`
+            }, { quoted: msg });
+        } else {
+            config[mappedKey] = finalValue;
+            console.log(`[SETVAR] Updated ${mappedKey} to ${finalValue} (in-memory only, restart will revert unless .env is updated manually)`);
+            await sock.sendMessage(jid, {
+                text: `✅ *${mappedKey} updated to:* \`${finalValue}\`\n\n` +
+                      `⚠️ *Note:* This variable is from .env. To make it permanent, edit your .env file manually.\n` +
+                      `_The change is active until the next restart._`
+            }, { quoted: msg });
         }
-    },
+    }
+},
 
-    // ─── REMIND ──────────────────────────────────────────────────
-    {
-        name: 'remind',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
+// ─── SETTINGS ────────────────────────────────────────────────
+{
+    name: 'settings',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
 
-            global.activeSock = sock;
-            const reminders = readReminders();
+        const ownersList = (config.secondaryOwners || []).length > 0 ?
+            config.secondaryOwners.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+        const sudoList = (config.sudos || []).length > 0 ?
+            config.sudos.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
+        const bannedList = (config.banned || []).length > 0 ?
+            config.banned.map(n => `@${n.split('@')[0]}`).join(', ') : '_None_';
 
-            if (args && args.toLowerCase().trim().startsWith('abort')) {
-                const idx = parseInt(args.toLowerCase().replace('abort', '').trim());
-                if (isNaN(idx) || idx < 1 || idx > reminders.length) {
-                    return await sock.sendMessage(jid, {
-                        text: `❌ Invalid selection index. Please enter a number between 1 and ${reminders.length}.`
-                    }, { quoted: msg });
+        const antilinkCount = Object.keys(config.antilink || {}).filter(k => config.antilink[k] !== 'off').length;
+        const antitagCount = Object.keys(config.antitag || {}).filter(k => config.antitag[k] !== 'off').length;
+        const antibotCount = Object.keys(config.antibot || {}).filter(k => config.antibot[k] !== 'off').length;
+
+        const settingsText =
+            `💻 *${config.botName.toUpperCase()} SYSTEM SETTINGS* 💻\n` +
+            `━━━━━━━━━━━━━━━━━━━\n\n` +
+            `🤖 *Bot Name:* \`${config.botName}\`\n` +
+            `👑 *Owner:* \`${config.ownerName}\`\n` +
+            `⚡ *Prefix:* \`${config.prefix || '(prefixless)'}\`\n` +
+            `🌐 *Mode:* \`${config.isPublic ? 'Public' : 'Private'}\`\n` +
+            `📱 *Owner Number:* \`${config.ownerNumber}\`\n\n` +
+            `📦 *Sticker Pack:* \`${config.packName}\`\n` +
+            `🎨 *Sticker Author:* \`${config.author}\`\n` +
+            `🔮 *VVS Trigger:* \`${config.vvs || 'kamui'}\`\n` +
+            `⚠️ *Warn Threshold:* \`${config.warnThreshold || 5}\`\n\n` +
+            `👥 *Secondary Owners:* ${ownersList}\n` +
+            `🛡️ *Sudos:* ${sudoList}\n` +
+            `🚫 *Banned:* ${bannedList}\n\n` +
+            `🛡️ *Active Protections:*\n` +
+            `• *Antilink:* \`${antilinkCount}\` groups\n` +
+            `• *Antitag:* \`${antitagCount}\` groups\n` +
+            `• *Antibot:* \`${antibotCount}\` groups\n\n` +
+            `🧠 *Gojo Sleep:* \`${config.gojoGlobalSleep ? '💤' : '🟢'}\``;
+
+        const allMentions = [
+            ...(config.secondaryOwners || []),
+            ...(config.sudos || []),
+            ...(config.banned || [])
+        ];
+
+        await sock.sendMessage(jid, {
+            text: settingsText,
+            mentions: allMentions
+        }, { quoted: msg });
+    }
+},
+
+// ─── .vars – List all settable variables ──────────────────────
+{
+    name: 'vars',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner && !isSudo && !isDev) {
+            return await sock.sendMessage(jid, { text: '❌ You are not authorized to view variables.' });
+        }
+
+        // Get all keys from DEFAULT_VARS and their current values from config
+        const keys = Object.keys(DEFAULT_VARS).sort();
+        let list = '📋 *Settable Variables (via .setvar)*\n\n';
+        for (const key of keys) {
+            const value = config[key] !== undefined ? config[key] : DEFAULT_VARS[key];
+            let display = typeof value === 'string' ? value : JSON.stringify(value);
+            if (display.length > 30) display = display.slice(0, 27) + '...';
+            list += `▪ *${key}* = \`${display}\`\n`;
+        }
+
+        if (list.length > 4096) {
+            const chunks = list.match(/.{1,4000}/g) || [];
+            for (const chunk of chunks) {
+                await sock.sendMessage(jid, { text: chunk }, { quoted: msg });
+            }
+        } else {
+            await sock.sendMessage(jid, { text: list }, { quoted: msg });
+        }
+    }
+},
+
+// ─── UPGRADE ──────────────────────────────────────────────────
+{
+    name: 'upgrade',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isDev }) => {
+        const jid = msg.key.remoteJid;
+        if (!isDev) return;
+
+        const GITHUB_TOKEN = config.githubToken;
+        if (!GITHUB_TOKEN) {
+            return await sock.sendMessage(jid, { text: "❌ GitHub token not configured. Please set GITHUB_TOKEN in config.js" }, { quoted: msg });
+        }
+
+        const GITHUB_OWNER = "Botking134";
+        const GITHUB_REPO = "Limitless-MD";
+        const GITHUB_BRANCH = "master";
+
+        const spaceIndex = args ? args.indexOf(' ') : -1;
+        if (spaceIndex === -1) {
+            return await sock.sendMessage(jid, {
+                text: `❌ Invalid upgrade format.\nUsage: \`${config.prefix}upgrade <file_path> <entire_code>\``
+            }, { quoted: msg });
+        }
+
+        const relativePathInput = args.slice(0, spaceIndex).trim();
+        const fileContent = args.slice(spaceIndex + 1).trim();
+
+        await sock.sendMessage(jid, { text: `📡 *Connecting to source to upgrade master files...*` }, { quoted: msg });
+
+        try {
+            const getUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePathInput}?ref=${GITHUB_BRANCH}`;
+            let currentSha = null;
+
+            const getResponse = await fetch(getUrl, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${GITHUB_TOKEN}`,
+                    'Accept': 'application/vnd.github+json',
+                    'X-GitHub-Api-Version': '2022-11-28'
                 }
-                const removed = reminders[idx - 1];
-                reminders.splice(idx - 1, 1);
-                saveReminders(reminders);
+            });
+
+            if (getResponse.ok) {
+                const fileData = await getResponse.json();
+                currentSha = fileData.sha;
+            }
+
+            const base64Content = Buffer.from(fileContent, 'utf-8').toString('base64');
+
+            const putUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePathInput}`;
+            const bodyPayload = {
+                message: `Upgrade file: ${relativePathInput}`,
+                content: base64Content,
+                branch: GITHUB_BRANCH
+            };
+
+            if (currentSha) {
+                bodyPayload.sha = currentSha;
+            }
+
+            const putResponse = await fetch(putUrl, {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Bearer ${GITHUB_TOKEN}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/vnd.github+json',
+                    'X-GitHub-Api-Version': '2022-11-28'
+                },
+                body: JSON.stringify(bodyPayload)
+            });
+
+            if (!putResponse.ok) {
+                const errorText = await putResponse.text();
+                throw new Error(`GitHub API Error ${putResponse.status}: ${errorText}`);
+            }
+
+            const putData = await putResponse.json();
+
+            await sock.sendMessage(jid, {
+                text: `✅ *Master Files Upgraded!*\n\n` +
+                      `• *Branch:* \`${GITHUB_BRANCH}\`\n` +
+                      `• *Path:* \`${relativePathInput}\`\n` +
+                      `• *Commit SHA:* \`${putData.commit?.sha?.slice(0, 7) || 'N/A'}\`\n` +
+                      `• *Status:* Pushed directly to source successfully! 🚀`
+            }, { quoted: msg });
+
+        } catch (error) {
+            console.error("Upgrade Command Error:", error);
+            await sock.sendMessage(jid, { text: `❌ Upgrade failed: ${error.message}` }, { quoted: msg });
+        }
+    }
+},
+
+// ─── ANTIPM ──────────────────────────────────────────────────
+{
+    name: 'antipm',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        if (!args) {
+            const current = config.antipm || 'off';
+            return await sock.sendMessage(jid, {
+                text: `💻 *Anti-PM Protection status:* \`${current.toUpperCase()}\`\n\nUse \`${config.prefix}antipm on\` or \`off\` to configure.`
+            }, { quoted: msg });
+        }
+
+        const mode = args.toLowerCase().trim();
+        if (mode === 'on') {
+            config.antipm = 'on';
+            await sock.sendMessage(jid, { text: "🔒 *Anti-PM Autoblocker activated!* Non-owners sending direct messages to the bot number will be blocked instantly." }, { quoted: msg });
+        } else if (mode === 'off') {
+            config.antipm = 'off';
+            await sock.sendMessage(jid, { text: "🔓 *Anti-PM Autoblocker deactivated completely.*" }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, { text: "❌ Invalid option. Use `on` or `off`." }, { quoted: msg });
+        }
+        saveState();
+    }
+},
+
+// ─── REMINDER ─────────────────────────────────────────────────
+{
+    name: 'reminder',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        if (!args) {
+            return await sock.sendMessage(jid, {
+                text: `❌ Please provide a timer and the reminder text.\nExample: \`${config.prefix}reminder 10m study Jujutsu history\``
+            }, { quoted: msg });
+        }
+
+        global.activeSock = sock;
+
+        const parts = args.trim().split(' ');
+        const durationString = parts[0] || '';
+        const textContent = parts.slice(1).join(' ').trim();
+
+        const durationMs = parseDuration(durationString);
+        if (!durationMs) {
+            return await sock.sendMessage(jid, { text: "❌ Invalid duration parameter. Use formats like `10s`, `5m`, `2h`." }, { quoted: msg });
+        }
+
+        if (!textContent) {
+            return await sock.sendMessage(jid, { text: "❌ Please provide a text description for your reminder." }, { quoted: msg });
+        }
+
+        try {
+            const prompt = await sock.sendMessage(jid, {
+                text: `⏳ *Reminder Scheduled!*\n\n• *Duration:* \`${durationString}\`\n• *Note:* _"${textContent}"_\n\n⚠️ *Action Required:* Please reply directly to *this message* with a short *Title* to complete the setup.`
+            }, { quoted: msg });
+
+            global.reminderSessions[prompt.key.id] = {
+                jid: jid,
+                durationMs: durationMs,
+                durationStr: durationString,
+                text: textContent,
+                timeSet: Date.now()
+            };
+        } catch (err) {
+            console.error("Reminder setup error:", err.message);
+        }
+    }
+},
+
+// ─── REMIND ──────────────────────────────────────────────────
+{
+    name: 'remind',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        global.activeSock = sock;
+        const reminders = readReminders();
+
+        if (args && args.toLowerCase().trim().startsWith('abort')) {
+            const idx = parseInt(args.toLowerCase().replace('abort', '').trim());
+            if (isNaN(idx) || idx < 1 || idx > reminders.length) {
                 return await sock.sendMessage(jid, {
-                    text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*\n• *Remaining:* Aborted.`
+                    text: `❌ Invalid selection index. Please enter a number between 1 and ${reminders.length}.`
                 }, { quoted: msg });
             }
+            const removed = reminders[idx - 1];
+            reminders.splice(idx - 1, 1);
+            saveReminders(reminders);
+            return await sock.sendMessage(jid, {
+                text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*\n• *Remaining:* Aborted.`
+            }, { quoted: msg });
+        }
 
-            if (args && args.toLowerCase().trim() === 'cancel') {
-                if (reminders.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No active reminders available to cancel." }, { quoted: msg });
-                }
-
-                let cancelMenu = `❌ *CANCEL REMINDER PANEL* ❌\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                reminders.forEach((r, idx) => {
-                    const remainingMs = Math.max(0, r.triggerTime - Date.now());
-                    const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
-                    cancelMenu += `${idx + 1}. *${r.title}* (${remainingStr} left)\n`;
-                });
-                cancelMenu += `\n💡 *Action Required:* Reply to this message with the *number* of the reminder you want to abort.`;
-
-                const cancelPrompt = await sock.sendMessage(jid, { text: cancelMenu }, { quoted: msg });
-                global.cancelSessions[cancelPrompt.key.id] = true;
-                return;
-            }
-
+        if (args && args.toLowerCase().trim() === 'cancel') {
             if (reminders.length === 0) {
-                return await sock.sendMessage(jid, { text: "📋 *No active reminders scheduled.*" }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ No active reminders available to cancel." }, { quoted: msg });
             }
 
-            let dashboard = `📋 *ACTIVE REMINDERS SCHEDULED* 📋\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                            `Total Reminders Active: \`${reminders.length}\`\n\n`;
-
+            let cancelMenu = `❌ *CANCEL REMINDER PANEL* ❌\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
             reminders.forEach((r, idx) => {
                 const remainingMs = Math.max(0, r.triggerTime - Date.now());
                 const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
-                const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', {
-                    timeZone: 'Africa/Lagos',
-                    hour12: true
-                });
+                cancelMenu += `${idx + 1}. *${r.title}* (${remainingStr} left)\n`;
+            });
+            cancelMenu += `\n💡 *Action Required:* Reply to this message with the *number* of the reminder you want to abort.`;
 
-                dashboard += `${idx + 1}. *${r.title}*\n`;
-                dashboard += `   • *Note:* _"${r.text}"_\n`;
-                dashboard += `   • *Set At:* \`${formattedTime} WAT\`\n`;
-                dashboard += `   • *Remaining:* \`${remainingStr}\` (set for ${r.durationStr})\n\n`;
+            const cancelPrompt = await sock.sendMessage(jid, { text: cancelMenu }, { quoted: msg });
+            global.cancelSessions[cancelPrompt.key.id] = true;
+            return;
+        }
+
+        if (reminders.length === 0) {
+            return await sock.sendMessage(jid, { text: "📋 *No active reminders scheduled.*" }, { quoted: msg });
+        }
+
+        let dashboard = `📋 *ACTIVE REMINDERS SCHEDULED* 📋\n` +
+                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        `Total Reminders Active: \`${reminders.length}\`\n\n`;
+
+        reminders.forEach((r, idx) => {
+            const remainingMs = Math.max(0, r.triggerTime - Date.now());
+            const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
+            const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', {
+                timeZone: 'Africa/Lagos',
+                hour12: true
             });
 
-            const buttonMessage = {
-                text: dashboard,
-                buttons: [
-                    { buttonId: `${config.prefix}remind cancel`, buttonText: { displayText: 'Cancel Reminder ❌' }, type: 1 }
-                ],
-                headerType: 1
-            };
+            dashboard += `${idx + 1}. *${r.title}*\n`;
+            dashboard += `   • *Note:* _"${r.text}"_\n`;
+            dashboard += `   • *Set At:* \`${formattedTime} WAT\`\n`;
+            dashboard += `   • *Remaining:* \`${remainingStr}\` (set for ${r.durationStr})\n\n`;
+        });
 
-            try {
-                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (err) {
-                const fallbackText = `${dashboard}\n💡 _Use \`${config.prefix}remind cancel\` to show the cancellation dashboard._`;
-                await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
-            }
-        }
-    },
+        const buttonMessage = {
+            text: dashboard,
+            buttons: [
+                { buttonId: `${config.prefix}remind cancel`, buttonText: { displayText: 'Cancel Reminder ❌' }, type: 1 }
+            ],
+            headerType: 1
+        };
 
-    // ─── GAMES ───────────────────────────────────────────────────
-    {
-        name: 'games',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const tttCount = Object.keys(global.gameSessions || {}).filter(k => k.endsWith('_ttt')).length;
-            const guessCount = Object.keys(global.gameSessions || {}).filter(k => k.endsWith('_guess')).length;
-            const v8Count = Object.keys(global.vault8Sessions || {}).length;
-            const triviaCount = Object.keys(global.triviaSessions || {}).length;
-            const charadeCount = Object.keys(global.charadeSessions || {}).length;
-            const anagramCount = Object.keys(global.anagramSessions || {}).length;
-            const wcgCount = Object.keys(global.wcgSessions || {}).length;
-            const millionaireCount = Object.keys(global.millionaireSessions || {}).length;
-            const torfCount = Object.keys(global.torfSessions || {}).length;
-            const pvpCount = Object.keys(global.pvpSessions || {}).length;
-            const escapeCount = Object.keys(global.escapeSessions || {}).length;
-
-            const totalActive = tttCount + guessCount + v8Count + triviaCount + charadeCount + anagramCount + wcgCount + millionaireCount + torfCount + pvpCount + escapeCount;
-
-            const summary =
-                `🎮 *LIMITLESS ACTIVE GAMES REGISTER* 🎮\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `• *Tic-Tac-Toe:* \`${tttCount}\` active\n` +
-                `• *Cursed Energy Guessing:* \`${guessCount}\` active\n` +
-                `• *The Vault 8 RPG:* \`${v8Count}\` active\n` +
-                `• *Trivia Quizzes:* \`${triviaCount}\` active\n` +
-                `• *Emoji Charades:* \`${charadeCount}\` active\n` +
-                `• *Anagram Scrambles:* \`${anagramCount}\` active\n` +
-                `• *Word Chain Game:* \`${wcgCount}\` active\n` +
-                `• *Who Wants to Be a Millionaire:* \`${millionaireCount}\` active\n` +
-                `• *Truth or False:* \`${torfCount}\` active\n` +
-                `• *PVP Lore Battles:* \`${pvpCount}\` active\n` +
-                `• *Escape Rooms:* \`${escapeCount}\` active\n\n` +
-                `📈 *Total Running Instances:* \`${totalActive}\` game(s)\n\n` +
-                `👉 _Click the button below to force-terminate all running game instances instantly._`;
-
-            const buttons = {
-                text: summary,
-                buttons: [
-                    { buttonId: `${config.prefix}games_closeall`, buttonText: { displayText: 'Terminate All Games 🛑' }, type: 1 }
-                ],
-                headerType: 1
-            };
-
-            await sock.sendMessage(jid, buttons, { quoted: msg });
-        }
-    },
-
-    // ─── GAMES_CLOSEALL ──────────────────────────────────────────
-    {
-        name: 'games_closeall',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            global.gameSessions = {};
-            global.vault8Sessions = {};
-            global.vault8SavedStories = {};
-            global.triviaSessions = {};
-            global.charadeSessions = {};
-            global.anagramSessions = {};
-            global.wcgSessions = {};
-            global.millionaireSessions = {};
-            global.torfSessions = {};
-            global.pvpSessions = {};
-            global.escapeSessions = {};
-
-            await sock.sendMessage(jid, { text: "🛑 *RECOVERY ACTION COMPLETE: All running games terminated.*" }, { quoted: msg });
-        }
-    },
-
-    // ─── OWNER ───────────────────────────────────────────────────
-    {
-        name: 'owner',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            const secondaries = config.secondaryOwners || [];
-            const sudos = config.sudos || [];
-
-            let list = `👑 *LIMITLESS OWNER & SUDO REGISTER* 👑\n` +
-                       `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                       `👤 *Primary Owner JID:*\n` +
-                       `• @${config.ownerNumber}\n\n`;
-
-            if (secondaries.length > 0) {
-                list += `👑 *Secondary Owners:*\n`;
-                secondaries.forEach((num) => {
-                    list += `• @${num.split('@')[0]}\n`;
-                });
-                list += `\n`;
-            } else {
-                list += `👑 *Secondary Owners:* _None_\n\n`;
-            }
-
-            if (sudos.length > 0) {
-                list += `🛡️ *Registered Sudoers:*\n`;
-                sudos.forEach((num) => {
-                    list += `• @${num.split('@')[0]}\n`;
-                });
-                list += `\n`;
-            } else {
-                list += `🛡️ *Registered Sudoers:* _None_\n\n`;
-            }
-
-            const mentionsList = [
-                config.ownerJid,
-                ...secondaries,
-                ...sudos
-            ].filter(Boolean);
-
-            await sock.sendMessage(jid, { text: list, mentions: mentionsList }, { quoted: msg });
-        }
-    },
-
-    // ─── LOGS ────────────────────────────────────────────────────
-    {
-        name: 'logs',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!global.recentLogs || global.recentLogs.length === 0) {
-                return await sock.sendMessage(jid, { text: "📋 No recent logs available." }, { quoted: msg });
-            }
-
-            let count = parseInt(args) || 20;
-            if (isNaN(count) || count < 1) count = 20;
-            if (count > 100) count = 100;
-
-            const logs = global.recentLogs.slice(-count);
-            let text = `📋 *RECENT LOGS (Last ${logs.length})*\n━━━━━━━━━━━━━━━━━━━\n\n`;
-            logs.forEach(entry => {
-                const time = entry.time ? entry.time.split('T')[1]?.slice(0, 8) || '??:??:??' : '??:??:??';
-                text += `[${time}] ${entry.level}: ${entry.message}\n`;
-            });
-
-            if (text.length > 60000) {
-                text = text.slice(0, 60000) + '\n... (truncated)';
-            }
-
-            await sock.sendMessage(jid, { text }, { quoted: msg });
+        try {
+            await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+        } catch (err) {
+            const fallbackText = `${dashboard}\n💡 _Use \`${config.prefix}remind cancel\` to show the cancellation dashboard._`;
+            await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
         }
     }
+},
+
+// ─── GAMES ───────────────────────────────────────────────────
+{
+    name: 'games',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        const tttCount = Object.keys(global.gameSessions || {}).filter(k => k.endsWith('_ttt')).length;
+        const guessCount = Object.keys(global.gameSessions || {}).filter(k => k.endsWith('_guess')).length;
+        const v8Count = Object.keys(global.vault8Sessions || {}).length;
+        const triviaCount = Object.keys(global.triviaSessions || {}).length;
+        const charadeCount = Object.keys(global.charadeSessions || {}).length;
+        const anagramCount = Object.keys(global.anagramSessions || {}).length;
+        const wcgCount = Object.keys(global.wcgSessions || {}).length;
+        const millionaireCount = Object.keys(global.millionaireSessions || {}).length;
+        const torfCount = Object.keys(global.torfSessions || {}).length;
+        const pvpCount = Object.keys(global.pvpSessions || {}).length;
+        const escapeCount = Object.keys(global.escapeSessions || {}).length;
+
+        const totalActive = tttCount + guessCount + v8Count + triviaCount + charadeCount + anagramCount + wcgCount + millionaireCount + torfCount + pvpCount + escapeCount;
+
+        const summary =
+            `🎮 *LIMITLESS ACTIVE GAMES REGISTER* 🎮\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `• *Tic-Tac-Toe:* \`${tttCount}\` active\n` +
+            `• *Cursed Energy Guessing:* \`${guessCount}\` active\n` +
+            `• *The Vault 8 RPG:* \`${v8Count}\` active\n` +
+            `• *Trivia Quizzes:* \`${triviaCount}\` active\n` +
+            `• *Emoji Charades:* \`${charadeCount}\` active\n` +
+            `• *Anagram Scrambles:* \`${anagramCount}\` active\n` +
+            `• *Word Chain Game:* \`${wcgCount}\` active\n` +
+            `• *Who Wants to Be a Millionaire:* \`${millionaireCount}\` active\n` +
+            `• *Truth or False:* \`${torfCount}\` active\n` +
+            `• *PVP Lore Battles:* \`${pvpCount}\` active\n` +
+            `• *Escape Rooms:* \`${escapeCount}\` active\n\n` +
+            `📈 *Total Running Instances:* \`${totalActive}\` game(s)\n\n` +
+            `👉 _Click the button below to force-terminate all running game instances instantly._`;
+
+        const buttons = {
+            text: summary,
+            buttons: [
+                { buttonId: `${config.prefix}games_closeall`, buttonText: { displayText: 'Terminate All Games 🛑' }, type: 1 }
+            ],
+            headerType: 1
+        };
+
+        await sock.sendMessage(jid, buttons, { quoted: msg });
+    }
+},
+
+// ─── GAMES_CLOSEALL ──────────────────────────────────────────
+{
+    name: 'games_closeall',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        global.gameSessions = {};
+        global.vault8Sessions = {};
+        global.vault8SavedStories = {};
+        global.triviaSessions = {};
+        global.charadeSessions = {};
+        global.anagramSessions = {};
+        global.wcgSessions = {};
+        global.millionaireSessions = {};
+        global.torfSessions = {};
+        global.pvpSessions = {};
+        global.escapeSessions = {};
+
+        await sock.sendMessage(jid, { text: "🛑 *RECOVERY ACTION COMPLETE: All running games terminated.*" }, { quoted: msg });
+    }
+},
+
+// ─── OWNER ───────────────────────────────────────────────────
+{
+    name: 'owner',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        const secondaries = config.secondaryOwners || [];
+        const sudos = config.sudos || [];
+
+        let list = `👑 *LIMITLESS OWNER & SUDO REGISTER* 👑\n` +
+                   `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                   `👤 *Primary Owner JID:*\n` +
+                   `• @${config.ownerNumber}\n\n`;
+
+        if (secondaries.length > 0) {
+            list += `👑 *Secondary Owners:*\n`;
+            secondaries.forEach((num) => {
+                list += `• @${num.split('@')[0]}\n`;
+            });
+            list += `\n`;
+        } else {
+            list += `👑 *Secondary Owners:* _None_\n\n`;
+        }
+
+        if (sudos.length > 0) {
+            list += `🛡️ *Registered Sudoers:*\n`;
+            sudos.forEach((num) => {
+                list += `• @${num.split('@')[0]}\n`;
+            });
+            list += `\n`;
+        } else {
+            list += `🛡️ *Registered Sudoers:* _None_\n\n`;
+        }
+
+        const mentionsList = [
+            config.ownerJid,
+            ...secondaries,
+            ...sudos
+        ].filter(Boolean);
+
+        await sock.sendMessage(jid, { text: list, mentions: mentionsList }, { quoted: msg });
+    }
+},
+
+// ─── LOGS ────────────────────────────────────────────────────
+{
+    name: 'logs',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner }) => {
+        const jid = msg.key.remoteJid;
+        if (!isOwner) return;
+
+        if (!global.recentLogs || global.recentLogs.length === 0) {
+            return await sock.sendMessage(jid, { text: "📋 No recent logs available." }, { quoted: msg });
+        }
+
+        let count = parseInt(args) || 20;
+        if (isNaN(count) || count < 1) count = 20;
+        if (count > 100) count = 100;
+
+        const logs = global.recentLogs.slice(-count);
+        let text = `📋 *RECENT LOGS (Last ${logs.length})*\n━━━━━━━━━━━━━━━━━━━\n\n`;
+        logs.forEach(entry => {
+            const time = entry.time ? entry.time.split('T')[1]?.slice(0, 8) || '??:??:??' : '??:??:??';
+            text += `[${time}] ${entry.level}: ${entry.message}\n`;
+        });
+
+        if (text.length > 60000) {
+            text = text.slice(0, 60000) + '\n... (truncated)';
+        }
+
+        await sock.sendMessage(jid, { text }, { quoted: msg });
+    }
+}
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
