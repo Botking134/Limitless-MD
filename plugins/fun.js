@@ -33,23 +33,34 @@ function parseTarget(msg, args) {
                         rawMsg?.audioMessage?.contextInfo ||
                         rawMsg?.documentMessage?.contextInfo;
 
-    const quotedParticipant = contextInfo?.participant;
-    let target = '';
+    // ─── 1. Try reply ──────────────────────────────────────────
+    if (contextInfo?.participant) {
+        return normalizeToJid(contextInfo.participant);
+    }
 
-    if (quotedParticipant) {
-        target = normalizeToJid(quotedParticipant);
-    } else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+    // ─── 2. Try mention (first non-bot mention) ──────────────
+    if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
         const botJid = config.botJid || '';
-        const filteredMention = contextInfo.mentionedJid.find(jid => !jid.includes(botJid));
-        const selectedJid = filteredMention || contextInfo.mentionedJid[0];
-        target = normalizeToJid(selectedJid);
-    } else if (args) {
+        const botLid = config.botLid || '';
+        const filtered = contextInfo.mentionedJid.filter(j => {
+            const norm = normalizeToJid(j);
+            return norm !== normalizeToJid(botJid) && norm !== normalizeToJid(botLid);
+        });
+        if (filtered.length > 0) {
+            return normalizeToJid(filtered[0]);
+        }
+        return normalizeToJid(contextInfo.mentionedJid[0]);
+    }
+
+    // ─── 3. Try args (phone number) ────────────────────────────
+    if (args) {
         const cleanDigits = args.replace(/[^0-9]/g, '');
         if (cleanDigits.length >= 7) {
-            target = `${cleanDigits}@s.whatsapp.net`;
+            return `${cleanDigits}@s.whatsapp.net`;
         }
     }
-    return target;
+
+    return '';
 }
 
 function getDeviceTypeFromId(id) {
@@ -1362,25 +1373,57 @@ module.exports = [
 
         let targetJid = '';
 
-        // ─── Extract target ────────────────────────────────────
-        if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
-            targetJid = normalizeToJid(contextInfo.mentionedJid[0]);
-        } else if (contextInfo?.participant) {
+        // ─── STEP 1: Try to get from reply (most reliable) ──
+        if (contextInfo?.participant) {
             targetJid = normalizeToJid(contextInfo.participant);
-        } else if (args) {
+            console.log('[GAY] Found via reply:', targetJid);
+        }
+        // ─── STEP 2: Try to get from mention ──────────────────
+        else if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+            // Get the first mention that is NOT the bot
+            const botJid = config.botJid || '';
+            const botLid = config.botLid || '';
+            const filtered = contextInfo.mentionedJid.filter(j => {
+                const norm = normalizeToJid(j);
+                return norm !== normalizeToJid(botJid) && norm !== normalizeToJid(botLid);
+            });
+            targetJid = filtered.length > 0 ? normalizeToJid(filtered[0]) : normalizeToJid(contextInfo.mentionedJid[0]);
+            console.log('[GAY] Found via mention:', targetJid);
+        }
+        // ─── STEP 3: Try to get from args ──────────────────────
+        else if (args) {
             const cleanDigits = args.replace(/[^0-9]/g, '');
             if (cleanDigits.length >= 7) {
                 targetJid = `${cleanDigits}@s.whatsapp.net`;
+                console.log('[GAY] Found via args:', targetJid);
             }
+        }
+
+        // ─── If still no target, try the sender as fallback ──
+        if (!targetJid) {
+            targetJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+            console.log('[GAY] Fallback to sender:', targetJid);
         }
 
         if (!targetJid) {
             console.log('[GAY] No target found');
-            return await sock.sendMessage(jid, { text: "❌ Please mention or reply to a user." }, { quoted: msg });
+            return await sock.sendMessage(jid, { text: "❌ Please mention, reply to, or provide a number for the user." }, { quoted: msg });
+        }
+
+        // ─── Prevent adding self ──────────────────────────────
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        if (normalizeToJid(targetJid) === normalizeToJid(senderJid)) {
+            return await sock.sendMessage(jid, { text: "❌ You can't add yourself to the gay list." }, { quoted: msg });
         }
 
         // ─── Get name ──────────────────────────────────────────
         let targetName = targetJid.split('@')[0];
+        try {
+            // Try to get name from group metadata or pushName
+            const groupMetadata = await sock.groupMetadata(jid);
+            const participant = groupMetadata.participants.find(p => normalizeToJid(p.id) === normalizeToJid(targetJid));
+            if (participant?.name) targetName = participant.name;
+        } catch (e) { /* ignore */ }
         try { targetName = msg.pushName || targetName; } catch (e) { /* ignore */ }
 
         // ─── Initialise gayList ───────────────────────────────
@@ -1402,9 +1445,9 @@ module.exports = [
         await sock.sendMessage(jid, { text: successMsg, mentions: [targetJid] }, { quoted: msg });
         console.log('[GAY] Done');
     }
-}, 
+},
 
- // ─── .ANTIGAY (Toggle on/off) ─────────────────────────────────
+// ─── .ANTIGAY (Toggle on/off) ─────────────────────────────────
 {
     name: 'antigay',
     isPrefixless: false,
@@ -1427,7 +1470,10 @@ module.exports = [
             config.antigay[jid] = { status: 'on', activatedBy: senderJid };
             saveState();
             console.log('[ANTIGAY] Activated for group', jid, 'by', senderJid);
-            await sock.sendMessage(jid, { text: "🔒 *AntiGay activated!* Gay users will be bullied only when they mention or reply to you." }, { quoted: msg });
+            await sock.sendMessage(jid, { 
+                text: `🔒 *AntiGay activated!* Gay users will be bullied only when they mention or reply to you (@${senderJid.split('@')[0]}).`, 
+                mentions: [senderJid] 
+            }, { quoted: msg });
         } else if (action === 'off') {
             config.antigay[jid] = { status: 'off' };
             saveState();
@@ -1435,12 +1481,16 @@ module.exports = [
             await sock.sendMessage(jid, { text: "🔓 *AntiGay deactivated.*" }, { quoted: msg });
         } else {
             const current = config.antigay[jid]?.status || 'off';
+            const activator = config.antigay[jid]?.activatedBy || 'None';
             console.log('[ANTIGAY] Status check:', current);
-            await sock.sendMessage(jid, { text: `🛡️ *AntiGay Status:* \`${current.toUpperCase()}\`` }, { quoted: msg });
+            await sock.sendMessage(jid, { 
+                text: `🛡️ *AntiGay Status:* \`${current.toUpperCase()}\`\n👤 *Activated by:* @${activator.split('@')[0] || 'None'}`,
+                mentions: activator !== 'None' ? [activator] : []
+            }, { quoted: msg });
         }
         console.log('[ANTIGAY] Done');
     }
-}, 
+},
 
 // ─── .GAYLIST (Show gay list) ──────────────────────────────────
 {
@@ -1464,7 +1514,6 @@ module.exports = [
         await sock.sendMessage(jid, { text, mentions }, { quoted: msg });
     }
 }
-
 
 ];
 
