@@ -154,8 +154,8 @@ if (!global.reminderInterval) {
     }, 10000);
 }
 
+// ─── UPDATE HELPER FUNCTIONS ────────────────────────────────────
 
-// ─── EXEC WITH TIMEOUT ──────────────────────────────────────────
 function execWithTimeout(cmd, timeoutMs, callback) {
     const child = exec(cmd, (err, stdout, stderr) => {
         if (callback) callback(err, stdout, stderr);
@@ -167,7 +167,6 @@ function execWithTimeout(cmd, timeoutMs, callback) {
     child.on('exit', () => clearTimeout(timer));
 }
 
-// ─── GET REPO URL (with token for private repos) ──────────────
 function getRepoUrl() {
     const token = config.githubToken || process.env.GITHUB_TOKEN || '';
     const baseUrl = 'https://github.com/Botking134/Limitless-MD.git';
@@ -177,7 +176,6 @@ function getRepoUrl() {
     return baseUrl;
 }
 
-// ─── BACKUP CRITICAL FILES ──────────────────────────────────────
 async function backupCriticalFiles(jid, sock) {
     try {
         const backupDir = path.join(__dirname, '../storage/backups');
@@ -206,7 +204,6 @@ async function backupCriticalFiles(jid, sock) {
     }
 }
 
-// ─── SEND UPDATE SUCCESS ────────────────────────────────────────
 async function sendUpdateSuccess(jid, sock, stdout) {
     let summary = stdout || 'Update complete.';
     const changed = summary.match(/(\d+) files changed/);
@@ -224,8 +221,6 @@ async function sendUpdateSuccess(jid, sock, stdout) {
     await sock.sendMessage(jid, { text: finalMsg }, { quoted: msg });
     setTimeout(() => process.exit(1), 3000);
 }
-
-
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
@@ -280,174 +275,199 @@ module.exports = [
         }
     },
 
-    
-    
-// ─── UPDATE ──────────────────────────────────────────────────────
-{
-    name: 'update',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isDev }) => {
-        const jid = msg.key.remoteJid;
+    // ─── UPDATE ──────────────────────────────────────────────────
+    {
+        name: 'update',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
 
-        const parts = args ? args.split(' ') : [];
-        const action = parts[0] ? parts[0].toLowerCase().trim() : '';
-        const option = parts[1] ? parts[1].toLowerCase().trim() : '';
+            // ─── Debug log ────────────────────────────────────────
+            console.log('[UPDATE] Command triggered with args:', args);
 
-        // ─── Developer-only actions ────────────────────────────
-        if (action === 'install' || action === 'repair' || action === 'npm') {
-            if (!isDev) return;
-            await sock.sendMessage(jid, { text: "⏳ *Running npm install to repair missing packages...*" }, { quoted: msg });
-            execWithTimeout('npm install', 120000, async (err, stdout, stderr) => {
-                if (err) {
-                    return await sock.sendMessage(jid, { text: `❌ *Package Installation Failed:*\n\`${err.message}\`` }, { quoted: msg });
-                }
-                await sock.sendMessage(jid, { text: `✅ *Packages successfully installed!*\n\n${stdout || 'Ready.'}\n\n🔄 _Restarting system..._` }, { quoted: msg });
-                setTimeout(() => process.exit(1), 3000);
-            });
-            return;
-        }
+            // ─── Extract action from args or button ID ──────────
+            let action = '';
+            let option = '';
 
-        // ─── Owner-only actions ────────────────────────────────
-        if (!isOwner) return;
-
-        // ─── SETUP ──────────────────────────────────────────────
-        if (action === 'setup') {
-            await sock.sendMessage(jid, { text: "⏳ *Setting up Git tracking...*" }, { quoted: msg });
-            const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
-            execWithTimeout(setupCmd, 60000, async (err, stdout, stderr) => {
-                if (err) {
-                    if (err.message.includes('already exists')) {
-                        const retryCmd = `git remote set-url origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
-                        execWithTimeout(retryCmd, 60000, async (retryErr) => {
-                            if (retryErr) {
-                                return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n\`${retryErr.message}\`` }, { quoted: msg });
-                            }
-                            await sock.sendMessage(jid, { text: "✅ *Git tracking successfully re-linked!*" }, { quoted: msg });
-                        });
-                        return;
+            // If args is empty, try to get from button response
+            if (!args || args.trim() === '') {
+                const rawMsg = getRawMessage(msg.message);
+                const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
+                                 rawMsg?.templateButtonReplyMessage?.selectedId ||
+                                 '';
+                if (buttonId) {
+                    const parts = buttonId.split(' ');
+                    if (parts.length > 1) {
+                        action = parts[1]?.toLowerCase().trim() || '';
+                        option = parts[2]?.toLowerCase().trim() || '';
                     }
-                    return await sock.sendMessage(jid, { text: `❌ *Git Setup Failed:*\n\`${err.message}\`` }, { quoted: msg });
+                    console.log('[UPDATE] Button ID detected:', buttonId, '→ action:', action);
                 }
-                await sock.sendMessage(jid, { text: "✅ *Git tracking initialized!*" }, { quoted: msg });
-            });
-            return;
-        }
-
-        // ─── BRANCH ─────────────────────────────────────────────
-        if (action === 'branch') {
-            if (!option) {
-                return await sock.sendMessage(jid, { text: "❌ Please specify a branch name.\nExample: `.update branch dev`" }, { quoted: msg });
+            } else {
+                const parts = args.split(' ');
+                action = parts[0] ? parts[0].toLowerCase().trim() : '';
+                option = parts[1] ? parts[1].toLowerCase().trim() : '';
             }
-            await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${option}"...*` }, { quoted: msg });
-            const branchCmd = `git fetch origin && git checkout ${option} && git pull origin ${option}`;
-            execWithTimeout(branchCmd, 60000, async (err, stdout, stderr) => {
-                if (err) {
-                    return await sock.sendMessage(jid, { text: `❌ *Branch switch failed:*\n\`${err.message}\`` }, { quoted: msg });
-                }
-                await sock.sendMessage(jid, { text: `✅ *Switched to branch "${option}".* Restarting...` }, { quoted: msg });
-                setTimeout(() => process.exit(1), 3000);
-            });
-            return;
-        }
 
-        // ─── ROLLBACK ────────────────────────────────────────────
-        if (action === 'revert') {
-            if (!option) {
-                // Show last 5 commits
-                execWithTimeout('git log --oneline -5', 10000, async (err, stdout) => {
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Failed to get commit log:*\n\`${err.message}\`` }, { quoted: msg });
-                    await sock.sendMessage(jid, { text: `📋 *Recent commits:*\n\n${stdout}\n\nUse \`.update revert <commit-hash>\` to rollback.` }, { quoted: msg });
+            console.log(`[UPDATE] Final action: "${action}", option: "${option}"`);
+
+            // ─── Developer-only actions ────────────────────────────
+            if (action === 'install' || action === 'repair' || action === 'npm') {
+                if (!isDev) return;
+                await sock.sendMessage(jid, { text: "⏳ *Running npm install to repair missing packages...*" }, { quoted: msg });
+                execWithTimeout('npm install', 120000, async (err, stdout, stderr) => {
+                    if (err) {
+                        return await sock.sendMessage(jid, { text: `❌ *Package Installation Failed:*\n\`${err.message}\`` }, { quoted: msg });
+                    }
+                    await sock.sendMessage(jid, { text: `✅ *Packages successfully installed!*\n\n${stdout || 'Ready.'}\n\n🔄 _Restarting system..._` }, { quoted: msg });
+                    setTimeout(() => process.exit(1), 3000);
                 });
                 return;
             }
-            const revertCmd = `git reset --hard ${option}`;
-            await sock.sendMessage(jid, { text: `⏳ *Reverting to commit ${option}...*` }, { quoted: msg });
-            execWithTimeout(revertCmd, 30000, async (err, stdout, stderr) => {
-                if (err) {
-                    return await sock.sendMessage(jid, { text: `❌ *Revert failed:*\n\`${err.message}\`` }, { quoted: msg });
-                }
-                await sock.sendMessage(jid, { text: `✅ *Reverted to commit ${option}.* Restarting...` }, { quoted: msg });
-                setTimeout(() => process.exit(1), 3000);
-            });
-            return;
-        }
 
-        // ─── MAIN UPDATE FLOW ────────────────────────────────────
-        const isForce = action === 'force' || option === 'force';
-        const isConfirm = action === 'yes' || action === 'confirm';
-
-        // Check if git is set up
-        execWithTimeout('git status', 10000, async (statusErr) => {
-            if (statusErr) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ *Git not initialized.*\n\nPlease run: \`${config.prefix}update setup\``
-                }, { quoted: msg });
+            // ─── Owner-only actions ────────────────────────────────
+            if (!isOwner) {
+                console.log('[UPDATE] Not owner, aborting');
+                return;
             }
 
-            // Get current branch and commit
-            execWithTimeout('git rev-parse --abbrev-ref HEAD', 10000, async (branchErr, branch) => {
-                if (branchErr) branch = 'unknown';
-                branch = branch.trim();
-
-                // Fetch and check status
-                execWithTimeout('git fetch && git status -uno', 30000, async (fetchErr, stdout, stderr) => {
-                    if (fetchErr) {
-                        return await sock.sendMessage(jid, { text: `❌ *Error checking updates:*\n\`${fetchErr.message}\`` }, { quoted: msg });
+            // ─── SETUP ──────────────────────────────────────────────
+            if (action === 'setup') {
+                await sock.sendMessage(jid, { text: "⏳ *Setting up Git tracking...*" }, { quoted: msg });
+                const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+                execWithTimeout(setupCmd, 60000, async (err, stdout, stderr) => {
+                    if (err) {
+                        if (err.message.includes('already exists')) {
+                            const retryCmd = `git remote set-url origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+                            execWithTimeout(retryCmd, 60000, async (retryErr) => {
+                                if (retryErr) {
+                                    return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n\`${retryErr.message}\`` }, { quoted: msg });
+                                }
+                                await sock.sendMessage(jid, { text: "✅ *Git tracking successfully re-linked!*" }, { quoted: msg });
+                            });
+                            return;
+                        }
+                        return await sock.sendMessage(jid, { text: `❌ *Git Setup Failed:*\n\`${err.message}\`` }, { quoted: msg });
                     }
+                    await sock.sendMessage(jid, { text: "✅ *Git tracking initialized!*" }, { quoted: msg });
+                });
+                return;
+            }
 
-                    const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
+            // ─── BRANCH ─────────────────────────────────────────────
+            if (action === 'branch') {
+                if (!option) {
+                    return await sock.sendMessage(jid, { text: "❌ Please specify a branch name.\nExample: `.update branch dev`" }, { quoted: msg });
+                }
+                await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${option}"...*` }, { quoted: msg });
+                const branchCmd = `git fetch origin && git checkout ${option} && git pull origin ${option}`;
+                execWithTimeout(branchCmd, 60000, async (err, stdout, stderr) => {
+                    if (err) {
+                        return await sock.sendMessage(jid, { text: `❌ *Branch switch failed:*\n\`${err.message}\`` }, { quoted: msg });
+                    }
+                    await sock.sendMessage(jid, { text: `✅ *Switched to branch "${option}".* Restarting...` }, { quoted: msg });
+                    setTimeout(() => process.exit(1), 3000);
+                });
+                return;
+            }
 
-                    // ─── SHOW STATUS ──────────────────────────────
-                    if (!isConfirm && action !== 'force') {
-                        if (!isBehind) {
-                            return await sock.sendMessage(jid, { text: "❄️ *No updates available.*" }, { quoted: msg });
+            // ─── ROLLBACK ────────────────────────────────────────────
+            if (action === 'revert') {
+                if (!option) {
+                    // Show last 5 commits
+                    execWithTimeout('git log --oneline -5', 10000, async (err, stdout) => {
+                        if (err) return await sock.sendMessage(jid, { text: `❌ *Failed to get commit log:*\n\`${err.message}\`` }, { quoted: msg });
+                        await sock.sendMessage(jid, { text: `📋 *Recent commits:*\n\n${stdout}\n\nUse \`.update revert <commit-hash>\` to rollback.` }, { quoted: msg });
+                    });
+                    return;
+                }
+                const revertCmd = `git reset --hard ${option}`;
+                await sock.sendMessage(jid, { text: `⏳ *Reverting to commit ${option}...*` }, { quoted: msg });
+                execWithTimeout(revertCmd, 30000, async (err, stdout, stderr) => {
+                    if (err) {
+                        return await sock.sendMessage(jid, { text: `❌ *Revert failed:*\n\`${err.message}\`` }, { quoted: msg });
+                    }
+                    await sock.sendMessage(jid, { text: `✅ *Reverted to commit ${option}.* Restarting...` }, { quoted: msg });
+                    setTimeout(() => process.exit(1), 3000);
+                });
+                return;
+            }
+
+            // ─── MAIN UPDATE FLOW ────────────────────────────────────
+            const isForce = action === 'force' || option === 'force';
+            const isConfirm = action === 'yes' || action === 'confirm';
+
+            // Check if git is set up
+            execWithTimeout('git status', 10000, async (statusErr) => {
+                if (statusErr) {
+                    return await sock.sendMessage(jid, {
+                        text: `❌ *Git not initialized.*\n\nPlease run: \`${config.prefix}update setup\``
+                    }, { quoted: msg });
+                }
+
+                // Get current branch and commit
+                execWithTimeout('git rev-parse --abbrev-ref HEAD', 10000, async (branchErr, branch) => {
+                    if (branchErr) branch = 'unknown';
+                    branch = branch.trim();
+
+                    // Fetch and check status
+                    execWithTimeout('git fetch && git status -uno', 30000, async (fetchErr, stdout, stderr) => {
+                        if (fetchErr) {
+                            return await sock.sendMessage(jid, { text: `❌ *Error checking updates:*\n\`${fetchErr.message}\`` }, { quoted: msg });
                         }
 
-                        // Show recent commits
-                        execWithTimeout('git log --oneline -5 HEAD..origin/' + branch, 10000, async (logErr, commitLog) => {
-                            const updateInfo = `👁️ *Updates available on branch "${branch}"*\n\n` +
-                                               `Recent commits:\n${commitLog || '  (no details)'}\n\n` +
-                                               `🔄 *Confirm update?* Use \`${config.prefix}update yes\` to apply.\n` +
-                                               `⚠️ *Force overwrite local changes:* \`${config.prefix}update force\``;
-                            await sock.sendMessage(jid, { text: updateInfo }, { quoted: msg });
-                        });
-                        return;
-                    }
+                        const isBehind = stdout.includes('behind') || stdout.includes('can be fast-forwarded');
 
-                    // ─── CONFIRM / FORCE UPDATE ──────────────────
-                    if (isForce) {
-                        // Backup before force
-                        await sock.sendMessage(jid, { text: "💾 *Backing up critical files...*" }, { quoted: msg });
-                        await backupCriticalFiles(jid, sock);
+                        // ─── SHOW STATUS ──────────────────────────────
+                        if (!isConfirm && action !== 'force') {
+                            if (!isBehind) {
+                                return await sock.sendMessage(jid, { text: "❄️ *No updates available.*" }, { quoted: msg });
+                            }
 
-                        await sock.sendMessage(jid, { text: "⏳ *Force‑pulling updates...*" }, { quoted: msg });
-                        execWithTimeout('git fetch --all && git reset --hard origin/' + branch, 60000, async (pullErr, pullOut, pullErrOut) => {
-                            if (pullErr) {
-                                return await sock.sendMessage(jid, { text: `❌ *Force Update Failed!*\n\n\`${pullErr.message}\`` }, { quoted: msg });
-                            }
-                            await sendUpdateSuccess(jid, sock, pullOut);
-                        });
-                    } else if (isConfirm) {
-                        await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
-                        execWithTimeout('git pull', 60000, async (pullErr, pullOut, pullErrOut) => {
-                            if (pullErr) {
-                                return await sock.sendMessage(jid, {
-                                    text: `❌ *Update Failed!*\n\n\`${pullErr.message}\`\n\n💡 _If you have uncommitted changes, use:\n\`${config.prefix}update force\`_`
-                                }, { quoted: msg });
-                            }
-                            await sendUpdateSuccess(jid, sock, pullOut);
-                        });
-                    } else if (action === 'no' || action === 'cancel') {
-                        await sock.sendMessage(jid, { text: "🔮 *Update cancelled.*" }, { quoted: msg });
-                    } else {
-                        await sock.sendMessage(jid, { text: "❌ Unknown action. Use `yes`, `force`, or `no`." }, { quoted: msg });
-                    }
+                            // Show recent commits
+                            execWithTimeout('git log --oneline -5 HEAD..origin/' + branch, 10000, async (logErr, commitLog) => {
+                                const updateInfo = `👁️ *Updates available on branch "${branch}"*\n\n` +
+                                                   `Recent commits:\n${commitLog || '  (no details)'}\n\n` +
+                                                   `🔄 *Confirm update?* Use \`${config.prefix}update yes\` to apply.\n` +
+                                                   `⚠️ *Force overwrite local changes:* \`${config.prefix}update force\``;
+                                await sock.sendMessage(jid, { text: updateInfo }, { quoted: msg });
+                            });
+                            return;
+                        }
+
+                        // ─── CONFIRM / FORCE UPDATE ──────────────────
+                        if (isForce) {
+                            // Backup before force
+                            await sock.sendMessage(jid, { text: "💾 *Backing up critical files...*" }, { quoted: msg });
+                            await backupCriticalFiles(jid, sock);
+
+                            await sock.sendMessage(jid, { text: "⏳ *Force‑pulling updates...*" }, { quoted: msg });
+                            execWithTimeout('git fetch --all && git reset --hard origin/' + branch, 60000, async (pullErr, pullOut, pullErrOut) => {
+                                if (pullErr) {
+                                    return await sock.sendMessage(jid, { text: `❌ *Force Update Failed!*\n\n\`${pullErr.message}\`` }, { quoted: msg });
+                                }
+                                await sendUpdateSuccess(jid, sock, pullOut);
+                            });
+                        } else if (isConfirm) {
+                            await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+                            execWithTimeout('git pull', 60000, async (pullErr, pullOut, pullErrOut) => {
+                                if (pullErr) {
+                                    return await sock.sendMessage(jid, {
+                                        text: `❌ *Update Failed!*\n\n\`${pullErr.message}\`\n\n💡 _If you have uncommitted changes, use:\n\`${config.prefix}update force\`_`
+                                    }, { quoted: msg });
+                                }
+                                await sendUpdateSuccess(jid, sock, pullOut);
+                            });
+                        } else if (action === 'no' || action === 'cancel') {
+                            await sock.sendMessage(jid, { text: "🔮 *Update cancelled.*" }, { quoted: msg });
+                        } else {
+                            await sock.sendMessage(jid, { text: "❌ Unknown action. Use `yes`, `force`, or `no`." }, { quoted: msg });
+                        }
+                    });
                 });
             });
-        });
-    }
-},
-
+        }
+    },
 
     // ─── MODE ────────────────────────────────────────────────────
     {
@@ -719,171 +739,95 @@ module.exports = [
         }
     },
 
-   // ─── SETVAR ──────────────────────────────────────────────────
+    // ─── SETVAR ──────────────────────────────────────────────────
+    {
+        name: 'setvar',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner) return;
 
-// ─── SETVAR ──────────────────────────────────────────────────
-{
-    name: 'setvar',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner }) => {
-        const jid = msg.key.remoteJid;
-        if (!isOwner) return;
-
-        const eqIndex = args.indexOf('=');
-        if (eqIndex === -1) {
-            return await sock.sendMessage(jid, {
-                text: `❌ Invalid format.\nUsage: \`${config.prefix}setvar KEY=VALUE\`\nExample: \`${config.prefix}setvar prefix=!\``
-            }, { quoted: msg });
-        }
-
-        let key = args.slice(0, eqIndex).trim();
-        let valueStr = args.slice(eqIndex + 1).trim();
-
-        const keyLower = key.toLowerCase();
-
-        // ─── Mapping from config/vars key to .env variable name ──
-        const envMapping = {
-            prefix: 'PREFIX',
-            botname: 'BOT_NAME',
-            ownername: 'OWNER_NAME',
-            ownernumber: 'OWNER_NUMBER',
-            ownerjid: 'OWNER_JID',
-            packname: 'PACK_NAME',
-            author: 'AUTHOR',
-            groqapikey: 'GROQ_API_KEY',
-            geminiapikey: 'GEMINI_API_KEY',
-            githubtoken: 'GITHUB_TOKEN',
-        };
-
-        // ─── Known dynamic keys that are NOT in .env ──────────
-        const dynamicKeys = [
-            'prefix', 'vvs', 'packname', 'author', 'menuimage', 
-            'warnthreshold', 'presencemode', 'ispublic', 'autoreact',
-            'antipm', 'lizzychats', 'chatbotchats', 'fridaychats',
-            'gojosleepchats', 'gojoglobalsleep', 'antilink', 'antitag',
-            'antibot', 'antispam', 'antigm', 'antigcstatus', 'antipromote',
-            'antidemote', 'stickercommands', 'welcome', 'goodbye', 'gcalerts',
-            'presence'
-        ];
-
-        let varKey = dynamicKeys.find(k => k.toLowerCase() === keyLower);
-        let envVarName = envMapping[keyLower] || null;
-
-        if (!varKey && envVarName) {
-            varKey = keyLower;
-        }
-
-        if (!varKey) {
-            return await sock.sendMessage(jid, {
-                text: `❌ Unknown variable "${key}".\nUse \`.vars\` to list all settable keys.`
-            }, { quoted: msg });
-        }
-
-        // ─── Handle special types ──────────────────────────────
-        let finalValue = valueStr;
-
-        if (varKey === 'ispublic') {
-            if (valueStr.toLowerCase() === 'true') finalValue = true;
-            else if (valueStr.toLowerCase() === 'false') finalValue = false;
-            else {
-                return await sock.sendMessage(jid, { text: "❌ isPublic must be either `true` or `false`." }, { quoted: msg });
-            }
-        }
-
-        if (varKey === 'menuimage') {
-            const urls = valueStr.split(',').map(u => u.trim()).filter(Boolean);
-            if (urls.length === 0) {
-                return await sock.sendMessage(jid, { text: "❌ menuImage requires at least one URL. Use comma-separated values." }, { quoted: msg });
-            }
-            finalValue = urls;
-        }
-
-        // ─── 1. Update vars.json and config via setVar ──────────
-        const success = setVar(varKey, finalValue);
-        if (!success) {
-            return await sock.sendMessage(jid, { text: `❌ Failed to save variable "${key}".` }, { quoted: msg });
-        }
-
-        // ─── 2. If this key corresponds to an environment variable, update .env ──
-        if (envVarName) {
-            try {
-                const envPath = path.join(__dirname, '../.env');
-                let envContent = '';
-                let found = false;
-
-                if (fs.existsSync(envPath)) {
-                    envContent = fs.readFileSync(envPath, 'utf-8');
-                    const lines = envContent.split('\n');
-                    const updatedLines = lines.map(line => {
-                        if (line.trim().startsWith(`${envVarName}=`)) {
-                            found = true;
-                            let envValue = typeof finalValue === 'boolean' ? (finalValue ? 'true' : 'false') : String(finalValue);
-                            return `${envVarName}=${envValue}`;
-                        }
-                        return line;
-                    });
-                    if (!found) {
-                        let envValue = typeof finalValue === 'boolean' ? (finalValue ? 'true' : 'false') : String(finalValue);
-                        updatedLines.push(`${envVarName}=${envValue}`);
-                    }
-                    envContent = updatedLines.join('\n');
-                } else {
-                    let envValue = typeof finalValue === 'boolean' ? (finalValue ? 'true' : 'false') : String(finalValue);
-                    envContent = `${envVarName}=${envValue}\n`;
-                }
-
-                fs.writeFileSync(envPath, envContent, 'utf-8');
-                console.log(`✅ [SETVAR] Updated .env: ${envVarName}=${finalValue}`);
-            } catch (envErr) {
-                console.error('❌ [SETVAR] Failed to update .env:', envErr.message);
-                await sock.sendMessage(jid, {
-                    text: `✅ Variable updated in vars.json, but could not update .env file.\nThe change will persist in config/vars but will revert on restart unless .env is fixed.`
+            const eqIndex = args.indexOf('=');
+            if (eqIndex === -1) {
+                return await sock.sendMessage(jid, {
+                    text: `❌ Invalid format.\nUsage: \`${config.prefix}setvar KEY=VALUE\`\nExample: \`${config.prefix}setvar prefix=!\``
                 }, { quoted: msg });
-                return;
+            }
+
+            const key = args.slice(0, eqIndex).trim();
+            const valueStr = args.slice(eqIndex + 1).trim();
+
+            // ─── KEY MAPPING ──────────────────────────────────────
+            const keyMapping = {
+                bot_name: "botName",
+                owner_name: "ownerName",
+                owner_number: "ownerNumber",
+                session_id: "sessionId",
+                git_token: "githubToken",
+                groq_api_key: "groqApiKey",
+                gemini_api_key: "geminiApiKey",
+                prefix: "prefix",
+                vvs: "vvs",
+                pack_name: "packName",
+                author: "author",
+                menu_image: "menuImage",
+                warn: "warnThreshold",
+                presence: "presenceMode"
+            };
+
+            const mappedKey = keyMapping[key.toLowerCase()];
+            if (!mappedKey) {
+                return await sock.sendMessage(jid, {
+                    text: `❌ Variable "${key}" cannot be configured dynamically.`
+                }, { quoted: msg });
+            }
+
+            let finalValue = valueStr;
+
+            if (mappedKey === 'isPublic') {
+                if (valueStr.toLowerCase() === 'true') finalValue = true;
+                else if (valueStr.toLowerCase() === 'false') finalValue = false;
+                else {
+                    return await sock.sendMessage(jid, { text: "❌ isPublic must be either `true` or `false`." }, { quoted: msg });
+                }
+            }
+
+            if (mappedKey === 'menuImage') {
+                const urls = valueStr.split(',').map(u => u.trim()).filter(Boolean);
+                if (urls.length === 0) {
+                    return await sock.sendMessage(jid, { text: "❌ menu_image requires at least one URL. Use comma-separated values." }, { quoted: msg });
+                }
+                finalValue = urls;
+            }
+
+            // ─── SET THE VARIABLE ────────────────────────────────
+            const dynamicKeys = ['prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode'];
+            if (dynamicKeys.includes(mappedKey)) {
+                const success = setVar(mappedKey, finalValue);
+                if (!success) {
+                    return await sock.sendMessage(jid, { text: `❌ Failed to save variable "${key}".` }, { quoted: msg });
+                }
+                if (mappedKey === 'prefix') {
+                    const commandsList = require('../commands');
+                    commandsList.reload();
+                }
+                await sock.sendMessage(jid, {
+                    text: `✅ *Variable Configured Successfully!*\n\n` +
+                          `• *Key:* \`${mappedKey}\`\n` +
+                          `• *Value:* \`${Array.isArray(finalValue) ? finalValue.join(', ') : finalValue}\`\n\n` +
+                          `_Value has been persisted to vars.json and applied instantly._`
+                }, { quoted: msg });
+            } else {
+                config[mappedKey] = finalValue;
+                console.log(`[SETVAR] Updated ${mappedKey} to ${finalValue} (in-memory only, restart will revert unless .env is updated manually)`);
+                await sock.sendMessage(jid, {
+                    text: `✅ *${mappedKey} updated to:* \`${finalValue}\`\n\n` +
+                          `⚠️ *Note:* This variable is from .env. To make it permanent, edit your .env file manually.\n` +
+                          `_The change is active until the next restart._`
+                }, { quoted: msg });
             }
         }
-
-        // ─── 3. Special handling for prefix ─────────────────────
-        if (varKey === 'prefix') {
-            try {
-                const commandsList = require('../commands');
-                if (commandsList.reload) commandsList.reload();
-            } catch (e) { /* ignore */ }
-        }
-
-        // ─── 4. Send success message ────────────────────────────
-        const displayValue = Array.isArray(finalValue) ? finalValue.join(', ') : finalValue;
-        await sock.sendMessage(jid, {
-            text: `✅ *Variable Configured Successfully!*\n\n` +
-                  `• *Key:* \`${varKey}\`\n` +
-                  `• *Value:* \`${displayValue}\`\n\n` +
-                  `_Value has been persisted to vars.json and ${envVarName ? '.env' : 'config'}._`
-        }, { quoted: msg });
-
-    }
-},
-
-
-        // ─── 3. Special handling for prefix ─────────────────────
-        if (varKey === 'prefix') {
-            // Reload commands to pick up new prefix (if needed)
-            try {
-                const commandsList = require('../commands');
-                if (commandsList.reload) commandsList.reload();
-            } catch (e) { /* ignore */ }
-        }
-
-        // ─── 4. Send success message ────────────────────────────
-        const displayValue = Array.isArray(finalValue) ? finalValue.join(', ') : finalValue;
-        await sock.sendMessage(jid, {
-            text: `✅ *Variable Configured Successfully!*\n\n` +
-                  `• *Key:* \`${varKey}\`\n` +
-                  `• *Value:* \`${displayValue}\`\n\n` +
-                  `_Value has been persisted to vars.json and ${envVarName ? '.env' : 'config'}._`
-        }, { quoted: msg });
-
-    }
-},
+    },
 
     // ─── SETTINGS ────────────────────────────────────────────────
     {
@@ -1340,73 +1284,45 @@ module.exports = [
 
             await sock.sendMessage(jid, { text: list, mentions: mentionsList }, { quoted: msg });
         }
-    }, 
+    },
 
-{
-    name: 'logs',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner }) => {
-        const jid = msg.key.remoteJid;
-        if (!isOwner) return;
+    // ─── LOGS ────────────────────────────────────────────────────
+    {
+        name: 'logs',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner) return;
 
-        // ─── Ensure global.recentLogs exists ──────────────────
-        if (!global.recentLogs || !Array.isArray(global.recentLogs)) {
-            global.recentLogs = [];
-        }
-
-        if (global.recentLogs.length === 0) {
-            return await sock.sendMessage(jid, { text: "📋 No recent logs available." }, { quoted: msg });
-        }
-
-        // ─── Parse count ────────────────────────────────────────
-        let count = parseInt(args) || 20;
-        if (isNaN(count) || count < 1) count = 20;
-        if (count > 100) count = 100;
-
-        const logs = global.recentLogs.slice(-count);
-
-        let text = `📋 *RECENT LOGS (Last ${logs.length})*\n━━━━━━━━━━━━━━━━━━━\n\n`;
-
-        for (const entry of logs) {
-            // Handle both string ISO and numeric timestamp
-            let timeStr = '??:??:??';
-            if (entry.time) {
-                try {
-                    const d = new Date(entry.time);
-                    if (!isNaN(d.getTime())) {
-                        timeStr = d.toTimeString().slice(0, 8);
-                    } else if (typeof entry.time === 'string') {
-                        timeStr = entry.time.slice(0, 8); // fallback
-                    }
-                } catch (e) { /* ignore */ }
+            if (!global.recentLogs || global.recentLogs.length === 0) {
+                return await sock.sendMessage(jid, { text: "📋 No recent logs available." }, { quoted: msg });
             }
 
-            const level = entry.level || 'INFO';
-            const message = entry.message || entry || '';
-            text += `[${timeStr}] ${level}: ${message}\n`;
-        }
+            let count = parseInt(args) || 20;
+            if (isNaN(count) || count < 1) count = 20;
+            if (count > 100) count = 100;
 
-        if (text.length > 60000) {
-            text = text.slice(0, 60000) + '\n... (truncated)';
-        }
+            const logs = global.recentLogs.slice(-count);
+            let text = `📋 *RECENT LOGS (Last ${logs.length})*\n━━━━━━━━━━━━━━━━━━━\n\n`;
+            logs.forEach(entry => {
+                const time = entry.time ? entry.time.split('T')[1]?.slice(0, 8) || '??:??:??' : '??:??:??';
+                text += `[${time}] ${entry.level}: ${entry.message}\n`;
+            });
 
-        await sock.sendMessage(jid, { text }, { quoted: msg });
+            if (text.length > 60000) {
+                text = text.slice(0, 60000) + '\n... (truncated)';
+            }
+
+            await sock.sendMessage(jid, { text }, { quoted: msg });
+        }
     }
-}
-
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
 const aliases = [];
 module.exports.forEach(cmd => {
-    if (cmd.name === 'addowner') {
-        aliases.push({ ...cmd, name: 'add-owner' });
-    }
-    if (cmd.name === 'delowner') {
-        aliases.push({ ...cmd, name: 'del-owner' });
-    }
-    if (cmd.name === 'games') {
-        aliases.push({ ...cmd, name: 'activegames' });
-    }
+    if (cmd.name === 'addowner') aliases.push({ ...cmd, name: 'add-owner' });
+    if (cmd.name === 'delowner') aliases.push({ ...cmd, name: 'del-owner' });
+    if (cmd.name === 'games') aliases.push({ ...cmd, name: 'activegames' });
 });
 module.exports.push(...aliases);
