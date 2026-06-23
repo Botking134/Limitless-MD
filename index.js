@@ -1,5 +1,6 @@
 // index.js
 
+require('dotenv').config();
 
 const { loadVars, syncVarsToConfig } = require('./vars');
 const { loadState } = require('./stateManager');
