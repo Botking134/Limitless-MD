@@ -8,7 +8,7 @@ module.exports = {
     //    These are the source of truth for API keys and owner details.
     // ================================================================
 
-    ownerNumber: process.env.OWNER_NUMBER || "601129363700",
+    ownerNumber: process.env.OWNER_NUMBER || "",
     ownerName: process.env.OWNER_NAME || "Infinity",
     botName: process.env.BOT_NAME || "Limitless",
     sessionId: process.env.SESSION_ID || "",
@@ -25,7 +25,7 @@ module.exports = {
     //    These are the defaults if vars.json doesn't exist.
     // ================================================================
 
-    prefix: process.env.PREFIX || "⚡",
+    prefix: process.env.PREFIX || ".",
     vvs: process.env.VVS || "wow",
     packName: process.env.PACK_NAME || "♾️",
     author: process.env.AUTHOR || "Infinity",
