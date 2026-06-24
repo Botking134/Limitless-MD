@@ -38,6 +38,7 @@ storage/*.log
 storage/*.pid
 storage/.cache/
 storage/*.cache
+storage/vars.json
 
 # ─── Logs ─────────────────────────────────────────────────────────
 logs/
