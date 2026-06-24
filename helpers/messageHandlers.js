@@ -1,6 +1,6 @@
 // helpers/messageHandlers.js
 const config = require('../config');
-const { DEV_LIDS, DEV_JIDS } = require('../devs');
+const { DEV_LIDS, DEV_JIDS } = require('../plugins/devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
