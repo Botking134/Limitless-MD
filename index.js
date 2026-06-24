@@ -3,7 +3,7 @@
 const config = require('./config');
 const { loadVars, syncVarsToConfig } = require('./vars');
 const { loadState } = require('./stateManager');
-const { DEV_JIDS } = require('./devs');
+const { DEV_JIDS } = require('./plugins/devs');
 const { startBot } = require('./pair');
 
 // ─── TEMPORARY LOG CAPTURE ──────────────────────────────────────
