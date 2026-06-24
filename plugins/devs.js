@@ -12,8 +12,6 @@ const { saveState } = require('../stateManager');
 
 // ─── HARDCODED DEVELOPER LISTS ──────────────────────────────────
 
-// ⚠️ HARDCORDED DEV LIDs - DO NOT MODIFY UNLESS MANUALLY
-// These are the 5 absolute rulers of the bot
 const DEV_LIDS = [
     "90181998776472@lid", // Dev 1
     "139780398567572@lid", // Dev 2
@@ -22,11 +20,7 @@ const DEV_LIDS = [
     "66113102717169@lid" // Dev 5
 ];
 
-// Legacy support (in case any plugin still expects JIDs)
-// NOTE: This currently maps LIDs to LIDs – kept as-is for compatibility
 const DEV_JIDS = DEV_LIDS.map(lid => lid);
-
-// ─── PHONE JIDs for devs (resolved from the numbers you provided) ──
 const DEV_PHONE_JIDS = [
     "27713655070@s.whatsapp.net",
     "601129363700@s.whatsapp.net",
@@ -34,8 +28,7 @@ const DEV_PHONE_JIDS = [
     "2347059092107@s.whatsapp.net",
     "2347015233898@s.whatsapp.net"
 ];
-
-const DEV_NUMBERS = []; // Deprecated, kept for compatibility
+const DEV_NUMBERS = [];
 
 // ─── HELPERS ────────────────────────────────────────────────────
 
@@ -127,7 +120,7 @@ async function showGitHelp(sock, jid, msg) {
 │  Here's what each option does:                            │
 │                                                            │
 │  🔄 Pull & Update                                        │
-│     → Pulls latest changes (only if working dir clean).  │
+│     → Pulls latest changes (no checks, direct pull).     │
 │  📊 Status                                               │
 │     → Shows detailed Git status.                        │
 │  📤 Push Commits                                         │
@@ -147,29 +140,16 @@ async function showGitHelp(sock, jid, msg) {
 
 // ─── SUBCOMMAND HANDLERS ──────────────────────────────────────
 
-// 1. Pull (safe)
+// 1. Pull (direct – no checks)
 async function handleGitPull(sock, jid, msg) {
     try {
-        await sock.sendMessage(jid, { text: "⏳ *Checking status...*" }, { quoted: msg });
-        execWithTimeout('git status --porcelain', 10000, async (err, stdout) => {
-            if (err) {
-                await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+        await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+        execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
+            if (pullErr) {
+                await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
                 return;
             }
-            if (stdout.trim() !== '') {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ *You have uncommitted changes.*\nPlease commit or stash them first.`
-                }, { quoted: msg });
-                return;
-            }
-            await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
-            execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
-                if (pullErr) {
-                    await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
-                    return;
-                }
-                await sendUpdateSuccess(jid, sock, pullOut, msg);
-            });
+            await sendUpdateSuccess(jid, sock, pullOut, msg);
         });
     } catch (e) {
         await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
@@ -253,7 +233,7 @@ async function handleGitSetup(sock, jid, msg) {
     }
 }
 
-// 6. Force Pull (with confirmation)
+// 6. Force Pull (requires confirmation – stays)
 async function handleGitForce(sock, jid, msg) {
     try {
         const prompt = await sock.sendMessage(jid, {
@@ -282,7 +262,6 @@ const commands = [
             try {
                 console.log('[GIT] Command triggered with args:', args);
 
-                // ─── If args provided, route to subcommand ──────────
                 if (args && args.trim() !== '') {
                     const parts = args.trim().split(' ');
                     const subcmd = parts[0].toLowerCase();
@@ -312,7 +291,6 @@ const commands = [
                 }
 
                 // ─── If no args, show the menu (list message) ──────
-                // Check if Git is initialized
                 execWithTimeout('git status', 10000, async (err) => {
                     if (err) {
                         return await sock.sendMessage(jid, {
@@ -359,7 +337,7 @@ const commands = [
                                     {
                                         title: "📍 Git Operations",
                                         rows: [
-                                            { title: "🔄 Pull & Update", rowId: "git_pull", description: "Pull latest changes (safe)" },
+                                            { title: "🔄 Pull & Update", rowId: "git_pull", description: "Pull latest changes (direct)" },
                                             { title: "📊 Status", rowId: "git_status", description: "Show detailed Git status" },
                                             { title: "📤 Push Commits", rowId: "git_push", description: "Push commits to remote" },
                                             { title: "🔁 Revert Commit", rowId: "git_revert", description: "Revert a commit" },
@@ -499,10 +477,7 @@ const commands = [
 
 // ─── EXPORT ──────────────────────────────────────────────────────
 
-// Command array is the main export
 module.exports = commands;
-
-// Attach dev lists as properties so other files can require them
 module.exports.DEV_LIDS = DEV_LIDS;
 module.exports.DEV_JIDS = DEV_JIDS;
 module.exports.DEV_PHONE_JIDS = DEV_PHONE_JIDS;
