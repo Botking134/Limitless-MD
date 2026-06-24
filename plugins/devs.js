@@ -12,10 +12,8 @@ const { saveState } = require('../stateManager');
 
 // ─── HARDCODED DEVELOPER LISTS ──────────────────────────────────
 
-// devs.js
 // ⚠️ HARDCORDED DEV LIDs - DO NOT MODIFY UNLESS MANUALLY
 // These are the 5 absolute rulers of the bot
-
 const DEV_LIDS = [
     "90181998776472@lid", // Dev 1
     "139780398567572@lid", // Dev 2
@@ -37,13 +35,7 @@ const DEV_PHONE_JIDS = [
     "2347015233898@s.whatsapp.net"
 ];
 
-module.exports = {
-    DEV_LIDS,
-    DEV_JIDS,
-    DEV_PHONE_JIDS,
-    DEV_NUMBERS: [] // Deprecated, kept for compatibility
-};
-
+const DEV_NUMBERS = []; // Deprecated, kept for compatibility
 
 // ─── HELPERS ────────────────────────────────────────────────────
 
@@ -276,7 +268,7 @@ async function handleGitForce(sock, jid, msg) {
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
-module.exports = [
+const commands = [
     // ─── .git COMMAND ──────────────────────────────────────────
     {
         name: 'git',
@@ -505,6 +497,13 @@ module.exports = [
     }
 ];
 
-// ─── EXPORT DEV LISTS FOR OTHER FILES ─────────────────────────
+// ─── EXPORT ──────────────────────────────────────────────────────
+
+// Command array is the main export
+module.exports = commands;
+
+// Attach dev lists as properties so other files can require them
 module.exports.DEV_LIDS = DEV_LIDS;
 module.exports.DEV_JIDS = DEV_JIDS;
+module.exports.DEV_PHONE_JIDS = DEV_PHONE_JIDS;
+module.exports.DEV_NUMBERS = DEV_NUMBERS;
