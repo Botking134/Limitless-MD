@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { DEV_LIDS } = require('../plugins/devs');
+const { DEV_LIDS } = require('./plugins/devs');
 
 // ─── Load vars module for dynamic variable persistence ─────────
 const { saveDynamicVars } = require('./vars');
