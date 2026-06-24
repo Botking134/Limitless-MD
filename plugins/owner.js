@@ -291,156 +291,230 @@ async function showGitHelp(sock, jid, msg) {
 
 // 1. Git Pull (safe – checks for uncommitted changes)
 async function handleGitPull(sock, jid, msg) {
-    await sock.sendMessage(jid, { text: "⏳ *Checking status...*" }, { quoted: msg });
-    execWithTimeout('git status --porcelain', 10000, async (err, stdout) => {
-        if (err) return await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
-        if (stdout.trim() !== '') {
-            return await sock.sendMessage(jid, {
-                text: `⚠️ *You have uncommitted changes.*\nPlease commit or stash them first.`
-            }, { quoted: msg });
-        }
-        await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
-        execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
-            if (pullErr) return await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
-            await sendUpdateSuccess(jid, sock, pullOut, msg);
+    try {
+        await sock.sendMessage(jid, { text: "⏳ *Checking status...*" }, { quoted: msg });
+        execWithTimeout('git status --porcelain', 10000, async (err, stdout) => {
+            if (err) {
+                await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+                return;
+            }
+            if (stdout.trim() !== '') {
+                await sock.sendMessage(jid, {
+                    text: `⚠️ *You have uncommitted changes.*\nPlease commit or stash them first.`
+                }, { quoted: msg });
+                return;
+            }
+            await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+            execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
+                if (pullErr) {
+                    await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
+                    return;
+                }
+                await sendUpdateSuccess(jid, sock, pullOut, msg);
+            });
         });
-    });
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 2. Git Stash + Pull + Pop
 async function handleGitStashPull(sock, jid, msg) {
-    await sock.sendMessage(jid, { text: "⏳ *Stashing changes...*" }, { quoted: msg });
-    execWithTimeout('git stash', 10000, async (stashErr) => {
-        if (stashErr && !stashErr.message.includes('No local changes')) {
-            return await sock.sendMessage(jid, { text: `⚠️ *Stash failed:* ${stashErr.message}` }, { quoted: msg });
-        }
-        await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
-        execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
-            if (pullErr) {
-                await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}\n\n💡 Trying to recover...` }, { quoted: msg });
-                execWithTimeout('git stash pop', 10000, () => {});
+    try {
+        await sock.sendMessage(jid, { text: "⏳ *Stashing changes...*" }, { quoted: msg });
+        execWithTimeout('git stash', 10000, async (stashErr) => {
+            if (stashErr && !stashErr.message.includes('No local changes')) {
+                await sock.sendMessage(jid, { text: `⚠️ *Stash failed:* ${stashErr.message}` }, { quoted: msg });
                 return;
             }
-            await sock.sendMessage(jid, { text: "⏳ *Restoring changes...*" }, { quoted: msg });
-            execWithTimeout('git stash pop', 10000, async (popErr) => {
-                if (popErr) {
-                    await sock.sendMessage(jid, { text: `⚠️ *Could not auto‑reapply stash. Check conflicts manually.` }, { quoted: msg });
-                } else {
-                    await sendUpdateSuccess(jid, sock, pullOut, msg);
+            await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+            execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
+                if (pullErr) {
+                    await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}\n\n💡 Trying to recover...` }, { quoted: msg });
+                    execWithTimeout('git stash pop', 10000, () => {});
+                    return;
                 }
+                await sock.sendMessage(jid, { text: "⏳ *Restoring changes...*" }, { quoted: msg });
+                execWithTimeout('git stash pop', 10000, async (popErr) => {
+                    if (popErr) {
+                        await sock.sendMessage(jid, { text: `⚠️ *Could not auto‑reapply stash. Check conflicts manually.` }, { quoted: msg });
+                    } else {
+                        await sendUpdateSuccess(jid, sock, pullOut, msg);
+                    }
+                });
             });
         });
-    });
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 3. Git Status
 async function handleGitStatus(sock, jid, msg) {
-    execWithTimeout('git status', 10000, async (err, stdout) => {
-        if (err) return await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
-        await sock.sendMessage(jid, { text: `📊 *Git Status*\n\`\`\`\n${stdout}\n\`\`\`` }, { quoted: msg });
-    });
+    try {
+        execWithTimeout('git status', 10000, async (err, stdout) => {
+            if (err) {
+                await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+                return;
+            }
+            await sock.sendMessage(jid, { text: `📊 *Git Status*\n\`\`\`\n${stdout}\n\`\`\`` }, { quoted: msg });
+        });
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 4. Git Commit (interactive)
 async function handleGitCommit(sock, jid, msg) {
-    const prompt = await sock.sendMessage(jid, {
-        text: "✏️ *Commit Changes*\n\nPlease reply with your commit message:"
-    }, { quoted: msg });
-    global.gitSessions = global.gitSessions || {};
-    global.gitSessions[prompt.key.id] = { action: 'commit', jid };
+    try {
+        const prompt = await sock.sendMessage(jid, {
+            text: "✏️ *Commit Changes*\n\nPlease reply with your commit message:"
+        }, { quoted: msg });
+        global.gitSessions = global.gitSessions || {};
+        global.gitSessions[prompt.key.id] = { action: 'commit', jid };
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 5. Git Push
 async function handleGitPush(sock, jid, msg) {
-    await sock.sendMessage(jid, { text: "⏳ *Pushing commits...*" }, { quoted: msg });
-    execWithTimeout('git push', 60000, async (err, stdout) => {
-        if (err) return await sock.sendMessage(jid, { text: `❌ *Push failed:* ${err.message}` }, { quoted: msg });
-        await sock.sendMessage(jid, { text: `✅ *Push successful!*\n\n${stdout}` }, { quoted: msg });
-    });
+    try {
+        await sock.sendMessage(jid, { text: "⏳ *Pushing commits...*" }, { quoted: msg });
+        execWithTimeout('git push', 60000, async (err, stdout) => {
+            if (err) {
+                await sock.sendMessage(jid, { text: `❌ *Push failed:* ${err.message}` }, { quoted: msg });
+                return;
+            }
+            await sock.sendMessage(jid, { text: `✅ *Push successful!*\n\n${stdout}` }, { quoted: msg });
+        });
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 6. Git Commit + Push (interactive commit then push)
 async function handleGitCommitPush(sock, jid, msg) {
-    const prompt = await sock.sendMessage(jid, {
-        text: "✏️ *Commit & Push*\n\nPlease reply with your commit message:"
-    }, { quoted: msg });
-    global.gitSessions = global.gitSessions || {};
-    global.gitSessions[prompt.key.id] = { action: 'commitpush', jid };
+    try {
+        const prompt = await sock.sendMessage(jid, {
+            text: "✏️ *Commit & Push*\n\nPlease reply with your commit message:"
+        }, { quoted: msg });
+        global.gitSessions = global.gitSessions || {};
+        global.gitSessions[prompt.key.id] = { action: 'commitpush', jid };
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 7. Git Branch (list)
 async function handleGitBranch(sock, jid, msg) {
-    execWithTimeout('git branch -a', 10000, async (err, stdout) => {
-        if (err) return await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
-        await sock.sendMessage(jid, { text: `🌿 *Branches*\n\`\`\`\n${stdout}\n\`\`\`` }, { quoted: msg });
-    });
+    try {
+        execWithTimeout('git branch -a', 10000, async (err, stdout) => {
+            if (err) {
+                await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+                return;
+            }
+            await sock.sendMessage(jid, { text: `🌿 *Branches*\n\`\`\`\n${stdout}\n\`\`\`` }, { quoted: msg });
+        });
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 8. Git Switch (interactive)
 async function handleGitSwitch(sock, jid, msg, branchName) {
-    if (branchName) {
-        // Direct switch with branch name
-        await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${branchName}"...*` }, { quoted: msg });
-        execWithTimeout(`git checkout ${branchName}`, 10000, async (err, stdout) => {
-            if (err) return await sock.sendMessage(jid, { text: `❌ *Switch failed:* ${err.message}` }, { quoted: msg });
-            await sock.sendMessage(jid, { text: `✅ *Switched to branch "${branchName}".*` }, { quoted: msg });
-        });
-    } else {
-        // Interactive: ask for branch name
-        const prompt = await sock.sendMessage(jid, {
-            text: "🌿 *Switch Branch*\n\nEnter the branch name you want to switch to:"
-        }, { quoted: msg });
-        global.gitSessions = global.gitSessions || {};
-        global.gitSessions[prompt.key.id] = { action: 'switch', jid };
+    try {
+        if (branchName) {
+            await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${branchName}"...*` }, { quoted: msg });
+            execWithTimeout(`git checkout ${branchName}`, 10000, async (err, stdout) => {
+                if (err) {
+                    await sock.sendMessage(jid, { text: `❌ *Switch failed:* ${err.message}` }, { quoted: msg });
+                    return;
+                }
+                await sock.sendMessage(jid, { text: `✅ *Switched to branch "${branchName}".*` }, { quoted: msg });
+            });
+        } else {
+            const prompt = await sock.sendMessage(jid, {
+                text: "🌿 *Switch Branch*\n\nEnter the branch name you want to switch to:"
+            }, { quoted: msg });
+            global.gitSessions = global.gitSessions || {};
+            global.gitSessions[prompt.key.id] = { action: 'switch', jid };
+        }
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
     }
 }
 
 // 9. Git New Branch (interactive)
 async function handleGitNewBranch(sock, jid, msg) {
-    const prompt = await sock.sendMessage(jid, {
-        text: "🌿 *New Branch*\n\nEnter the name for the new branch:"
-    }, { quoted: msg });
-    global.gitSessions = global.gitSessions || {};
-    global.gitSessions[prompt.key.id] = { action: 'newbranch', jid };
+    try {
+        const prompt = await sock.sendMessage(jid, {
+            text: "🌿 *New Branch*\n\nEnter the name for the new branch:"
+        }, { quoted: msg });
+        global.gitSessions = global.gitSessions || {};
+        global.gitSessions[prompt.key.id] = { action: 'newbranch', jid };
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 10. Git Revert (interactive)
 async function handleGitRevert(sock, jid, msg) {
-    // Show last 5 commits
-    execWithTimeout('git log --oneline -5', 10000, async (err, stdout) => {
-        if (err) return await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
-        const prompt = await sock.sendMessage(jid, {
-            text: `🔁 *Revert Commit*\n\nRecent commits:\n${stdout}\n\nReply with the commit number (1-5) to revert:`
-        }, { quoted: msg });
-        global.gitSessions = global.gitSessions || {};
-        global.gitSessions[prompt.key.id] = { action: 'revert', jid, commits: stdout.split('\n').filter(Boolean) };
-    });
+    try {
+        execWithTimeout('git log --oneline -5', 10000, async (err, stdout) => {
+            if (err) {
+                await sock.sendMessage(jid, { text: `❌ Error: ${err.message}` }, { quoted: msg });
+                return;
+            }
+            const prompt = await sock.sendMessage(jid, {
+                text: `🔁 *Revert Commit*\n\nRecent commits:\n${stdout}\n\nReply with the commit number (1-5) to revert:`
+            }, { quoted: msg });
+            global.gitSessions = global.gitSessions || {};
+            global.gitSessions[prompt.key.id] = { action: 'revert', jid, commits: stdout.split('\n').filter(Boolean) };
+        });
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 11. Git Force Pull (requires confirmation)
 async function handleGitForce(sock, jid, msg) {
-    const prompt = await sock.sendMessage(jid, {
-        text: `⚠️ *WARNING: Force Pull*\n\nThis will overwrite ALL local changes.\nType \`CONFIRM\` to proceed:`
-    }, { quoted: msg });
-    global.gitSessions = global.gitSessions || {};
-    global.gitSessions[prompt.key.id] = { action: 'force', jid };
+    try {
+        const prompt = await sock.sendMessage(jid, {
+            text: `⚠️ *WARNING: Force Pull*\n\nThis will overwrite ALL local changes.\nType \`CONFIRM\` to proceed:`
+        }, { quoted: msg });
+        global.gitSessions = global.gitSessions || {};
+        global.gitSessions[prompt.key.id] = { action: 'force', jid };
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // 12. Git Setup
 async function handleGitSetup(sock, jid, msg) {
-    await sock.sendMessage(jid, { text: "⏳ *Setting up Git...*" }, { quoted: msg });
-    const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
-    execWithTimeout(setupCmd, 60000, async (err) => {
-        if (err && err.message.includes('already exists')) {
-            execWithTimeout(`git remote set-url origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`, 60000, async (retryErr) => {
-                if (retryErr) return await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n${retryErr.message}` }, { quoted: msg });
-                await sock.sendMessage(jid, { text: "✅ *Git re-linked!*" }, { quoted: msg });
-            });
-            return;
-        }
-        if (err) return await sock.sendMessage(jid, { text: `❌ *Setup Failed:*\n${err.message}` }, { quoted: msg });
-        await sock.sendMessage(jid, { text: "✅ *Git initialized!*" }, { quoted: msg });
-    });
+    try {
+        await sock.sendMessage(jid, { text: "⏳ *Setting up Git...*" }, { quoted: msg });
+        const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+        execWithTimeout(setupCmd, 60000, async (err) => {
+            if (err && err.message.includes('already exists')) {
+                execWithTimeout(`git remote set-url origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`, 60000, async (retryErr) => {
+                    if (retryErr) {
+                        await sock.sendMessage(jid, { text: `❌ *Setup Retry Failed:*\n${retryErr.message}` }, { quoted: msg });
+                        return;
+                    }
+                    await sock.sendMessage(jid, { text: "✅ *Git re-linked!*" }, { quoted: msg });
+                });
+                return;
+            }
+            if (err) {
+                await sock.sendMessage(jid, { text: `❌ *Setup Failed:*\n${err.message}` }, { quoted: msg });
+                return;
+            }
+            await sock.sendMessage(jid, { text: "✅ *Git initialized!*" }, { quoted: msg });
+        });
+    } catch (e) {
+        await sock.sendMessage(jid, { text: `❌ *Error:* ${e.message}` }, { quoted: msg });
+    }
 }
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
@@ -516,137 +590,145 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            // ─── If args provided, route to subcommand ──────────────
-            if (args && args.trim() !== '') {
-                const parts = args.trim().split(' ');
-                const subcmd = parts[0].toLowerCase();
-                const option = parts.slice(1).join(' ');
+            try {
+                // ─── If args provided, route to subcommand ──────────────
+                if (args && args.trim() !== '') {
+                    const parts = args.trim().split(' ');
+                    const subcmd = parts[0].toLowerCase();
+                    const option = parts.slice(1).join(' ');
 
-                switch (subcmd) {
-                    case 'pull':
-                        return await handleGitPull(sock, jid, msg);
-                    case 'stashpull':
-                        return await handleGitStashPull(sock, jid, msg);
-                    case 'status':
-                        return await handleGitStatus(sock, jid, msg);
-                    case 'commit':
-                        return await handleGitCommit(sock, jid, msg);
-                    case 'push':
-                        return await handleGitPush(sock, jid, msg);
-                    case 'commitpush':
-                        return await handleGitCommitPush(sock, jid, msg);
-                    case 'branch':
-                        return await handleGitBranch(sock, jid, msg);
-                    case 'switch':
-                        return await handleGitSwitch(sock, jid, msg, option);
-                    case 'newbranch':
-                        return await handleGitNewBranch(sock, jid, msg);
-                    case 'revert':
-                        return await handleGitRevert(sock, jid, msg);
-                    case 'force':
-                        return await handleGitForce(sock, jid, msg);
-                    case 'setup':
-                        return await handleGitSetup(sock, jid, msg);
-                    case 'info':
-                        return await showGitHelp(sock, jid, msg);
-                    default:
-                        return await sock.sendMessage(jid, { text: `❌ Unknown subcommand: ${subcmd}` }, { quoted: msg });
-                }
-            }
+                    console.log(`[GIT] Subcommand: ${subcmd}, option: ${option}`);
 
-            // ─── If no args, show the menu (list message) ────────────
-            // ─── Check if Git is initialized ──────────────────────
-            execWithTimeout('git status', 10000, async (err) => {
-                if (err) {
-                    return await sock.sendMessage(jid, {
-                        text: `❌ *Git not initialized.*\nRun \`${config.prefix}git setup\` first.`
-                    }, { quoted: msg });
-                }
-
-                // ─── Get current status ─────────────────────────────
-                const gitInfo = await getGitStatus();
-                if (gitInfo.status === 'error') {
-                    return await sock.sendMessage(jid, { text: `❌ Error: ${gitInfo.msg}` }, { quoted: msg });
-                }
-
-                // ─── Check if behind remote ────────────────────────
-                const branchCmd = 'git rev-parse --abbrev-ref HEAD';
-                execWithTimeout(branchCmd, 5000, async (branchErr, branch) => {
-                    if (branchErr) {
-                        console.error('[GIT] Branch error:', branchErr.message);
-                        branch = 'master';
+                    switch (subcmd) {
+                        case 'pull':
+                            return await handleGitPull(sock, jid, msg);
+                        case 'stashpull':
+                            return await handleGitStashPull(sock, jid, msg);
+                        case 'status':
+                            return await handleGitStatus(sock, jid, msg);
+                        case 'commit':
+                            return await handleGitCommit(sock, jid, msg);
+                        case 'push':
+                            return await handleGitPush(sock, jid, msg);
+                        case 'commitpush':
+                            return await handleGitCommitPush(sock, jid, msg);
+                        case 'branch':
+                            return await handleGitBranch(sock, jid, msg);
+                        case 'switch':
+                            return await handleGitSwitch(sock, jid, msg, option);
+                        case 'newbranch':
+                            return await handleGitNewBranch(sock, jid, msg);
+                        case 'revert':
+                            return await handleGitRevert(sock, jid, msg);
+                        case 'force':
+                            return await handleGitForce(sock, jid, msg);
+                        case 'setup':
+                            return await handleGitSetup(sock, jid, msg);
+                        case 'info':
+                            return await showGitHelp(sock, jid, msg);
+                        default:
+                            await sock.sendMessage(jid, { text: `❌ Unknown subcommand: ${subcmd}` }, { quoted: msg });
+                            return;
                     }
-                    branch = branch.trim();
+                }
 
-                    const countCmd = `git rev-list HEAD..origin/${branch} --count 2>/dev/null || echo 0`;
-                    execWithTimeout(countCmd, 10000, async (countErr, stdout) => {
-                        if (countErr) {
-                            console.error('[GIT] Count error:', countErr.message);
-                            stdout = '0';
+                // ─── If no args, show the menu (list message) ────────────
+                // ─── Check if Git is initialized ──────────────────────
+                execWithTimeout('git status', 10000, async (err) => {
+                    if (err) {
+                        return await sock.sendMessage(jid, {
+                            text: `❌ *Git not initialized.*\nRun \`${config.prefix}git setup\` first.`
+                        }, { quoted: msg });
+                    }
+
+                    // ─── Get current status ─────────────────────────────
+                    const gitInfo = await getGitStatus();
+                    if (gitInfo.status === 'error') {
+                        return await sock.sendMessage(jid, { text: `❌ Error: ${gitInfo.msg}` }, { quoted: msg });
+                    }
+
+                    // ─── Check if behind remote ────────────────────────
+                    const branchCmd = 'git rev-parse --abbrev-ref HEAD';
+                    execWithTimeout(branchCmd, 5000, async (branchErr, branch) => {
+                        if (branchErr) {
+                            console.error('[GIT] Branch error:', branchErr.message);
+                            branch = 'master';
                         }
-                        const behind = stdout.trim() || '0';
+                        branch = branch.trim();
 
-                        const statusMsg =
-                            `🔧 *GIT CONTROL PANEL* 🔧\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                            `📡  Branch: \`${gitInfo.branch}\`\n` +
-                            `📦  Behind remote: \`${behind}\` commits\n` +
-                            `📝  Uncommitted changes: \`${gitInfo.changes}\`\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                            `Select an action from the menu below:`;
+                        const countCmd = `git rev-list HEAD..origin/${branch} --count 2>/dev/null || echo 0`;
+                        execWithTimeout(countCmd, 10000, async (countErr, stdout) => {
+                            if (countErr) {
+                                console.error('[GIT] Count error:', countErr.message);
+                                stdout = '0';
+                            }
+                            const behind = stdout.trim() || '0';
 
-                        const listMessage = {
-                            text: statusMsg,
-                            footer: "⚡ Limitless Git Control",
-                            title: "📋 Git Actions",
-                            buttonText: "📋 Select Action",
-                            sections: [
-                                {
-                                    title: "📍 Basic Operations",
-                                    rows: [
-                                        { title: "🔄 Pull & Update", rowId: "git_pull", description: "Pull latest changes (safe)" },
-                                        { title: "📦 Stash & Pull", rowId: "git_stash_pull", description: "Stash, pull, and pop changes" },
-                                        { title: "📊 Status", rowId: "git_status", description: "Show detailed Git status" }
-                                    ]
-                                },
-                                {
-                                    title: "💾 Commit & Push",
-                                    rows: [
-                                        { title: "💾 Commit Changes", rowId: "git_commit", description: "Commit all local changes" },
-                                        { title: "⬆️ Push Commits", rowId: "git_push", description: "Push commits to remote" },
-                                        { title: "📤 Commit & Push", rowId: "git_commit_push", description: "Commit and push together" }
-                                    ]
-                                },
-                                {
-                                    title: "🌿 Branch Management",
-                                    rows: [
-                                        { title: "🌿 Show Branches", rowId: "git_branch", description: "List all branches" },
-                                        { title: "🌿 Switch Branch", rowId: "git_switch", description: "Switch to another branch" },
-                                        { title: "🌿 New Branch", rowId: "git_new_branch", description: "Create a new branch" }
-                                    ]
-                                },
-                                {
-                                    title: "⚠️ Advanced (Dangerous)",
-                                    rows: [
-                                        { title: "🔁 Revert Commit", rowId: "git_revert", description: "Revert to a previous commit" },
-                                        { title: "🔄 Force Pull", rowId: "git_force", description: "⚠️ Overwrites local changes!" },
-                                        { title: "🛠️ Setup Git", rowId: "git_setup", description: "Initialize Git tracking" },
-                                        { title: "ℹ️ Help / Info", rowId: "git_info", description: "Explanation of all actions" }
-                                    ]
-                                }
-                            ]
-                        };
+                            const statusMsg =
+                                `🔧 *GIT CONTROL PANEL* 🔧\n` +
+                                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                `📡  Branch: \`${gitInfo.branch}\`\n` +
+                                `📦  Behind remote: \`${behind}\` commits\n` +
+                                `📝  Uncommitted changes: \`${gitInfo.changes}\`\n` +
+                                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                `Select an action from the menu below:`;
 
-                        try {
-                            await sock.sendMessage(jid, listMessage, { quoted: msg });
-                            console.log('[GIT] List message sent successfully');
-                        } catch (sendErr) {
-                            console.error('[GIT] Failed to send list message:', sendErr);
-                            await sock.sendMessage(jid, { text: '❌ Failed to display menu. Please try again.' }, { quoted: msg });
-                        }
+                            const listMessage = {
+                                text: statusMsg,
+                                footer: "⚡ Limitless Git Control",
+                                title: "📋 Git Actions",
+                                buttonText: "📋 Select Action",
+                                sections: [
+                                    {
+                                        title: "📍 Basic Operations",
+                                        rows: [
+                                            { title: "🔄 Pull & Update", rowId: "git_pull", description: "Pull latest changes (safe)" },
+                                            { title: "📦 Stash & Pull", rowId: "git_stash_pull", description: "Stash, pull, and pop changes" },
+                                            { title: "📊 Status", rowId: "git_status", description: "Show detailed Git status" }
+                                        ]
+                                    },
+                                    {
+                                        title: "💾 Commit & Push",
+                                        rows: [
+                                            { title: "💾 Commit Changes", rowId: "git_commit", description: "Commit all local changes" },
+                                            { title: "⬆️ Push Commits", rowId: "git_push", description: "Push commits to remote" },
+                                            { title: "📤 Commit & Push", rowId: "git_commit_push", description: "Commit and push together" }
+                                        ]
+                                    },
+                                    {
+                                        title: "🌿 Branch Management",
+                                        rows: [
+                                            { title: "🌿 Show Branches", rowId: "git_branch", description: "List all branches" },
+                                            { title: "🌿 Switch Branch", rowId: "git_switch", description: "Switch to another branch" },
+                                            { title: "🌿 New Branch", rowId: "git_new_branch", description: "Create a new branch" }
+                                        ]
+                                    },
+                                    {
+                                        title: "⚠️ Advanced (Dangerous)",
+                                        rows: [
+                                            { title: "🔁 Revert Commit", rowId: "git_revert", description: "Revert to a previous commit" },
+                                            { title: "🔄 Force Pull", rowId: "git_force", description: "⚠️ Overwrites local changes!" },
+                                            { title: "🛠️ Setup Git", rowId: "git_setup", description: "Initialize Git tracking" },
+                                            { title: "ℹ️ Help / Info", rowId: "git_info", description: "Explanation of all actions" }
+                                        ]
+                                    }
+                                ]
+                            };
+
+                            try {
+                                await sock.sendMessage(jid, listMessage, { quoted: msg });
+                                console.log('[GIT] List message sent successfully');
+                            } catch (sendErr) {
+                                console.error('[GIT] Failed to send list message:', sendErr);
+                                await sock.sendMessage(jid, { text: '❌ Failed to display menu. Please try again.' }, { quoted: msg });
+                            }
+                        });
                     });
                 });
-            });
+            } catch (err) {
+                console.error('[GIT] Error:', err);
+                await sock.sendMessage(jid, { text: `❌ *An error occurred:* ${err.message}` }, { quoted: msg });
+            }
         }
     },
 
