@@ -7,6 +7,9 @@ const { getRawMessage, handleViewOnce } = require('./log');
 const fs = require('fs');
 const path = require('path');
 
+// ─── IMPORT REMINDER HELPERS ONCE (avoid inline require) ──────
+const { readReminders, saveReminders } = require('../plugins/owner');
+
 const notesPath = path.join(__dirname, '../storage/notes.json');
 
 // ─── PERMISSION MATRIX ──────────────────────────────────────────
@@ -80,7 +83,11 @@ async function handleNoteSession(sock, msg) {
 async function handleInteractiveSessions(sock, msg) {
     const jid = msg.key.remoteJid;
     const rawMsg = getRawMessage(msg.message);
-    const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+    // Robust extraction of the quoted message ID
+    const contextInfo =
+        rawMsg?.contextInfo ||
+        msg.message?.extendedTextMessage?.contextInfo ||
+        msg.message?.contextInfo;   // conversation reply may have top-level contextInfo
     const quotedMsgId = contextInfo?.stanzaId;
 
     if (!quotedMsgId) return false;
@@ -89,220 +96,252 @@ async function handleInteractiveSessions(sock, msg) {
 
     // ─── AZA SESSION ───────────────────────────────────────────
     if (global.azaSessions && global.azaSessions[quotedMsgId]) {
-        const session = global.azaSessions[quotedMsgId];
-        if (session.step === 1) {
-            const account = text.trim();
-            if (!account || account.length < 5) {
-                await sock.sendMessage(jid, { text: "❌ Account number must be at least 5 digits. Please try again." });
+        try {
+            const session = global.azaSessions[quotedMsgId];
+            if (session.step === 1) {
+                const account = text.trim();
+                if (!account || account.length < 5) {
+                    await sock.sendMessage(jid, { text: "❌ Account number must be at least 5 digits. Please try again." });
+                    return true;
+                }
+                session.account = account;
+                session.step = 2;
+                const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 2:* Please reply with the *Bank Name*." });
+                global.azaSessions[prompt.key.id] = session;
+                delete global.azaSessions[quotedMsgId];
                 return true;
             }
-            session.account = account;
-            session.step = 2;
-            const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 2:* Please reply with the *Bank Name*." });
-            global.azaSessions[prompt.key.id] = session;
+            if (session.step === 2) {
+                const bank = text.trim();
+                if (!bank) {
+                    await sock.sendMessage(jid, { text: "❌ Bank name cannot be empty. Please try again." });
+                    return true;
+                }
+                session.bank = bank;
+                session.step = 3;
+                const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 3:* Please reply with the *Account Name*." });
+                global.azaSessions[prompt.key.id] = session;
+                delete global.azaSessions[quotedMsgId];
+                return true;
+            }
+            if (session.step === 3) {
+                const name = text.trim();
+                if (!name) {
+                    await sock.sendMessage(jid, { text: "❌ Account name cannot be empty. Please try again." });
+                    return true;
+                }
+                config.aza = { set: true, account: session.account, bank: session.bank, name: name };
+                saveState();
+                await sock.sendMessage(jid, {
+                    text: `✅ *Bank details saved successfully!*\n\n🏦 *Bank:* ${session.bank}\n💳 *Account:* ${session.account}\n👤 *Name:* ${name}`
+                });
+                delete global.azaSessions[quotedMsgId];
+                return true;
+            }
+            delete global.azaSessions[quotedMsgId];
+            return true;
+        } catch (err) {
+            console.error('[AZA INTERCEPTOR]', err);
+            await sock.sendMessage(jid, { text: '❌ An error occurred while processing your Aza session.' });
             delete global.azaSessions[quotedMsgId];
             return true;
         }
-        if (session.step === 2) {
-            const bank = text.trim();
-            if (!bank) {
-                await sock.sendMessage(jid, { text: "❌ Bank name cannot be empty. Please try again." });
-                return true;
-            }
-            session.bank = bank;
-            session.step = 3;
-            const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 3:* Please reply with the *Account Name*." });
-            global.azaSessions[prompt.key.id] = session;
-            delete global.azaSessions[quotedMsgId];
-            return true;
-        }
-        if (session.step === 3) {
-            const name = text.trim();
-            if (!name) {
-                await sock.sendMessage(jid, { text: "❌ Account name cannot be empty. Please try again." });
-                return true;
-            }
-            config.aza = { set: true, account: session.account, bank: session.bank, name: name };
-            const { saveState } = require('../stateManager');
-            saveState();
-            await sock.sendMessage(jid, {
-                text: `✅ *Bank details saved successfully!*\n\n🏦 *Bank:* ${session.bank}\n💳 *Account:* ${session.account}\n👤 *Name:* ${name}`
-            });
-            delete global.azaSessions[quotedMsgId];
-            return true;
-        }
-        delete global.azaSessions[quotedMsgId];
-        return true;
     }
 
     // ─── REMINDER SESSION ──────────────────────────────────────
     if (global.reminderSessions && global.reminderSessions[quotedMsgId]) {
-        const session = global.reminderSessions[quotedMsgId];
-        const title = text.trim();
-        if (!title) {
-            await sock.sendMessage(jid, { text: "❌ Reminder title cannot be empty." });
+        try {
+            const session = global.reminderSessions[quotedMsgId];
+            if (!session || !session.durationMs || !session.text) {
+                await sock.sendMessage(jid, { text: "❌ Reminder session data is invalid. Please start again." });
+                delete global.reminderSessions[quotedMsgId];
+                return true;
+            }
+            const title = text.trim();
+            if (!title) {
+                await sock.sendMessage(jid, { text: "❌ Reminder title cannot be empty." });
+                return true;
+            }
+            const reminders = readReminders();
+            reminders.push({
+                jid: session.jid,
+                title: title,
+                text: session.text,
+                triggerTime: Date.now() + session.durationMs,
+                timeSet: session.timeSet,
+                durationStr: session.durationStr
+            });
+            saveReminders(reminders);
+            await sock.sendMessage(jid, { text: `✅ *Reminder Set!*\n\n📌 *Title:* ${title}\n⏳ *Duration:* ${session.durationStr}\n\nI'll remind you then.` });
+            delete global.reminderSessions[quotedMsgId];
+            return true;
+        } catch (err) {
+            console.error('[REMINDER INTERCEPTOR]', err);
+            await sock.sendMessage(jid, { text: '❌ Failed to save reminder due to an internal error.' });
+            delete global.reminderSessions[quotedMsgId];
             return true;
         }
-        const { readReminders, saveReminders } = require('../plugins/owner');
-        const reminders = readReminders();
-        reminders.push({
-            jid: session.jid,
-            title: title,
-            text: session.text,
-            triggerTime: Date.now() + session.durationMs,
-            timeSet: session.timeSet,
-            durationStr: session.durationStr
-        });
-        saveReminders(reminders);
-        await sock.sendMessage(jid, { text: `✅ *Reminder Set!*\n\n📌 *Title:* ${title}\n⏳ *Duration:* ${session.durationStr}\n\nI'll remind you then.` });
-        delete global.reminderSessions[quotedMsgId];
-        return true;
     }
 
     // ─── CANCEL SESSION ──────────────────────────────────────
     if (global.cancelSessions && global.cancelSessions[quotedMsgId]) {
-        const num = parseInt(text.trim());
-        if (isNaN(num)) {
-            await sock.sendMessage(jid, { text: "❌ Please enter a valid number from the list." });
+        try {
+            const num = parseInt(text.trim());
+            if (isNaN(num)) {
+                await sock.sendMessage(jid, { text: "❌ Please enter a valid number from the list." });
+                return true;
+            }
+            const reminders = readReminders();
+            if (num < 1 || num > reminders.length) {
+                await sock.sendMessage(jid, { text: `❌ Invalid index. Please choose between 1 and ${reminders.length}.` });
+                return true;
+            }
+            const removed = reminders.splice(num - 1, 1);
+            saveReminders(reminders);
+            await sock.sendMessage(jid, { text: `✅ *Reminder Cancelled:* "${removed[0].title}"` });
+            delete global.cancelSessions[quotedMsgId];
+            return true;
+        } catch (err) {
+            console.error('[CANCEL INTERCEPTOR]', err);
+            await sock.sendMessage(jid, { text: '❌ Failed to cancel reminder.' });
+            delete global.cancelSessions[quotedMsgId];
             return true;
         }
-        const { readReminders, saveReminders } = require('../plugins/owner');
-        const reminders = readReminders();
-        if (num < 1 || num > reminders.length) {
-            await sock.sendMessage(jid, { text: `❌ Invalid index. Please choose between 1 and ${reminders.length}.` });
-            return true;
-        }
-        const removed = reminders.splice(num - 1, 1);
-        saveReminders(reminders);
-        await sock.sendMessage(jid, { text: `✅ *Reminder Cancelled:* "${removed[0].title}"` });
-        delete global.cancelSessions[quotedMsgId];
-        return true;
     }
 
     // ─── FORWARD SESSION ──────────────────────────────────────
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
-        const target = text.trim().replace(/[^0-9]/g, '');
-        if (target.length < 7) {
-            await sock.sendMessage(jid, { text: "❌ Please enter a valid phone number (at least 7 digits)." });
-            return true;
-        }
-        const targetJid = `${target}@s.whatsapp.net`;
-        const session = global.forwardSessions[quotedMsgId];
         try {
+            const target = text.trim().replace(/[^0-9]/g, '');
+            if (target.length < 7) {
+                await sock.sendMessage(jid, { text: "❌ Please enter a valid phone number (at least 7 digits)." });
+                return true;
+            }
+            const targetJid = `${target}@s.whatsapp.net`;
+            const session = global.forwardSessions[quotedMsgId];
+            if (!session || !session.msgToForward) {
+                await sock.sendMessage(jid, { text: "❌ Forward data missing. Please initiate a new forward." });
+                delete global.forwardSessions[quotedMsgId];
+                return true;
+            }
             await sock.sendMessage(targetJid, { forward: session.msgToForward });
             await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` });
             delete global.forwardSessions[quotedMsgId];
+            return true;
         } catch (e) {
+            console.error('[FORWARD INTERCEPTOR]', e);
             await sock.sendMessage(jid, { text: `❌ Forward failed: ${e.message}` });
+            delete global.forwardSessions[quotedMsgId];
+            return true;
         }
-        return true;
     }
 
     // ─── GIT SESSIONS ──────────────────────────────────────────
     if (global.gitSessions && global.gitSessions[quotedMsgId]) {
-        const session = global.gitSessions[quotedMsgId];
+        try {
+            const session = global.gitSessions[quotedMsgId];
+            const { exec } = require('child_process');
 
-        // We'll re-use the execWithTimeout from owner.js – but we can't import it directly without circular deps.
-        // We'll use a local copy or use the same pattern.
-        // Since this is in messageHandlers.js, we'll define a minimal execWithTimeout here or use the one from owner? 
-        // Safer to just inline a simple exec wrapper.
-        const { exec } = require('child_process');
-        function execGit(cmd, timeout, callback) {
-            const child = exec(cmd, (err, stdout, stderr) => {
-                if (callback) callback(err, stdout, stderr);
-            });
-            const timer = setTimeout(() => {
-                child.kill();
-                if (callback) callback(new Error('Command timed out'), '', '');
-            }, timeout);
-            child.on('exit', () => clearTimeout(timer));
-        }
+            function execGit(cmd, timeout, callback) {
+                const child = exec(cmd, (err, stdout, stderr) => {
+                    if (callback) callback(err, stdout, stderr);
+                });
+                const timer = setTimeout(() => {
+                    child.kill();
+                    if (callback) callback(new Error('Command timed out'), '', '');
+                }, timeout);
+                child.on('exit', () => clearTimeout(timer));
+            }
 
-        switch (session.action) {
-            case 'commit':
-            case 'commitpush': {
-                if (!text) {
-                    await sock.sendMessage(jid, { text: "❌ Commit message cannot be empty." });
-                    return true;
-                }
-                await sock.sendMessage(jid, { text: `⏳ *Committing with message:* "${text}"` });
-                execGit(`git add . && git commit -m "${text}"`, 10000, async (err, stdout) => {
-                    if (err) {
-                        await sock.sendMessage(jid, { text: `❌ *Commit failed:* ${err.message}` });
-                    } else {
-                        await sock.sendMessage(jid, { text: `✅ *Committed successfully!*\n${stdout}` });
-                        if (session.action === 'commitpush') {
-                            // Now push
-                            await sock.sendMessage(jid, { text: "⏳ *Pushing commits...*" });
-                            execGit('git push', 60000, async (pushErr, pushOut) => {
-                                if (pushErr) return await sock.sendMessage(jid, { text: `❌ *Push failed:* ${pushErr.message}` });
-                                await sock.sendMessage(jid, { text: `✅ *Push successful!*\n${pushOut}` });
-                            });
-                        }
+            switch (session.action) {
+                case 'commit':
+                case 'commitpush': {
+                    if (!text) {
+                        await sock.sendMessage(jid, { text: "❌ Commit message cannot be empty." });
+                        return true;
                     }
-                });
-                delete global.gitSessions[quotedMsgId];
-                return true;
-            }
-            case 'switch': {
-                if (!text) {
-                    await sock.sendMessage(jid, { text: "❌ Branch name cannot be empty." });
+                    await sock.sendMessage(jid, { text: `⏳ *Committing with message:* "${text}"` });
+                    execGit(`git add . && git commit -m "${text}"`, 10000, async (err, stdout) => {
+                        if (err) {
+                            await sock.sendMessage(jid, { text: `❌ *Commit failed:* ${err.message}` });
+                        } else {
+                            await sock.sendMessage(jid, { text: `✅ *Committed successfully!*\n${stdout}` });
+                            if (session.action === 'commitpush') {
+                                await sock.sendMessage(jid, { text: "⏳ *Pushing commits...*" });
+                                execGit('git push', 60000, async (pushErr, pushOut) => {
+                                    if (pushErr) return await sock.sendMessage(jid, { text: `❌ *Push failed:* ${pushErr.message}` });
+                                    await sock.sendMessage(jid, { text: `✅ *Push successful!*\n${pushOut}` });
+                                });
+                            }
+                        }
+                    });
+                    delete global.gitSessions[quotedMsgId];
                     return true;
                 }
-                await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${text}"...*` });
-                execGit(`git checkout ${text}`, 10000, async (err, stdout) => {
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Switch failed:* ${err.message}` });
-                    await sock.sendMessage(jid, { text: `✅ *Switched to branch "${text}".*` });
-                });
-                delete global.gitSessions[quotedMsgId];
-                return true;
-            }
-            case 'newbranch': {
-                if (!text) {
-                    await sock.sendMessage(jid, { text: "❌ Branch name cannot be empty." });
+                case 'switch': {
+                    if (!text) {
+                        await sock.sendMessage(jid, { text: "❌ Branch name cannot be empty." });
+                        return true;
+                    }
+                    await sock.sendMessage(jid, { text: `⏳ *Switching to branch "${text}"...*` });
+                    execGit(`git checkout ${text}`, 10000, async (err, stdout) => {
+                        if (err) return await sock.sendMessage(jid, { text: `❌ *Switch failed:* ${err.message}` });
+                        await sock.sendMessage(jid, { text: `✅ *Switched to branch "${text}".*` });
+                    });
+                    delete global.gitSessions[quotedMsgId];
                     return true;
                 }
-                await sock.sendMessage(jid, { text: `⏳ *Creating branch "${text}"...*` });
-                execGit(`git checkout -b ${text}`, 10000, async (err, stdout) => {
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Branch creation failed:* ${err.message}` });
-                    await sock.sendMessage(jid, { text: `✅ *Created and switched to branch "${text}".*` });
-                });
-                delete global.gitSessions[quotedMsgId];
-                return true;
-            }
-            case 'revert': {
-                const num = parseInt(text);
-                if (isNaN(num) || num < 1 || num > session.commits.length) {
-                    await sock.sendMessage(jid, { text: `❌ Invalid number. Enter 1-${session.commits.length}.` });
+                case 'newbranch': {
+                    if (!text) {
+                        await sock.sendMessage(jid, { text: "❌ Branch name cannot be empty." });
+                        return true;
+                    }
+                    await sock.sendMessage(jid, { text: `⏳ *Creating branch "${text}"...*` });
+                    execGit(`git checkout -b ${text}`, 10000, async (err, stdout) => {
+                        if (err) return await sock.sendMessage(jid, { text: `❌ *Branch creation failed:* ${err.message}` });
+                        await sock.sendMessage(jid, { text: `✅ *Created and switched to branch "${text}".*` });
+                    });
+                    delete global.gitSessions[quotedMsgId];
                     return true;
                 }
-                const commitHash = session.commits[num - 1].split(' ')[0];
-                await sock.sendMessage(jid, { text: `⏳ *Reverting commit ${commitHash}...*` });
-                execGit(`git revert ${commitHash} --no-edit`, 10000, async (err, stdout) => {
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Revert failed:* ${err.message}` });
-                    await sock.sendMessage(jid, { text: `✅ *Reverted commit ${commitHash}.` });
-                });
-                delete global.gitSessions[quotedMsgId];
-                return true;
-            }
-            case 'force': {
-                if (text !== 'CONFIRM') {
-                    await sock.sendMessage(jid, { text: "❌ Force pull cancelled. Type CONFIRM to proceed." });
+                case 'revert': {
+                    const num = parseInt(text);
+                    if (isNaN(num) || num < 1 || num > session.commits.length) {
+                        await sock.sendMessage(jid, { text: `❌ Invalid number. Enter 1-${session.commits.length}.` });
+                        return true;
+                    }
+                    const commitHash = session.commits[num - 1].split(' ')[0];
+                    await sock.sendMessage(jid, { text: `⏳ *Reverting commit ${commitHash}...*` });
+                    execGit(`git revert ${commitHash} --no-edit`, 10000, async (err, stdout) => {
+                        if (err) return await sock.sendMessage(jid, { text: `❌ *Revert failed:* ${err.message}` });
+                        await sock.sendMessage(jid, { text: `✅ *Reverted commit ${commitHash}.` });
+                    });
+                    delete global.gitSessions[quotedMsgId];
                     return true;
                 }
-                // backupCriticalFiles is in owner.js; we can't easily import it here without circular deps.
-                // We'll just run the force pull without backup, or we can try to require it.
-                // Safer to just run git reset --hard directly.
-                await sock.sendMessage(jid, { text: "⏳ *Force pulling updates...*" });
-                execGit(`git fetch --all && git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)`, 60000, async (err, stdout) => {
-                    if (err) return await sock.sendMessage(jid, { text: `❌ *Force pull failed:* ${err.message}` });
-                    await sock.sendMessage(jid, { text: `✅ *Force pull successful!*` });
-                });
-                delete global.gitSessions[quotedMsgId];
-                return true;
+                case 'force': {
+                    if (text !== 'CONFIRM') {
+                        await sock.sendMessage(jid, { text: "❌ Force pull cancelled. Type CONFIRM to proceed." });
+                        return true;
+                    }
+                    await sock.sendMessage(jid, { text: "⏳ *Force pulling updates...*" });
+                    execGit(`git fetch --all && git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)`, 60000, async (err, stdout) => {
+                        if (err) return await sock.sendMessage(jid, { text: `❌ *Force pull failed:* ${err.message}` });
+                        await sock.sendMessage(jid, { text: `✅ *Force pull successful!*` });
+                    });
+                    delete global.gitSessions[quotedMsgId];
+                    return true;
+                }
+                default:
+                    delete global.gitSessions[quotedMsgId];
+                    return true;
             }
+        } catch (err) {
+            console.error('[GIT INTERCEPTOR]', err);
+            await sock.sendMessage(jid, { text: '❌ Git operation failed internally.' });
+            delete global.gitSessions[quotedMsgId];
+            return true;
         }
-        return false;
     }
 
     return false;
@@ -327,7 +366,6 @@ async function handleDownloaderSessions(sock, msg) {
             delete global.downloaderSessions[senderJid];
 
             const jid = msg.key.remoteJid;
-
             try {
                 const axios = require('axios');
                 async function downloadBuffer(url) {
@@ -452,7 +490,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const senderNumber = senderJid.split('@')[0];
         const isGroup = jid.endsWith('@g.us');
 
-        // ─── DECLARE COMMAND AND ARGS EARLY ──────────────────────
         let command;
         let args;
 
@@ -481,7 +518,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo || msg.message?.contextInfo;
         const quotedMsgId = contextInfo?.stanzaId;
         const trimmedMessage = (rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '').trim();
 
@@ -590,8 +627,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // ─── LIST RESPONSE DETECTION (Git menu) ──────────────────
         if (msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId) {
             const rowId = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
-            // rowId format: "git_pull", "git_commit", etc.
-            // Convert to command: e.g., "git pull"
             const parts = rowId.split('_');
             if (parts[0] === 'git') {
                 const subcmd = parts.slice(1).join('_');
@@ -1067,7 +1102,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const cmdKey = command.startsWith(config.prefix) ? command : `${config.prefix}${command}`;
 
-        // Determine reaction emoji based on role
         let reactEmoji = "❄";
         if (isDev) reactEmoji = "♾️";
         else if (isOwner) reactEmoji = "🪯";
