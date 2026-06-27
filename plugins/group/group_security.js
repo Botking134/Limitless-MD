@@ -1,7 +1,7 @@
 // plugins/group/group_security.js
 const config = require('../../config');
 const { saveState, normalizeToJid } = require('../../stateManager');
-const { DEV_LIDS } = require('../../devs');
+const { DEV_LIDS } = require('../devs');
 
 // ─── GLOBAL ──────────────────────────────────────────────────────
 global.silencedUsers = global.silencedUsers || {};
