@@ -1,5 +1,5 @@
 # ─── Secrets & Credentials ──────────────────────────────────────
-config.js                     # ← Ignored – contains API keys & owner details
+                     # ← Ignored – contains API keys & owner details
 .env
 .env.*
 *.env
@@ -38,7 +38,6 @@ storage/*.log
 storage/*.pid
 storage/.cache/
 storage/*.cache
-storage/vars.json
 
 # ─── Logs ─────────────────────────────────────────────────────────
 logs/
