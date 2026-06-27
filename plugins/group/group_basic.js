@@ -1,7 +1,7 @@
 // plugins/group/group_basic.js
 const config = require('../../config');
 const { saveState, normalizeToJid, resolveToPhoneJid } = require('../../stateManager');
-const { DEV_LIDS } = require('../../devs');
+const { DEV_LIDS } = require('../devs');
 
 // ─── MADARA GIFS (Defined directly in this file) ──────────────
 const madaraGifs = [
