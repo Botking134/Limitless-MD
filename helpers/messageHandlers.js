@@ -444,6 +444,7 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
         try {
             await sock.sendMessage(jid, { delete: msg.key });
             const warnKey = `${jid}_${senderNumber}`;
+            config.warns = config.warns || {};
             config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
             const count = config.warns[warnKey];
             const threshold = config.warnThreshold || 5;
@@ -672,6 +673,53 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
+        // ─── USER LEVEL-UP & STATS TRACKER ──────────────────────
+        if (isGroup && senderJid && !msg.key.fromMe) {
+            config.userStats = config.userStats || {};
+            config.userStats[jid] = config.userStats[jid] || {};
+            config.userStats[jid][senderJid] = config.userStats[jid][senderJid] || { msgCount: 0, level: 11 };
+
+            // Only increment if it's not a command to prevent spamming command exploits
+            const isCommand = trimmedMessageBody.startsWith(config.prefix);
+            if (!isCommand && trimmedMessageBody.length > 0) {
+                config.userStats[jid][senderJid].msgCount += 1;
+                const newCount = config.userStats[jid][senderJid].msgCount;
+
+                // Define milestone tiers (matching TIER_DATA in group_advanced.js)
+                const milestones = {
+                    15: { index: 10, name: "Human", icon: "🏃", text: "🏃 *TIER UNLOCKED: HUMAN ASCENSION*\n\nPeak physical form achieved! @Username has crossed 15 messages!\n\n• Current Tier: Tier 10: Human\n• Status: Standard human capabilities up to peak athlete level. Durability is strictly human level." },
+                    45: { index: 9, name: "Superhuman", icon: "⚡", text: "⚡ *TIER UNLOCKED: WALL BREACHED*\n\nConcrete walls shattered! @Username has crossed 45 messages!\n\n• Current Tier: Tier 9: Superhuman\n• Status: Street-level fighter. Can smash steel, concrete, or small rooms with minor effort." },
+                    90: { index: 8, name: "Urban", icon: "🏢", text: "🏢 *TIER UNLOCKED: URBAN CALAMITY*\n\nStructures are collapsing! @Username has crossed 90 messages!\n\n• Current Tier: Tier 8: Urban\n• Status: Destructive force ranging from single buildings to city blocks." },
+                    150: { index: 7, name: "Nuclear / Regional", icon: "☄️", text: "☄️ *TIER UNLOCKED: REGIONAL CONSTRAINTS SHATTERED*\n\nTowns and vaporized mountains lie behind them! @Username has scaled to 150 messages!\n\n• Current Tier: Tier 7: Nuclear / Regional\n• Status: Capable of leveling towns, major cities, or vaporizing massive mountain ranges." },
+                    250: { index: 6, name: "Global", icon: "🗺️", text: "🗺️ *TIER UNLOCKED: GLOBAL DOMINANCE*\n\nTectonic shockwaves detected! @Username has crossed 250 messages and attained global force!\n\n• Current Tier: Tier 6: Global\n• Status: Tectonic force capable of destroying island nations or continents." },
+                    400: { index: 5, name: "Planetary", icon: "🪐", text: "🪐 *TIER UNLOCKED: CELESTIAL COLLAPSE*\n\nMoons and planets shatter in their wake! @Username has crossed 400 messages!\n\n• Current Tier: Tier 5: Planetary\n• Status: Celestial power capable of shattering moons and gas giants." },
+                    600: { index: 4, name: "Stellar", icon: "☀️", text: "☀️ *TIER UNLOCKED: STELLAR OBLITERATION*\n\nWatch the skies! @Username has crossed 600 messages and can obliterate entire solar systems with a single sentence!\n\n• Current Tier: Tier 4: Stellar\n• Status: Cosmic power able to completely obliterate stars and solar systems." },
+                    800: { index: 3, name: "Cosmic", icon: "🌌", text: "🌌 *TIER UNLOCKED: GALACTIC EXTINCTION*\n\nReality is collapsing! @Username has reached 800 messages!\n\n• Current Tier: Tier 3: Cosmic\n• Status: Reality-spanning scale. Can collapse galaxies and physical matter." },
+                    900: { index: 2, name: "Multiversal", icon: "🔮", text: "🔮 *TIER UNLOCKED: TIMELINE ANOMALY*\n\nBranching realities are warping! @Username has reached 900 messages!\n\n• Current Tier: Tier 2: Multiversal\n• Status: Manipulates multiple timelines and distinct universes simultaneously." },
+                    1000: { index: 1, name: "Extradimensional (Outerversal)", icon: "👁️", text: "👁️ *TIER UNLOCKED: DIMENSIONAL FRAMEWORK ERASED*\n\nThe narrative grid has dissolved! @Username has achieved Outerversal ascension at 1,000 messages!\n\n• Current Tier: Tier 1: Extradimensional (Outerversal)\n• Status: Transcends space, time, and dimensional conceptual frameworks. They exist beyond standard human physics." },
+                    1500: { index: 0, name: "Boundless", icon: "👑", text: "👑 *THE FINAL CEILING: BOUNDLESS ASCENSION*\n\nABSOLUTE DIVINITY ACHIEVED! @Username has conquered the maximum peak of 1,500 messages!\n\n• Current Tier: Tier 0: Boundless\n• Status: True omnipotence. Omnipresent, omniscient, and conceptually unreachable. The supreme deity of this chat." }
+                };
+
+                if (milestones[newCount]) {
+                    const milestone = milestones[newCount];
+                    config.userStats[jid][senderJid].level = milestone.index;
+
+                    // Only send broadcast if levelup alerts are active (not set to off)
+                    const levelupAlertState = config.gcalerts?.levelup?.[jid] || 'off';
+                    if (levelupAlertState === 'on') {
+                        const targetNum = senderJid.split('@')[0];
+                        const cleanMsgText = milestone.text.replace(/@Username/g, `@${targetNum}`);
+                        
+                        // Send levelup milestone card directly to the group chat
+                        sock.sendMessage(jid, { text: cleanMsgText, mentions: [senderJid] }).catch(err => {
+                            console.error("[LEVELUP BROADCAST FAILED]", err.message);
+                        });
+                    }
+                }
+                saveState();
+            }
+        }
+
         // ─── LID-SAFE SILENCE CHECK ──────────────────────────────
         if (isGroup) {
             const silenceData = isUserSilenced(global.silencedUsers, jid, senderJid);
@@ -860,6 +908,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     try {
                         await sock.sendMessage(jid, { delete: msg.key });
                         const warnKey = `${jid}_${senderNumber}`;
+                        config.warns = config.warns || {};
                         config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
                         const count = config.warns[warnKey];
                         const threshold = config.warnThreshold || 5;
