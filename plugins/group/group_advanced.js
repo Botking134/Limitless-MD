@@ -1,18 +1,55 @@
 // plugins/group/group_advanced.js
 const config = require('../../config');
-const { saveState, normalizeToJid, resolveToPhoneJid } = require('../../stateManager');
+const { saveState, normalizeToJid } = require('../../stateManager');
 const { DEV_LIDS } = require('../devs');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 
-// ─── GLOBALS ──────────────────────────────────────────────────────
+// ─── GLOBALS  ──────────────────────────────────────────────────────
 global.tkickTimers = global.tkickTimers || {};
 global.kickallActive = global.kickallActive || {};
 global.groupTimers = global.groupTimers || {};
 global.gclogIntervals = global.gclogIntervals || {};
 
+// ─── TIER GRID CONFIGURATION ───────────────────────────────────────
+const TIER_DATA = [
+    { index: 11, name: "Infinitesimal", req: 0, icon: "🌌", desc: "Lower-dimensional entity unable to affect the 3D world." },
+    { index: 10, name: "Human", req: 15, icon: "🏃", desc: "Standard human capabilities up to peak athlete level." },
+    { index: 9, name: "Superhuman", req: 45, icon: "⚡", desc: "Street-level fighter. Can smash steel, concrete, or small rooms." },
+    { index: 8, name: "Urban", req: 90, icon: "🏢", desc: "Destructive force ranging from single buildings to city blocks." },
+    { index: 7, name: "Nuclear / Regional", req: 150, icon: "☄️", desc: "Capable of leveling towns, major cities, or vaporizing mountains." },
+    { index: 6, name: "Global", req: 250, icon: "🗺️", desc: "Tectonic force capable of destroying island nations or continents." },
+    { index: 5, name: "Planetary", req: 400, icon: "🪐", desc: "Celestial power capable of shattering moons and gas giants." },
+    { index: 4, name: "Stellar", req: 600, icon: "☀️", desc: "Cosmic power able to completely obliterate stars and solar systems." },
+    { index: 3, name: "Cosmic", req: 800, icon: "🌌", desc: "Reality-spanning scale. Can collapse galaxies and physical matter." },
+    { index: 2, name: "Multiversal", req: 900, icon: "🔮", desc: "Manipulates multiple timelines and distinct universes simultaneously." },
+    { index: 1, name: "Extradimensional (Outerversal)", req: 1000, icon: "👁️", desc: "Transcends space, time, and dimensional conceptual frameworks." },
+    { index: 0, name: "Boundless", req: 1500, icon: "👑", desc: "True omnipotence. Beyond any logical framework or hierarchy." }
+];
+
+const LEVEL_STATUS_HYPE = {
+    11: "New spectator entity detected. Bound by basic physical laws.",
+    10: "Standard human capabilities, from below-average to peak athletes. Speed and durability are strictly human level.",
+    9: "Street-level fighters who can smash walls, steel, or small rooms with minor effort.",
+    8: "Destruction ranging from single buildings up to multiple city blocks. Their presence is starting to make an actual impact.",
+    7: "Capable of wiping out towns, major cities, or vaporizing massive mountain ranges. Celestial anomalies are forming.",
+    6: "Tectonic-scale power that can destroy islands, countries, or entire continents with single shockwaves.",
+    5: "Celestial-scale power capable of shattering moons, planets, or gas giants. Handle with extreme caution.",
+    4: "Cosmic power able to obliterate stars and entire solar systems. Massively Faster-Than-Light typing speed detected.",
+    3: "Reality-spanning power that can destroy entire galaxies or all physical matter in a universe.",
+    2: "A dimensional anomaly of catastrophic proportions! Their words shatter the walls between infinitely branching realities, collapsing multiple space-time continuums simultaneously in the chat.",
+    1: "TRANSCENDENCE OF ALL CONCEPTS ACHIEVED! The concepts of space, time, scale, and linear progression no longer apply to them. They exist completely outside standard physical laws and speak directly from the void.",
+    0: "THE SUPREME APEX OF EXISTENCE! They stand completely above all dualities, logic, and mathematical structures. Omnipotent, omnipresent, and conceptually unreachable. They don't just transcend the rules of the group—they define reality. The unmatched deity of the chat."
+};
+
 // ─── HELPERS ──────────────────────────────────────────────────────
+
+function cleanJid(jid) {
+    if (!jid) return '';
+    const raw = normalizeToJid(jid);
+    return raw.split('@')[0].split(':')[0] + '@' + raw.split('@')[1];
+}
 
 function getRawMessage(message) {
     if (!message) return null;
@@ -37,11 +74,11 @@ function parseTargetUser(msg, args) {
     const mentions = contextInfo?.mentionedJid || [];
 
     if (mentions.length > 0) {
-        return normalizeToJid(mentions[0]);
+        return cleanJid(mentions[0]);
     }
 
     if (contextInfo?.participant) {
-        return normalizeToJid(contextInfo.participant);
+        return cleanJid(contextInfo.participant);
     }
 
     if (args) {
@@ -56,18 +93,20 @@ function parseTargetUser(msg, args) {
 
 function isDeveloper(jid) {
     if (!jid) return false;
-    const normalized = normalizeToJid(jid);
+    const normalized = cleanJid(jid);
     return DEV_LIDS.includes(normalized);
 }
 
 function isOwnerTarget(target) {
-    return target === config.ownerJid ||
-           (config.ownerLid && target === config.ownerLid) ||
-           (config.ownerLids && config.ownerLids.includes(target)) ||
-           (config.secondaryOwners && config.secondaryOwners.includes(target));
+    const cleaned = cleanJid(target);
+    return cleaned === cleanJid(config.ownerJid) ||
+           (config.ownerLid && cleaned === cleanJid(config.ownerLid)) ||
+           (config.ownerLids && config.ownerLids.map(cleanJid).includes(cleaned)) ||
+           (config.secondaryOwners && config.secondaryOwners.map(cleanJid).includes(cleaned));
 }
 
 function parseDuration(str) {
+    if (!str) return null;
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
     const value = parseInt(match[1]);
@@ -78,11 +117,43 @@ function parseDuration(str) {
     return null;
 }
 
-// ─── UPDATED verifyPermissions ──────────────────────
-async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
-    const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+async function safeResolveToPhoneJid(sock, senderJid) {
+    try {
+        const stateManager = require('../../stateManager');
+        const resolver = stateManager.resolveToPhoneJid || stateManager.getPhoneJid;
+        if (resolver) {
+            const resolved = await resolver(sock, senderJid);
+            if (resolved) return cleanJid(resolved);
+        }
+    } catch (e) { /* ignore */ }
+    return cleanJid(senderJid);
+}
 
-    // 1. AUTHORIZATION CHECK (Developers bypass all checks)
+function getUserTier(msgCount) {
+    let currentTier = TIER_DATA[0];
+    for (let i = 0; i < TIER_DATA.length; i++) {
+        if (msgCount >= TIER_DATA[i].req) {
+            currentTier = TIER_DATA[i];
+        } else {
+            break;
+        }
+    }
+    return currentTier;
+}
+
+function getNextTier(msgCount) {
+    for (let i = 0; i < TIER_DATA.length; i++) {
+        if (msgCount < TIER_DATA[i].req) {
+            return TIER_DATA[i];
+        }
+    }
+    return null;
+}
+
+// ─── verifyPermissions Helper ──────────────────────
+async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
+    const senderJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
+
     if (isDev) {
         return true;
     }
@@ -90,26 +161,24 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const isAuthorized = isOwner || isSudo;
     if (!isAuthorized) return false;
 
-    // 2. EXEMPT COMMANDS
     const exemptCommands = [
         'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
         'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
-        'join', 'exit', 'listonline', 'msgs'
+        'join', 'exit', 'listonline', 'msgs', 'rank', 'ranks', 'leaderboard'
     ];
     if (exemptCommands.includes(commandName.toLowerCase())) {
         return true;
     }
 
-    // 3. BOT ADMIN CHECK WITH JID & LID CO-EXISTENCE
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
-    const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-    const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
+    const botJid = sock.user?.id ? cleanJid(sock.user.id) : '';
+    const botLid = sock.user?.lid ? cleanJid(sock.user.lid) : (config.botLid || '');
 
     const botParticipant = participants.find(p => {
-        const pId = normalizeToJid(p.id);
-        const pLid = p.lid ? normalizeToJid(p.lid) : '';
+        const pId = cleanJid(p.id);
+        const pLid = p.lid ? cleanJid(p.lid) : '';
         return (botJid && (pId === botJid || pLid === botJid)) ||
                (botLid && (pId === botLid || pLid === botLid));
     });
@@ -120,10 +189,9 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    // 4. SENDER ADMIN CHECK
     let sender = participants.find(p => {
-        const pId = normalizeToJid(p.id);
-        const pLid = p.lid ? normalizeToJid(p.lid) : '';
+        const pId = cleanJid(p.id);
+        const pLid = p.lid ? cleanJid(p.lid) : '';
         return pId === senderJid || (pLid && pLid === senderJid);
     });
     const isSenderAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
@@ -157,7 +225,6 @@ async function queryGeminiText(prompt, logString, model = "gemini-3.5-flash", us
             });
             return response.text || null;
         } catch (sdkErr) {
-            // Fallback: try without search
             const response = await ai.models.generateContent({
                 model,
                 contents: fullPrompt
@@ -171,69 +238,53 @@ async function queryGeminiText(prompt, logString, model = "gemini-3.5-flash", us
 }
 
 async function triggerSummary(sock, jid) {
-    // ... (your existing code)
+    const logs = config.conversationLogs?.[jid] || [];
+    if (logs.length === 0) return;
+
+    const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+    const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
+
+    try {
+        const responseText = await queryGeminiText(prompt, logString);
+        if (responseText) {
+            const activeSocket = global.activeSock || sock;
+            await activeSocket.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3‑HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
+            if (config.conversationLogs) config.conversationLogs[jid] = [];
+            saveState();
+        }
+    } catch (err) {
+        console.error("❌ [GCLOG] Auto‑summary failed:", err.message);
+    }
 }
 
-// ─── EXPORT COMMANDS ────────────────────────────────────────────
-module.exports = [
-    // ... all commands including gclog
-];
-
-module.exports = [
+// ─── COMMAND DEFINITIONS ─────────────────────────────────────────
+const advancedGroupCommands = [
     // 1. WELCOME
     {
         name: 'welcome',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return;
+            if (!jid.endsWith('@g.us')) return;
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'welcome');
             if (!isAuthorized) return;
 
-            if (!config.welcome) config.welcome = {};
-
-            const parts = args ? args.split(' ') : [];
-            const subAction = parts[0] ? parts[0].toLowerCase().trim() : '';
-
-            if (subAction === 'on') {
-                config.welcome[jid] = config.welcome[jid] || { active: true, msg: "" };
-                config.welcome[jid].active = true;
-
-                if (!config.gcalerts) config.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
-                config.gcalerts.welcome = config.gcalerts.welcome || {};
-                config.gcalerts.welcome[jid] = 'on';
-
-                saveState();
-                return await sock.sendMessage(jid, { text: "✅ Welcoming sequence activated for new members." }, { quoted: msg });
+            const action = args ? args.toLowerCase().trim() : '';
+            if (action !== 'on' && action !== 'off') {
+                return await sock.sendMessage(jid, { text: `❌ Use: \`${config.prefix}welcome <on/off>\`` }, { quoted: msg });
             }
 
-            if (subAction === 'off') {
-                config.welcome[jid] = config.welcome[jid] || { active: false, msg: "" };
-                config.welcome[jid].active = false;
+            config.gcalerts = config.gcalerts || {};
+            config.gcalerts.welcome = config.gcalerts.welcome || {};
+            config.gcalerts.welcome[jid] = action;
 
-                if (!config.gcalerts) config.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
-                config.gcalerts.welcome = config.gcalerts.welcome || {};
-                config.gcalerts.welcome[jid] = 'off';
+            config.welcome = config.welcome || {};
+            config.welcome[jid] = config.welcome[jid] || {};
+            config.welcome[jid].active = (action === 'on');
 
-                saveState();
-                return await sock.sendMessage(jid, { text: "❌ Welcoming sequence deactivated." }, { quoted: msg });
-            }
-
-            if (subAction === 'set') {
-                const customMsg = parts.slice(1).join(' ').trim();
-                if (!customMsg) return await sock.sendMessage(jid, { text: "❌ Provide a custom message." }, { quoted: msg });
-
-                config.welcome[jid] = config.welcome[jid] || { active: true };
-                config.welcome[jid].msg = customMsg;
-                saveState();
-                return await sock.sendMessage(jid, { text: `✅ Custom welcome message set.` }, { quoted: msg });
-            }
-
-            const currentStatus = config.welcome[jid]?.active ? "Enabled ✅" : "Disabled ❌";
-            const prompt = `🌸 *Welcome Module Configuration:*\n\nStatus: \`${currentStatus}\``;
-            await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+            saveState();
+            await sock.sendMessage(jid, { text: `✅ Welcome alerts have been turned *${action.toUpperCase()}*` }, { quoted: msg });
         }
     },
 
@@ -243,285 +294,482 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return;
+            if (!jid.endsWith('@g.us')) return;
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'goodbye');
             if (!isAuthorized) return;
 
-            if (!config.goodbye) config.goodbye = {};
-
-            const parts = args ? args.split(' ') : [];
-            const subAction = parts[0] ? parts[0].toLowerCase().trim() : '';
-
-            if (subAction === 'on') {
-                config.goodbye[jid] = config.goodbye[jid] || { active: true, msg: "" };
-                config.goodbye[jid].active = true;
-
-                if (!config.gcalerts) config.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
-                config.gcalerts.goodbye = config.gcalerts.goodbye || {};
-                config.gcalerts.goodbye[jid] = 'on';
-
-                saveState();
-                return await sock.sendMessage(jid, { text: "✅ Goodbye notification sequence activated." }, { quoted: msg });
+            const action = args ? args.toLowerCase().trim() : '';
+            if (action !== 'on' && action !== 'off') {
+                return await sock.sendMessage(jid, { text: `❌ Use: \`${config.prefix}goodbye <on/off>\`` }, { quoted: msg });
             }
 
-            if (subAction === 'off') {
-                config.goodbye[jid] = config.goodbye[jid] || { active: false, msg: "" };
-                config.goodbye[jid].active = false;
+            config.gcalerts = config.gcalerts || {};
+            config.gcalerts.goodbye = config.gcalerts.goodbye || {};
+            config.gcalerts.goodbye[jid] = action;
 
-                if (!config.gcalerts) config.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
-                config.gcalerts.goodbye = config.gcalerts.goodbye || {};
-                config.gcalerts.goodbye[jid] = 'off';
+            config.goodbye = config.goodbye || {};
+            config.goodbye[jid] = config.goodbye[jid] || {};
+            config.goodbye[jid].active = (action === 'on');
 
-                saveState();
-                return await sock.sendMessage(jid, { text: "❌ Goodbye notification sequence deactivated." }, { quoted: msg });
-            }
-
-            if (subAction === 'set') {
-                const customMsg = parts.slice(1).join(' ').trim();
-                if (!customMsg) return await sock.sendMessage(jid, { text: "❌ Provide custom goodbye message." }, { quoted: msg });
-
-                config.goodbye[jid] = config.goodbye[jid] || { active: true };
-                config.goodbye[jid].msg = customMsg;
-                saveState();
-                return await sock.sendMessage(jid, { text: `✅ Custom goodbye message set.` }, { quoted: msg });
-            }
-
-            const currentStatus = config.goodbye[jid]?.active ? "Enabled ✅" : "Disabled ❌";
-            const currentMsg = config.goodbye[jid]?.msg || "Goodbye @user! We'll miss you.";
-            const prompt = `🌸 *Goodbye Module Configuration:*\n\nStatus: \`${currentStatus}\`\nLayout: _"${currentMsg}"_`;
-            await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+            saveState();
+            await sock.sendMessage(jid, { text: `✅ Goodbye alerts have been turned *${action.toUpperCase()}*` }, { quoted: msg });
         }
     },
 
-    // 3. DELWELCOME
+    // 3. SETWELCOME
     {
-        name: 'delwelcome',
+        name: 'setwelcome',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return;
+            if (!jid.endsWith('@g.us')) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delwelcome');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'setwelcome');
             if (!isAuthorized) return;
 
-            if (config.welcome && config.welcome[jid]) delete config.welcome[jid];
-            await sock.sendMessage(jid, { text: "✅ Welcome settings removed." }, { quoted: msg });
+            if (!args || !args.trim()) {
+                return await sock.sendMessage(jid, { text: `❌ Please provide custom welcome layout.\nExample: \`${config.prefix}setwelcome Welcome @user to @group!\`` }, { quoted: msg });
+            }
+
+            config.welcome = config.welcome || {};
+            config.welcome[jid] = config.welcome[jid] || {};
+            config.welcome[jid].msg = args.trim();
+            config.welcome[jid].active = true;
+
+            config.gcalerts = config.gcalerts || {};
+            config.gcalerts.welcome = config.gcalerts.welcome || {};
+            config.gcalerts.welcome[jid] = 'on';
+
             saveState();
+            await sock.sendMessage(jid, { text: "✅ Custom welcome message set and activated." }, { quoted: msg });
         }
     },
 
-    // 4. DELGOODBYE
+    // 4. SETGOODBYE
     {
-        name: 'delgoodbye',
+        name: 'setgoodbye',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return;
+            if (!jid.endsWith('@g.us')) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delgoodbye');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'setgoodbye');
             if (!isAuthorized) return;
 
-            if (config.goodbye && config.goodbye[jid]) delete config.goodbye[jid];
-            await sock.sendMessage(jid, { text: "✅ Goodbye settings removed." }, { quoted: msg });
+            if (!args || !args.trim()) {
+                return await sock.sendMessage(jid, { text: `❌ Please provide custom goodbye layout.\nExample: \`${config.prefix}setgoodbye Goodbye @user!\`` }, { quoted: msg });
+            }
+
+            config.goodbye = config.goodbye || {};
+            config.goodbye[jid] = config.goodbye[jid] || {};
+            config.goodbye[jid].msg = args.trim();
+            config.goodbye[jid].active = true;
+
+            config.gcalerts = config.gcalerts || {};
+            config.gcalerts.goodbye = config.gcalerts.goodbye || {};
+            config.gcalerts.goodbye[jid] = 'on';
+
             saveState();
+            await sock.sendMessage(jid, { text: "✅ Custom goodbye message set and activated." }, { quoted: msg });
         }
     },
 
-    // 5. GCALERTS
+    // 5. PROMOTION
+    {
+        name: 'promotion',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!jid.endsWith('@g.us')) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'promotion');
+            if (!isAuthorized) return;
+
+            const action = args ? args.toLowerCase().trim() : '';
+            if (action !== 'on' && action !== 'off') {
+                return await sock.sendMessage(jid, { text: `❌ Use: \`${config.prefix}promotion <on/off>\`` }, { quoted: msg });
+            }
+
+            config.gcalerts = config.gcalerts || {};
+            config.gcalerts.promote = config.gcalerts.promote || {};
+            config.gcalerts.promote[jid] = action;
+
+            saveState();
+            await sock.sendMessage(jid, { text: `✅ Promotion alerts have been turned *${action.toUpperCase()}*` }, { quoted: msg });
+        }
+    },
+
+    // 6. DEMOTION
+    {
+        name: 'demotion',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!jid.endsWith('@g.us')) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'demotion');
+            if (!isAuthorized) return;
+
+            const action = args ? args.toLowerCase().trim() : '';
+            if (action !== 'on' && action !== 'off') {
+                return await sock.sendMessage(jid, { text: `❌ Use: \`${config.prefix}demotion <on/off>\`` }, { quoted: msg });
+            }
+
+            config.gcalerts = config.gcalerts || {};
+            config.gcalerts.demote = config.gcalerts.demote || {};
+            config.gcalerts.demote[jid] = action;
+
+            saveState();
+            await sock.sendMessage(jid, { text: `✅ Demotion alerts have been turned *${action.toUpperCase()}*` }, { quoted: msg });
+        }
+    },
+
+    // 7. LEVELUP (Alert Toggle)
+    {
+        name: 'levelup',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!jid.endsWith('@g.us')) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'levelup');
+            if (!isAuthorized) return;
+
+            const action = args ? args.toLowerCase().trim() : '';
+            if (action !== 'on' && action !== 'off') {
+                return await sock.sendMessage(jid, { text: `❌ Use: \`${config.prefix}levelup <on/off>\`` }, { quoted: msg });
+            }
+
+            config.gcalerts = config.gcalerts || {};
+            config.gcalerts.levelup = config.gcalerts.levelup || {};
+            config.gcalerts.levelup[jid] = action;
+
+            saveState();
+            await sock.sendMessage(jid, { text: `✅ Level Up milestone broadcast alerts have been turned *${action.toUpperCase()}*` }, { quoted: msg });
+        }
+    },
+
+    // 8. GCALERTS (Consolidated Alert Dashboard)
     {
         name: 'gcalerts',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return await sock.sendMessage(jid, { text: "❌ Group required." }, { quoted: msg });
+            if (!jid.endsWith('@g.us')) return await sock.sendMessage(jid, { text: "❌ Group required." }, { quoted: msg });
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'gcalerts');
             if (!isAuthorized) return;
 
-            if (!config.gcalerts) {
-                config.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
-            }
+            config.gcalerts = config.gcalerts || { promote: {}, demote: {}, welcome: {}, goodbye: {}, levelup: {} };
 
-            const parts = args ? args.toLowerCase().trim().split(' ') : [];
-            const sub = parts[0] || '';
-            const toggle = parts[1] || '';
+            const rawAction = args ? args.toLowerCase().trim() : '';
 
-            const validSubs = ['promote', 'demote', 'welcome', 'goodbye'];
-            if (!validSubs.includes(sub)) {
-                const promStatus = config.gcalerts.promote?.[jid] || 'off';
-                const demStatus = config.gcalerts.demote?.[jid] || 'off';
-                const welStatus = config.gcalerts.welcome?.[jid] || 'off';
-                const gbStatus = config.gcalerts.goodbye?.[jid] || 'off';
+            // Master enable/disable
+            if (rawAction === 'on' || rawAction === 'off') {
+                const targetState = rawAction;
+                const statusFlag = (targetState === 'on');
 
-                return await sock.sendMessage(jid, {
-                    text: `🔔 *Group Alerts Dashboard (gcalerts)* 🔔\n` +
-                          `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                          `• *Promote Alert:* \`${promStatus.toUpperCase()}\` (Format: @target was promoted by @actor)\n` +
-                          `• *Demote Alert:* \`${demStatus.toUpperCase()}\` (Format: @target was demoted by @actor)\n` +
-                          `• *Welcome Alert:* \`${welStatus.toUpperCase()}\` (Linked to .welcome)\n` +
-                          `• *Goodbye Alert:* \`${gbStatus.toUpperCase()}\` (Linked to .goodbye)\n\n` +
-                          `👉 To toggle: \`${config.prefix}gcalerts <promote/demote/welcome/goodbye> <on/off>\``
-                }, { quoted: msg });
-            }
+                config.gcalerts.promote = config.gcalerts.promote || {};
+                config.gcalerts.demote = config.gcalerts.demote || {};
+                config.gcalerts.welcome = config.gcalerts.welcome || {};
+                config.gcalerts.goodbye = config.gcalerts.goodbye || {};
+                config.gcalerts.levelup = config.gcalerts.levelup || {};
 
-            if (toggle !== 'on' && toggle !== 'off') return await sock.sendMessage(jid, { text: `❌ Use 'on' or 'off'.` }, { quoted: msg });
+                config.gcalerts.promote[jid] = targetState;
+                config.gcalerts.demote[jid] = targetState;
+                config.gcalerts.welcome[jid] = targetState;
+                config.gcalerts.goodbye[jid] = targetState;
+                config.gcalerts.levelup[jid] = targetState;
 
-            config.gcalerts[sub] = config.gcalerts[sub] || {};
-            config.gcalerts[sub][jid] = toggle;
-
-            if (sub === 'welcome') {
                 config.welcome = config.welcome || {};
                 config.welcome[jid] = config.welcome[jid] || {};
-                config.welcome[jid].active = (toggle === 'on');
-            }
-            if (sub === 'goodbye') {
+                config.welcome[jid].active = statusFlag;
+
                 config.goodbye = config.goodbye || {};
                 config.goodbye[jid] = config.goodbye[jid] || {};
-                config.goodbye[jid].active = (toggle === 'on');
+                config.goodbye[jid].active = statusFlag;
+
+                saveState();
+                return await sock.sendMessage(jid, { text: `✅ *All alerts have been turned ${targetState.toUpperCase()} for this group!*` }, { quoted: msg });
             }
 
-            saveState();
+            // Dashboard Status Display
+            const welStatus = config.gcalerts.welcome?.[jid] || 'off';
+            const gbStatus = config.gcalerts.goodbye?.[jid] || 'off';
+            const promStatus = config.gcalerts.promote?.[jid] || 'off';
+            const demStatus = config.gcalerts.demote?.[jid] || 'off';
+            const lvlStatus = config.gcalerts.levelup?.[jid] || 'off';
 
-            await sock.sendMessage(jid, { text: `✅ *Alert updated:* ${sub.toUpperCase()} alert is now \`${toggle.toUpperCase()}\`` }, { quoted: msg });
+            return await sock.sendMessage(jid, {
+                text: `🔔 *Group Alerts Status Dashboard* 🔔\n` +
+                      `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                      `• *Welcome Alert:* \`${welStatus.toUpperCase()}\` (Linked: .welcome)\n` +
+                      `• *Goodbye Alert:* \`${gbStatus.toUpperCase()}\` (Linked: .goodbye)\n` +
+                      `• *Promote Alert:* \`${promStatus.toUpperCase()}\` (Linked: .promotion)\n` +
+                      `• *Demote Alert:* \`${demStatus.toUpperCase()}\` (Linked: .demotion)\n` +
+                      `• *Levelup Alert:* \`${lvlStatus.toUpperCase()}\` (Linked: .levelup)\n\n` +
+                      `👉 To toggle all alerts: \`${config.prefix}gcalerts <on/off>\`\n` +
+                      `👉 To toggle individual alerts: \`welcome\`, \`goodbye\`, \`promotion\`, \`demotion\`, or \`levelup\``
+            }, { quoted: msg });
         }
     },
 
-    // 6. GCLOG (with button fix & error handling)
-{
-    name: 'gclog',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-        const jid = msg.key.remoteJid;
-        const isGroup = jid.endsWith('@g.us');
-        if (!isGroup) return;
+    // 9. RANKS
+    {
+        name: 'ranks',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
 
-        const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'gclog');
-        if (!isAuthorized) return;
+            let layout = `📊 *Infinite Void — Universal Power Grid (12-Tiers)*\n` +
+                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
-        if (!config.gclogActive) config.gclogActive = {};
-        if (!config.conversationLogs) config.conversationLogs = {};
+            TIER_DATA.forEach(tier => {
+                layout += `${tier.icon} *Tier ${tier.index}: ${tier.name}* (${tier.req} Messages)\n` +
+                          `_Status: ${tier.desc}_\n\n`;
+            });
 
-        // ─── Extract action from args or button ──────────────────
-        let action = args ? args.toLowerCase().trim() : '';
+            layout += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                      `👉 _Scale your typing velocity to breach milestones!_`;
 
-        if (!action) {
-            const rawMsg = getRawMessage(msg.message);
-            const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
-                             rawMsg?.templateButtonReplyMessage?.selectedId ||
-                             '';
-            if (buttonId) {
-                const parts = buttonId.split(' ');
-                if (parts.length > 1) action = parts[1]?.toLowerCase() || '';
-            }
+            await sock.sendMessage(jid, { text: layout }, { quoted: msg });
         }
+    },
 
-        // ─── No action: show menu ──────────────────────────────
-        if (!action) {
-            const current = config.gclogActive[jid] ? 'on' : 'off';
-            const activeStatus = current === 'on' ? "Active 🟢" : "Inactive 💤";
-            const prompt = `📊 *Group Chat Log (GCLOG) Configuration:*\n\n` +
-                           `• *Status:* \`${activeStatus}\`\n\n` +
-                           `Select an option below:`;
-            const buttonMessage = {
-                text: prompt,
-                buttons: [
-                    { buttonId: `${config.prefix}gclog on`, buttonText: { displayText: 'Turn On 🟢' }, type: 1 },
-                    { buttonId: `${config.prefix}gclog off`, buttonText: { displayText: 'Turn Off 💤' }, type: 1 },
-                    { buttonId: `${config.prefix}gclog check`, buttonText: { displayText: 'Check Log 📊' }, type: 1 }
-                ],
-                headerType: 1
-            };
-            try {
-                return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (e) {
-                return await sock.sendMessage(jid, { text: `${prompt}\n\n• \`${config.prefix}gclog on\`\n• \`${config.prefix}gclog off\`\n• \`${config.prefix}gclog check\`` }, { quoted: msg });
+    // 10. RANK
+    {
+        name: 'rank',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const target = parseTargetUser(msg, args) || cleanJid(msg.key.participant || msg.key.remoteJid || '');
+
+            config.userStats = config.userStats || {};
+            config.userStats[jid] = config.userStats[jid] || {};
+            const stats = config.userStats[jid][target] || { msgCount: 0, level: 11 };
+
+            const currentTier = getUserTier(stats.msgCount);
+            const nextTier = getNextTier(stats.msgCount);
+
+            // Group ranking calculation
+            const allUsers = Object.keys(config.userStats[jid]).map(uJid => ({
+                ujid: uJid,
+                count: config.userStats[jid][uJid].msgCount || 0
+            })).sort((a, b) => b.count - a.count);
+
+            const placementIndex = allUsers.findIndex(u => u.ujid === target);
+            const placementRank = placementIndex !== -1 ? (placementIndex + 1) : allUsers.length + 1;
+
+            let progressBarStr = '';
+            let progressPercentage = 100;
+            let requirementString = '🏆 Max Level reached! Infinite Totality.';
+
+            if (nextTier) {
+                const prevTierReq = currentTier.req;
+                const nextTierReq = nextTier.req;
+                const earned = stats.msgCount - prevTierReq;
+                const needed = nextTierReq - prevTierReq;
+
+                progressPercentage = Math.min(100, Math.max(0, Math.floor((earned / needed) * 100)));
+                const filledBlocks = Math.round(progressPercentage / 5);
+                const emptyBlocks = 20 - filledBlocks;
+                progressBarStr = `[${'█'.repeat(filledBlocks)}${'░'.repeat(emptyBlocks)}] **${progressPercentage}%**`;
+                requirementString = `⏳ Needs **${nextTierReq - stats.msgCount}** more messages to scale to \`Tier ${nextTier.index}: ${nextTier.name}\``;
+            } else {
+                progressBarStr = `[${'█'.repeat(20)}] **100%**`;
             }
-        }
 
-        // ─── Handle actions ──────────────────────────────────────
-        if (action === 'on') {
-            config.gclogActive[jid] = true;
-            if (global.gclogIntervals[jid]) clearInterval(global.gclogIntervals[jid]);
-            global.gclogIntervals[jid] = setInterval(async () => {
-                await triggerSummary(sock, jid);
-            }, 3 * 60 * 60 * 1000);
-            await sock.sendMessage(jid, { text: "🔒 *GCLOG Activated. A 10‑point summary will be generated every 3 hours.*" }, { quoted: msg });
-            saveState();
-            return;
-        }
+            const username = target.split('@')[0];
+            const hypeStatus = LEVEL_STATUS_HYPE[currentTier.index] || currentTier.desc;
 
-        if (action === 'off') {
-            if (global.gclogIntervals[jid]) {
-                clearInterval(global.gclogIntervals[jid]);
-                delete global.gclogIntervals[jid];
+            const layout = `👁️ *Domain Rank Verification*\n` +
+                           `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                           `👤 *User:* @${username}\n` +
+                           `📊 *Group Placement:* Rank \`#${placementRank}\` out of \`${allUsers.length}\` members\n` +
+                           `💬 *Message Count:* \`${stats.msgCount}\` Messages\n\n` +
+                           `🎖️ *Current Tier:* \`Tier ${currentTier.index}: ${currentTier.name}\` ${currentTier.icon}\n` +
+                           `🛡️ *Status:* ${hypeStatus}\n\n` +
+                           `📈 *Progress to Next Tier:*\n` +
+                           `${progressBarStr}\n` +
+                           `${requirementString}`;
+
+            await sock.sendMessage(jid, { text: layout, mentions: [target] }, { quoted: msg });
+        }
+    },
+
+    // 11. LEADERBOARD
+    {
+        name: 'leaderboard',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+
+            config.userStats = config.userStats || {};
+            config.userStats[jid] = config.userStats[jid] || {};
+
+            const sortedUsers = Object.keys(config.userStats[jid]).map(uJid => ({
+                ujid: uJid,
+                count: config.userStats[jid][uJid].msgCount || 0
+            })).sort((a, b) => b.count - a.count);
+
+            if (sortedUsers.length === 0) {
+                return await sock.sendMessage(jid, { text: "🏆 No message records found inside this group yet." }, { quoted: msg });
             }
-            config.gclogActive[jid] = false;
-            if (config.conversationLogs[jid]) delete config.conversationLogs[jid];
-            await sock.sendMessage(jid, { text: "🔓 *GCLOG Deactivated and logs cleared.*" }, { quoted: msg });
-            saveState();
-            return;
-        }
 
-        if (action === 'check') {
-            const logs = config.conversationLogs[jid] || [];
-            if (logs.length === 0) {
-                return await sock.sendMessage(jid, { text: "📊 No logs found within the current 3‑hour window." }, { quoted: msg });
+            const limit = Math.min(sortedUsers.length, 10);
+            let layout = `🏆 *Infinite Void — Top ${limit} Apex Entities*\n` +
+                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+            const mentions = [];
+            const positionEmojis = ["👑", "🥈", "🥉"];
+
+            for (let i = 0; i < limit; i++) {
+                const record = sortedUsers[i];
+                const userTier = getUserTier(record.count);
+                const userNum = record.ujid.split('@')[0];
+                const badge = positionEmojis[i] || "🏅";
+                const suffix = (i === 0) ? "st." : ((i === 1) ? "nd." : ((i === 2) ? "rd." : "th."));
+
+                layout += `${badge} *${i + 1}${suffix}* @${userNum} — \`${record.count}\` Messages\n` +
+                          `└ *Tier:* \`Tier ${userTier.index}: ${userTier.name}\` ${userTier.icon}\n\n`;
+
+                mentions.push(record.ujid);
             }
-            const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Summarizing current logs...*" }, { quoted: msg });
-            const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
-            const prompt = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
 
-            try {
-                const responseText = await queryGeminiText(prompt, logString);
-                if (responseText) {
-                    await sock.sendMessage(jid, {
-                        text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}`,
-                        edit: statusMsg.key
-                    });
-                } else {
-                    // Fallback: try Groq if available
-                    const groqKey = config.groqApiKey;
-                    if (groqKey) {
-                        try {
-                            const { queryLLM } = require('./games');
-                            const groqResponse = await queryLLM(`${prompt}\n\nHere are the chat logs:\n${logString}`, 0.7);
-                            if (groqResponse) {
-                                await sock.sendMessage(jid, {
-                                    text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${groqResponse.trim()}`,
-                                    edit: statusMsg.key
-                                });
-                                return;
+            layout += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                      `👉 _Leaderboard updates instantly with every message._`;
+
+            await sock.sendMessage(jid, { text: layout, mentions: mentions }, { quoted: msg });
+        }
+    },
+
+    // 12. GCLOG (Fixed Socket & Autosummarizer execution)
+    {
+        name: 'gclog',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'gclog');
+            if (!isAuthorized) return;
+
+            if (!config.gclogActive) config.gclogActive = {};
+            if (!config.conversationLogs) config.conversationLogs = {};
+
+            let action = args ? args.toLowerCase().trim() : '';
+
+            if (!action) {
+                const rawMsg = getRawMessage(msg.message);
+                const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
+                                 rawMsg?.templateButtonReplyMessage?.selectedId ||
+                                 '';
+                if (buttonId) {
+                    const parts = buttonId.split(' ');
+                    if (parts.length > 1) action = parts[1]?.toLowerCase() || '';
+                }
+            }
+
+            if (!action) {
+                const current = config.gclogActive[jid] ? 'on' : 'off';
+                const activeStatus = current === 'on' ? "Active 🟢" : "Inactive 💤";
+                const prompt = `📊 *Group Chat Log (GCLOG) Configuration:*\n\n` +
+                               `• *Status:* \`${activeStatus}\`\n\n` +
+                               `Select an option below:`;
+                const buttonMessage = {
+                    text: prompt,
+                    buttons: [
+                        { buttonId: `${config.prefix}gclog on`, buttonText: { displayText: 'Turn On 🟢' }, type: 1 },
+                        { buttonId: `${config.prefix}gclog off`, buttonText: { displayText: 'Turn Off 💤' }, type: 1 },
+                        { buttonId: `${config.prefix}gclog check`, buttonText: { displayText: 'Check Log 📊' }, type: 1 }
+                    ],
+                    headerType: 1
+                };
+                try {
+                    return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                } catch (e) {
+                    return await sock.sendMessage(jid, { text: `${prompt}\n\n• \`${config.prefix}gclog on\`\n• \`${config.prefix}gclog off\`\n• \`${config.prefix}gclog check\`` }, { quoted: msg });
+                }
+            }
+
+            if (action === 'on') {
+                config.gclogActive[jid] = true;
+                if (global.gclogIntervals[jid]) clearInterval(global.gclogIntervals[jid]);
+                global.gclogIntervals[jid] = setInterval(async () => {
+                    await triggerSummary(sock, jid);
+                }, 3 * 60 * 60 * 1000);
+                await sock.sendMessage(jid, { text: "🔒 *GCLOG Activated. A 10‑point summary will be generated every 3 hours.*" }, { quoted: msg });
+                saveState();
+                return;
+            }
+
+            if (action === 'off') {
+                if (global.gclogIntervals[jid]) {
+                    clearInterval(global.gclogIntervals[jid]);
+                    delete global.gclogIntervals[jid];
+                }
+                config.gclogActive[jid] = false;
+                if (config.conversationLogs[jid]) delete config.conversationLogs[jid];
+                await sock.sendMessage(jid, { text: "🔓 *GCLOG Deactivated and logs cleared.*" }, { quoted: msg });
+                saveState();
+                return;
+            }
+
+            if (action === 'check') {
+                const logs = config.conversationLogs[jid] || [];
+                if (logs.length === 0) {
+                    return await sock.sendMessage(jid, { text: "📊 No logs found within the current 3‑hour window." }, { quoted: msg });
+                }
+                const statusMsg = await sock.sendMessage(jid, { text: "⏳ *Summarizing current logs...*" }, { quoted: msg });
+                const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
+                const promptMsg = "You are Satoru Gojo. Summarize this group conversation logs. You must output exactly 10 bullet points. Keep your tone playful and cocky. Do not include any intro, outro, or conversational filler.";
+
+                try {
+                    const responseText = await queryGeminiText(promptMsg, logString);
+                    if (responseText) {
+                        await sock.sendMessage(jid, {
+                            text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${responseText.trim()}`,
+                            edit: statusMsg.key
+                        });
+                    } else {
+                        const groqKey = config.groqApiKey;
+                        if (groqKey) {
+                            try {
+                                const { queryLLM } = require('./games');
+                                const groqResponse = await queryLLM(`${promptMsg}\n\nHere are the chat logs:\n${logString}`, 0.7);
+                                if (groqResponse) {
+                                    await sock.sendMessage(jid, {
+                                        text: `🤞 *LIMITLESS DOMAIN CONVERSATION PREVIEW (Current Window):*\n\n${groqResponse.trim()}`,
+                                        edit: statusMsg.key
+                                    });
+                                    return;
+                                }
+                            } catch (groqErr) {
+                                console.error("[GCLOG] Groq fallback failed:", groqErr.message);
                             }
-                        } catch (groqErr) {
-                            console.error("[GCLOG] Groq fallback failed:", groqErr.message);
                         }
+                        await sock.sendMessage(jid, {
+                            text: "❌ *Summary generation failed.*\n\nPlease ensure `GEMINI_API_KEY` is set and valid.",
+                            edit: statusMsg.key
+                        });
                     }
+                } catch (err) {
+                    console.error("[GCLOG] Summary error:", err);
                     await sock.sendMessage(jid, {
-                        text: "❌ *Summary generation failed.*\n\nPlease ensure `GEMINI_API_KEY` is set and valid.",
+                        text: `❌ *Summary generation error:*\n${err.message}`,
                         edit: statusMsg.key
                     });
                 }
-            } catch (err) {
-                console.error("[GCLOG] Summary error:", err);
-                await sock.sendMessage(jid, {
-                    text: `❌ *Summary generation error:*\n${err.message}`,
-                    edit: statusMsg.key
-                });
+                return;
             }
-            return;
+
+            await sock.sendMessage(jid, { text: `❌ Unknown action: ${action}` }, { quoted: msg });
         }
+    },
 
-        // Fallback
-        await sock.sendMessage(jid, { text: `❌ Unknown action: ${action}` }, { quoted: msg });
-    }
-}, 
-
-    // 7. CREATEGC
+    // 13. CREATEGC
     {
         name: 'creategc',
         isPrefixless: false,
@@ -534,7 +782,7 @@ module.exports = [
 
             try {
                 const senderJid = msg.key.participant || msg.key.remoteJid;
-                const phoneJid = await resolveToPhoneJid(sock, senderJid);
+                const phoneJid = await safeResolveToPhoneJid(sock, senderJid);
                 if (!phoneJid) return await sock.sendMessage(jid, { text: "❌ Resolution failed." }, { quoted: msg });
 
                 const group = await sock.groupCreate(args, [phoneJid]);
@@ -545,7 +793,7 @@ module.exports = [
         }
     },
 
-    // 8. KICKALL
+    // 14. KICKALL
     {
         name: 'kickall',
         isPrefixless: false,
@@ -561,9 +809,9 @@ module.exports = [
                 const groupMetadata = await sock.groupMetadata(jid);
                 const participants = groupMetadata.participants;
 
-                const botJid = normalizeToJid(sock.user.id);
+                const botJid = cleanJid(sock.user.id);
                 const targets = participants.filter(p => {
-                    const normId = normalizeToJid(p.id);
+                    const normId = cleanJid(p.id);
                     return normId !== botJid &&
                            !isOwnerTarget(normId) &&
                            !isDeveloper(normId) &&
@@ -573,7 +821,7 @@ module.exports = [
                 if (targets.length === 0) return await sock.sendMessage(jid, { text: "❌ No non-admin targets found to exorcise." }, { quoted: msg });
 
                 const durationString = args ? args.trim() : '';
-                const countdownMs = durationString ? (parseDuration(countdownMs) || 20000) : 20000;
+                const countdownMs = durationString ? (parseDuration(durationString) || 20000) : 20000;
                 const countdownSecs = countdownMs / 1000;
 
                 const text = `🌪 *Channelling Limitless Void... Exorcism sequence initiated.* Removing all members in *${countdownSecs} seconds*.`;
@@ -620,7 +868,7 @@ module.exports = [
         }
     },
 
-    // 9. STOPKICKALL
+    // 15. STOPKICKALL
     {
         name: 'stopkickall',
         isPrefixless: false,
@@ -638,7 +886,7 @@ module.exports = [
         }
     },
 
-    // 10. TKICK
+    // 16. TKICK
     {
         name: 'tkick',
         isPrefixless: false,
@@ -706,7 +954,7 @@ module.exports = [
         }
     },
 
-    // 11. JOIN
+    // 17. JOIN
     {
         name: 'join',
         isPrefixless: false,
@@ -734,7 +982,7 @@ module.exports = [
         }
     },
 
-    // 12. EXIT
+    // 18. EXIT
     {
         name: 'exit',
         isPrefixless: false,
@@ -760,7 +1008,7 @@ module.exports = [
         }
     },
 
-    // 13. TOGCSTATUS
+    // 19. TOGCSTATUS
     {
         name: 'togcstatus',
         isPrefixless: false,
@@ -873,7 +1121,7 @@ module.exports = [
         }
     },
 
-    // 14. TOGCJID
+    // 20. TOGCJID
     {
         name: 'togcjid',
         isPrefixless: false,
@@ -989,7 +1237,7 @@ module.exports = [
         }
     },
 
-    // 15. GETGPP
+    // 21. GETGPP
     {
         name: 'getgpp',
         isPrefixless: false,
@@ -1010,7 +1258,7 @@ module.exports = [
         }
     },
 
-    // 16. SETGPP
+    // 22. SETGPP
     {
         name: 'setgpp',
         isPrefixless: false,
@@ -1019,13 +1267,12 @@ module.exports = [
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            // ─── FIX: Resolve bot LID before calling verifyPermissions ──
             if (!config.botLid && sock.user && sock.user.id) {
                 try {
-                    const botJid = normalizeToJid(sock.user.id);
+                    const botJid = cleanJid(sock.user.id);
                     const resolved = await sock.findUserId(botJid);
                     if (resolved && resolved.lid) {
-                        config.botLid = normalizeToJid(resolved.lid);
+                        config.botLid = cleanJid(resolved.lid);
                         console.log('📌 [SETGPP] Resolved bot LID:', config.botLid);
                     }
                 } catch (e) {
@@ -1064,7 +1311,7 @@ module.exports = [
         }
     },
 
-    // 17. POLL
+    // 23. POLL
     {
         name: 'poll',
         isPrefixless: false,
@@ -1088,7 +1335,7 @@ module.exports = [
         }
     },
 
-    // 18. HTAG
+    // 24. HTAG
     {
         name: 'htag',
         isPrefixless: false,
@@ -1124,7 +1371,7 @@ module.exports = [
         }
     },
 
-    // 19. SPAMTAG
+    // 25. SPAMTAG
     {
         name: 'spamtag',
         isPrefixless: false,
@@ -1170,10 +1417,9 @@ module.exports = [
     }
 ];
 
-// ─── ALIASES ──────────────────────────────────────────────────────
-
+// ─── GENERATE ALIASES ─────────────────────────────────────────────
 const aliases = [];
-module.exports.forEach(cmd => {
+advancedGroupCommands.forEach(cmd => {
     if (cmd.name === 'exit') {
         aliases.push({ ...cmd, name: 'leave' });
     }
@@ -1181,4 +1427,6 @@ module.exports.forEach(cmd => {
         aliases.push({ ...cmd, name: 'ghost' });
     }
 });
-module.exports.push(...aliases);
+advancedGroupCommands.push(...aliases);
+
+module.exports = advancedGroupCommands;
