@@ -732,14 +732,28 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         ];
         const random = devNumbers[Math.floor(Math.random() * devNumbers.length)];
 
-        await sock.sendMessage(jid, {
-            contacts: {
-                displayName: '@Developer',
-                contacts: [{ vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:@Developer\nTEL:${random}\nEND:VCARD` }]
+        const { generateWAMessageFromContent } = await import('@itsliaaa/baileys');
+
+        const messageContent = {
+            interactive: {
+                header: { hasMediaAttachment: false },
+                body: { text: '@Developer' },
+                footer: { text: '' },
+                buttons: [{
+                    name: 'url',
+                    buttonParamsJson: JSON.stringify({
+                        display_text: 'Message',
+                        url: `https://wa.me/${random}`
+                    })
+                }]
             }
-        }, { quoted: msg });
+        };
+
+        const msgProto = generateWAMessageFromContent(jid, messageContent, { userJid: sock.user.id });
+        await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
     }
 },
+
 
 // ─── .user ───────────────────────────────────────────────────────
 {
@@ -749,6 +763,7 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         const jid = msg.key.remoteJid;
         const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
         let targetJid = '';
+        let phoneNumber = '';
 
         const rawMsg = getRawMessage(msg.message);
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
@@ -765,32 +780,28 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         else if (args) {
             const cleanNum = args.replace(/[^0-9]/g, '');
             if (cleanNum.length >= 7) {
-                // Send contact card directly with the given number
-                const displayName = await sock.getName(`${cleanNum}@s.whatsapp.net`).catch(() => 'User');
-                await sock.sendMessage(jid, {
-                    contacts: {
-                        displayName: `@${displayName}`,
-                        contacts: [{ vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:@${displayName}\nTEL:${cleanNum}\nEND:VCARD` }]
-                    }
-                }, { quoted: msg });
-                return;
+                phoneNumber = cleanNum;
+                targetJid = `${cleanNum}@s.whatsapp.net`;
             }
         }
 
         // Fallback: use sender
-        if (!targetJid) targetJid = senderJid;
+        if (!targetJid) {
+            targetJid = senderJid;
+        }
 
-        // Resolve phone number
-        let phoneNumber = '';
-        if (targetJid.endsWith('@s.whatsapp.net')) {
-            phoneNumber = targetJid.split('@')[0];
-        } else if (targetJid.endsWith('@lid')) {
-            try {
-                const resolved = await getPhoneJid(sock, targetJid, jid);
-                if (resolved) phoneNumber = resolved.split('@')[0];
-            } catch (e) { /* ignore */ }
-        } else {
-            phoneNumber = targetJid.split('@')[0];
+        // If we still don't have a phone number, try to resolve it
+        if (!phoneNumber) {
+            if (targetJid.endsWith('@s.whatsapp.net')) {
+                phoneNumber = targetJid.split('@')[0];
+            } else if (targetJid.endsWith('@lid')) {
+                try {
+                    const resolved = await getPhoneJid(sock, targetJid, jid);
+                    if (resolved) phoneNumber = resolved.split('@')[0];
+                } catch (e) { /* ignore */ }
+            } else {
+                phoneNumber = targetJid.split('@')[0];
+            }
         }
 
         if (!phoneNumber) {
@@ -798,27 +809,67 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
             return;
         }
 
-        // Get user's display name
+        // Get display name
         const displayName = await sock.getName(targetJid).catch(() => 'User');
 
-        // Send contact card
-        await sock.sendMessage(jid, {
-            contacts: {
-                displayName: `@${displayName}`,
-                contacts: [{ vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:@${displayName}\nTEL:${phoneNumber}\nEND:VCARD` }]
-            }
-        }, { quoted: msg });
-
-        // ─── Fetch and send About (if available) ──────────────
+        // Fetch about (status)
+        let aboutText = '';
         try {
             const status = await sock.fetchStatus(targetJid);
             if (status && status.status && status.status.trim()) {
-                await sock.sendMessage(jid, { text: status.status }, { quoted: msg });
+                aboutText = status.status.trim();
             }
-        } catch (e) { /* ignore – user may not have about or network error */ }
+        } catch (e) { /* ignore */ }
+
+        // Fetch profile picture
+        let imageBuffer = null;
+        try {
+            const imgUrl = await sock.profilePictureUrl(targetJid, 'image');
+            const response = await fetch(imgUrl);
+            if (response.ok) {
+                const arrayBuffer = await response.arrayBuffer();
+                imageBuffer = Buffer.from(arrayBuffer);
+            }
+        } catch (e) { /* ignore */ }
+
+        // Build interactive message
+        const { prepareWAMessageMedia, generateWAMessageFromContent } = await import('@itsliaaa/baileys');
+
+        let header = { hasMediaAttachment: false };
+        let bodyText = `@${displayName}`;
+        if (aboutText) bodyText += `\n${aboutText}`;
+
+        const messageContent = {
+            interactive: {
+                header: header,
+                body: { text: bodyText },
+                footer: { text: '' },
+                buttons: [{
+                    name: 'url',
+                    buttonParamsJson: JSON.stringify({
+                        display_text: 'Message',
+                        url: `https://wa.me/${phoneNumber}`
+                    })
+                }]
+            }
+        };
+
+        // If we have an image, attach it as header
+        if (imageBuffer) {
+            const media = await prepareWAMessageMedia(
+                { image: imageBuffer },
+                { upload: sock.waUploadToServer }
+            );
+            messageContent.interactive.header = {
+                ...media,
+                hasMediaAttachment: true
+            };
+        }
+
+        const msgProto = generateWAMessageFromContent(jid, messageContent, { userJid: sock.user.id });
+        await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
     }
 },
-
 
 
     // ─── .uptime ──────────────────────────────────────────────────
