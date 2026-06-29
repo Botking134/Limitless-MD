@@ -1,38 +1,29 @@
-// plugins/user.js
-const config = require('../config');
-const { normalizeToJid } = require('../stateManager');
+// plugins/user/user.js
+const config = require('../../config');
+const { normalizeToJid } = require('../../stateManager');
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
 function cleanJid(jid) {
     if (!jid) return '';
-    try {
-        const raw = normalizeToJid(jid);
-        if (!raw || !raw.includes('@')) return raw || '';
-        const parts = raw.split('@');
-        const userPart = parts[0].split(':')[0];
-        return `${userPart}@${parts[1]}`;
-    } catch (err) {
-        return '';
-    }
+    const raw = normalizeToJid(jid);
+    return raw.split('@')[0].split(':')[0] + '@' + raw.split('@')[1];
 }
 
 async function getBaileys() {
-    let baileys;
     try {
-        baileys = require('@whiskeysockets/baileys');
+        return require('@whiskeysockets/baileys');
     } catch (e) {
         try {
-            baileys = require('@itsliaaa/baileys');
+            return require('@itsliaaa/baileys');
         } catch (err) {
             try {
-                baileys = await import('@whiskeysockets/baileys');
+                return await import('@whiskeysockets/baileys');
             } catch (importErr) {
-                baileys = await import('@itsliaaa/baileys');
+                return await import('@itsliaaa/baileys');
             }
         }
     }
-    return baileys?.default || baileys;
 }
 
 function getRawMessage(message) {
@@ -75,140 +66,10 @@ function parseTargetUser(msg, args) {
     return '';
 }
 
-/**
- * Attempts to extract the display name of a JID using available metadata and store resources.
- */
-async function resolveUsername(sock, jid, msg) {
-    if (!jid) return 'WhatsApp User';
-
-    const senderJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
-    if (jid === senderJid && msg.pushName) {
-        return msg.pushName;
-    }
-
-    // Try reading from store if available
-    if (sock.store?.contacts?.[jid]) {
-        const contact = sock.store.contacts[jid];
-        if (contact.name) return contact.name;
-        if (contact.notify) return contact.notify;
-    }
-
-    // Try custom/socket getName helper
-    if (typeof sock.getName === 'function') {
-        try {
-            const name = sock.getName(jid);
-            if (name) return name;
-        } catch (e) { /* ignore fallback */ }
-    }
-
-    // Try business profile check
-    if (typeof sock.getBusinessProfile === 'function') {
-        try {
-            const profile = await sock.getBusinessProfile(jid);
-            if (profile && profile.title) return profile.title;
-        } catch (e) { /* ignore fallback */ }
-    }
-
-    // Fallback directly to formatted phone number rather than standard static text
-    const num = jid.split('@')[0];
-    return `+${num}`;
-}
-
-/**
- * Safely fetches profile picture URL
- */
-async function getProfilePic(sock, jid) {
-    try {
-        return await sock.profilePictureUrl(jid, 'image');
-    } catch (err) {
-        return null;
-    }
-}
-
-/**
- * Sends a native flow template containing user metadata, image, and CTA message button
- */
-async function sendInteractiveProfile(sock, jid, targetJid, displayName, pfpUrl, quotedMsg) {
-    const b = await getBaileys();
-    const targetNum = targetJid.split('@')[0];
-    const captionText = `/// ${displayName} ///`;
-
-    let messageContent = {};
-
-    if (pfpUrl) {
-        const preparedMedia = await b.prepareWAMessageMedia(
-            { image: { url: pfpUrl } },
-            { upload: sock.waUploadToServer }
-        );
-        messageContent = {
-            viewOnceMessage: {
-                message: {
-                    interactiveMessage: {
-                        header: {
-                            hasMediaAttachment: true,
-                            imageMessage: preparedMedia.imageMessage
-                        },
-                        body: {
-                            text: captionText
-                        },
-                        nativeFlowMessage: {
-                            buttons: [
-                                {
-                                    name: "cta_url",
-                                    buttonParamsJson: JSON.stringify({
-                                        display_text: "Message 💬",
-                                        url: `https://wa.me/${targetNum}`,
-                                        merchant_url: `https://wa.me/${targetNum}`
-                                    })
-                                }
-                            ]
-                        }
-                    }
-                }
-            }
-        };
-    } else {
-        messageContent = {
-            viewOnceMessage: {
-                message: {
-                    interactiveMessage: {
-                        header: {
-                            hasMediaAttachment: false
-                        },
-                        body: {
-                            text: captionText
-                        },
-                        nativeFlowMessage: {
-                            buttons: [
-                                {
-                                    name: "cta_url",
-                                    buttonParamsJson: JSON.stringify({
-                                        display_text: "Message 💬",
-                                        url: `https://wa.me/${targetNum}`,
-                                        merchant_url: `https://wa.me/${targetNum}`
-                                    })
-                                }
-                            ]
-                        }
-                    }
-                }
-            }
-        };
-    }
-
-    const generated = b.generateWAMessageFromContent(
-        jid,
-        b.proto.Message.fromObject(messageContent),
-        { userJid: sock.user.id, quoted: quotedMsg }
-    );
-
-    await sock.relayMessage(jid, generated.message, { messageId: generated.key.id });
-}
-
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. USER (Dynamic Username, Pfp & Message Button Layout)
+    // 1. USER (Dynamic Contact Card with Exact Name)
     {
         name: 'user',
         isPrefixless: false,
@@ -217,15 +78,40 @@ module.exports = [
             const targetJid = parseTargetUser(msg, args) || cleanJid(msg.key.participant || msg.key.remoteJid || '');
             const targetNum = targetJid.split('@')[0];
 
+            // Re-prioritized check order: checks pushName first if target is the sender
+            let username = '';
+            const senderJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
+            
             try {
-                const displayName = await resolveUsername(sock, targetJid, msg);
-                const pfpUrl = await getProfilePic(sock, targetJid);
+                if (cleanJid(targetJid) === senderJid) {
+                    username = msg.pushName || '';
+                }
+                if (!username && sock.getName) {
+                    username = sock.getName(targetJid) || '';
+                }
+            } catch (e) { /* ignore and use fallback */ }
 
-                await sendInteractiveProfile(sock, jid, targetJid, displayName, pfpUrl, msg);
+            if (!username) {
+                username = 'WhatsApp User';
+            }
+
+            const vcard = 'BEGIN:VCARD\n' +
+                          'VERSION:3.0\n' +
+                          `FN:${username}\n` +
+                          'ORG:Business Account;\n' +
+                          `TEL;type=CELL;type=VOICE;waid=${targetNum}:+${targetNum}\n` +
+                          'END:VCARD';
+
+            try {
+                // Highly compatible single-contact card payload structure
+                await sock.sendMessage(jid, {
+                    contacts: {
+                        displayName: username,
+                        contacts: [{ vcard }]
+                    }
+                }, { quoted: msg });
             } catch (err) {
                 console.error("[USER COMMAND ERROR]", err.message);
-                // Standard fallback text link if native interactive fails
-                await sock.sendMessage(jid, { text: `/// Contact ///\n\n💬 Message: https://wa.me/${targetNum}` }, { quoted: msg });
             }
         }
     },
@@ -237,6 +123,7 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const targetJid = parseTargetUser(msg, args) || cleanJid(msg.key.participant || msg.key.remoteJid || '');
+            const targetNum = targetJid.split('@')[0];
 
             let lidJid = 'N/A';
             try {
@@ -246,7 +133,7 @@ module.exports = [
                         lidJid = cleanJid(resolved.lid);
                     }
                 }
-            } catch (lidErr) { /* ignore fallback */ }
+            } catch (lidErr) { /* ignore and use N/A fallback */ }
 
             let layout = `🧬 *Domain ID Resolver*\n` +
                          `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -268,7 +155,7 @@ module.exports = [
         }
     },
 
-    // 3. DEV (Native Flow Button Message)
+    // 3. DEV (Native Flow Button Message with exact Developer @mention)
     {
         name: 'dev',
         isPrefixless: false,
@@ -277,15 +164,97 @@ module.exports = [
             const devJid = '2347040401291@s.whatsapp.net';
             const devPhoneNum = '2347040401291';
 
+            // Fetch Developer's profile photo url safely
+            let pfpUrl = null;
             try {
-                const displayName = await resolveUsername(sock, devJid, msg);
-                const pfpUrl = await getProfilePic(sock, devJid);
+                pfpUrl = await sock.profilePictureUrl(devJid, 'image');
+            } catch (pfpErr) { /* fallback to null if private */ }
 
-                await sendInteractiveProfile(sock, jid, devJid, displayName, pfpUrl, msg);
+            // Strictly hardcoded to format a direct blue-clickable @user mention
+            const captionText = `@${devPhoneNum}`;
+
+            try {
+                const b = await getBaileys();
+                
+                // Build a modern, universally supported WhatsApp Native Flow Button Message
+                let messageContent = {};
+
+                if (pfpUrl) {
+                    const preparedMedia = await b.prepareWAMessageMedia({ image: { url: pfpUrl } }, { upload: sock.waUploadToServer });
+                    messageContent = {
+                        viewOnceMessage: {
+                            message: {
+                                interactiveMessage: {
+                                    header: {
+                                        hasMediaAttachment: true,
+                                        imageMessage: preparedMedia.imageMessage
+                                    },
+                                    body: {
+                                        text: captionText
+                                    },
+                                    nativeFlowMessage: {
+                                        buttons: [
+                                            {
+                                                name: "cta_url",
+                                                buttonParamsJson: JSON.stringify({
+                                                    display_text: "Message 💬",
+                                                    url: `https://wa.me/${devPhoneNum}`,
+                                                    merchant_url: `https://wa.me/${devPhoneNum}`
+                                                })
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    };
+                } else {
+                    messageContent = {
+                        viewOnceMessage: {
+                            message: {
+                                interactiveMessage: {
+                                    header: {
+                                        hasMediaAttachment: false
+                                    },
+                                    body: {
+                                        text: captionText
+                                    },
+                                    nativeFlowMessage: {
+                                        buttons: [
+                                            {
+                                                name: "cta_url",
+                                                buttonParamsJson: JSON.stringify({
+                                                    display_text: "Message 💬",
+                                                    url: `https://wa.me/${devPhoneNum}`,
+                                                    merchant_url: `https://wa.me/${devPhoneNum}`
+                                                })
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    };
+                }
+
+                // Compile and relay the interactive payload directly with the mentions context mapping
+                const generated = b.generateWAMessageFromContent(
+                    jid,
+                    b.proto.Message.fromObject(messageContent),
+                    { userJid: sock.user.id }
+                );
+
+                // Inject mentions into the interactive message context info
+                generated.message.viewOnceMessage.message.interactiveMessage.contextInfo = {
+                    mentionedJid: [devJid]
+                };
+
+                await sock.relayMessage(jid, generated.message, { messageId: generated.key.id });
+
             } catch (err) {
                 console.error("[DEV COMMAND ERROR]", err.message);
-                // Hard fallback to standard text link if message relay fails
-                await sock.sendMessage(jid, { text: `/// Dev Contact ///\n\n💬 Message: https://wa.me/${devPhoneNum}` }, { quoted: msg });
+                // Hard fallback to standard mention text if everything fails
+                await sock.sendMessage(jid, { text: `@${devPhoneNum}\n\n💬 Message: https://wa.me/${devPhoneNum}`, mentions: [devJid] }, { quoted: msg });
             }
         }
     }
