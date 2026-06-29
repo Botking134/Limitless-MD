@@ -1,5 +1,5 @@
 // plugins/user/user.js
-const config = require('../../config');
+const config = require('../config');
 const { normalizeToJid } = require('../../stateManager');
 const { DEV_LIDS } = require('../devs');
 
