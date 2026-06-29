@@ -719,63 +719,6 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         }
     },
 
-// ─── .user ───────────────────────────────────────────────────────
-{
-    name: 'user',
-    isPrefixless: false,
-    execute: async (sock, msg, args) => {
-        const jid = msg.key.remoteJid;
-        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-        let targetJid = '';
-
-        // 1. Check if there's a mention
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-        if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
-            targetJid = normalizeToJid(contextInfo.mentionedJid[0]);
-        }
-        // 2. Check if there's a reply
-        else if (contextInfo?.quotedMessage) {
-            targetJid = normalizeToJid(contextInfo.participant || senderJid);
-        }
-        // 3. Check if args contain a number
-        else if (args) {
-            const cleanNum = args.replace(/[^0-9]/g, '');
-            if (cleanNum.length >= 7) {
-                // If it's a number, just use it directly
-                await sock.sendMessage(jid, { text: `https://wa.me/${cleanNum}` }, { quoted: msg });
-                return;
-            }
-        }
-
-        // If no target found, use sender's own JID
-        if (!targetJid) targetJid = senderJid;
-
-        // Resolve phone number
-        let phoneJid = '';
-        if (targetJid.endsWith('@s.whatsapp.net')) {
-            phoneJid = targetJid;
-        } else if (targetJid.endsWith('@lid')) {
-            try {
-                const resolved = await getPhoneJid(sock, targetJid, jid);
-                if (resolved) phoneJid = resolved;
-            } catch (e) { /* ignore */ }
-        } else {
-            // fallback: try to normalize
-            phoneJid = normalizeToJid(targetJid);
-        }
-
-        if (!phoneJid || !phoneJid.endsWith('@s.whatsapp.net')) {
-            await sock.sendMessage(jid, { text: '❌ Could not resolve phone number.' }, { quoted: msg });
-            return;
-        }
-
-        const number = phoneJid.split('@')[0];
-        await sock.sendMessage(jid, { text: `https://wa.me/${number}` }, { quoted: msg });
-    }
-},
-
-
 // ─── .dev ───────────────────────────────────────────────────────
 {
     name: 'dev',
@@ -788,9 +731,94 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
             '2347040401291'
         ];
         const random = devNumbers[Math.floor(Math.random() * devNumbers.length)];
-        await sock.sendMessage(jid, { text: `https://wa.me/${random}` }, { quoted: msg });
+
+        await sock.sendMessage(jid, {
+            contacts: {
+                displayName: '@Developer',
+                contacts: [{ vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:@Developer\nTEL:${random}\nEND:VCARD` }]
+            }
+        }, { quoted: msg });
     }
 },
+
+// ─── .user ───────────────────────────────────────────────────────
+{
+    name: 'user',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        let targetJid = '';
+
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+
+        // 1. Check mention
+        if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+            targetJid = normalizeToJid(contextInfo.mentionedJid[0]);
+        }
+        // 2. Check reply
+        else if (contextInfo?.quotedMessage) {
+            targetJid = normalizeToJid(contextInfo.participant || senderJid);
+        }
+        // 3. Check phone number in args
+        else if (args) {
+            const cleanNum = args.replace(/[^0-9]/g, '');
+            if (cleanNum.length >= 7) {
+                // Send contact card directly with the given number
+                const displayName = await sock.getName(`${cleanNum}@s.whatsapp.net`).catch(() => 'User');
+                await sock.sendMessage(jid, {
+                    contacts: {
+                        displayName: `@${displayName}`,
+                        contacts: [{ vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:@${displayName}\nTEL:${cleanNum}\nEND:VCARD` }]
+                    }
+                }, { quoted: msg });
+                return;
+            }
+        }
+
+        // Fallback: use sender
+        if (!targetJid) targetJid = senderJid;
+
+        // Resolve phone number
+        let phoneNumber = '';
+        if (targetJid.endsWith('@s.whatsapp.net')) {
+            phoneNumber = targetJid.split('@')[0];
+        } else if (targetJid.endsWith('@lid')) {
+            try {
+                const resolved = await getPhoneJid(sock, targetJid, jid);
+                if (resolved) phoneNumber = resolved.split('@')[0];
+            } catch (e) { /* ignore */ }
+        } else {
+            phoneNumber = targetJid.split('@')[0];
+        }
+
+        if (!phoneNumber) {
+            await sock.sendMessage(jid, { text: '❌ Could not resolve phone number.' }, { quoted: msg });
+            return;
+        }
+
+        // Get user's display name
+        const displayName = await sock.getName(targetJid).catch(() => 'User');
+
+        // Send contact card
+        await sock.sendMessage(jid, {
+            contacts: {
+                displayName: `@${displayName}`,
+                contacts: [{ vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:@${displayName}\nTEL:${phoneNumber}\nEND:VCARD` }]
+            }
+        }, { quoted: msg });
+
+        // ─── Fetch and send About (if available) ──────────────
+        try {
+            const status = await sock.fetchStatus(targetJid);
+            if (status && status.status && status.status.trim()) {
+                await sock.sendMessage(jid, { text: status.status }, { quoted: msg });
+            }
+        } catch (e) { /* ignore – user may not have about or network error */ }
+    }
+},
+
 
 
     // ─── .uptime ──────────────────────────────────────────────────
