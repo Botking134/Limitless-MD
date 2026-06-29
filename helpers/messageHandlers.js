@@ -31,6 +31,13 @@ if (!global.recentLogs || !Array.isArray(global.recentLogs)) {
     global.recentLogs = [];
 }
 
+// ─── JID NORMALIZATION HELPER ───────────────────────────────────
+function cleanJid(jid) {
+    if (!jid) return '';
+    const raw = normalizeToJid(jid);
+    return raw.split('@')[0].split(':')[0] + '@' + raw.split('@')[1];
+}
+
 // ─── NOTE HELPERS ───────────────────────────────────────────────
 
 function readNotes() {
@@ -106,9 +113,13 @@ async function handleInteractiveSessions(sock, msg) {
                 }
                 session.account = account;
                 session.step = 2;
-                const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 2:* Please reply with the *Bank Name*." });
-                global.azaSessions[prompt.key.id] = session;
-                delete global.azaSessions[quotedMsgId];
+                try {
+                    const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 2:* Please reply with the *Bank Name*." });
+                    global.azaSessions[prompt.key.id] = session;
+                    delete global.azaSessions[quotedMsgId];
+                } catch (sendErr) {
+                    console.error("Failed to send Aza Step 2 prompt:", sendErr);
+                }
                 return true;
             }
             if (session.step === 2) {
@@ -119,9 +130,13 @@ async function handleInteractiveSessions(sock, msg) {
                 }
                 session.bank = bank;
                 session.step = 3;
-                const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 3:* Please reply with the *Account Name*." });
-                global.azaSessions[prompt.key.id] = session;
-                delete global.azaSessions[quotedMsgId];
+                try {
+                    const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 3:* Please reply with the *Account Name*." });
+                    global.azaSessions[prompt.key.id] = session;
+                    delete global.azaSessions[quotedMsgId];
+                } catch (sendErr) {
+                    console.error("Failed to send Aza Step 3 prompt:", sendErr);
+                }
                 return true;
             }
             if (session.step === 3) {
@@ -377,8 +392,7 @@ async function handleDownloaderSessions(sock, msg) {
                     await sock.sendMessage(jid, {
                         audio: buffer,
                         mimetype: 'audio/mp4',
-                        ptt: false,
-                        caption: item.title || 'Song'
+                        ptt: false
                     });
                 } else if (session.type === 'apk') {
                     const buffer = await downloadBuffer(item.download || item.url);
@@ -517,7 +531,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             activeQuizKey = quizMultiKey;
         }
 
-        const rawMsg = getRawMessage(msg.message);
+        const rawMsg = getRawMessage(msg.message) || msg.message;
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo || msg.message?.contextInfo;
         const quotedMsgId = contextInfo?.stanzaId;
         const trimmedMessage = (rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '').trim();
@@ -558,9 +572,13 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             const session = global.pvpSessions[pvpSessionKey];
             if (session.lastQuestionMsgId === quotedMsgId) {
                 const ans = trimmedMessage.trim();
+                const lowerAns = ans.toLowerCase();
+                const acceptWords = ['yes', 'y', 'accept', 'play', 'join', 'ok', 'okay'];
                 if (session.status === 'lobby' && senderJid !== session.p1) {
-                    command = 'pvp_lobby_accept';
-                    args = ans;
+                    if (acceptWords.includes(lowerAns)) {
+                        command = 'pvp_lobby_accept';
+                        args = ans;
+                    }
                 } else if (session.status === 'p2_choosing' && senderJid === session.p2) {
                     command = 'pvp_choose';
                     args = ans;
@@ -616,10 +634,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
 
         // ─── EXTRACT BODY ────────────────────────────────────────
-        let body = msg.message.conversation ||
-                   msg.message.extendedTextMessage?.text ||
-                   msg.message.imageMessage?.caption ||
-                   msg.message.videoMessage?.caption ||
+        let body = rawMsg?.conversation ||
+                   rawMsg?.extendedTextMessage?.text ||
+                   rawMsg?.imageMessage?.caption ||
+                   rawMsg?.videoMessage?.caption ||
                    msg.message.buttonsResponseMessage?.selectedButtonId ||
                    msg.message.templateButtonReplyMessage?.selectedId ||
                    '';
@@ -652,7 +670,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const storeKeys = Object.keys(global.messageStore);
         if (storeKeys.length > 1000) delete global.messageStore[storeKeys[0]];
 
-        const mentionedJids = contextInfo?.mentionedJid || [];
+        const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
         // ─── LID-SAFE SILENCE CHECK ──────────────────────────────
         if (isGroup) {
@@ -767,13 +785,14 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                         });
                         const responseText = response.text || "Could not generate summary.";
 
-                        await sock.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3‑HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
+                        const activeSocket = global.activeSock || sock;
+                        await activeSocket.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3‑HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
+                        
+                        if (config.conversationLogs) config.conversationLogs[jid] = [];
+                        saveState();
                     } catch (err) {
                         console.error("❌ [GCLOG] Auto‑summary failed:", err.message);
                     }
-
-                    if (config.conversationLogs) config.conversationLogs[jid] = [];
-                    saveState();
                 }, 3 * 60 * 60 * 1000);
             }
         }
@@ -893,6 +912,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 } catch (blockErr) { /* ignore */ }
                 return;
             }
+            if (global.spamTracker[senderJid].length === 0) {
+                delete global.spamTracker[senderJid];
+            }
         }
 
         // ─── ANTISPAM RATE-LIMIT ──────────────────────────────────
@@ -930,6 +952,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 } catch (e) { /* ignore */ }
                 return;
             }
+            if (global.spamTracker[senderJid].length === 0) {
+                delete global.spamTracker[senderJid];
+            }
         }
 
         // ─── ANTIGAY INTERCEPTOR (FIXED) ─────────────────────────
@@ -938,8 +963,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const isGayCommand = gayCommands.includes(cleanCmd);
 
         if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList && config.gayList.length > 0) {
-            const senderNum = senderJid.split('@')[0];
-            const isGay = config.gayList.some(entry => normalizeToJid(entry.lid) === normalizeToJid(senderJid));
+            const cleanSenderJid = cleanJid(senderJid);
+            const isGay = config.gayList.some(entry => {
+                const entryJid = entry.lid || entry.jid || entry.id;
+                return entryJid && cleanJid(entryJid) === cleanSenderJid;
+            });
 
             if (isGay) {
                 const activatedBy = config.antigay[jid].activatedBy;
@@ -948,11 +976,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     return;
                 }
 
-                const normActivatedBy = normalizeToJid(activatedBy);
-                const normSender = normalizeToJid(senderJid);
+                const normActivatedBy = cleanJid(activatedBy);
+                const normSender = cleanJid(senderJid);
 
-                const isMentioningActivated = mentionedJids.some(j => normalizeToJid(j) === normActivatedBy);
-                const isReplyingToActivated = contextInfo?.participant && normalizeToJid(contextInfo.participant) === normActivatedBy;
+                const isMentioningActivated = mentionedJids.some(j => cleanJid(j) === normActivatedBy);
+                const isReplyingToActivated = contextInfo?.participant && cleanJid(contextInfo.participant) === normActivatedBy;
 
                 if (isMentioningActivated || isReplyingToActivated) {
                     const rudeMessages = [
@@ -982,8 +1010,16 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── AGENT DETECTION ──────────────────────────────────────
         const quotedParticipant = contextInfo?.participant;
-        const isReplyingToBot = quotedParticipant === botJid || (botLid && quotedParticipant === botLid) || (!isGroup && !msg.key.fromMe && quotedMsgId);
-        const isMentioningBot = mentionedJids.includes(botJid) || (botLid && mentionedJids.includes(botLid));
+        const cleanQuoted = cleanJid(quotedParticipant);
+        const cleanBotJid = cleanJid(botJid);
+        const cleanBotLid = cleanJid(botLid);
+
+        const isReplyingToBot = cleanQuoted === cleanBotJid || 
+                                (cleanBotLid && cleanQuoted === cleanBotLid) || 
+                                (!isGroup && !msg.key.fromMe && quotedMsgId);
+
+        const isMentioningBot = mentionedJids.some(j => cleanJid(j) === cleanBotJid) || 
+                                (cleanBotLid && mentionedJids.some(j => cleanJid(j) === cleanBotLid));
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
         const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
