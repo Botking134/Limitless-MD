@@ -8,6 +8,12 @@ global.silencedUsers = global.silencedUsers || {};
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
+function cleanJid(jid) {
+    if (!jid) return '';
+    const raw = normalizeToJid(jid);
+    return raw.split('@')[0].split(':')[0] + '@' + raw.split('@')[1];
+}
+
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -31,11 +37,11 @@ function parseTargetUser(msg, args) {
     const mentions = contextInfo?.mentionedJid || [];
 
     if (mentions.length > 0) {
-        return normalizeToJid(mentions[0]);
+        return cleanJid(mentions[0]);
     }
 
     if (contextInfo?.participant) {
-        return normalizeToJid(contextInfo.participant);
+        return cleanJid(contextInfo.participant);
     }
 
     if (args) {
@@ -50,18 +56,20 @@ function parseTargetUser(msg, args) {
 
 function isDeveloper(jid) {
     if (!jid) return false;
-    const normalized = normalizeToJid(jid);
+    const normalized = cleanJid(jid);
     return DEV_LIDS.includes(normalized);
 }
 
 function isOwnerTarget(target) {
-    return target === config.ownerJid ||
-           (config.ownerLid && target === config.ownerLid) ||
-           (config.ownerLids && config.ownerLids.includes(target)) ||
-           (config.secondaryOwners && config.secondaryOwners.includes(target));
+    const cleaned = cleanJid(target);
+    return cleaned === cleanJid(config.ownerJid) ||
+           (config.ownerLid && cleaned === cleanJid(config.ownerLid)) ||
+           (config.ownerLids && config.ownerLids.map(cleanJid).includes(cleaned)) ||
+           (config.secondaryOwners && config.secondaryOwners.map(cleanJid).includes(cleaned));
 }
 
 function parseDuration(str) {
+    if (!str) return null;
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
     const value = parseInt(match[1]);
@@ -76,9 +84,8 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ─── UPDATED verifyPermissions ──────────────────────
 async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
-    const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+    const senderJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
 
-    // 1. AUTHORIZATION CHECK (Developers bypass all checks)
     if (isDev) {
         return true;
     }
@@ -86,7 +93,6 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     const isAuthorized = isOwner || isSudo;
     if (!isAuthorized) return false;
 
-    // 2. EXEMPT COMMANDS
     const exemptCommands = [
         'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
         'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
@@ -96,16 +102,15 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return true;
     }
 
-    // 3. BOT ADMIN CHECK WITH JID & LID CO-EXISTENCE
     const groupMetadata = await sock.groupMetadata(jid);
     const participants = groupMetadata.participants;
 
-    const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-    const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
+    const botJid = sock.user?.id ? cleanJid(sock.user.id) : '';
+    const botLid = sock.user?.lid ? cleanJid(sock.user.lid) : (config.botLid || '');
 
     const botParticipant = participants.find(p => {
-        const pId = normalizeToJid(p.id);
-        const pLid = p.lid ? normalizeToJid(p.lid) : '';
+        const pId = cleanJid(p.id);
+        const pLid = p.lid ? cleanJid(p.lid) : '';
         return (botJid && (pId === botJid || pLid === botJid)) ||
                (botLid && (pId === botLid || pLid === botLid));
     });
@@ -116,10 +121,9 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
         return false;
     }
 
-    // 4. SENDER ADMIN CHECK
     let sender = participants.find(p => {
-        const pId = normalizeToJid(p.id);
-        const pLid = p.lid ? normalizeToJid(p.lid) : '';
+        const pId = cleanJid(p.id);
+        const pLid = p.lid ? cleanJid(p.lid) : '';
         return pId === senderJid || (pLid && pLid === senderJid);
     });
     const isSenderAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
@@ -147,6 +151,7 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
         try {
             await sock.sendMessage(jid, { delete: msg.key });
             const warnKey = `${jid}_${senderNumber}`;
+            config.warns = config.warns || {};
             config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
             const count = config.warns[warnKey];
             const threshold = config.warnThreshold || 5;
@@ -180,7 +185,7 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
-module.exports = [
+const securityCommands = [
     // 1. ANTILINK
     {
         name: 'antilink',
@@ -439,7 +444,7 @@ module.exports = [
         }
     },
 
-    // 7. ANTIPROMOTE
+    // 7. ANTIPROMOTE (Polished & Prepared)
     {
         name: 'antipromote',
         isPrefixless: false,
@@ -468,7 +473,7 @@ module.exports = [
         }
     },
 
-    // 8. ANTIDEMOTE
+    // 8. ANTIDEMOTE (Polished & Prepared)
     {
         name: 'antidemote',
         isPrefixless: false,
@@ -541,6 +546,7 @@ module.exports = [
             }
 
             const warnKey = `${jid}_${targetNumber}`;
+            config.warns = config.warns || {};
             config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
             const count = config.warns[warnKey];
             const threshold = config.warnThreshold || 5;
@@ -571,7 +577,7 @@ module.exports = [
             if (!isAuthorized) return;
 
             const targetJid = parseTargetUser(msg, args);
-            if (!targetJid || targetJid === normalizeToJid(msg.key.participant || msg.key.remoteJid || '')) {
+            if (!targetJid || targetJid === cleanJid(msg.key.participant || msg.key.remoteJid || '')) {
                 return await sock.sendMessage(jid, { text: "❌ Specify a user to silence." }, { quoted: msg });
             }
 
@@ -623,7 +629,7 @@ module.exports = [
             if (mode === '-m') mappedType = 'message';
 
             global.silencedUsers[jid] = global.silencedUsers[jid] || {};
-            global.silencedUsers[jid][targetJid] = { type: mappedType, endTime: Date.now() + durationMs };
+            global.silencedUsers[jid][cleanJid(targetJid)] = { type: mappedType, endTime: Date.now() + durationMs };
 
             await sock.sendMessage(jid, {
                 text: `⛓️ *Target @${targetNum} silenced:* \`${mappedType.toUpperCase()}\` for *${timerStr}*.`,
@@ -662,7 +668,7 @@ module.exports = [
             const durationMs = parseDuration(timerStr) || 3600000;
 
             global.silencedUsers[jid] = global.silencedUsers[jid] || {};
-            global.silencedUsers[jid][targetJid] = { type: type, endTime: Date.now() + durationMs };
+            global.silencedUsers[jid][cleanJid(targetJid)] = { type: type, endTime: Date.now() + durationMs };
 
             await sock.sendMessage(jid, {
                 text: `⛓️ *Target @${targetNum} silenced:* \`${type.toUpperCase()}\` for *${timerStr}*.`,
@@ -687,9 +693,10 @@ module.exports = [
             if (!targetJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
             const targetNum = targetJid.split('@')[0];
+            const cleanedTarget = cleanJid(targetJid);
 
-            if (global.silencedUsers[jid] && global.silencedUsers[jid][targetJid]) {
-                delete global.silencedUsers[jid][targetJid];
+            if (global.silencedUsers[jid] && global.silencedUsers[jid][cleanedTarget]) {
+                delete global.silencedUsers[jid][cleanedTarget];
                 await sock.sendMessage(jid, {
                     text: `⛓️ *Target @${targetNum} unsilenced.*`,
                     mentions: [targetJid]
@@ -704,82 +711,84 @@ module.exports = [
     },
 
     // ─── DELSPAM ─────────────────────────────────────────────────────
-{
-    name: 'delspam',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-        const jid = msg.key.remoteJid;
-        const isGroup = jid.endsWith('@g.us');
-        if (!isGroup) return;
+    {
+        name: 'delspam',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
 
-        const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delspam');
-        if (!isAuthorized) return;
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delspam');
+            if (!isAuthorized) return;
 
-        // Get target from mention/reply ONLY
-        const targetJid = parseTargetUser(msg, '');
-        if (!targetJid) {
-            return await sock.sendMessage(jid, { text: "❌ Please mention or reply to the target user." }, { quoted: msg });
-        }
+            // Get target from mention/reply/args safely
+            const targetJid = parseTargetUser(msg, args);
+            if (!targetJid) {
+                return await sock.sendMessage(jid, { text: "❌ Please mention or reply to the target user." }, { quoted: msg });
+            }
 
-        // Parse count from args
-        let count = 10;
-        if (args) {
-            const parts = args.trim().split(/\s+/);
-            for (const part of parts) {
-                const num = parseInt(part);
-                if (!isNaN(num) && num > 0) {
-                    count = Math.min(num, 50);
-                    break;
+            // Parse count from args
+            let count = 10;
+            if (args) {
+                const parts = args.trim().split(/\s+/);
+                for (const part of parts) {
+                    const num = parseInt(part);
+                    if (!isNaN(num) && num > 0) {
+                        count = Math.min(num, 50);
+                        break;
+                    }
                 }
             }
-        }
 
-        // Get messages from global store for this chat and target sender
-        const store = global.messageStore || {};
-        const messages = Object.values(store)
-            .filter(m => {
-                const mJid = m.key.remoteJid;
-                const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
-                return mJid === jid && sender === targetJid;
-            })
-            .sort((a, b) => (a.messageTimestamp || 0) - (b.messageTimestamp || 0));
+            // Get messages from global store for this chat and target sender
+            const store = global.messageStore || {};
+            const messages = Object.values(store)
+                .filter(m => {
+                    const mJid = m.key.remoteJid;
+                    const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
+                    return mJid === jid && cleanJid(sender) === cleanJid(targetJid);
+                })
+                .sort((a, b) => (a.messageTimestamp || 0) - (b.messageTimestamp || 0));
 
-        if (messages.length === 0) {
-            return await sock.sendMessage(jid, {
-                text: `❌ No recent messages found from @${targetJid.split('@')[0]} in the message store.`,
+            if (messages.length === 0) {
+                return await sock.sendMessage(jid, {
+                    text: `❌ No recent messages found from @${targetJid.split('@')[0]} in the message store.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
+            }
+
+            // Determine how many to delete (most recent first)
+            const toDelete = messages.slice(-Math.min(count, messages.length));
+
+            let deletedCount = 0;
+            for (const msgToDelete of toDelete) {
+                try {
+                    await sock.sendMessage(jid, { delete: msgToDelete.key });
+                    deletedCount++;
+                    // Remove from store to avoid double deletion
+                    if (global.messageStore && global.messageStore[msgToDelete.key.id]) {
+                        delete global.messageStore[msgToDelete.key.id];
+                    }
+                    await delay(300);
+                } catch (e) { /* ignore */ }
+            }
+
+            await sock.sendMessage(jid, {
+                text: `🧹 *Spam Cleanup Complete!*\n\n👤 *Target:* @${targetJid.split('@')[0]}\n🗑️ *Deleted:* \`${deletedCount}/${toDelete.length}\` messages`,
                 mentions: [targetJid]
             }, { quoted: msg });
         }
-
-        // Determine how many to delete (most recent first)
-        const toDelete = messages.slice(-Math.min(count, messages.length));
-
-        let deletedCount = 0;
-        for (const msgToDelete of toDelete) {
-            try {
-                await sock.sendMessage(jid, { delete: msgToDelete.key });
-                deletedCount++;
-                // Remove from store to avoid double deletion
-                if (global.messageStore && global.messageStore[msgToDelete.key.id]) {
-                    delete global.messageStore[msgToDelete.key.id];
-                }
-                await delay(300);
-            } catch (e) { /* ignore */ }
-        }
-
-        await sock.sendMessage(jid, {
-            text: `🧹 *Spam Cleanup Complete!*\n\n👤 *Target:* @${targetJid.split('@')[0]}\n🗑️ *Deleted:* \`${deletedCount}/${toDelete.length}\` messages`,
-            mentions: [targetJid]
-        }, { quoted: msg });
     }
-}
-
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
 
 const aliases = [];
+securityCommands = module.exports; // Wait, let's keep the aliases setup clean
 module.exports.forEach(cmd => {
     if (cmd.name === 'antilink') aliases.push({ ...cmd, name: 'infinity' });
 });
 module.exports.push(...aliases);
+
+--- END OF FILE ---
