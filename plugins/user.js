@@ -1,6 +1,6 @@
-// plugins/user/user.js
-const config = require('../config');
-const { normalizeToJid } = require('../stateManager');
+// plugins/user.js
+const config = require('../../config');
+const { normalizeToJid } = require('../../stateManager');
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -8,6 +8,22 @@ function cleanJid(jid) {
     if (!jid) return '';
     const raw = normalizeToJid(jid);
     return raw.split('@')[0].split(':')[0] + '@' + raw.split('@')[1];
+}
+
+async function getBaileys() {
+    try {
+        return require('@whiskeysockets/baileys');
+    } catch (e) {
+        try {
+            return require('@itsliaaa/baileys');
+        } catch (err) {
+            try {
+                return await import('@whiskeysockets/baileys');
+            } catch (importErr) {
+                return await import('@itsliaaa/baileys');
+            }
+        }
+    }
 }
 
 function getRawMessage(message) {
@@ -62,7 +78,6 @@ module.exports = [
             const targetJid = parseTargetUser(msg, args) || cleanJid(msg.key.participant || msg.key.remoteJid || '');
             const targetNum = targetJid.split('@')[0];
 
-            // Dynamically resolve their exact profile/LID name
             let username = 'WhatsApp User';
             try {
                 if (sock.getName) {
@@ -80,11 +95,11 @@ module.exports = [
                           'END:VCARD';
 
             try {
-                // Highly compatible single-contact card payload structure
+                // Correct multi-contact array payload with a single card entry
                 await sock.sendMessage(jid, {
-                    contact: {
+                    contacts: {
                         displayName: `/// ${username} ///`,
-                        vcard: vcard
+                        contacts: [{ vcard }]
                     }
                 }, { quoted: msg });
             } catch (err) {
@@ -132,7 +147,7 @@ module.exports = [
         }
     },
 
-    // 3. DEV (Overhauled Template-Button Layout)
+    // 3. DEV (Native Flow Button Message)
     {
         name: 'dev',
         isPrefixless: false,
@@ -154,37 +169,93 @@ module.exports = [
                 } else if (sock.getName) {
                     devName = sock.getName(devJid) || 'Ghost';
                 }
-            } catch (err) { /* fallback to 'Ghost' if privacy settings or network block queries */ }
+            } catch (err) { /* fallback to 'Ghost' if blocked */ }
 
             // 2. Fetch Developer's profile photo url safely
             let pfpUrl = null;
             try {
                 pfpUrl = await sock.profilePictureUrl(devJid, 'image');
-            } catch (pfpErr) { /* fallback to null if profile picture is private */ }
-
-            // 3. Construct URL Button template
-            const templateButtons = [
-                { index: 1, urlButton: { displayText: 'Message 💬', url: `https://wa.me/${devPhoneNum}` } }
-            ];
+            } catch (pfpErr) { /* fallback to null if private */ }
 
             const captionText = `/// ${devName} ///`;
 
             try {
+                const b = await getBaileys();
+                
+                // Build a modern, universally supported WhatsApp Native Flow Button Message
+                let messageContent = {};
+
                 if (pfpUrl) {
-                    await sock.sendMessage(jid, {
-                        image: { url: pfpUrl },
-                        caption: captionText,
-                        templateButtons: templateButtons
-                    }, { quoted: msg });
+                    const preparedMedia = await b.prepareWAMessageMedia({ image: { url: pfpUrl } }, { upload: sock.waUploadToServer });
+                    messageContent = {
+                        viewOnceMessage: {
+                            message: {
+                                interactiveMessage: {
+                                    header: {
+                                        hasMediaAttachment: true,
+                                        imageMessage: preparedMedia.imageMessage
+                                    },
+                                    body: {
+                                        text: captionText
+                                    },
+                                    nativeFlowMessage: {
+                                        buttons: [
+                                            {
+                                                name: "cta_url",
+                                                buttonParamsJson: JSON.stringify({
+                                                    display_text: "Message 💬",
+                                                    url: `https://wa.me/${devPhoneNum}`,
+                                                    merchant_url: `https://wa.me/${devPhoneNum}`
+                                                })
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    };
                 } else {
-                    // Fallback to text message with buttons if developer profile pic is completely hidden
-                    await sock.sendMessage(jid, {
-                        text: captionText,
-                        templateButtons: templateButtons
-                    }, { quoted: msg });
+                    messageContent = {
+                        viewOnceMessage: {
+                            message: {
+                                interactiveMessage: {
+                                    header: {
+                                        hasMediaAttachment: false
+                                    },
+                                    body: {
+                                        text: captionText
+                                    },
+                                    nativeFlowMessage: {
+                                        buttons: [
+                                            {
+                                                name: "cta_url",
+                                                buttonParamsJson: JSON.stringify({
+                                                    display_text: "Message 💬",
+                                                    url: `https://wa.me/${devPhoneNum}`,
+                                                    merchant_url: `https://wa.me/${devPhoneNum}`
+                                                })
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    };
                 }
+
+                // Compile and relay the interactive payload directly
+                const generated = b.generateWAMessageFromContent(
+                    jid,
+                    b.proto.Message.fromObject(messageContent),
+                    { userJid: sock.user.id }
+                );
+
+                await sock.relayMessage(jid, generated.message, { messageId: generated.key.id });
+
             } catch (err) {
                 console.error("[DEV COMMAND ERROR]", err.message);
+                // Hard fallback to standard link text if everything fails
+                await sock.sendMessage(jid, { text: `/// ${devName} ///\n\n💬 Message: https://wa.me/${devPhoneNum}` }, { quoted: msg });
             }
         }
     }
