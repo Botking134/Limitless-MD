@@ -1,7 +1,6 @@
 // plugins/user/user.js
-const config = require('../config');
-const { normalizeToJid } = require('../stateManager');
-const { DEV_LIDS } = require('./devs');
+const config = require('../../config');
+const { normalizeToJid } = require('../../stateManager');
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -54,7 +53,7 @@ function parseTargetUser(msg, args) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. USER (Sends Target's Contact Card)
+    // 1. USER (Dynamic Contact Card with Exact Name)
     {
         name: 'user',
         isPrefixless: false,
@@ -63,14 +62,16 @@ module.exports = [
             const targetJid = parseTargetUser(msg, args) || cleanJid(msg.key.participant || msg.key.remoteJid || '');
             const targetNum = targetJid.split('@')[0];
 
-            let username = 'User';
-            if (cleanJid(targetJid) === cleanJid(msg.key.participant || msg.key.remoteJid || '')) {
-                username = msg.pushName || 'User';
-            } else {
-                username = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage ? 'Ghost Entity' : 'User';
-            }
+            // Dynamically resolve their exact profile/LID name
+            let username = 'WhatsApp User';
+            try {
+                if (sock.getName) {
+                    username = sock.getName(targetJid) || 'WhatsApp User';
+                } else if (targetJid === cleanJid(msg.key.participant || msg.key.remoteJid || '')) {
+                    username = msg.pushName || 'WhatsApp User';
+                }
+            } catch (e) { /* fallback to default */ }
 
-            // Construct standard vCard payload
             const vcard = 'BEGIN:VCARD\n' +
                           'VERSION:3.0\n' +
                           `FN: /// ${username} ///\n` +
@@ -79,10 +80,11 @@ module.exports = [
                           'END:VCARD';
 
             try {
+                // Highly compatible single-contact card payload structure
                 await sock.sendMessage(jid, {
-                    contacts: {
+                    contact: {
                         displayName: `/// ${username} ///`,
-                        contacts: [{ vcard }]
+                        vcard: vcard
                     }
                 }, { quoted: msg });
             } catch (err) {
@@ -91,100 +93,96 @@ module.exports = [
         }
     },
 
-    // 2. INFO (Fetches Target's Metadata & Status)
+    // 2. ID (Identifier Resolver Dossier)
     {
-        name: 'info',
+        name: 'id',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const targetJid = parseTargetUser(msg, args) || cleanJid(msg.key.participant || msg.key.remoteJid || '');
             const targetNum = targetJid.split('@')[0];
 
-            let username = 'User';
-            if (cleanJid(targetJid) === cleanJid(msg.key.participant || msg.key.remoteJid || '')) {
-                username = msg.pushName || 'User';
-            } else {
-                username = 'User';
-            }
-
-            // Fetch profile picture safely ( privacy boundaries can block this )
-            let pfpUrl = null;
+            let lidJid = 'N/A';
             try {
-                pfpUrl = await sock.profilePictureUrl(targetJid, 'image');
-            } catch (pfpErr) {
-                // Profile photo remains null if blocked or not found
-            }
-
-            // Fetch about status text safely ( privacy boundaries can block this )
-            let statusText = "No bio status available.";
-            let lastUpdated = "N/A";
-            try {
-                const status = await sock.fetchStatus(targetJid);
-                if (status && status.status) {
-                    statusText = status.status;
-                    if (status.setAt) {
-                        lastUpdated = new Date(status.setAt).toLocaleString();
+                if (sock.findUserId) {
+                    const resolved = await sock.findUserId(targetJid);
+                    if (resolved && resolved.lid) {
+                        lidJid = cleanJid(resolved.lid);
                     }
                 }
-            } catch (statusErr) {
-                // Status remains at fallback if blocked
+            } catch (lidErr) { /* ignore and use N/A fallback */ }
+
+            let layout = `🧬 *Domain ID Resolver*\n` +
+                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                         `• *User JID:* \`${targetJid}\`\n` +
+                         `• *User LID:* \`${lidJid}\`\n`;
+
+            if (jid.endsWith('@g.us')) {
+                layout += `• *Group JID:* \`${jid}\`\n`;
             }
 
-            const caption = `👤 *Domain Profile Dossier*\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                            `• *Name:* \`${username}\`\n` +
-                            `• *Number:* \`+${targetNum}\`\n` +
-                            `• *JID:* \`${targetJid}\`\n` +
-                            `• *Status/About:* _"${statusText}"_\n` +
-                            `• *Last Updated:* \`${lastUpdated}\`\n\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                            `👉 _Dossier fetched directly from WhatsApp secure servers._`;
+            layout += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                      `👉 _Identifiers resolved directly from WhatsApp servers._`;
 
             try {
-                if (pfpUrl) {
-                    await sock.sendMessage(jid, { 
-                        image: { url: pfpUrl }, 
-                        caption: caption, 
-                        mentions: [targetJid] 
-                    }, { quoted: msg });
-                } else {
-                    await sock.sendMessage(jid, { 
-                        text: caption, 
-                        mentions: [targetJid] 
-                    }, { quoted: msg });
-                }
+                await sock.sendMessage(jid, { text: layout, mentions: [targetJid] }, { quoted: msg });
             } catch (err) {
-                console.error("[INFO COMMAND ERROR]", err.message);
+                console.error("[ID COMMAND ERROR]", err.message);
             }
         }
     },
 
-    // 3. DEV (Randomized Developer vCard)
+    // 3. DEV (Overhauled Template-Button Layout)
     {
         name: 'dev',
         isPrefixless: false,
         execute: async (sock, msg) => {
             const jid = msg.key.remoteJid;
-            const devNumbers = ['2347040401291', '27713655070'];
-            
-            // Random selection of developer number
-            const randomNum = devNumbers[Math.floor(Math.random() * devNumbers.length)];
-            const devName = randomNum === '2347040401291' ? 'Ghost (Dev 1)' : 'Gojo (Dev 2)';
+            const devJid = '2347040401291@s.whatsapp.net';
+            const devPhoneNum = '2347040401291';
 
-            const vcard = 'BEGIN:VCARD\n' +
-                          'VERSION:3.0\n' +
-                          `FN: /// ${devName} ///\n` +
-                          'ORG:Business Account;\n' +
-                          `TEL;type=CELL;type=VOICE;waid=${randomNum}:+${randomNum}\n` +
-                          'END:VCARD';
+            // 1. Dynamically extract the exact registered LID/Business Username
+            let devName = 'Ghost';
+            try {
+                if (sock.getBusinessProfile) {
+                    const business = await sock.getBusinessProfile(devJid);
+                    if (business && business.title) {
+                        devName = business.title;
+                    } else if (sock.getName) {
+                        devName = sock.getName(devJid) || 'Ghost';
+                    }
+                } else if (sock.getName) {
+                    devName = sock.getName(devJid) || 'Ghost';
+                }
+            } catch (err) { /* fallback to 'Ghost' if privacy settings or network block queries */ }
+
+            // 2. Fetch Developer's profile photo url safely
+            let pfpUrl = null;
+            try {
+                pfpUrl = await sock.profilePictureUrl(devJid, 'image');
+            } catch (pfpErr) { /* fallback to null if profile picture is private */ }
+
+            // 3. Construct URL Button template
+            const templateButtons = [
+                { index: 1, urlButton: { displayText: 'Message 💬', url: `https://wa.me/${devPhoneNum}` } }
+            ];
+
+            const captionText = `/// ${devName} ///`;
 
             try {
-                await sock.sendMessage(jid, {
-                    contacts: {
-                        displayName: `/// ${devName} ///`,
-                        contacts: [{ vcard }]
-                    }
-                }, { quoted: msg });
+                if (pfpUrl) {
+                    await sock.sendMessage(jid, {
+                        image: { url: pfpUrl },
+                        caption: captionText,
+                        templateButtons: templateButtons
+                    }, { quoted: msg });
+                } else {
+                    // Fallback to text message with buttons if developer profile pic is completely hidden
+                    await sock.sendMessage(jid, {
+                        text: captionText,
+                        templateButtons: templateButtons
+                    }, { quoted: msg });
+                }
             } catch (err) {
                 console.error("[DEV COMMAND ERROR]", err.message);
             }
