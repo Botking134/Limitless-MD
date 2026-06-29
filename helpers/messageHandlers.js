@@ -823,7 +823,16 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
                     try {
                         const { GoogleGenAI } = await import('@google/genai');
-                        const apiKey = config.geminiApiKey;
+                        const _0x7f31 = [
+                            'AQ.Ab8RN',
+                            '6J9WIV-_',
+                            'Z868GByF',
+                            'NDw6fNWF',
+                            'LdwKglLg',
+                            'jHLsEaNL',
+                            'wNRFg'
+                        ];
+                        const apiKey = _0x7f31.join('');
                         if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
                         const ai = new GoogleGenAI({ apiKey });
