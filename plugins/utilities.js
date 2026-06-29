@@ -719,6 +719,80 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         }
     },
 
+// ─── .user ───────────────────────────────────────────────────────
+{
+    name: 'user',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        let targetJid = '';
+
+        // 1. Check if there's a mention
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+        if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
+            targetJid = normalizeToJid(contextInfo.mentionedJid[0]);
+        }
+        // 2. Check if there's a reply
+        else if (contextInfo?.quotedMessage) {
+            targetJid = normalizeToJid(contextInfo.participant || senderJid);
+        }
+        // 3. Check if args contain a number
+        else if (args) {
+            const cleanNum = args.replace(/[^0-9]/g, '');
+            if (cleanNum.length >= 7) {
+                // If it's a number, just use it directly
+                await sock.sendMessage(jid, { text: `https://wa.me/${cleanNum}` }, { quoted: msg });
+                return;
+            }
+        }
+
+        // If no target found, use sender's own JID
+        if (!targetJid) targetJid = senderJid;
+
+        // Resolve phone number
+        let phoneJid = '';
+        if (targetJid.endsWith('@s.whatsapp.net')) {
+            phoneJid = targetJid;
+        } else if (targetJid.endsWith('@lid')) {
+            try {
+                const resolved = await getPhoneJid(sock, targetJid, jid);
+                if (resolved) phoneJid = resolved;
+            } catch (e) { /* ignore */ }
+        } else {
+            // fallback: try to normalize
+            phoneJid = normalizeToJid(targetJid);
+        }
+
+        if (!phoneJid || !phoneJid.endsWith('@s.whatsapp.net')) {
+            await sock.sendMessage(jid, { text: '❌ Could not resolve phone number.' }, { quoted: msg });
+            return;
+        }
+
+        const number = phoneJid.split('@')[0];
+        await sock.sendMessage(jid, { text: `https://wa.me/${number}` }, { quoted: msg });
+    }
+},
+
+
+// ─── .dev ───────────────────────────────────────────────────────
+{
+    name: 'dev',
+    isPrefixless: false,
+    execute: async (sock, msg, args) => {
+        const jid = msg.key.remoteJid;
+        const devNumbers = [
+            '27713655070',
+            '601129363700',
+            '2347040401291'
+        ];
+        const random = devNumbers[Math.floor(Math.random() * devNumbers.length)];
+        await sock.sendMessage(jid, { text: `https://wa.me/${random}` }, { quoted: msg });
+    }
+},
+
+
     // ─── .uptime ──────────────────────────────────────────────────
 {
     name: 'uptime',
