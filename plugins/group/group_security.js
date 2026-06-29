@@ -785,10 +785,9 @@ const securityCommands = [
 // ─── ALIASES ──────────────────────────────────────────────────────
 
 const aliases = [];
-securityCommands = module.exports; // Wait, let's keep the aliases setup clean
-module.exports.forEach(cmd => {
+securityCommands.forEach(cmd => {
     if (cmd.name === 'antilink') aliases.push({ ...cmd, name: 'infinity' });
 });
-module.exports.push(...aliases);
+securityCommands.push(...aliases);
 
---- END OF FILE ---
+module.exports = securityCommands;
