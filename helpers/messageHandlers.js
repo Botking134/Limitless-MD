@@ -11,6 +11,7 @@ const path = require('path');
 const { readReminders, saveReminders } = require('../plugins/owner');
 
 const notesPath = path.join(__dirname, '../storage/notes.json');
+const userStatsPath = path.join(__dirname, '../storage/userStats.json');
 
 // ─── PERMISSION MATRIX ──────────────────────────────────────────
 const ownerCommands = [
@@ -52,6 +53,23 @@ function saveNotes(notes) {
         const dir = path.dirname(notesPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
+    } catch (e) { /* ignore */ }
+}
+
+// ─── USER STATS PERSISTENCE HELPERS ─────────────────────────────
+
+function readUserStats() {
+    try {
+        if (fs.existsSync(userStatsPath)) return JSON.parse(fs.readFileSync(userStatsPath, 'utf-8'));
+    } catch (e) { /* ignore */ }
+    return {};
+}
+
+function saveUserStats(stats) {
+    try {
+        const dir = path.dirname(userStatsPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(userStatsPath, JSON.stringify(stats, null, 2), 'utf-8');
     } catch (e) { /* ignore */ }
 }
 
@@ -675,15 +693,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── USER LEVEL-UP & STATS TRACKER ──────────────────────
         if (isGroup && senderJid && !msg.key.fromMe) {
-            config.userStats = config.userStats || {};
-            config.userStats[jid] = config.userStats[jid] || {};
-            config.userStats[jid][senderJid] = config.userStats[jid][senderJid] || { msgCount: 0, level: 11 };
+            const userStats = readUserStats();
+            userStats[jid] = userStats[jid] || {};
+            userStats[jid][senderJid] = userStats[jid][senderJid] || { msgCount: 0, level: 11 };
 
             // Only increment if it's not a command to prevent spamming command exploits
             const isCommand = trimmedMessageBody.startsWith(config.prefix);
             if (!isCommand && trimmedMessageBody.length > 0) {
-                config.userStats[jid][senderJid].msgCount += 1;
-                const newCount = config.userStats[jid][senderJid].msgCount;
+                userStats[jid][senderJid].msgCount += 1;
+                const newCount = userStats[jid][senderJid].msgCount;
 
                 // Define milestone tiers (matching TIER_DATA in group_advanced.js)
                 const milestones = {
@@ -702,7 +720,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
                 if (milestones[newCount]) {
                     const milestone = milestones[newCount];
-                    config.userStats[jid][senderJid].level = milestone.index;
+                    userStats[jid][senderJid].level = milestone.index;
 
                     // Only send broadcast if levelup alerts are active (not set to off)
                     const levelupAlertState = config.gcalerts?.levelup?.[jid] || 'off';
@@ -716,7 +734,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                         });
                     }
                 }
-                saveState();
+                saveUserStats(userStats);
             }
         }
 
