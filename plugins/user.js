@@ -1,6 +1,6 @@
 // plugins/user/user.js
-const config = require('../../config');
-const { getPhoneJid, normalizeToJid } = require('../../stateManager');
+const config = require('../config');
+const { getPhoneJid, normalizeToJid } = require('../stateManager');
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
