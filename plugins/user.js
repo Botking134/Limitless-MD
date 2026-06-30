@@ -1,6 +1,6 @@
 // plugins/user/user.js
-const config = require('../config');
-const { normalizeToJid } = require('../stateManager');
+const config = require('../../config');
+const { getPhoneJid, normalizeToJid } = require('../../stateManager');
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -69,49 +69,137 @@ function parseTargetUser(msg, args) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. USER (Dynamic Contact Card with Exact Name)
+    // 1. USER (Dynamic Profile Card with LID Mention & wa.me Button)
     {
         name: 'user',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const targetJid = parseTargetUser(msg, args) || cleanJid(msg.key.participant || msg.key.remoteJid || '');
-            const targetNum = targetJid.split('@')[0];
 
-            // Re-prioritized check order: checks pushName first if target is the sender
-            let username = '';
-            const senderJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
-            
+            // 1. Resolve LID (for clickable @user mention)
+            let targetLid = targetJid;
             try {
-                if (cleanJid(targetJid) === senderJid) {
-                    username = msg.pushName || '';
+                if (sock.findUserId && targetJid.endsWith('@s.whatsapp.net')) {
+                    const resolved = await sock.findUserId(targetJid);
+                    if (resolved && resolved.lid) {
+                        targetLid = cleanJid(resolved.lid);
+                    }
                 }
-                if (!username && sock.getName) {
-                    username = sock.getName(targetJid) || '';
-                }
-            } catch (e) { /* ignore and use fallback */ }
+            } catch (e) { /* ignore */ }
 
-            if (!username) {
-                username = 'WhatsApp User';
+            // 2. Resolve Standard Phone Number (for wa.me button link)
+            let phoneNum = '';
+            if (targetJid.endsWith('@s.whatsapp.net')) {
+                phoneNum = targetJid.split('@')[0];
+            } else {
+                try {
+                    if (getPhoneJid) {
+                        const resolvedPhone = await getPhoneJid(sock, targetJid);
+                        if (resolvedPhone) {
+                            phoneNum = resolvedPhone.split('@')[0];
+                        }
+                    }
+                } catch (e) { /* ignore */ }
             }
 
-            const vcard = 'BEGIN:VCARD\n' +
-                          'VERSION:3.0\n' +
-                          `FN:${username}\n` +
-                          'ORG:Business Account;\n' +
-                          `TEL;type=CELL;type=VOICE;waid=${targetNum}:+${targetNum}\n` +
-                          'END:VCARD';
+            // Fallback to JID prefix if reverse lookup fails
+            if (!phoneNum) {
+                phoneNum = targetJid.split('@')[0];
+            }
+
+            // 3. Fetch target's profile photo url safely
+            let pfpUrl = null;
+            try {
+                pfpUrl = await sock.profilePictureUrl(targetJid, 'image');
+            } catch (pfpErr) { /* fallback to null if private */ }
+
+            // Mention string targeting their LID for direct clickability
+            const lidNumber = targetLid.split('@')[0];
+            const captionText = `@${lidNumber}`;
 
             try {
-                // Highly compatible single-contact card payload structure
-                await sock.sendMessage(jid, {
-                    contacts: {
-                        displayName: username,
-                        contacts: [{ vcard }]
-                    }
-                }, { quoted: msg });
+                const b = await getBaileys();
+                let messageContent = {};
+
+                if (pfpUrl) {
+                    const preparedMedia = await b.prepareWAMessageMedia({ image: { url: pfpUrl } }, { upload: sock.waUploadToServer });
+                    messageContent = {
+                        viewOnceMessage: {
+                            message: {
+                                interactiveMessage: {
+                                    header: {
+                                        hasMediaAttachment: true,
+                                        imageMessage: preparedMedia.imageMessage
+                                    },
+                                    body: {
+                                        text: captionText
+                                    },
+                                    nativeFlowMessage: {
+                                        buttons: [
+                                            {
+                                                name: "cta_url",
+                                                buttonParamsJson: JSON.stringify({
+                                                    display_text: "Message 💬",
+                                                    url: `https://wa.me/${phoneNum}`,
+                                                    merchant_url: `https://wa.me/${phoneNum}`
+                                                })
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    };
+                } else {
+                    messageContent = {
+                        viewOnceMessage: {
+                            message: {
+                                interactiveMessage: {
+                                    header: {
+                                        hasMediaAttachment: false
+                                    },
+                                    body: {
+                                        text: captionText
+                                    },
+                                    nativeFlowMessage: {
+                                        buttons: [
+                                            {
+                                                name: "cta_url",
+                                                buttonParamsJson: JSON.stringify({
+                                                    display_text: "Message 💬",
+                                                    url: `https://wa.me/${phoneNum}`,
+                                                    merchant_url: `https://wa.me/${phoneNum}`
+                                                })
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    };
+                }
+
+                // Compile and relay the interactive payload with mentions mapping
+                const generated = b.generateWAMessageFromContent(
+                    jid,
+                    b.proto.Message.fromObject(messageContent),
+                    { userJid: sock.user.id }
+                );
+
+                generated.message.viewOnceMessage.message.interactiveMessage.contextInfo = {
+                    mentionedJid: [targetLid]
+                };
+
+                await sock.relayMessage(jid, generated.message, { messageId: generated.key.id });
+
             } catch (err) {
                 console.error("[USER COMMAND ERROR]", err.message);
+                // Hard fallback to standard text and link if everything fails
+                await sock.sendMessage(jid, { 
+                    text: `@${lidNumber}\n\n💬 Message: https://wa.me/${phoneNum}`, 
+                    mentions: [targetLid] 
+                }, { quoted: msg });
             }
         }
     },
@@ -170,7 +258,6 @@ module.exports = [
                 pfpUrl = await sock.profilePictureUrl(devJid, 'image');
             } catch (pfpErr) { /* fallback to null if private */ }
 
-            // Strictly hardcoded to format a direct blue-clickable @user mention
             const captionText = `@${devPhoneNum}`;
 
             try {
