@@ -1,4 +1,20 @@
 // index.js
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+// ─── REDIRECT TEMPORARY DIRECTORY ──────────────────────────────────
+// Forces all temporary processes (like stickers or ffmpeg conversions)
+// to utilize your main 6GB disk space, preventing virtual /tmp partition ENOSPC errors.
+const localTempPath = path.join(__dirname, './storage/temp');
+try {
+    if (!fs.existsSync(localTempPath)) {
+        fs.mkdirSync(localTempPath, { recursive: true });
+    }
+    os.tmpdir = () => localTempPath;
+} catch (e) {
+    console.error("Failed to redirect temporary directory path:", e);
+}
 
 const config = require('./config');
 const { loadVars, syncVarsToConfig } = require('./vars');
