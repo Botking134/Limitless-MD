@@ -16,35 +16,17 @@ try {
     console.error("Failed to redirect temporary directory path:", e);
 }
 
-const config = require('./config');
 const { loadVars, syncVarsToConfig } = require('./vars');
 const { loadState } = require('./stateManager');
-const { DEV_JIDS } = require('./plugins/devs');
+const { DEV_JIDS } = require('./devs');
 const { startBot } = require('./pair');
-
-// ─── TEMPORARY LOG CAPTURE ──────────────────────────────────────
-global.recentLogs = global.recentLogs || [];
-const MAX_LOGS = 100;
-
-const origLog = console.log;
-const origWarn = console.warn;
-const origError = console.error;
-
-function pushLog(level, args) {
-    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-    global.recentLogs.push({ time: new Date().toISOString(), level, message: msg });
-    if (global.recentLogs.length > MAX_LOGS) global.recentLogs.shift();
-}
-
-console.log = (...a) => { pushLog('INFO', a); origLog(...a); };
-console.warn = (...a) => { pushLog('WARN', a); origWarn(...a); };
-console.error = (...a) => { pushLog('ERROR', a); origError(...a); };
+const config = require('./config');
 
 // ─── LOAD PERSISTENT STATE ──────────────────────────────────────
 
-// 1. Load vars.json (bidirectional sync – compares timestamps)
-const vars = loadVars();            // ← NEW: auto-syncs config.js ↔ vars.json
-syncVarsToConfig(vars);             // ← Overrides config with vars.json values
+// 1. Load behavior toggles from vars.json → sync to config
+const vars = loadVars();
+syncVarsToConfig(vars);
 
 // 2. Load permission lists from state.json → merge into config
 loadState();
