@@ -6,12 +6,27 @@ const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
 const fs = require('fs');
 const path = require('path');
+const os = require('os'); // Added for temporary directory redirection
+
+// ─── REDIRECT TEMPORARY DIRECTORY ──────────────────────────────────
+// Forces all temporary processes (like stickers or ffmpeg conversions)
+// to utilize your main 6GB disk space, preventing virtual /tmp partition ENOSPC errors.
+const localTempPath = path.join(__dirname, '../storage/temp');
+try {
+    if (!fs.existsSync(localTempPath)) {
+        fs.mkdirSync(localTempPath, { recursive: true });
+    }
+    os.tmpdir = () => localTempPath;
+} catch (e) {
+    console.error("Failed to redirect temporary directory path:", e);
+}
 
 // ─── IMPORT REMINDER HELPERS ONCE (avoid inline require) ──────
 const { readReminders, saveReminders } = require('../plugins/owner');
 
 const notesPath = path.join(__dirname, '../storage/notes.json');
 const userStatsPath = path.join(__dirname, '../storage/userStats.json');
+const gcLogsPath = path.join(__dirname, '../storage/gclogs.json'); // Dedicated file for chat logging
 
 // ─── PERMISSION MATRIX ──────────────────────────────────────────
 const ownerCommands = [
@@ -56,22 +71,56 @@ function saveNotes(notes) {
     } catch (e) { /* ignore */ }
 }
 
-// ─── USER STATS PERSISTENCE HELPERS ─────────────────────────────
+// ─── DEDICATED GC CHAT LOG HELPERS (Option A) ───────────────────
 
-function readUserStats() {
+function readGcLogs() {
     try {
-        if (fs.existsSync(userStatsPath)) return JSON.parse(fs.readFileSync(userStatsPath, 'utf-8'));
+        if (fs.existsSync(gcLogsPath)) return JSON.parse(fs.readFileSync(gcLogsPath, 'utf-8'));
     } catch (e) { /* ignore */ }
     return {};
 }
 
-function saveUserStats(stats) {
+function saveGcLogs(logs) {
     try {
-        const dir = path.dirname(userStatsPath);
+        const dir = path.dirname(gcLogsPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(userStatsPath, JSON.stringify(stats, null, 2), 'utf-8');
+        fs.writeFileSync(gcLogsPath, JSON.stringify(logs, null, 2), 'utf-8');
     } catch (e) { /* ignore */ }
 }
+
+// ─── USER STATS PERSISTENCE HELPERS (Optimized In-Memory Cache) ───
+
+let cachedUserStats = null;
+let isUserStatsDirty = false;
+
+function readUserStats() {
+    if (cachedUserStats) return cachedUserStats;
+    try {
+        if (fs.existsSync(userStatsPath)) {
+            cachedUserStats = JSON.parse(fs.readFileSync(userStatsPath, 'utf-8'));
+            return cachedUserStats;
+        }
+    } catch (e) { /* ignore */ }
+    cachedUserStats = {};
+    return cachedUserStats;
+}
+
+function saveUserStats(stats) {
+    cachedUserStats = stats;
+    isUserStatsDirty = true;
+}
+
+// Write the cached stats to disk every 10 seconds only if there were modifications
+setInterval(() => {
+    if (isUserStatsDirty && cachedUserStats) {
+        try {
+            const dir = path.dirname(userStatsPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(userStatsPath, JSON.stringify(cachedUserStats, null, 2), 'utf-8');
+            isUserStatsDirty = false;
+        } catch (e) { /* ignore */ }
+    }
+}, 10000);
 
 async function handleNoteSession(sock, msg) {
     try {
@@ -551,7 +600,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         const rawMsg = getRawMessage(msg.message) || msg.message;
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo || msg.message?.contextInfo;
+        
+        // Robust contextInfo extraction across various message types to ensure replies are captured
+        const contextInfo = msg.message?.extendedTextMessage?.contextInfo ||
+                            msg.message?.imageMessage?.contextInfo ||
+                            msg.message?.videoMessage?.contextInfo ||
+                            msg.message?.documentMessage?.contextInfo ||
+                            msg.message?.contextInfo ||
+                            rawMsg?.contextInfo;
+                            
         const quotedMsgId = contextInfo?.stanzaId;
         const trimmedMessage = (rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '').trim();
 
@@ -810,30 +867,32 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }
 
         // ─── CHAT LOG RECORDING INTERCEPTOR (.gclog) ──────────────
+        // Stores active logs in a separate dedicated gclogs.json storage file, bypassing state.json completely
         if (isGroup && config.gclogActive?.[jid]) {
-            if (!config.conversationLogs) config.conversationLogs = {};
-            if (!config.conversationLogs[jid]) config.conversationLogs[jid] = [];
+            const gcLogs = readGcLogs();
+            if (!gcLogs[jid]) gcLogs[jid] = [];
 
             if (trimmedMessageBody && !trimmedMessageBody.startsWith(config.prefix)) {
                 const senderName = msg.pushName || senderNumber || 'Unknown';
-                config.conversationLogs[jid].push({
+                gcLogs[jid].push({
                     sender: senderName,
                     text: trimmedMessageBody,
                     time: Date.now()
                 });
 
-                if (config.conversationLogs[jid].length > 1000) {
-                    config.conversationLogs[jid].shift();
+                if (gcLogs[jid].length > 1000) {
+                    gcLogs[jid].shift();
                 }
 
-                saveState();
+                saveGcLogs(gcLogs);
             }
 
             if (!global.gclogIntervals) global.gclogIntervals = {};
             if (!global.gclogIntervals[jid]) {
                 console.log(`🔄 [GCLOG] Re‑creating 3‑hour interval for ${jid}`);
                 global.gclogIntervals[jid] = setInterval(async () => {
-                    const logs = config.conversationLogs?.[jid] || [];
+                    const currentLogs = readGcLogs();
+                    const logs = currentLogs[jid] || [];
                     if (logs.length === 0) return;
 
                     const logString = logs.map(l => `[${new Date(l.time).toLocaleTimeString()}] ${l.sender}: ${l.text}`).join('\n');
@@ -863,8 +922,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                         const activeSocket = global.activeSock || sock;
                         await activeSocket.sendMessage(jid, { text: `🤞 *LIMITLESS DOMAIN 3‑HOUR CONVERSATION SUMMARY:*\n\n${responseText.trim()}` });
                         
-                        if (config.conversationLogs) config.conversationLogs[jid] = [];
-                        saveState();
+                        // Safely clear logs in dedicated storage on summary success
+                        const logsToClear = readGcLogs();
+                        logsToClear[jid] = [];
+                        saveGcLogs(logsToClear);
                     } catch (err) {
                         console.error("❌ [GCLOG] Auto‑summary failed:", err.message);
                     }
@@ -1090,12 +1151,21 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const cleanBotJid = cleanJid(botJid);
         const cleanBotLid = cleanJid(botLid);
 
-        const isReplyingToBot = cleanQuoted === cleanBotJid || 
-                                (cleanBotLid && cleanQuoted === cleanBotLid) || 
+        // Fallback store evaluation to check if the replied-to message was sent by the bot
+        const quotedMsg = quotedMsgId ? global.messageStore[quotedMsgId] : null;
+        const isReplyingToBot = (cleanQuoted && (cleanQuoted === cleanBotJid || (cleanBotLid && cleanQuoted === cleanBotLid))) ||
+                                (quotedMsg && quotedMsg.key && quotedMsg.key.fromMe) ||
                                 (!isGroup && !msg.key.fromMe && quotedMsgId);
 
+        // Fallback text check to catch mentions that native contextInfo structures miss
+        const botNumber = botJid ? botJid.split('@')[0] : '';
+        const botLidNumber = botLid ? botLid.split('@')[0] : '';
+        const mentionsBotInText = (botNumber && lowerMessage.includes(`@${botNumber}`)) || 
+                                  (botLidNumber && lowerMessage.includes(`@${botLidNumber}`));
+
         const isMentioningBot = mentionedJids.some(j => cleanJid(j) === cleanBotJid) || 
-                                (cleanBotLid && mentionedJids.some(j => cleanJid(j) === cleanBotLid));
+                                (cleanBotLid && mentionedJids.some(j => cleanJid(j) === cleanBotLid)) ||
+                                mentionsBotInText;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
         const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
