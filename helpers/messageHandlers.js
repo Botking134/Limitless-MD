@@ -6,20 +6,6 @@ const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { getRawMessage, handleViewOnce } = require('./log');
 const fs = require('fs');
 const path = require('path');
-const os = require('os'); // Added for temporary directory redirection
-
-// ─── REDIRECT TEMPORARY DIRECTORY ──────────────────────────────────
-// Forces all temporary processes (like stickers or ffmpeg conversions)
-// to utilize your main 6GB disk space, preventing virtual /tmp partition ENOSPC errors.
-const localTempPath = path.join(__dirname, '../storage/temp');
-try {
-    if (!fs.existsSync(localTempPath)) {
-        fs.mkdirSync(localTempPath, { recursive: true });
-    }
-    os.tmpdir = () => localTempPath;
-} catch (e) {
-    console.error("Failed to redirect temporary directory path:", e);
-}
 
 // ─── IMPORT REMINDER HELPERS ONCE (avoid inline require) ──────
 const { readReminders, saveReminders } = require('../plugins/owner');
@@ -39,8 +25,12 @@ const ownerCommands = [
 const primaryOnlyCommands = ['addowner', 'delowner'];
 const devOnlyCommands = ['upgrade'];
 
-// ─── GLOBAL SESSIONS ──────────────────────────────────────────────
+// ─── GLOBAL SESSIONS & DATA STORES ──────────────────────────────
 global.gitSessions = global.gitSessions || {};
+global.spamTracker = global.spamTracker || {};
+global.spamDeletedCount = global.spamDeletedCount || {};
+global.messageStore = global.messageStore || {};
+global.botMessageAgents = global.botMessageAgents || {};
 
 // ─── LOGGING CAPTURE ────────────────────────────────────────────
 if (!global.recentLogs || !Array.isArray(global.recentLogs)) {
@@ -71,7 +61,7 @@ function saveNotes(notes) {
     } catch (e) { /* ignore */ }
 }
 
-// ─── DEDICATED GC CHAT LOG HELPERS (Option A) ───────────────────
+// ─── DEDICATED GC CHAT LOG HELPERS ───────────────────
 
 function readGcLogs() {
     try {
@@ -1094,78 +1084,37 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── ANTIGAY INTERCEPTOR (FIXED) ─────────────────────────
-        const gayCommands = ['gay', 'gaylist', 'gaycheck', 'antigay'];
-        const cleanCmd = trimmedMessageBody.replace(config.prefix || '⚡', '').trim().split(' ')[0]?.toLowerCase() || '';
-        const isGayCommand = gayCommands.includes(cleanCmd);
-
-        if (!isGayCommand && config.antigay?.[jid]?.status === 'on' && config.gayList && config.gayList.length > 0) {
-            const cleanSenderJid = cleanJid(senderJid);
-            const isGay = config.gayList.some(entry => {
-                const entryJid = entry.lid || entry.jid || entry.id;
-                return entryJid && cleanJid(entryJid) === cleanSenderJid;
-            });
-
-            if (isGay) {
-                const activatedBy = config.antigay[jid].activatedBy;
-                if (!activatedBy) {
-                    console.log('[ANTIGAY] No activatedBy found for', jid);
-                    return;
-                }
-
-                const normActivatedBy = cleanJid(activatedBy);
-                const normSender = cleanJid(senderJid);
-
-                const isMentioningActivated = mentionedJids.some(j => cleanJid(j) === normActivatedBy);
-                const isReplyingToActivated = contextInfo?.participant && cleanJid(contextInfo.participant) === normActivatedBy;
-
-                if (isMentioningActivated || isReplyingToActivated) {
-                    const rudeMessages = [
-                        "Shut up, you gay fool. Don't tag my master.",
-                        "Back off, rainbow boy. You're not worthy.",
-                        "My Infinity rejects your gay energy. Stay away.",
-                        "You really think you can talk to my master? Gay. 💀",
-                        "Don't you have a boyfriend to annoy? Leave me alone.",
-                        "Master is busy. Go find your gay club.",
-                        "I'd say you're weak, but you're just... gay.",
-                        "You're not even worth my Six Eyes. Get lost.",
-                        "Master doesn't associate with gay peasants like you.",
-                        "Another gay trying to get attention. Blocked."
-                    ];
-                    const randomMsg = rudeMessages[Math.floor(Math.random() * rudeMessages.length)];
-                    try {
-                        await sock.sendMessage(jid, { text: randomMsg, mentions: [senderJid] });
-                        console.log('[ANTIGAY] Sent rude message to', senderJid);
-                    } catch (err) {
-                        console.error('[ANTIGAY] Failed to send message:', err);
-                    }
-                } else {
-                    console.log('[ANTIGAY] Gay user did not mention or reply to activator');
-                }
-            }
-        }
-
         // ─── AGENT DETECTION ──────────────────────────────────────
         const quotedParticipant = contextInfo?.participant;
         const cleanQuoted = cleanJid(quotedParticipant);
         const cleanBotJid = cleanJid(botJid);
         const cleanBotLid = cleanJid(botLid);
 
+        const botNumber = cleanBotJid ? cleanBotJid.split('@')[0] : '';
+        const botLidNumber = cleanBotLid ? cleanBotLid.split('@')[0] : '';
+
         // Fallback store evaluation to check if the replied-to message was sent by the bot
         const quotedMsg = quotedMsgId ? global.messageStore[quotedMsgId] : null;
-        const isReplyingToBot = (cleanQuoted && (cleanQuoted === cleanBotJid || (cleanBotLid && cleanQuoted === cleanBotLid))) ||
-                                (quotedMsg && quotedMsg.key && quotedMsg.key.fromMe) ||
-                                (!isGroup && !msg.key.fromMe && quotedMsgId);
+        
+        // Match standard replies, store fallback, and the verified botSentMessageIds array
+        const isReplyingToBot = (quotedMsgId && botSentMessageIds && botSentMessageIds.has(quotedMsgId)) ||
+                               (cleanQuoted && (
+                                   cleanQuoted === cleanBotJid || 
+                                   (cleanBotLid && cleanQuoted === cleanBotLid) ||
+                                   (botNumber && cleanQuoted.startsWith(botNumber)) ||
+                                   (botLidNumber && cleanQuoted.startsWith(botLidNumber))
+                               )) ||
+                               (quotedMsg && quotedMsg.key && quotedMsg.key.fromMe) ||
+                               (!isGroup && !msg.key.fromMe && quotedMsgId);
 
         // Fallback text check to catch mentions that native contextInfo structures miss
-        const botNumber = botJid ? botJid.split('@')[0] : '';
-        const botLidNumber = botLid ? botLid.split('@')[0] : '';
         const mentionsBotInText = (botNumber && lowerMessage.includes(`@${botNumber}`)) || 
                                   (botLidNumber && lowerMessage.includes(`@${botLidNumber}`));
 
-        const isMentioningBot = mentionedJids.some(j => cleanJid(j) === cleanBotJid) || 
-                                (cleanBotLid && mentionedJids.some(j => cleanJid(j) === cleanBotLid)) ||
-                                mentionsBotInText;
+        const isMentioningBot = mentionedJids.some(j => {
+            const cj = cleanJid(j);
+            return cj === cleanBotJid || (cleanBotLid && cj === cleanBotLid);
+        }) || mentionsBotInText;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
         const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
