@@ -238,7 +238,7 @@ const commands = [
             config.gayList.push({ lid: normalizeToJid(targetJid), name: targetName });
             saveState();
 
-            const successMsg = `🏳️‍🌈 *GAY ADDED!* 🏳️‍🌈\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *User:* @${targetName}\n📌 *Status:* Added to the gay list.\n\n💀 *They will now be bullied whenever they mention or reply to an Owner, Dev, or Sudo.*`;
+            const successMsg = `🏳️‍🌈 *GAY ADDED!* 🏳️‍🌈\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n👤 *User:* @${targetName}\n📌 *Status:* Added to the gay list.\n\n > _Turn on antigay for extra protection_💀`;
             await sock.sendMessage(jid, { text: successMsg, mentions: [targetJid] }, { quoted: msg });
         }
     },
@@ -263,7 +263,7 @@ const commands = [
                 config.antigay[jid] = { status: 'on', activatedBy: senderJid };
                 saveState();
                 await sock.sendMessage(jid, { 
-                    text: `🔒 *AntiGay activated!* Gay users will be bullied whenever they reply to or mention an Owner, Dev, or Sudo user inside this chat.`, 
+                    text: `🔒 *AntiGay activated!* Infinity has been modded to repel gay creatures.`, 
                     mentions: [senderJid] 
                 }, { quoted: msg });
             } else if (action === 'off') {
