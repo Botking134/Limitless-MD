@@ -7,6 +7,10 @@ const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// ─── INITIALIZE GLOBAL OBJECTS ────────────────────────────────────
+global.aiMemory = global.aiMemory || {};
+global.botMessageAgents = global.botMessageAgents || {};
+
 // ─── HELPERS ──────────────────────────────────────────────────────
 
 function normalizeToJid(input) {
@@ -71,26 +75,42 @@ async function synthesizeFridayVoice(text) {
     return null;
 }
 
-// ─── FIX: Dual JID & LID Matching for replies/mentions ───
+// ─── UPDATED: Robust JID, LID, Mention, and Reply Matcher ───────────
 function isBotAddressed(sock, msg) {
     const rawIncoming = getRawMessage(msg.message);
     const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
                         rawIncoming?.imageMessage?.contextInfo ||
-                        rawIncoming?.videoMessage?.contextInfo;
+                        rawIncoming?.videoMessage?.contextInfo ||
+                        rawIncoming?.contextInfo ||
+                        msg.message?.contextInfo;
 
     const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
     const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
 
+    const cleanBotJid = botJid ? botJid.split('@')[0] : '';
+    const cleanBotLid = botLid ? botLid.split('@')[0] : '';
+
+    // Check replies
     const quotedParticipant = contextInfo?.participant ? normalizeToJid(contextInfo.participant) : '';
-    if (quotedParticipant && (quotedParticipant === botJid || (botLid && quotedParticipant === botLid))) {
-        return true;
+    if (quotedParticipant) {
+        const cleanQuoted = quotedParticipant.split('@')[0];
+        if (quotedParticipant === botJid || quotedParticipant === botLid || cleanQuoted === cleanBotJid || cleanQuoted === cleanBotLid) {
+            return true;
+        }
     }
 
+    // Check mention metadata array
     const mentions = contextInfo?.mentionedJid || [];
     const normalizedMentions = mentions.map(m => normalizeToJid(m));
     if (normalizedMentions.includes(botJid) || (botLid && normalizedMentions.includes(botLid))) {
         return true;
     }
+
+    // Check text-based mentions
+    const body = rawIncoming?.conversation || rawIncoming?.extendedTextMessage?.text || rawIncoming?.imageMessage?.caption || rawIncoming?.videoMessage?.caption || '';
+    const lowerMessage = body.toLowerCase();
+    if (cleanBotJid && lowerMessage.includes(`@${cleanBotJid}`)) return true;
+    if (cleanBotLid && lowerMessage.includes(`@${cleanBotLid}`)) return true;
 
     return false;
 }
@@ -174,8 +194,8 @@ module.exports = [
                 return;
             }
 
-            // Only trigger if directly addressed, mentioned, replied to, or begins with his name
-            const isAddressed = isBotAddressed(sock, msg) || cleanArgs.toLowerCase().startsWith('gojo');
+            // Trigger if directly addressed, mentioned, replied to, or contains his name anywhere in the sentence
+            const isAddressed = isBotAddressed(sock, msg) || /\bgojo\b/i.test(cleanArgs);
             if (!isAddressed) return;
 
             if (!cleanQuery) {
@@ -227,7 +247,10 @@ module.exports = [
                 // Wait natural typing duration before sending
                 await handleNaturalDelay(sock, jid, responseText, 'composing');
 
-                await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+                const sent = await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+                if (sent?.key?.id) {
+                    global.botMessageAgents[sent.key.id] = 'gojo';
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "Tch, looks like something interfered with my Infinity." }, { quoted: msg });
             }
@@ -446,8 +469,18 @@ module.exports = [
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
             const jid = msg.key.remoteJid;
-            // Only respond if Lizzy is active in this chat
-            if (!config.lizzyChats?.includes(jid)) return;
+
+            const rawIncoming = getRawMessage(msg.message);
+            const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
+                                rawIncoming?.contextInfo ||
+                                msg.message?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+
+            const isLizzyCalled = args && /\blizzy\b/i.test(args);
+            const isReplyingToLizzy = quotedMsgId && global.botMessageAgents[quotedMsgId] === 'lizzy';
+
+            // Only respond if Lizzy is active in this chat, or called by name, or replied to
+            if (!config.lizzyChats?.includes(jid) && !isLizzyCalled && !isReplyingToLizzy) return;
 
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             if (lowerQuery.startsWith(config.prefix)) return;
@@ -504,7 +537,10 @@ module.exports = [
 
                 await handleNaturalDelay(sock, jid, responseText, 'composing');
 
-                await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+                const sent = await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+                if (sent?.key?.id) {
+                    global.botMessageAgents[sent.key.id] = 'lizzy';
+                }
             } catch (error) {
                 await sock.sendMessage(jid, { text: "Ah... something interfered with my system..." }, { quoted: msg });
             }
@@ -555,7 +591,18 @@ module.exports = [
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            if (!config.chatbotChats?.includes(jid)) return;
+
+            const rawIncoming = getRawMessage(msg.message);
+            const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
+                                rawIncoming?.contextInfo ||
+                                msg.message?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+
+            const isJarvisCalled = args && /\bjarvis\b|\bchatbot\b/i.test(args);
+            const isReplyingToJarvis = quotedMsgId && global.botMessageAgents[quotedMsgId] === 'jarvis';
+
+            // Only respond if Jarvis is active in this chat, or called by name, or replied to
+            if (!config.chatbotChats?.includes(jid) && !isJarvisCalled && !isReplyingToJarvis) return;
 
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             if (lowerQuery.startsWith(config.prefix)) return;
@@ -600,7 +647,10 @@ module.exports = [
 
                 await handleNaturalDelay(sock, jid, responseText, 'composing');
 
-                await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+                const sent = await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+                if (sent?.key?.id) {
+                    global.botMessageAgents[sent.key.id] = 'jarvis';
+                }
             } catch (error) {
                 console.error(error);
             }
@@ -637,7 +687,18 @@ module.exports = [
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            if (!config.fridayChats?.includes(jid)) return;
+
+            const rawIncoming = getRawMessage(msg.message);
+            const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
+                                rawIncoming?.contextInfo ||
+                                msg.message?.contextInfo;
+            const quotedMsgId = contextInfo?.stanzaId;
+
+            const isFridayCalled = args && /\bfriday\b/i.test(args);
+            const isReplyingToFriday = quotedMsgId && global.botMessageAgents[quotedMsgId] === 'friday';
+
+            // Only respond if Friday is active in this chat, or called by name, or replied to
+            if (!config.fridayChats?.includes(jid) && !isFridayCalled && !isReplyingToFriday) return;
 
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             if (lowerQuery.startsWith(config.prefix)) return;
@@ -681,10 +742,16 @@ module.exports = [
                 const audioBuffer = await synthesizeFridayVoice(responseText);
                 if (audioBuffer) {
                     await handleNaturalDelay(sock, jid, responseText, 'recording');
-                    await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    const sent = await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    if (sent?.key?.id) {
+                        global.botMessageAgents[sent.key.id] = 'friday';
+                    }
                 } else {
                     await handleNaturalDelay(sock, jid, responseText, 'composing');
-                    await sock.sendMessage(jid, { text: `[Voice Fallback] ${responseText}` }, { quoted: msg });
+                    const sent = await sock.sendMessage(jid, { text: `[Voice Fallback] ${responseText}` }, { quoted: msg });
+                    if (sent?.key?.id) {
+                        global.botMessageAgents[sent.key.id] = 'friday';
+                    }
                 }
             } catch (error) {
                 console.error("FRIDAY Chat Error:", error);
