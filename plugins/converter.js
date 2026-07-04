@@ -1,7 +1,6 @@
 // plugins/converter.js
 const config = require('../config'); 
-const settings = require('../settings'); 
-const { saveSettings } = require('../helpers/settingsSaver'); 
+const { saveSettings } = require('../helpers/messagehandlers'); 
 const { saveState } = require('../stateManager'); 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const fs = require('fs');
