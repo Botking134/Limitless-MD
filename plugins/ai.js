@@ -305,11 +305,7 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `Summoning *${character}*... 🔮` }, { quoted: msg });
 
                 let summonPrompt = `[System: You are '${character}'. Respond strictly in character using their lore and tone. Keep it concise.`;
-                if (isDev) {
-                    summonPrompt += " Address the user as 'Master'.";
-                } else if (isOwner) {
-                    summonPrompt += ` Address the user as '${config.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
-                }
+               }
                 summonPrompt += `]\nQuery: ${query}`;
 
                 const responseText = await queryGroq([{ role: "user", content: summonPrompt }], "llama-3.3-70b-versatile");
