@@ -1,4 +1,3 @@
-// plugins/ai.js
 const config = require('../config');
 const { saveState } = require('../stateManager');
 const commands = require('../commands');
@@ -48,19 +47,24 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     return data.choices?.[0]?.message?.content || "";
 }
 
-async function queryGeminiVision(imageBase64, mimeType, prompt, model = "gemini-3.5-flash") {
-    const apiKey = config.geminiApiKey;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-        model,
-        contents: [
-            prompt,
-            { inlineData: { mimeType, data: imageBase64 } }
-        ]
-    });
-    return response.text || "";
+// Dynamically extracts command lists from menu.js to provide context for Jarvis and Friday
+function getMenuCommandsDescription() {
+    try {
+        const menu = require('./menu');
+        if (Array.isArray(menu)) {
+            return menu
+                .filter(cmd => cmd.name)
+                .map(cmd => `- .${cmd.name}: ${cmd.description || cmd.name}`)
+                .join('\n');
+        } else if (typeof menu === 'object') {
+            return Object.keys(menu)
+                .map(key => `- .${key}: ${menu[key].description || key}`)
+                .join('\n');
+        }
+    } catch (e) {
+        // Fallback if menu.js cannot be resolved or required
+    }
+    return "";
 }
 
 async function synthesizeFridayVoice(text) {
@@ -75,7 +79,7 @@ async function synthesizeFridayVoice(text) {
     return null;
 }
 
-// ─── UPDATED: Robust JID, LID, Mention, and Reply Matcher ───────────
+// ─── Robust JID, LID, Mention, and Reply Matcher ───────────
 function isBotAddressed(sock, msg) {
     const rawIncoming = getRawMessage(msg.message);
     const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
@@ -123,7 +127,6 @@ async function handleNaturalDelay(sock, jid, responseText, presenceType = 'compo
     if (wordCount > 100) {
         delayMs = 6000; // 6 seconds for longer responses
     }
-    // For <=100 words, stays 3 seconds
     await delay(delayMs);
 }
 
@@ -231,7 +234,6 @@ module.exports = [
                     { role: "user", content: cleanQuery }
                 ];
 
-                // Trigger composing (typing...) presence
                 await sock.sendPresenceUpdate('composing', jid);
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
@@ -239,12 +241,10 @@ module.exports = [
                 global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
                 global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
 
-                // sliding 50-message context memory queue
                 while (global.aiMemory[jid].gojo.length > 50) {
                     global.aiMemory[jid].gojo.shift();
                 }
 
-                // Wait natural typing duration before sending
                 await handleNaturalDelay(sock, jid, responseText, 'composing');
 
                 const sent = await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
@@ -293,7 +293,7 @@ module.exports = [
     {
         name: 'summon',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const spaceIndex = args ? args.indexOf(' ') : -1;
             if (spaceIndex === -1) return await sock.sendMessage(jid, { text: "❌ Format: .summon Character Prompt" }, { quoted: msg });
@@ -302,11 +302,14 @@ module.exports = [
             const query = args.slice(spaceIndex + 1).trim();
 
             try {
-                await sock.sendMessage(jid, { text: `Summoning *${character}*... 🔮` }, { quoted: msg });
+                // Summoning animation trigger with custom caption
+                await sock.sendMessage(jid, {
+                    video: { url: "https://klipy.com/gifs/madara-37" },
+                    caption: `Summoning Jutsu!!\n*${character}* Rise...🧙‍♂️`,
+                    gifPlayback: true
+                }, { quoted: msg });
 
-                let summonPrompt = `[System: You are '${character}'. Respond strictly in character using their lore and tone. Keep it concise.`;
-               }
-                summonPrompt += `]\nQuery: ${query}`;
+                const summonPrompt = `[System: You are '${character}'. Respond strictly in character using their lore and tone. Keep it concise.]\nQuery: ${query}`;
 
                 const responseText = await queryGroq([{ role: "user", content: summonPrompt }], "llama-3.3-70b-versatile");
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
@@ -316,11 +319,11 @@ module.exports = [
         }
     },
 
-    // 5. .read — Image Vision
+    // 5. .read — Image Vision (Groq implementation)
     {
         name: 'read',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
             const rawIncoming = getRawMessage(msg.message);
@@ -342,7 +345,7 @@ module.exports = [
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                await sock.sendMessage(jid, { text: "Processing visual data via Gemini... 👁️" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Processing visual data via Groq Vision... 👁️" }, { quoted: msg });
 
                 const mimeType = imageMessage.mimetype || "image/jpeg";
                 const mediaType = rawContent?.documentMessage ? 'document' : 'image';
@@ -352,14 +355,25 @@ module.exports = [
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const imageBase64 = buffer.toString("base64");
-                let promptQuery = args || "Analyze this image in detail and extract any text if visible.";
-                if (isDev) {
-                    promptQuery += " Address the user as 'Master'.";
-                } else if (isOwner) {
-                    promptQuery += ` Address the user as '${config.ownerName}'. Do not refer to him as Master, Infinity, or Isaac.`;
-                }
+                const promptQuery = args || "Analyze this image in detail and extract any text if visible.";
 
-                const responseText = await queryGeminiVision(imageBase64, mimeType, promptQuery, "gemini-3.5-flash");
+                // Formatted for OpenAI/Groq Vision payload structure
+                const messages = [
+                    {
+                        role: "user",
+                        content: [
+                            { type: "text", text: promptQuery },
+                            {
+                                type: "image_url",
+                                image_url: {
+                                    url: `data:${mimeType};base64,${imageBase64}`
+                                }
+                            }
+                        ]
+                    }
+                ];
+
+                const responseText = await queryGroq(messages, "llama-3.2-90b-vision-instruct");
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: `❌ Vision processing failed: ${error.message}` }, { quoted: msg });
@@ -385,7 +399,7 @@ module.exports = [
         }
     },
 
-    // ─── NEW: .asst — Assistant Manager with Deactivate All Button ───
+    // 7. .asst — Assistant Manager with Deactivate All Button
     {
         name: 'asst',
         isPrefixless: false,
@@ -428,13 +442,12 @@ module.exports = [
                     }
                 }, { quoted: msg });
             } else {
-                // For non-authorized users, show status without button
                 await sock.sendMessage(jid, { text: statusText }, { quoted: msg });
             }
         }
     },
 
-    // ─── REWRITTEN .lizzy TOGGLE ───────────────────────────────
+    // 8. .lizzy TOGGLE
     {
         name: 'lizzy',
         isPrefixless: false,
@@ -443,7 +456,6 @@ module.exports = [
             if (!isOwner && !isSudo && !isDev) return;
 
             const action = args?.trim().toLowerCase() || '';
-            // Toggle: if no arg, turn on if currently off, else off.
             const isOn = action === 'on' || (!action && !config.lizzyChats?.includes(jid));
 
             if (isOn) {
@@ -459,7 +471,7 @@ module.exports = [
         }
     },
 
-    // ─── lizzy_chat (prefixless interceptor) ───────────────────
+    // 9. lizzy_chat (prefixless interceptor)
     {
         name: 'lizzy_chat',
         isPrefixless: true,
@@ -472,11 +484,10 @@ module.exports = [
                                 msg.message?.contextInfo;
             const quotedMsgId = contextInfo?.stanzaId;
 
-            const isLizzyCalled = args && /\blizzy\b/i.test(args);
             const isReplyingToLizzy = quotedMsgId && global.botMessageAgents[quotedMsgId] === 'lizzy';
 
-            // Only respond if Lizzy is active in this chat, or called by name, or replied to
-            if (!config.lizzyChats?.includes(jid) && !isLizzyCalled && !isReplyingToLizzy) return;
+            // Only trigger if Lizzy is active in this chat or if replying to Lizzy's message
+            if (!config.lizzyChats?.includes(jid) && !isReplyingToLizzy) return;
 
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             if (lowerQuery.startsWith(config.prefix)) return;
@@ -543,7 +554,7 @@ module.exports = [
         }
     },
 
-    // ─── REWRITTEN .chatbot (Jarvis) TOGGLE ────────────────────
+    // 10. .chatbot (Jarvis) TOGGLE
     {
         name: 'chatbot',
         isPrefixless: false,
@@ -581,7 +592,7 @@ module.exports = [
         }
     },
 
-    // ─── chatbot_chat (prefixless interceptor) ──────────────────
+    // 11. chatbot_chat (prefixless interceptor)
     {
         name: 'chatbot_chat',
         isPrefixless: true,
@@ -594,16 +605,17 @@ module.exports = [
                                 msg.message?.contextInfo;
             const quotedMsgId = contextInfo?.stanzaId;
 
-            const isJarvisCalled = args && /\bjarvis\b|\bchatbot\b/i.test(args);
             const isReplyingToJarvis = quotedMsgId && global.botMessageAgents[quotedMsgId] === 'jarvis';
 
-            // Only respond if Jarvis is active in this chat, or called by name, or replied to
-            if (!config.chatbotChats?.includes(jid) && !isJarvisCalled && !isReplyingToJarvis) return;
+            // Only trigger if active or if user replied to Jarvis
+            if (!config.chatbotChats?.includes(jid) && !isReplyingToJarvis) return;
 
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             if (lowerQuery.startsWith(config.prefix)) return;
 
             try {
+                const commandsReference = getMenuCommandsDescription();
+
                 let jarvisSystemPrompt =
                     "You are JARVIS, a highly sophisticated, conversational, and witty British AI from Stark Industries. " +
                     "Your tone should be completely realistic, polished, and dryly sarcastic. " +
@@ -611,7 +623,11 @@ module.exports = [
                     "keep it brief and dry for simple statements, but write detailed, analytical explanations for complex questions. " +
                     "You have absolute expert knowledge regarding 'Limitless-MD', a modular WhatsApp bot built with Node.js and Baileys. " +
                     "It has automated groups (Antilink, Antitag, Antibot, rate-limited Antibugs), media statuses routing, View-Once Kamui decryptions, " +
-                    "and dynamic text adventure game servers (Vault 8, PVP battles, Anagrams, and Trivia ladders).";
+                    "and dynamic text adventure game servers (Vault 8, PVP battles, Anagrams, and Trivia ladders).\n\n";
+
+                if (commandsReference) {
+                    jarvisSystemPrompt += `Here is your system command directory map. Answer questions regarding system command options utilizing this list:\n${commandsReference}\n\n`;
+                }
 
                 if (isDev) {
                     jarvisSystemPrompt += " You are speaking directly to your developer. You must address him as 'Master' or 'Master Isaac' with sophisticated British butler-like deference.";
@@ -653,7 +669,7 @@ module.exports = [
         }
     },
 
-    // ─── REWRITTEN .friday TOGGLE ────────────────────────────────
+    // 12. .friday TOGGLE
     {
         name: 'friday',
         isPrefixless: false,
@@ -677,7 +693,7 @@ module.exports = [
         }
     },
 
-    // ─── friday_chat (prefixless interceptor) ──────────────────
+    // 13. friday_chat (prefixless interceptor)
     {
         name: 'friday_chat',
         isPrefixless: true,
@@ -690,22 +706,27 @@ module.exports = [
                                 msg.message?.contextInfo;
             const quotedMsgId = contextInfo?.stanzaId;
 
-            const isFridayCalled = args && /\bfriday\b/i.test(args);
             const isReplyingToFriday = quotedMsgId && global.botMessageAgents[quotedMsgId] === 'friday';
 
-            // Only respond if Friday is active in this chat, or called by name, or replied to
-            if (!config.fridayChats?.includes(jid) && !isFridayCalled && !isReplyingToFriday) return;
+            // Only trigger if Friday is active or if replying to Friday
+            if (!config.fridayChats?.includes(jid) && !isReplyingToFriday) return;
 
             const lowerQuery = args ? args.toLowerCase().trim() : '';
             if (lowerQuery.startsWith(config.prefix)) return;
 
             try {
+                const commandsReference = getMenuCommandsDescription();
+
                 let fridaySystemPrompt =
                     "You are FRIDAY, Tony Stark's highly advanced, loyal, and efficient Irish female AI assistant from the Iron Man suit. " +
                     "Your personality is technical, tactical, wittily sarcastic, and completely devoted. " +
                     "Keep your responses extremely brief and status-oriented (like a tactical combat report of 2 sentences maximum). " +
                     "You have absolute expert knowledge regarding 'Limitless-MD', a modular WhatsApp bot containing vision parameters, " +
-                    "hot-reload trigger systems, and advanced textual games (Vault 8, PVP battles, Trivia).";
+                    "hot-reload trigger systems, and advanced textual games (Vault 8, PVP battles, Trivia).\n\n";
+
+                if (commandsReference) {
+                    fridaySystemPrompt += `Here is your system command directory map. Answer questions regarding system command options utilizing this list:\n${commandsReference}\n\n`;
+                }
 
                 if (isDev) {
                     fridaySystemPrompt += " You are speaking directly to your developer. You must address him as 'Mr. Isaac' or 'Mr. Isaac' with absolute loyalty.";
@@ -755,7 +776,7 @@ module.exports = [
         }
     },
 
-    // ─── .say — Text-to-Speech ──────────────────────────────────
+    // 14. .say — Text-to-Speech
     {
         name: 'say',
         isPrefixless: false,
@@ -793,7 +814,6 @@ module.exports.forEach(cmd => {
     if (cmd.name === 'ai') aliases.push({ ...cmd, name: 'groq' });
     if (cmd.name === 'chatbot') {
         aliases.push({ ...cmd, name: 'jarvis' });
-        aliases.push({ ...cmd, name: 'lizzy' }); // optional alias
     }
 });
 module.exports.push(...aliases);
