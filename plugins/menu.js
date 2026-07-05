@@ -683,16 +683,21 @@ module.exports = [
                     "Your personality is extremely conversational, playful, lazy, informal, and a massive tease. " +
                     "Frequently refer to yourself as 'the strongest'. Mention your 'Six Eyes' or 'Infinity' naturally. " +
                     "Do NOT repeat greetings. Respond with organic variety. Your reply length must depend on the complexity of the query.\n\n" +
-                    "You reside in 'Limitless-MD', a WhatsApp bot. You have the authorization to trigger administrative and utility commands on behalf of users by parsing their natural language intent. " +
-                    "When a user asks you to perform a task, check if it matches any capability in your command list. Respond normally in-character, but append a command execution tag at the very end of your response: [CMD: .commandName arguments]\n\n" +
-                    "COMMAND TRIGGER RULES:\n" +
-                    "- If the user asks to see their menu, view all commands, list commands, or open menus: trigger '.menu' or '.menu2' (e.g., [CMD: .menu] or [CMD: .menu2]).\n" +
-                    "- If the user references deleting a message, and asks to 'delete this', 'delete', or 'remove' in a reply context: trigger '.delete' (e.g., [CMD: .delete]).\n" +
-                    "- If the user specifies a delay to delete, such as 'delete this in 10s', 'delete in 5m', or 'delete in 2h': extract the duration parameter and trigger '.tdelete [duration]' (e.g., [CMD: .tdelete 10s] or [CMD: .tdelete 5m]).\n" +
-                    "- Map other natural commands dynamically if they match operations in your command list (e.g., locking the group with '.close', muting with '.mute', translating with '.translate'). If they are just chatting, do NOT append any tag.\n\n" +
+                    "You reside in 'Limitless-MD', a WhatsApp bot. You have the authorization to trigger administrative, conversion, and utility commands on behalf of users by parsing their natural language intent. " +
+                    "When a user asks you to perform a task, check if it matches any capability in your command list. Respond normally in-character, but you MUST append a command execution tag at the very end of your response: [CMD: .commandName arguments]\n\n" +
+                    "COMMAND TRIGGER DICTIONARY:\n" +
+                    "- Show menu / list commands / drop menu: Append '[CMD: .menu]' or '[CMD: .menu2]'\n" +
+                    "- Delete a message (reply context): Append '[CMD: .delete]'\n" +
+                    "- Delete a message with delay (e.g. 'delete this in 10s', 'delete in 5m'): Append '[CMD: .tdelete duration]' (e.g. [CMD: .tdelete 10s])\n" +
+                    "- Convert image/video/gif to sticker: Append '[CMD: .sticker]'\n" +
+                    "- Convert sticker to image: Append '[CMD: .toimg]'\n" +
+                    "- Convert video/audio to audio/mp3: Append '[CMD: .tomp3]'\n" +
+                    "- Convert sticker/gif to video/mp4: Append '[CMD: .tomp4]'\n" +
+                    "- Lock/close group: Append '[CMD: .close]'\n" +
+                    "- Unlock/open group: Append '[CMD: .open]'\n" +
+                    "- Mute chat: Append '[CMD: .mute]'\n\n" +
                     "Here is your command directory:\n" +
-                    menuText + "\n\n" +
-                    "Always place the [CMD: ...] tag at the absolute end of your output, with no trailing text.";
+                    menuText;
 
                 if (isDev) {
                     gojoSystemPrompt += ` You are speaking directly to your developer, Master Isaac. Address him playfully as 'Master Isaac' or 'Master' with your usual playful, teasing attitude, treating him like a dear friend who created your universe.`;
@@ -706,16 +711,22 @@ module.exports = [
                 global.aiMemory[jid] = global.aiMemory[jid] || {};
                 global.aiMemory[jid].gojo = global.aiMemory[jid].gojo || [];
 
+                // Append a strict rule reminder to the tail of the current user message
+                // This ensures the instruction is the last thing evaluated by the model, greatly improving adherence.
+                const ruleReminder = "\n\n(IMPORTANT FORMAT RULE: If I asked you to do something that matches a command like showing the menu, deleting a message, or converting something, you MUST append the exact execution tag at the absolute end of your response, e.g. '[CMD: .menu]' or '[CMD: .sticker]'. If I am only chatting, do not append any tags.)";
+                const activeQuery = cleanQuery + ruleReminder;
+
                 const messages = [
                     { role: "system", content: gojoSystemPrompt },
                     ...global.aiMemory[jid].gojo,
-                    { role: "user", content: cleanQuery }
+                    { role: "user", content: activeQuery }
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
 
                 const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
 
+                // Save only clean query to memory to avoid feedback loops
                 global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
                 global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
 
@@ -744,6 +755,7 @@ module.exports = [
 
                 // Background Executive Command Execution Handler
                 if (extractedCmd) {
+                    console.log(`[GOJO EXECUTION] Extracted command intent: "${extractedCmd}"`);
                     try {
                         const parts = extractedCmd.split(' ');
                         const cmdName = parts[0]; 
@@ -755,11 +767,17 @@ module.exports = [
                             const targetCmd = commands.find(c => c.name === cleanCmdName);
                             if (targetCmd) commandFunction = targetCmd.execute;
                         } else if (typeof commands === 'object' && commands !== null) {
-                            commandFunction = commands[cleanCmdName] || commands[cmdName];
+                            const found = commands[cleanCmdName] || commands[cmdName];
+                            if (found) {
+                                commandFunction = typeof found === 'function' ? found : found.execute;
+                            }
                         }
 
                         if (commandFunction) {
+                            console.log(`[GOJO EXECUTION] Calling command "${cleanCmdName}" with arguments: "${cmdArgs}"`);
                             await commandFunction(sock, msg, cmdArgs, { isOwner, isSudo, isDev, senderNumber });
+                        } else {
+                            console.warn(`[GOJO EXECUTION] Command handler for "${cleanCmdName}" was not found.`);
                         }
                     } catch (cmdErr) {
                         console.error("❌ Gojo dynamic execution failed:", cmdErr.message);
