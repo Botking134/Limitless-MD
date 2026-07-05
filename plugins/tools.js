@@ -1,4 +1,3 @@
-// plugins/tools.js
 const config = require('../config');
 const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
 const { setVar, loadVars, syncVarsToConfig } = require('../vars');
@@ -10,6 +9,8 @@ const fs = require('fs');
 // ─── GLOBALS ──────────────────────────────────────────────────────
 global.forwardSessions = global.forwardSessions || {};
 global.azaSessions = global.azaSessions || {};
+
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -86,36 +87,26 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("Catbox and qu.ax upload hosts failed.");
 }
 
-async function queryGeminiText(prompt, textContent, model = "gemini-3.5-flash", useSearch = true) {
-    const apiKey = config.geminiApiKey;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is not set in config or .env");
-
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({ apiKey });
-
-    const configPayload = useSearch ? { tools: [{ googleSearch: {} }] } : {};
-
-    try {
-        const response = await ai.models.generateContent({
-            model,
-            contents: `${prompt}\n\nContent:\n"${textContent}"`,
-            config: configPayload
-        });
-        return response.text || "";
-    } catch (sdkErr) {
-        // Fallback without search
-        const response = await ai.models.generateContent({
-            model,
-            contents: `${prompt}\n\nContent:\n"${textContent}"`
-        });
-        return response.text || response.output || "";
-    }
+async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
+    const apiKey = config.groqApiKey;
+    if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
+    const response = await fetch(GROQ_BASE_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ model, messages, temperature: 0.7 })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "";
 }
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. SETPP (Bot Profile Picture)
+    // 1. SETPP (Bot Profile Picture - Fixed Media Pulling)
     {
         name: 'setpp',
         isPrefixless: false,
@@ -132,16 +123,19 @@ module.exports = [
                                 rawMsg?.audioMessage?.contextInfo ||
                                 rawMsg?.documentMessage?.contextInfo;
             const quoted = contextInfo?.quotedMessage;
+            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
 
-            if (!quoted || !quoted.imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
+            const rawContent = getRawMessage(quoted);
+            const imageMessage = rawContent?.imageMessage;
+            if (!imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(quoted.imageMessage, 'image');
+                const stream = await downloadContentFromMessage(imageMessage, 'image');
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                const botJid = sock.user.id.split(':')[0] + (sock.user.id.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+                const botJid = normalizeToJid(sock.user.id);
                 await sock.updateProfilePicture(botJid, buffer);
                 await sock.sendMessage(jid, { text: "✅ Bot profile picture has been updated!" }, { quoted: msg });
             } catch (error) {
@@ -150,7 +144,7 @@ module.exports = [
         }
     },
 
-    // 2. TRACK (Spatial geographical locator)
+    // 2. TRACK (Spatial geographical locator - Fixed LID translation)
     {
         name: 'track',
         isPrefixless: false,
@@ -217,16 +211,27 @@ module.exports = [
         }
     },
 
-    // 3. GETPP (User Profile Picture)
+    // 3. GETPP (User Profile Picture - Fixed fallbacks & LID)
     {
         name: 'getpp',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
+            let targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
+
+            if (targetJid.endsWith('@lid')) {
+                const resolved = await getPhoneJid(sock, targetJid, jid);
+                if (resolved) targetJid = resolved;
+            }
 
             try {
-                const profileUrl = await sock.profilePictureUrl(targetJid, 'image');
+                let profileUrl;
+                try {
+                    profileUrl = await sock.profilePictureUrl(targetJid, 'image');
+                } catch (err) {
+                    // Fallback to low-resolution preview
+                    profileUrl = await sock.profilePictureUrl(targetJid, 'preview');
+                }
                 await sock.sendMessage(jid, { image: { url: profileUrl }, mentions: [targetJid] }, { quoted: msg });
             } catch (e) {
                 await sock.sendMessage(jid, { text: "❌ No public profile picture found." }, { quoted: msg });
@@ -354,79 +359,98 @@ module.exports = [
         }
     },
 
-    
-// 7. FW (Forwarding – Fixed)
-{
-    name: 'fw',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isDev }) => {
-        const jid = msg.key.remoteJid;
-        if (!isOwner && !isDev) return;
+    // 7. FW (Forwarding - Fixed Smart Parsing & Delivery)
+    {
+        name: 'fw',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
 
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo ||
-                            rawMsg?.extendedTextMessage?.contextInfo ||
-                            rawMsg?.imageMessage?.contextInfo ||
-                            rawMsg?.videoMessage?.contextInfo ||
-                            rawMsg?.stickerMessage?.contextInfo ||
-                            rawMsg?.audioMessage?.contextInfo ||
-                            rawMsg?.documentMessage?.contextInfo;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo ||
+                                rawMsg?.extendedTextMessage?.contextInfo ||
+                                rawMsg?.imageMessage?.contextInfo ||
+                                rawMsg?.videoMessage?.contextInfo ||
+                                rawMsg?.stickerMessage?.contextInfo ||
+                                rawMsg?.audioMessage?.contextInfo ||
+                                rawMsg?.documentMessage?.contextInfo;
 
-        // ─── Mode 1: Direct forward with args (target JID) ──────────
-        if (args && !contextInfo?.stanzaId) {
-            const spaceIdx = args.indexOf(' ');
-            if (spaceIdx === -1) {
-                return await sock.sendMessage(jid, { text: "❌ Format: .fw <targetNumber> <text> or reply to a message and use .fw <targetNumber>" }, { quoted: msg });
+            // ─── Mode 1: Direct forward with args (Smart parsing) ──────────
+            if (args && !contextInfo?.stanzaId) {
+                const parts = args.trim().split(' ');
+                let targetJid = '';
+                let textToSend = '';
+
+                const isJidCheck = (p) => p.endsWith('@s.whatsapp.net') || p.endsWith('@g.us') || /^\d{7,15}$/.test(p);
+
+                if (isJidCheck(parts[0])) {
+                    targetJid = parts[0].includes('@') ? parts[0] : parts[0] + '@s.whatsapp.net';
+                    textToSend = parts.slice(1).join(' ').trim();
+                } else if (isJidCheck(parts[parts.length - 1])) {
+                    targetJid = parts[parts.length - 1].includes('@') ? parts[parts.length - 1] : parts[parts.length - 1] + '@s.whatsapp.net';
+                    textToSend = parts.slice(0, parts.length - 1).join(' ').trim();
+                }
+
+                if (!targetJid || !textToSend) {
+                    return await sock.sendMessage(jid, { text: "❌ Format: .fw <targetNumber> <text> or reply to a message and use .fw <targetNumber>" }, { quoted: msg });
+                }
+
+                try {
+                    await sock.sendMessage(targetJid, { text: textToSend });
+                    await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: `❌ Failed: ${e.message}` }, { quoted: msg });
+                }
+                return;
             }
 
-            const targetJid = args.slice(0, spaceIdx).replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-            const textToSend = args.slice(spaceIdx + 1).trim();
+            // ─── Mode 2: Reply to a message with .fw <targetNumber> ──────
+            if (contextInfo && contextInfo.stanzaId && args) {
+                const cleanTarget = args.trim();
+                const targetJid = cleanTarget.endsWith('@g.us') ? cleanTarget : (cleanTarget.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
+                if (targetJid.length < 8) return await sock.sendMessage(jid, { text: "❌ Invalid target JID." }, { quoted: msg });
 
-            try {
-                await sock.sendMessage(targetJid, { text: textToSend });
-                await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
-            } catch (e) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${e.message}` }, { quoted: msg });
+                try {
+                    const quotedMsg = contextInfo.quotedMessage;
+                    if (!quotedMsg) return await sock.sendMessage(jid, { text: "❌ No quoted message found." }, { quoted: msg });
+
+                    const { proto } = await import('@itsliaaa/baileys');
+                    const fullMessage = proto.WebMessageInfo.create({
+                        key: {
+                            remoteJid: jid,
+                            id: contextInfo.stanzaId,
+                            participant: contextInfo.participant
+                        },
+                        message: quotedMsg
+                    });
+
+                    await sock.copyNForward(targetJid, fullMessage, true);
+                    await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: `❌ Forward failed: ${e.message}` }, { quoted: msg });
+                }
+                return;
             }
-            return;
-        }
 
-        // ─── Mode 2: Reply to a message with .fw <targetNumber> ──────
-        if (contextInfo && contextInfo.stanzaId && args) {
-            const targetJid = args.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-            if (targetJid.length < 8) return await sock.sendMessage(jid, { text: "❌ Invalid target number." }, { quoted: msg });
+            // ─── Mode 3: Interactive prompt (no args, reply to a message) ──
+            if (contextInfo && contextInfo.stanzaId && !args) {
+                const prompt = await sock.sendMessage(jid, {
+                    text: "📤 *FORWARD WIZARD* 📤\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
+                          "Please reply directly to *this message* with the target phone number (e.g., 2348123456789) or group JID."
+                }, { quoted: msg });
 
-            try {
-                const quotedMsg = contextInfo.quotedMessage;
-                if (!quotedMsg) return await sock.sendMessage(jid, { text: "❌ No quoted message found." }, { quoted: msg });
-
-                await sock.sendMessage(targetJid, { forward: quotedMsg });
-                await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
-            } catch (e) {
-                await sock.sendMessage(jid, { text: `❌ Forward failed: ${e.message}` }, { quoted: msg });
+                global.forwardSessions[prompt.key.id] = {
+                    msgToForward: contextInfo.quotedMessage,
+                    originalMsgKey: contextInfo.stanzaId,
+                    originalParticipant: contextInfo.participant
+                };
+                return;
             }
-            return;
+
+            await sock.sendMessage(jid, { text: "❌ Usage:\n• `.fw <targetNumber> <text>`\n• Reply to a message with `.fw <targetNumber>`\n• Reply to a message and use `.fw` (interactive)" }, { quoted: msg });
         }
-
-        // ─── Mode 3: Interactive prompt (no args, reply to a message) ──
-        if (contextInfo && contextInfo.stanzaId && !args) {
-            const prompt = await sock.sendMessage(jid, {
-                text: "📤 *FORWARD WIZARD* 📤\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
-                      "Please reply directly to *this message* with the target phone number (e.g., 2348123456789)."
-            }, { quoted: msg });
-
-            global.forwardSessions[prompt.key.id] = {
-                msgToForward: contextInfo.quotedMessage,
-                originalMsgKey: contextInfo.stanzaId,
-                originalParticipant: contextInfo.participant
-            };
-            return;
-        }
-
-        // ─── Fallback ──────────────────────────────────────────────
-        await sock.sendMessage(jid, { text: "❌ Usage:\n• `.fw <targetNumber> <text>`\n• Reply to a message with `.fw <targetNumber>`\n• Reply to a message and use `.fw` (interactive)" }, { quoted: msg });
-    }
-},
+    },
 
     // 8. PRESENCE (Dashboard)
     {
@@ -547,7 +571,7 @@ module.exports = [
         }
     },
 
-    // 13. ANTIDELETE (with flags)
+    // 13. ANTIDELETE (Fixed Legacy Buttons)
     {
         name: 'antidelete',
         isPrefixless: false,
@@ -564,30 +588,22 @@ module.exports = [
                     'all': '🌐 All Chats'
                 };
                 const prompt =
-                    `🛡️ *ANTIDELETE MODE SELECTOR* 🛡️\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `🛡️ *ANTIDELETE CONFIGURATION* 🛡️\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `*Current Mode:* ${statusMap[current] || '⛔ Off'}\n\n` +
-                    `Select a mode below:`;
+                    `To update this mode, run:\n` +
+                    `• \`${config.prefix}antidelete -g\` (Groups Only)\n` +
+                    `• \`${config.prefix}antidelete -pm\` (DMs Only)\n` +
+                    `• \`${config.prefix}antidelete -all\` (All Chats)\n` +
+                    `• \`${config.prefix}antidelete -off\` (Turn Off)`;
 
-                const buttonMessage = {
-                    text: prompt,
-                    buttons: [
-                        { buttonId: `${config.prefix}antidelete -g`, buttonText: { displayText: 'Groups Only 🏢' }, type: 1 },
-                        { buttonId: `${config.prefix}antidelete -pm`, buttonText: { displayText: 'DMs Only 💬' }, type: 1 },
-                        { buttonId: `${config.prefix}antidelete -all`, buttonText: { displayText: 'All Chats 🌐' }, type: 1 },
-                        { buttonId: `${config.prefix}antidelete -off`, buttonText: { displayText: 'Off ⛔' }, type: 1 }
-                    ],
-                    headerType: 1
-                };
-                try { return await sock.sendMessage(jid, buttonMessage, { quoted: msg }); } catch (e) {
-                    return await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
-                }
+                return await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
             }
 
             const mode = args.toLowerCase().trim();
             if (['-g', '-pm', '-all', '-off'].includes(mode)) {
                 const cleanMode = mode.replace('-', '');
                 if (!config.antidelete) config.antidelete = {};
-                config.antidelete.mode = cleanMode;
+                config.antidelete.mode = cleanMode === 'g' ? 'group' : cleanMode;
                 saveState();
                 const statusMap = {
                     'off': '⛔ Off',
@@ -595,14 +611,15 @@ module.exports = [
                     'pm': '💬 DMs Only',
                     'all': '🌐 All Chats'
                 };
-                await sock.sendMessage(jid, { text: `✅ *Antidelete mode updated:* ${statusMap[cleanMode]}` }, { quoted: msg });
+                const updatedMode = config.antidelete.mode;
+                await sock.sendMessage(jid, { text: `✅ *Antidelete mode updated:* ${statusMap[updatedMode] || updatedMode}` }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, { text: `❌ Invalid option. Use -g, -pm, -all, or -off.` }, { quoted: msg });
             }
         }
     },
 
-    // 14. ANTIVIEWONCE (with flags)
+    // 14. ANTIVIEWONCE (Fixed Legacy Buttons)
     {
         name: 'antiviewonce',
         isPrefixless: false,
@@ -619,30 +636,22 @@ module.exports = [
                     'all': '🌐 All Chats'
                 };
                 const prompt =
-                    `🛡️ *ANTIVIEWONCE MODE SELECTOR* 🛡️\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `🛡️ *ANTIVIEWONCE CONFIGURATION* 🛡️\n━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `*Current Mode:* ${statusMap[current] || '⛔ Off'}\n\n` +
-                    `Select a mode below:`;
+                    `To update this mode, run:\n` +
+                    `• \`${config.prefix}antiviewonce -g\` (Groups Only)\n` +
+                    `• \`${config.prefix}antiviewonce -pm\` (DMs Only)\n` +
+                    `• \`${config.prefix}antiviewonce -all\` (All Chats)\n` +
+                    `• \`${config.prefix}antiviewonce -off\` (Turn Off)`;
 
-                const buttonMessage = {
-                    text: prompt,
-                    buttons: [
-                        { buttonId: `${config.prefix}antiviewonce -g`, buttonText: { displayText: 'Groups Only 🏢' }, type: 1 },
-                        { buttonId: `${config.prefix}antiviewonce -pm`, buttonText: { displayText: 'DMs Only 💬' }, type: 1 },
-                        { buttonId: `${config.prefix}antiviewonce -all`, buttonText: { displayText: 'All Chats 🌐' }, type: 1 },
-                        { buttonId: `${config.prefix}antiviewonce -off`, buttonText: { displayText: 'Off ⛔' }, type: 1 }
-                    ],
-                    headerType: 1
-                };
-                try { return await sock.sendMessage(jid, buttonMessage, { quoted: msg }); } catch (e) {
-                    return await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
-                }
+                return await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
             }
 
             const mode = args.toLowerCase().trim();
             if (['-g', '-pm', '-all', '-off'].includes(mode)) {
                 const cleanMode = mode.replace('-', '');
                 if (!config.antiviewonce) config.antiviewonce = {};
-                config.antiviewonce.mode = cleanMode;
+                config.antiviewonce.mode = cleanMode === 'g' ? 'group' : cleanMode;
                 saveState();
                 const statusMap = {
                     'off': '⛔ Off',
@@ -650,14 +659,15 @@ module.exports = [
                     'pm': '💬 DMs Only',
                     'all': '🌐 All Chats'
                 };
-                await sock.sendMessage(jid, { text: `✅ *Antiviewonce mode updated:* ${statusMap[cleanMode]}` }, { quoted: msg });
+                const updatedMode = config.antiviewonce.mode;
+                await sock.sendMessage(jid, { text: `✅ *Antiviewonce mode updated:* ${statusMap[updatedMode] || updatedMode}` }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, { text: `❌ Invalid option. Use -g, -pm, -all, or -off.` }, { quoted: msg });
             }
         }
     },
 
-    // 15. ANTIBUG
+    // 15. ANTIBUG (Fixed spam rate warnings)
     {
         name: 'antibug',
         isPrefixless: false,
@@ -669,7 +679,7 @@ module.exports = [
 
             if (target === 'on') {
                 config.antibug = 'on';
-                await sock.sendMessage(jid, { text: "🛡️ *Antibug protection enabled!*" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "🛡️ *Antibug protection enabled!* (Anti-flood active: 2 msgs/sec threshold is now armed)" }, { quoted: msg });
             } else if (target === 'off') {
                 config.antibug = 'off';
                 await sock.sendMessage(jid, { text: "🛡️ *Antibug protection disabled.*" }, { quoted: msg });
@@ -678,7 +688,7 @@ module.exports = [
         }
     },
 
-    // 16. CLEAR
+    // 16. CLEAR (Fixed light-payload serializations)
     {
         name: 'clear',
         isPrefixless: false,
@@ -686,12 +696,13 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
             try {
-                await sock.chatModify({ delete: true, lastMessages: [msg] }, jid);
+                await sock.chatModify({ delete: true, lastMessages: [{ key: msg.key, messageTimestamp: msg.messageTimestamp }] }, jid);
+                await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
             } catch (e) { /* ignore */ }
         }
     },
 
-    // 17. ARCHIVE
+    // 17. ARCHIVE (Fixed light-payload serializations)
     {
         name: 'archive',
         isPrefixless: false,
@@ -699,15 +710,15 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
             try {
-                await sock.chatModify({ archive: true, lastMessages: [msg] }, jid);
-                await sock.sendMessage(jid, { text: "✅ Chat archived successfully!" }, { quoted: msg });
+                await sock.chatModify({ archive: true, lastMessages: [{ key: msg.key, messageTimestamp: msg.messageTimestamp }] }, jid);
+                await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
             } catch (e) {
                 await sock.sendMessage(jid, { text: `❌ Failed to archive chat: ${e.message}` }, { quoted: msg });
             }
         }
     },
 
-    // 18. UNARCHIVE
+    // 18. UNARCHIVE (Fixed light-payload serializations)
     {
         name: 'unarchive',
         isPrefixless: false,
@@ -715,8 +726,8 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
             try {
-                await sock.chatModify({ archive: false, lastMessages: [msg] }, jid);
-                await sock.sendMessage(jid, { text: "✅ Chat unarchived successfully!" }, { quoted: msg });
+                await sock.chatModify({ archive: false, lastMessages: [{ key: msg.key, messageTimestamp: msg.messageTimestamp }] }, jid);
+                await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
             } catch (e) {
                 await sock.sendMessage(jid, { text: `❌ Failed to unarchive chat: ${e.message}` }, { quoted: msg });
             }
@@ -779,7 +790,7 @@ module.exports = [
         }
     },
 
-    // 22. BLOCK
+    // 22. BLOCK (Fixed LID translations)
     {
         name: 'block',
         isPrefixless: false,
@@ -787,16 +798,22 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            const targetJid = parseTarget(msg, args);
+            let targetJid = parseTarget(msg, args);
             if (!targetJid) return;
+
+            if (targetJid.endsWith('@lid')) {
+                const resolved = await getPhoneJid(sock, targetJid, jid);
+                if (resolved) targetJid = resolved;
+            }
 
             try {
                 await sock.updateBlockStatus(targetJid, 'block');
+                await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
             } catch (e) { /* ignore */ }
         }
     },
 
-    // 23. UNBLOCK
+    // 23. UNBLOCK (Fixed LID translations)
     {
         name: 'unblock',
         isPrefixless: false,
@@ -804,16 +821,22 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
 
-            const targetJid = parseTarget(msg, args);
+            let targetJid = parseTarget(msg, args);
             if (!targetJid) return;
+
+            if (targetJid.endsWith('@lid')) {
+                const resolved = await getPhoneJid(sock, targetJid, jid);
+                if (resolved) targetJid = resolved;
+            }
 
             try {
                 await sock.updateBlockStatus(targetJid, 'unblock');
+                await sock.sendMessage(jid, { react: { text: "✓", key: msg.key } });
             } catch (e) { /* ignore */ }
         }
     },
 
-    // 24. AZA (Bank details)
+    // 24. AZA (Bank details - Fixed Legacy Buttons)
     {
         name: 'aza',
         isPrefixless: false,
@@ -844,19 +867,8 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: detailsCard }, { quoted: msg });
             }
 
-            const promptText = `❌ *No Bank Details Configured!*\n\nPlease set your bank credentials first.`;
-            const buttonMessage = {
-                text: promptText,
-                buttons: [
-                    { buttonId: `${config.prefix}aza set`, buttonText: { displayText: 'Set Aza 🏦' }, type: 1 }
-                ],
-                headerType: 1
-            };
-            try {
-                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (e) {
-                await sock.sendMessage(jid, { text: `${promptText}\n\n_Use \`${config.prefix}aza set\` to configure details manually._` }, { quoted: msg });
-            }
+            const promptText = `❌ *No Bank Details Configured!*\n\nPlease configure your bank details manually by running:\n\`${config.prefix}aza set\``;
+            await sock.sendMessage(jid, { text: promptText }, { quoted: msg });
         }
     },
 
@@ -915,7 +927,7 @@ module.exports = [
         }
     },
 
-    // 26. WEATHER (Gemini Search)
+    // 26. WEATHER (Transitioned to keyless wttr.in + Groq formatting)
     {
         name: 'weather',
         isPrefixless: false,
@@ -926,12 +938,15 @@ module.exports = [
             try {
                 await sock.sendMessage(jid, { text: "Fetching live weather intelligence... 🌤️" }, { quoted: msg });
 
-                const prompt = `Perform a live Google Search to find the exact current, live weather details for: ${args}. ` +
-                               `Provide a detailed weather report including: Temperature (Celsius & Fahrenheit), ` +
-                               `Real Feel, Humidity, Wind Speed, Atmospheric Conditions, and precipitation chance. ` +
-                               `Keep the formatting clean, organized with appropriate emojis, and highly readable.`;
+                const response = await axios.get(`https://wttr.in/${encodeURIComponent(args)}?format=j1`);
+                const weatherData = JSON.stringify(response.data).slice(0, 4000); 
 
-                const responseText = await queryGeminiText(prompt, args);
+                const prompt = `Below is raw JSON weather data for "${args}". Please parse and format this into a clean, highly readable, beautiful weather forecast card with appropriate emojis. Do not output raw JSON, output only the clean weather report text.`;
+                const responseText = await queryGroq([
+                    { role: "system", content: "You are a professional weather assistant." },
+                    { role: "user", content: `${prompt}\n\nData:\n${weatherData}` }
+                ], "llama-3.3-70b-versatile");
+
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to retrieve weather data." }, { quoted: msg });
@@ -980,7 +995,7 @@ module.exports = [
         }
     },
 
-    // 28. SS (Screenshot)
+    // 28. SS (Screenshot - Fixed to download rendering buffer first)
     {
         name: 'ss',
         isPrefixless: false,
@@ -1007,35 +1022,50 @@ module.exports = [
             if (!/^https?:\/\//i.test(targetUrl)) targetUrl = 'https://' + targetUrl;
 
             try {
+                await sock.sendMessage(jid, { text: "Generating website screenshot... 📸" }, { quoted: msg });
                 const screenshotUrl = `https://image.thum.io/get/width/1280/crop/800/${targetUrl}`;
-                await sock.sendMessage(jid, { image: { url: screenshotUrl }, caption: `📸 *Screenshot of:* \`${targetUrl}\`` }, { quoted: msg });
-            } catch (err) { /* ignore */ }
+                
+                // Fetch the rendering buffer first to force full page render
+                const response = await axios.get(screenshotUrl, { responseType: 'arraybuffer' });
+                const buffer = Buffer.from(response.data);
+
+                await sock.sendMessage(jid, { image: buffer, caption: `📸 *Screenshot of:* \`${targetUrl}\`` }, { quoted: msg });
+            } catch (err) { 
+                await sock.sendMessage(jid, { text: "❌ Failed to capture screenshot." }, { quoted: msg });
+            }
         }
     },
 
-    // 29. CALCULATOR
+    // 29. CALCULATOR (calc - Fixed empty & syntax error handling)
     {
         name: 'calculator',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            if (!args) return;
+            if (!args) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a mathematical expression. (e.g., .calc (2+3)*5)" }, { quoted: msg });
+            }
 
             const cleanExpr = args.replace(/[^0-9+\-*/().\s]/g, '').trim();
-            if (!cleanExpr) return;
+            if (!cleanExpr) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid characters. Use only numbers and operators." }, { quoted: msg });
+            }
 
             try {
                 const result = Function('"use strict";return (' + cleanExpr + ')')();
+                if (result === undefined || isNaN(result)) throw new Error();
                 await sock.sendMessage(jid, {
                     text: `📊 *EVALUATION* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                           `• *Expression:* \`${cleanExpr}\`\n` +
                           `• *Result:* \`${result}\``
                 }, { quoted: msg });
-            } catch (err) { /* ignore */ }
+            } catch (err) { 
+                await sock.sendMessage(jid, { text: "❌ Invalid mathematical expression." }, { quoted: msg });
+            }
         }
     },
 
-    // 30. TRT (Translate – Gemini)
+    // 30. TRT (Translate - Transitioned to Groq)
     {
         name: 'trt',
         isPrefixless: false,
@@ -1051,7 +1081,7 @@ module.exports = [
             }
 
             try {
-                await sock.sendMessage(jid, { text: "Translating via Gemini... 🌐" }, { quoted: msg });
+                await sock.sendMessage(jid, { text: "Translating via Groq... 🌐" }, { quoted: msg });
 
                 const rawMsg = getRawMessage(msg.message);
                 const contextInfo = rawMsg?.contextInfo ||
@@ -1084,10 +1114,13 @@ module.exports = [
                                `Preserve all original WhatsApp markdown formatting (such as *, _, ~, \`\`) exactly as they are. ` +
                                `Provide only the translated text. Do not include any introduction, explanation, or conversational filler.`;
 
-                const translatedText = await queryGeminiText(prompt, textToTranslate);
+                const translatedText = await queryGroq([
+                    { role: "system", content: "You are an expert translator." },
+                    { role: "user", content: `${prompt}\n\nText:\n${textToTranslate}` }
+                ], "llama-3.3-70b-versatile");
 
                 const translationCard =
-                    `🌐 *GEMINI AI TRANSLATION* 🌐\n` +
+                    `🌐 *GROQ AI TRANSLATION* 🌐\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                     `📥 *Original:* _"${textToTranslate.trim()}"_\n` +
                     `📤 *Translation:* *"${translatedText.trim()}"*\n\n` +
@@ -1102,7 +1135,7 @@ module.exports = [
         }
     },
 
-    // 31. SPAM (Looper)
+    // 31. SPAM (Looper - Fixed media pulling using getRawMessage)
     {
         name: 'spam',
         isPrefixless: false,
@@ -1183,14 +1216,12 @@ module.exports = [
         }
     },
 
-    // ─── 32. VV (Manual ViewOnce Decryption – ISSUE 4b FIX) ────
+    // 32. VV (Manual ViewOnce Decryption - Fixed media pulling using getRawMessage)
     {
         name: 'vv',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-
             if (!isOwner && !isSudo && !isDev) return;
 
             const rawMsg = getRawMessage(msg.message);
@@ -1214,17 +1245,12 @@ module.exports = [
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 const mediaType = rawContent.imageMessage ? 'image' : (rawContent.videoMessage ? 'video' : 'audio');
 
-                // ─── Send Madara GIF before decryption (kept) ──────────────
                 await sock.sendMessage(jid, {
                     video: { url: "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZzh6bzl1azdlcmlsZmM4d3hnemJuNG54bDV0b3M2N3RjZXczd254OCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/8qXJTU5oEhQZO/giphy.mp4" },
                     gifPlayback: true,
                     caption: "Hmmmmmm..."
                 });
 
-                // ─── REMOVED the extra text message ──────────────────────
-                // (The line "Decrypting View-Once media... 👁️" is deleted)
-
-                // ─── Decrypt and send directly to the same chat (not DM) ──
                 const stream = await downloadContentFromMessage(viewOnceMedia, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
@@ -1246,7 +1272,7 @@ module.exports = [
         }
     },
 
-    // 33. KAMUI (Hardcoded prefixless decrypter – Strict Instructions)
+    // 33. KAMUI (ViewOnce Decrypter - Fixed media pulling using getRawMessage)
     {
         name: 'kamui',
         isPrefixless: true,
@@ -1255,7 +1281,6 @@ module.exports = [
             const cleanQuery = args ? args.trim() : '';
 
             if (!isOwner && !isSudo && !isDev) return;
-
             if (cleanQuery.startsWith(config.prefix)) return;
 
             const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -1281,19 +1306,16 @@ module.exports = [
                 const mediaType = rawContent.imageMessage ? 'image' :
                                   (rawContent.videoMessage ? 'video' : 'audio');
 
-                // ─── STEP 1: Activation GIF in chat ────────────────
                 await sock.sendMessage(jid, {
                     video: { url: "https://media.giphy.com/media/LUnjrcDnwdbi/giphy.mp4" },
                     gifPlayback: true,
                     caption: "ＫＡＭＵＩ!!!!!!"
                 });
 
-                // ─── STEP 2: React to trigger with 🌀 ───────────────
                 await sock.sendMessage(jid, {
                     react: { text: "🌀", key: msg.key }
                 });
 
-                // ─── STEP 3: Download decrypted media ──────────────
                 const stream = await downloadContentFromMessage(viewOnceMedia, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
@@ -1303,19 +1325,16 @@ module.exports = [
                 const caption = viewOnceMedia.caption || "Decrypted View-Once media 👁️";
                 const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
-                // ─── STEP 4: DM - Text message ──────────────────────
                 await sock.sendMessage(senderJid, {
                     text: "Orae Wa Uchiha Obito 👁"
                 });
 
-                // ─── STEP 5: DM - Reverse GIF ───────────────────────
                 await sock.sendMessage(senderJid, {
                     video: { url: "https://media.giphy.com/media/mzdeCXqTmG1IA/giphy.mp4" },
                     gifPlayback: true,
                     caption: "Ｋａｍｕｉ!!!! 🌀"
                 });
 
-                // ─── STEP 6: DM - Decrypted media ──────────────────
                 if (mediaType === 'image') {
                     await sock.sendMessage(senderJid, { image: buffer, caption });
                 } else if (mediaType === 'video') {
@@ -1341,56 +1360,105 @@ module.exports = [
         }
     },
 
-    // 34. VVS_ROUTER (Dynamic prefixless decrypter using config.vvs)
+    // 34. SETCMD
     {
-        name: 'vvs_router',
+        name: 'setcmd',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo && !isDev) {
+                return await sock.sendMessage(jid, { text: "❌ You are not authorized to use this command." }, { quoted: msg });
+            }
+
+            const commandName = args ? args.trim() : '';
+            if (!commandName) {
+                return await sock.sendMessage(jid, { text: "❌ Please specify a command name. Example: `.setcmd ping`" }, { quoted: msg });
+            }
+
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+            if (!contextInfo || !contextInfo.quotedMessage) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker." }, { quoted: msg });
+            }
+
+            const quoted = contextInfo.quotedMessage;
+            const stickerMsg = quoted.stickerMessage || quoted.message?.stickerMessage;
+            if (!stickerMsg) {
+                return await sock.sendMessage(jid, { text: "❌ The replied message is not a sticker." }, { quoted: msg });
+            }
+
+            const hashBuffer = stickerMsg.fileSha256;
+            if (!hashBuffer) {
+                return await sock.sendMessage(jid, { text: "❌ Could not read sticker hash." }, { quoted: msg });
+            }
+            const fileHash = hashBuffer.toString('base64');
+
+            if (!config.stickerCommands) config.stickerCommands = {};
+
+            config.stickerCommands[fileHash] = commandName;
+            const { setVar } = require('../vars');
+            const success = setVar('stickerCommands', config.stickerCommands);
+            if (!success) {
+                return await sock.sendMessage(jid, { text: "❌ Failed to save mapping." }, { quoted: msg });
+            }
+
+            saveState();
+            await sock.sendMessage(jid, { text: `✅ Sticker mapped to command: *${commandName}*` }, { quoted: msg });
+        }
+    },
+
+// 36. SILENT_DECRYPTER (Prefixless silent View-Once decrypter)
+    {
+        name: 'silent_decrypter',
         isPrefixless: true,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const cleanQuery = args ? args.trim() : '';
+            const cleanQuery = args ? args.trim().toLowerCase() : '';
 
+            // Strictly restricted to authorized users (Dev, Sudo, Owner)
             if (!isOwner && !isSudo && !isDev) return;
+
+            // Bypass if it begins with the command prefix
             if (cleanQuery.startsWith(config.prefix)) return;
 
-            const customTrigger = config.vvs || '';
-            if (!customTrigger || cleanQuery !== customTrigger) return;
+            // Trigger on the specified emoji or aliases
+            const triggers = ['🥷', 'wow', 'damn', 'whoa', '🌚', '❤'];
+            if (!triggers.includes(cleanQuery)) return;
 
             const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) {
-                return await sock.sendMessage(jid, {
-                    text: "❌ Reply directly to a View-Once message to decrypt it."
-                }, { quoted: msg });
-            }
+            if (!quoted) return; // Silent exit if no quoted message is present
 
             const rawContent = getRawMessage(quoted);
             const viewOnceMedia = rawContent?.imageMessage ||
                                   rawContent?.videoMessage ||
                                   rawContent?.audioMessage;
 
-            if (!viewOnceMedia) {
-                return await sock.sendMessage(jid, {
-                    text: "❌ The replied message is not a View-Once media message."
-                }, { quoted: msg });
-            }
+            if (!viewOnceMedia) return; // Silent exit if quoted message is not View-Once
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 const mediaType = rawContent.imageMessage ? 'image' :
                                   (rawContent.videoMessage ? 'video' : 'audio');
 
-                await sock.sendMessage(jid, {
-                    text: `🌀 *Activating "${customTrigger}"...* Decrypting View-Once media.`
-                }, { quoted: msg });
+                // Resolve the sender JID (handles LID-to-Phone translation)
+                let senderJid = msg.key.participant || msg.key.remoteJid || '';
+                senderJid = normalizeToJid(senderJid);
 
+                if (senderJid.endsWith('@lid')) {
+                    const resolved = await getPhoneJid(sock, senderJid, jid);
+                    if (resolved) senderJid = resolved;
+                }
+
+                // Download View-Once media bytes
                 const stream = await downloadContentFromMessage(viewOnceMedia, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) {
                     buffer = Buffer.concat([buffer, chunk]);
                 }
 
-                const caption = viewOnceMedia.caption || "Decrypted View-Once media 👁️";
-                const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+                const caption = viewOnceMedia.caption || "Silently decrypted media 🥷";
 
+                // Direct delivery to the resolved sender's DM
                 if (mediaType === 'image') {
                     await sock.sendMessage(senderJid, { image: buffer, caption });
                 } else if (mediaType === 'video') {
@@ -1407,120 +1475,59 @@ module.exports = [
                     });
                 }
 
+                // React to the trigger message with the ninja emoji as silent confirmation
                 await sock.sendMessage(jid, {
-                    text: `✅ Media decrypted and sent to your private DM, @${senderJid.split('@')[0]}.`,
-                    mentions: [senderJid]
+                    react: { text: "🥷", key: msg.key }
                 });
 
             } catch (error) {
-                console.error("❌ [VVS_ROUTER] Decryption failed:", error.message);
-                await sock.sendMessage(jid, {
-                    text: `❌ Decryption failed: ${error.message}`
-                }, { quoted: msg });
+                console.error("❌ [SILENT_DECRYPTER] Failed:", error.message);
             }
         }
-    }, 
+    },
 
-// ─── SETCMD – Map a sticker to a command ───────────────────────
-{
-    name: 'setcmd',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-        const jid = msg.key.remoteJid;
-        if (!isOwner && !isSudo && !isDev) {
-            return await sock.sendMessage(jid, { text: "❌ You are not authorized to use this command." }, { quoted: msg });
+
+    // 35. DELCMD
+    {
+        name: 'delcmd',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo && !isDev) {
+                return await sock.sendMessage(jid, { text: "❌ You are not authorized to use this command." }, { quoted: msg });
+            }
+
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+            if (!contextInfo || !contextInfo.quotedMessage) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker to remove its mapping." }, { quoted: msg });
+            }
+
+            const quoted = contextInfo.quotedMessage;
+            const stickerMsg = quoted.stickerMessage || quoted.message?.stickerMessage;
+            if (!stickerMsg) {
+                return await sock.sendMessage(jid, { text: "❌ The replied message is not a sticker." }, { quoted: msg });
+            }
+
+            const fileHash = stickerMsg.fileSha256?.toString('base64');
+            if (!fileHash) {
+                return await sock.sendMessage(jid, { text: "❌ Could not read sticker hash." }, { quoted: msg });
+            }
+
+            if (!config.stickerCommands || !config.stickerCommands[fileHash]) {
+                return await sock.sendMessage(jid, { text: "❌ No command mapped to this sticker." }, { quoted: msg });
+            }
+
+            delete config.stickerCommands[fileHash];
+            const { setVar } = require('../vars');
+            const success = setVar('stickerCommands', config.stickerCommands);
+            if (!success) {
+                return await sock.sendMessage(jid, { text: "❌ Failed to remove mapping." }, { quoted: msg });
+            }
+
+            await sock.sendMessage(jid, { text: "✅ Sticker command mapping removed." }, { quoted: msg });
         }
-
-        const commandName = args ? args.trim() : '';
-        if (!commandName) {
-            return await sock.sendMessage(jid, { text: "❌ Please specify a command name. Example: `.setcmd ping`" }, { quoted: msg });
-        }
-
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-        if (!contextInfo || !contextInfo.quotedMessage) {
-            return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker." }, { quoted: msg });
-        }
-
-        const quoted = contextInfo.quotedMessage;
-        const stickerMsg = quoted.stickerMessage || quoted.message?.stickerMessage;
-        if (!stickerMsg) {
-            return await sock.sendMessage(jid, { text: "❌ The replied message is not a sticker." }, { quoted: msg });
-        }
-
-        // Get hash – ensure it's a Buffer before converting
-        const hashBuffer = stickerMsg.fileSha256;
-        if (!hashBuffer) {
-            return await sock.sendMessage(jid, { text: "❌ Could not read sticker hash." }, { quoted: msg });
-        }
-        const fileHash = hashBuffer.toString('base64');
-
-        // Optional: log the hash for debugging
-        console.log(`[SETCMD] Sticker hash: ${fileHash}`);
-
-        // Initialize config
-        if (!config.stickerCommands) config.stickerCommands = {};
-
-        // Save mapping
-        config.stickerCommands[fileHash] = commandName;
-        const { setVar } = require('../vars');
-        const success = setVar('stickerCommands', config.stickerCommands);
-        if (!success) {
-            return await sock.sendMessage(jid, { text: "❌ Failed to save mapping." }, { quoted: msg });
-        }
-
-        // Also save to config itself (double‑save for safety)
-        saveState();
-
-        await sock.sendMessage(jid, { text: `✅ Sticker mapped to command: *${commandName}*` }, { quoted: msg });
     }
-},
-
-
-
-// ─── DELCMD – Remove sticker command mapping ───────────────────
-{
-    name: 'delcmd',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-        const jid = msg.key.remoteJid;
-        if (!isOwner && !isSudo && !isDev) {
-            return await sock.sendMessage(jid, { text: "❌ You are not authorized to use this command." }, { quoted: msg });
-        }
-
-        // Get the sticker's SHA256 hash from the replied message
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-        if (!contextInfo || !contextInfo.quotedMessage) {
-            return await sock.sendMessage(jid, { text: "❌ Please reply to a sticker to remove its mapping." }, { quoted: msg });
-        }
-
-        const quoted = contextInfo.quotedMessage;
-        const stickerMsg = quoted.stickerMessage || quoted.message?.stickerMessage;
-        if (!stickerMsg) {
-            return await sock.sendMessage(jid, { text: "❌ The replied message is not a sticker." }, { quoted: msg });
-        }
-
-        const fileHash = stickerMsg.fileSha256?.toString('base64');
-        if (!fileHash) {
-            return await sock.sendMessage(jid, { text: "❌ Could not read sticker hash." }, { quoted: msg });
-        }
-
-        if (!config.stickerCommands || !config.stickerCommands[fileHash]) {
-            return await sock.sendMessage(jid, { text: "❌ No command mapped to this sticker." }, { quoted: msg });
-        }
-
-        delete config.stickerCommands[fileHash];
-        const { setVar } = require('../vars');
-        const success = setVar('stickerCommands', config.stickerCommands);
-        if (!success) {
-            return await sock.sendMessage(jid, { text: "❌ Failed to remove mapping." }, { quoted: msg });
-        }
-
-        await sock.sendMessage(jid, { text: "✅ Sticker command mapping removed." }, { quoted: msg });
-    }
-}
-
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
