@@ -1,3 +1,4 @@
+// helpers/Infinity.js
 const config = require('../config');
 const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../plugins/devs');
 const commands = require('../commands');
