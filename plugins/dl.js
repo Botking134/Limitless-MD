@@ -1,7 +1,7 @@
-// plugins/dl.js
 const config = require('../config');
 const { normalizeToJid, saveState } = require('../stateManager');
 const axios = require('axios');
+const FormData = require('form-data');
 
 // ─── GLOBAL SESSIONS ──────────────────────────────────────────────
 global.songSessions = global.songSessions || {};
@@ -9,14 +9,73 @@ global.tgsSessions = global.tgsSessions || {};
 global.lyricsSessions = global.lyricsSessions || {};
 global.xvidSessions = global.xvidSessions || {};
 
+// Helper to register sessions with automatic garbage collection
+function registerSession(sessionType, promptId, data) {
+    const registries = {
+        song: global.songSessions,
+        tgs: global.tgsSessions,
+        lyrics: global.lyricsSessions,
+        xvid: global.xvidSessions
+    };
+    const registry = registries[sessionType];
+    if (registry) {
+        registry[promptId] = data;
+        // Auto-delete session after 5 minutes to prevent RAM memory leaks
+        setTimeout(() => {
+            if (registry[promptId]) delete registry[promptId];
+        }, 5 * 60 * 1000);
+    }
+}
+
 // ─── HELPERS ──────────────────────────────────────────────────────
 
+// Upgraded fetchBuffer with User-Agent spoofing and direct Content-Type extraction
 async function fetchBuffer(url) {
     if (!url) throw new Error('No URL provided');
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.google.com/'
+        },
+        maxRedirects: 5,
+        timeout: 15000
+    });
+    const buffer = Buffer.from(response.data);
+    // Attaching real MIME-Type header directly to the buffer object
+    buffer.mimeType = response.headers['content-type'] || 'application/octet-stream';
+    return buffer;
+}
+
+async function uploadToCloud(buffer, mimeType) {
+    let ext = mimeType.split('/')[1] || 'bin';
+    ext = ext.split(';')[0].trim();
+    const filename = `file_${Date.now()}.${ext}`;
+
+    try {
+        const form = new FormData();
+        form.append('files[]', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://qu.ax/upload.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data?.success && response.data.files?.[0]?.url) {
+            return response.data.files[0].url.trim();
+        }
+    } catch (err) { /* ignore */ }
+
+    try {
+        const form = new FormData();
+        form.append('reqtype', 'fileupload');
+        form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://catbox.moe/user/api.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
+            return response.data.trim();
+        }
+    } catch (err) { /* ignore */ }
+
+    throw new Error("Cloud upload gateways failed.");
 }
 
 async function downloadMedia(apiUrl, params = {}, method = 'GET') {
@@ -34,27 +93,33 @@ async function downloadMedia(apiUrl, params = {}, method = 'GET') {
     }
 }
 
+// Deep recursive scanner to catch shifting API response keys automatically
+function scanObjectForUrl(obj) {
+    if (!obj) return null;
+    if (typeof obj === 'string') {
+        if (obj.startsWith('http') && (obj.includes('cdn') || obj.includes('download') || /\.(mp4|mp3|jpg|jpeg|png|gif|pdf|zip|apk)/i.test(obj.split('?')[0]))) {
+            return obj;
+        }
+    }
+    if (typeof obj === 'object') {
+        for (const key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                const result = scanObjectForUrl(obj[key]);
+                if (result) return result;
+            }
+        }
+    }
+    return null;
+}
+
 function extractDownloadUrl(data) {
     if (!data) return null;
+    
+    // 1. Try common structured paths first
     const paths = [
-        // Common download fields
-        'result.download_url',
-        'result.download',
-        'result.video',
-        'result.video_sd',
-        'result.video_hd',
-        'result.mp3',
-        'downloadUrl',
-        'DownloadLink',
-        'download_link',
-        'download',
-        'data.download_url',
-        'data.download',
-        'data.hdplay',
-        'data.wmplay',
-        'data.play',
-        'data.data.download',
-        'url'
+        'result.download_url', 'result.download', 'result.video', 'result.video_sd', 'result.video_hd',
+        'result.mp3', 'downloadUrl', 'DownloadLink', 'download_link', 'download', 'data.download_url',
+        'data.download', 'data.hdplay', 'data.wmplay', 'data.play', 'data.data.download', 'url'
     ];
     for (const path of paths) {
         const parts = path.split('.');
@@ -65,7 +130,9 @@ function extractDownloadUrl(data) {
         }
         if (value && typeof value === 'string') return value;
     }
-    return null;
+
+    // 2. Fallback to recursive scan if structured lookup fails
+    return scanObjectForUrl(data);
 }
 
 function extractTitle(data) {
@@ -106,17 +173,27 @@ async function handleSongReply(sock, msg, session, userReply) {
         if (song.thumbnail) {
             try { thumbnailBuffer = await fetchBuffer(song.thumbnail); } catch (e) {}
         }
-        const caption = `🎵 *${song.title}*\n` + (song.artist ? `👤 ${song.artist}\n` : '') + (song.duration ? `⏱️ ${song.duration}` : '');
+        
+        const audioPayload = {
+            audio: audioBuffer,
+            mimetype: 'audio/mpeg',
+            ptt: false
+        };
+
         if (thumbnailBuffer) {
-            await sock.sendMessage(jid, {
-                image: thumbnailBuffer,
-                caption: caption,
-                contextInfo: { externalAdReply: { title: song.title, body: 'Song', thumbnail: thumbnailBuffer, mediaType: 1 } }
-            });
-            await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false, caption });
-        } else {
-            await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false, caption });
+            audioPayload.contextInfo = {
+                externalAdReply: {
+                    title: song.title,
+                    body: song.artist || 'Limitless Music',
+                    thumbnail: thumbnailBuffer,
+                    mediaType: 2, // Tells WhatsApp to render as a native music card
+                    mediaUrl: downloadUrl,
+                    sourceUrl: downloadUrl
+                }
+            };
         }
+
+        await sock.sendMessage(jid, audioPayload, { quoted: msg });
     } catch (err) {
         await sock.sendMessage(jid, { text: `❌ Download failed: ${err.message}` });
     }
@@ -138,6 +215,7 @@ async function handleTgsReply(sock, msg, session, userReply) {
     }
 }
 
+// Fixed to fetch and display the actual lyrics text instead of just a link
 async function handleLyricsReply(sock, msg, session, userReply) {
     const jid = msg.key.remoteJid;
     const num = parseInt(userReply);
@@ -145,14 +223,25 @@ async function handleLyricsReply(sock, msg, session, userReply) {
         return await sock.sendMessage(jid, { text: `❌ Invalid selection. Please choose a number between 1 and ${session.results.length}.` });
     }
     const result = session.results[num - 1];
-    const songUrl = result.url;
+    
+    await sock.sendMessage(jid, { text: `⏳ Fetching full lyrics text for *${result.title}*...` }, { quoted: msg });
     try {
-        // For now, send the URL – you can implement scraping if needed
-        await sock.sendMessage(jid, {
-            text: `🎵 *${result.full_title}*\n\n📝 *Lyrics:* Please view at: ${songUrl}`
-        });
+        const lyricsData = await downloadMedia('https://apis.davidcyril.name.ng/lyrics', { text: `${result.title} ${result.artist}` });
+        const lyricsText = lyricsData?.lyrics || lyricsData?.result || null;
+
+        if (!lyricsText) {
+            return await sock.sendMessage(jid, { text: `📝 *${result.title}* (${result.artist})\n\nLyrics text could not be parsed. Read online here: ${result.url}` });
+        }
+
+        const noteCard =
+            `📝 *LYRICS: ${result.title.toUpperCase()}* 📝\n` +
+            `👤 *Artist:* ${result.artist}\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `${lyricsText}`;
+
+        await sock.sendMessage(jid, { text: noteCard });
     } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+        await sock.sendMessage(jid, { text: `❌ Failed to fetch lyrics: ${err.message}` });
     }
 }
 
@@ -163,7 +252,6 @@ async function handleXvidReply(sock, msg, session, userReply) {
         return await sock.sendMessage(jid, { text: `❌ Invalid selection. Please choose a number between 1 and ${session.results.length}.` });
     }
     const video = session.results[num - 1];
-    // For now, just send the URL – you can implement actual video download if needed
     await sock.sendMessage(jid, {
         text: `🎥 *${video.title}*\n\n▶️ Watch at: ${video.url}`
     });
@@ -231,7 +319,7 @@ module.exports = [
         }
     },
 
-    // 3. YouTube (savetube)
+    // 3. YouTube
     {
         name: 'yt',
         isPrefixless: false,
@@ -273,7 +361,7 @@ module.exports = [
         }
     },
 
-    // 4. Instagram
+    // 4. Instagram (Fixed audio misidentification checks)
     {
         name: 'ig',
         isPrefixless: false,
@@ -287,7 +375,8 @@ module.exports = [
                 const downloadUrl = data?.result?.video || data?.result?.mp3 || extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
                 const buffer = await fetchBuffer(downloadUrl);
-                const isVideo = downloadUrl.match(/\.(mp4|mov|avi)/i);
+                
+                const isVideo = downloadUrl.includes('video') || downloadUrl.includes('mp4') || !downloadUrl.includes('mp3');
                 if (isVideo) {
                     await sock.sendMessage(jid, { video: buffer, caption: extractTitle(data) });
                 } else {
@@ -357,7 +446,7 @@ module.exports = [
         }
     },
 
-    // 7. Pinterest (download specific pin)
+    // 7. Pinterest
     {
         name: 'pinterest',
         isPrefixless: false,
@@ -378,7 +467,7 @@ module.exports = [
         }
     },
 
-    // 8. MediaFire
+    // 8. MediaFire (Fixed to map exact Content-Type headers)
     {
         name: 'mediafire',
         isPrefixless: false,
@@ -391,9 +480,11 @@ module.exports = [
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/mediafire', { url });
                 const downloadUrl = data?.downloadLink || extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
+                
                 const buffer = await fetchBuffer(downloadUrl);
+                const mime = buffer.mimeType || 'application/octet-stream';
                 const ext = downloadUrl.split('.').pop().split('?')[0] || 'bin';
-                const mime = { mp4: 'video/mp4', mp3: 'audio/mpeg', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', pdf: 'application/pdf', zip: 'application/zip' }[ext] || 'application/octet-stream';
+
                 await sock.sendMessage(jid, {
                     document: buffer,
                     fileName: data.fileName || `mediafire.${ext}`,
@@ -406,7 +497,7 @@ module.exports = [
         }
     },
 
-    // 9. Google Drive
+    // 9. Google Drive (Fixed to map exact Content-Type headers)
     {
         name: 'gdrive',
         isPrefixless: false,
@@ -419,9 +510,11 @@ module.exports = [
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/gdrive', { url });
                 const downloadUrl = data?.download_link || extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
+                
                 const buffer = await fetchBuffer(downloadUrl);
+                const mime = buffer.mimeType || 'application/octet-stream';
                 const ext = downloadUrl.split('.').pop().split('?')[0] || 'bin';
-                const mime = { mp4: 'video/mp4', mp3: 'audio/mpeg', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', pdf: 'application/pdf', zip: 'application/zip' }[ext] || 'application/octet-stream';
+
                 await sock.sendMessage(jid, {
                     document: buffer,
                     fileName: data.name || `gdrive.${ext}`,
@@ -493,14 +586,16 @@ module.exports = [
                 if (song.duration) list += `   ⏱️ ${song.duration}\n`;
                 list += `\n📌 Reply with **1** to download.`;
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
-                global.songSessions[prompt.key.id] = { results: [song], handle: handleSongReply };
+                
+                // Registered via safe session helper
+                registerSession('song', prompt.key.id, { results: [song], handle: handleSongReply });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Search failed: ${err.message}` });
             }
         }
     },
 
-    // 12. Play (direct)
+    // 12. Play (direct with native music card previews)
     {
         name: 'play',
         isPrefixless: false,
@@ -518,93 +613,105 @@ module.exports = [
                 const audioBuffer = await fetchBuffer(downloadUrl);
                 let thumbBuffer = null;
                 if (song.thumbnail) try { thumbBuffer = await fetchBuffer(song.thumbnail); } catch (e) {}
-                const caption = `🎵 *${song.title}*\n` + (song.duration ? `⏱️ ${song.duration}` : '');
+                
+                const audioPayload = {
+                    audio: audioBuffer,
+                    mimetype: 'audio/mpeg',
+                    ptt: false
+                };
+
                 if (thumbBuffer) {
-                    await sock.sendMessage(jid, { image: thumbBuffer, caption, contextInfo: { externalAdReply: { title: song.title, body: 'Song', thumbnail: thumbBuffer, mediaType: 1 } } });
+                    audioPayload.contextInfo = {
+                        externalAdReply: {
+                            title: song.title,
+                            body: song.artist || 'Limitless Music',
+                            thumbnail: thumbBuffer,
+                            mediaType: 2, // Tells WhatsApp to render as a native music card
+                            mediaUrl: downloadUrl,
+                            sourceUrl: downloadUrl
+                        }
+                    };
                 }
-                await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false, caption });
+
+                await sock.sendMessage(jid, audioPayload, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
         }
     },
 
-    
-// 13. Telegram Stickers (using Telegram Bot API)
-{
-    name: 'tgs',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-        const jid = msg.key.remoteJid;
-        const url = args?.trim();
-        if (!url) return await sock.sendMessage(jid, { text: "❌ Provide Telegram sticker pack URL.\nExample: `.tgs https://t.me/addstickers/doakesreactions`" }, { quoted: msg });
+    // 13. Telegram Stickers (using Telegram Bot API)
+    {
+        name: 'tgs',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const url = args?.trim();
+            if (!url) return await sock.sendMessage(jid, { text: "❌ Provide Telegram sticker pack URL.\nExample: `.tgs https://t.me/addstickers/doakesreactions`" }, { quoted: msg });
 
-        const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack via Telegram API..." }, { quoted: msg });
+            const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack via Telegram API..." }, { quoted: msg });
 
-        const token = config.telegramBotToken;
-        if (!token) {
-            return await sock.sendMessage(jid, {
-                text: "❌ Telegram Bot Token not configured. Please add TELEGRAM_BOT_TOKEN to your .env file.",
-                edit: statusMsg.key
-            });
+            const token = config.telegramBotToken;
+            if (!token) {
+                return await sock.sendMessage(jid, {
+                    text: "❌ Telegram Bot Token not configured. Please add TELEGRAM_BOT_TOKEN to your .env file.",
+                    edit: statusMsg.key
+                });
+            }
+
+            const packMatch = url.match(/addstickers\/([a-zA-Z0-9_]+)/i);
+            if (!packMatch) {
+                return await sock.sendMessage(jid, {
+                    text: "❌ Invalid sticker pack URL. Must be like: https://t.me/addstickers/PackName",
+                    edit: statusMsg.key
+                });
+            }
+            const packName = packMatch[1];
+
+            try {
+                const apiUrl = `https://api.telegram.org/bot${token}/getStickerSet?name=${packName}`;
+                const response = await axios.get(apiUrl);
+                const data = response.data;
+
+                if (!data.ok) {
+                    throw new Error(data.description || 'Telegram API error');
+                }
+
+                const stickers = data.result.stickers || [];
+                if (stickers.length === 0) {
+                    await sock.sendMessage(jid, { text: "❌ No stickers found in this pack.", edit: statusMsg.key });
+                    return;
+                }
+
+                const maxShow = Math.min(stickers.length, 20);
+                let list = `📦 *${data.result.title || 'Stickers'}*\n\n`;
+                for (let i = 0; i < maxShow; i++) {
+                    const s = stickers[i];
+                    list += `${i+1}. ${s.emoji || '📌'} ${s.is_animated ? '🔄' : ''}\n`;
+                }
+                if (stickers.length > 20) {
+                    list += `\n*Showing first 20 of ${stickers.length}*`;
+                }
+                list += `\n\n📌 Reply with number to download.`;
+
+                const prompt = await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
+                
+                // Registered via safe session helper
+                registerSession('tgs', prompt.key.id, {
+                    stickers: stickers,
+                    token: token,
+                    handle: handleTgsReply,
+                    timestamp: Date.now()
+                });
+            } catch (err) {
+                console.error('[TGS] Error:', err.message);
+                await sock.sendMessage(jid, {
+                    text: `❌ Failed to fetch sticker pack: ${err.message}`,
+                    edit: statusMsg.key
+                });
+            }
         }
-
-        // Extract pack name from URL
-        const packMatch = url.match(/addstickers\/([a-zA-Z0-9_]+)/i);
-        if (!packMatch) {
-            return await sock.sendMessage(jid, {
-                text: "❌ Invalid sticker pack URL. Must be like: https://t.me/addstickers/PackName",
-                edit: statusMsg.key
-            });
-        }
-        const packName = packMatch[1];
-
-        try {
-            // 1. Get sticker set info
-            const apiUrl = `https://api.telegram.org/bot${token}/getStickerSet?name=${packName}`;
-            console.log(`[TGS] Fetching: ${apiUrl}`);
-            const response = await axios.get(apiUrl);
-            const data = response.data;
-
-            if (!data.ok) {
-                throw new Error(data.description || 'Telegram API error');
-            }
-
-            const stickers = data.result.stickers || [];
-            if (stickers.length === 0) {
-                await sock.sendMessage(jid, { text: "❌ No stickers found in this pack.", edit: statusMsg.key });
-                return;
-            }
-
-            // 2. Build selection list (max 20)
-            const maxShow = Math.min(stickers.length, 20);
-            let list = `📦 *${data.result.title || 'Stickers'}*\n\n`;
-            for (let i = 0; i < maxShow; i++) {
-                const s = stickers[i];
-                list += `${i+1}. ${s.emoji || '📌'} ${s.is_animated ? '🔄' : ''}\n`;
-            }
-            if (stickers.length > 20) {
-                list += `\n*Showing first 20 of ${stickers.length}*`;
-            }
-            list += `\n\n📌 Reply with number to download.`;
-
-            // 3. Store session with the stickers data
-            const prompt = await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
-            global.tgsSessions[prompt.key.id] = {
-                stickers: stickers,
-                token: token, // store token for later use
-                handle: handleTgsReply,
-                timestamp: Date.now()
-            };
-        } catch (err) {
-            console.error('[TGS] Error:', err.message);
-            await sock.sendMessage(jid, {
-                text: `❌ Failed to fetch sticker pack: ${err.message}`,
-                edit: statusMsg.key
-            });
-        }
-    }
-}, 
+    }, 
 
     // 14. APK
     {
@@ -634,7 +741,7 @@ module.exports = [
         }
     },
 
-    // 15. Web (download website as zip)
+    // 15. Web
     {
         name: 'web',
         isPrefixless: false,
@@ -661,7 +768,7 @@ module.exports = [
         }
     },
 
-    // 16. Lyrics (interactive)
+    // 16. Lyrics
     {
         name: 'lyrics',
         isPrefixless: false,
@@ -682,7 +789,9 @@ module.exports = [
                 });
                 list += `\n📌 Reply with number to view lyrics.`;
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
-                global.lyricsSessions[prompt.key.id] = { results, handle: handleLyricsReply };
+                
+                // Registered via safe session helper
+                registerSession('lyrics', prompt.key.id, { results, handle: handleLyricsReply });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
@@ -721,7 +830,7 @@ module.exports = [
         }
     },
 
-    // 18. XVID (interactive)
+    // 18. XVID
     {
         name: 'xvid',
         isPrefixless: false,
@@ -742,14 +851,16 @@ module.exports = [
                 });
                 list += `\n📌 Reply with number to get video link.`;
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
-                global.xvidSessions[prompt.key.id] = { results, handle: handleXvidReply };
+                
+                // Registered via safe session helper
+                registerSession('xvid', prompt.key.id, { results, handle: handleXvidReply });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
         }
     },
 
-    // 19. Shazam (supports URL + audio messages)
+    // 19. Shazam
     {
         name: 'shazam',
         isPrefixless: false,
@@ -757,47 +868,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             let audioUrl = args?.trim() || '';
 
-            // Helper to upload buffer
-            async function uploadToCloud(buffer, mimeType) {
-                let ext = mimeType.split('/')[1] || 'bin';
-                ext = ext.split(';')[0].trim();
-                const filename = `file_${Date.now()}.${ext}`;
-
-                try {
-                    const FormData = require('form-data');
-                    const axios = require('axios');
-                    const form = new FormData();
-                    form.append('files[]', buffer, { filename, contentType: mimeType });
-                    const response = await axios.post('https://qu.ax/upload.php', form, {
-                        headers: { ...form.getHeaders() }
-                    });
-                    if (response.data?.success && response.data.files?.[0]?.url) {
-                        return response.data.files[0].url.trim();
-                    }
-                } catch (err) {
-                    console.error("❌ [UPLOAD] qu.ax failed:", err.message);
-                }
-
-                try {
-                    const FormData = require('form-data');
-                    const axios = require('axios');
-                    const form = new FormData();
-                    form.append('reqtype', 'fileupload');
-                    form.append('fileToUpload', buffer, { filename, contentType: mimeType });
-                    const response = await axios.post('https://catbox.moe/user/api.php', form, {
-                        headers: { ...form.getHeaders() }
-                    });
-                    if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
-                        return response.data.trim();
-                    }
-                } catch (err) {
-                    console.error("❌ [UPLOAD] catbox failed:", err.message);
-                }
-
-                throw new Error("Catbox and qu.ax upload hosts failed.");
-            }
-
-            // ─── 1. If no URL provided, check if replying to an audio message ───
             if (!audioUrl) {
                 const rawMsg = getRawMessage(msg.message);
                 const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
