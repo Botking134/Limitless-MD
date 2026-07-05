@@ -359,7 +359,8 @@ module.exports = [
         }
     },
 
-    // 7. FW (Forwarding - Fixed Smart Parsing & Delivery)
+    
+// 7. FW (Forwarding - Fixed Smart Parsing & Delivery)
     {
         name: 'fw',
         isPrefixless: false,
@@ -405,7 +406,7 @@ module.exports = [
                 return;
             }
 
-            // ─── Mode 2: Reply to a message with .fw <targetNumber> ──────
+            // ─── Mode 2: Reply to a message with .fw <targetNumber> (Fixed XML-not-well-formed validation) ──────
             if (contextInfo && contextInfo.stanzaId && args) {
                 const cleanTarget = args.trim();
                 const targetJid = cleanTarget.endsWith('@g.us') ? cleanTarget : (cleanTarget.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
@@ -420,7 +421,8 @@ module.exports = [
                         key: {
                             remoteJid: jid,
                             id: contextInfo.stanzaId,
-                            participant: contextInfo.participant
+                            // Participant is strictly forbidden on DM remoteJids
+                            participant: jid.endsWith('@g.us') ? contextInfo.participant : undefined
                         },
                         message: quotedMsg
                     });
