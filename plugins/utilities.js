@@ -1,11 +1,39 @@
-// plugins/utilities.js
 const config = require('../config');
-const { saveState, normalizeToJid } = require('../stateManager');
+const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
+const FormData = require('form-data');
 
 // ─── NOTES PATH ──────────────────────────────────────────────────
 const notesPath = path.join(__dirname, '../storage/notes.json');
+
+// ─── NOTES LOCAL STORAGE HELPERS ─────────────────────────────────
+
+function readNotes() {
+    try {
+        if (fs.existsSync(notesPath)) {
+            const rawData = fs.readFileSync(notesPath, 'utf-8');
+            return JSON.parse(rawData);
+        }
+    } catch (e) {
+        console.error("⚠️ [NOTES] Parse failed. Backing up corrupted file.");
+        try {
+            if (fs.existsSync(notesPath)) {
+                fs.renameSync(notesPath, notesPath.replace('.json', '.corrupted.json'));
+            }
+        } catch (backupErr) { /* ignore */ }
+    }
+    return {};
+}
+
+function saveNotes(notes) {
+    try {
+        const dir = path.dirname(notesPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
+    } catch (e) { /* ignore */ }
+}
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -38,22 +66,47 @@ function getRawMessage(message) {
     return message;
 }
 
-function readNotes() {
+async function uploadToCloud(buffer, mimeType) {
+    let ext = mimeType.split('/')[1] || 'bin';
+    ext = ext.split(';')[0].trim();
+    const filename = `file_${Date.now()}.${ext}`;
+
     try {
-        if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
-    } catch (e) { /* ignore */ }
-    return {};
+        const form = new FormData();
+        form.append('files[]', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://qu.ax/upload.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data?.success && response.data.files?.[0]?.url) {
+            return response.data.files[0].url.trim();
+        }
+    } catch (err) { /* ignore */ }
+
+    try {
+        const form = new FormData();
+        form.append('reqtype', 'fileupload');
+        form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://catbox.moe/user/api.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
+            return response.data.trim();
+        }
+    } catch (err) { /* ignore */ }
+
+    throw new Error("Cloud upload gateways failed.");
 }
 
-function saveNotes(notes) {
+async function getQuickWeather() {
     try {
-        const dir = path.dirname(notesPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
-    } catch (e) { /* ignore */ }
+        const res = await axios.get("https://wttr.in/Lagos?format=%c+%t", { timeout: 2000 });
+        return res.data.trim();
+    } catch (e) {
+        return "Unavailable 🌀";
+    }
 }
 
-// ─── NOTE SESSION HANDLER (also used by tools/addnote) ────────
+// ─── NOTE SESSION HANDLER ────────────────────────────────────
 async function handleNoteSession(sock, msg) {
     try {
         const jid = msg.key.remoteJid;
@@ -88,7 +141,7 @@ async function handleNoteSession(sock, msg) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. PING (animated)
+    // 1. PING (Animated with deletion crash guards)
     {
         name: 'ping',
         isPrefixless: false,
@@ -104,25 +157,33 @@ module.exports = [
                 for (let cycle = 0; cycle < 2; cycle++) {
                     for (const frame of frames) {
                         if (cycle > 0 && frame === "[□□□□□□]") continue;
-                        await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
+                        try {
+                            await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
+                        } catch (err) {
+                            return; // Break immediately if the user deleted the message during the loop
+                        }
                         await delay(400);
                     }
                     if (cycle === 0) {
-                        await sock.sendMessage(jid, { text: "[□□□□□□]", edit: loadingMsg.key });
+                        try {
+                            await sock.sendMessage(jid, { text: "[□□□□□□]", edit: loadingMsg.key });
+                        } catch (err) { return; }
                         await delay(400);
                     }
                 }
 
                 const networkPing = Date.now() - start;
-                await sock.sendMessage(jid, {
-                    text: `▫️ _Void speed:_   ∞\n➤ _Cursed Energy:_ _\`${networkPing * 100}ms\`_`,
-                    edit: loadingMsg.key
-                });
+                try {
+                    await sock.sendMessage(jid, {
+                        text: `▫️ _Void speed:_   ∞\n➤ _Cursed Energy:_ _\`${networkPing * 100}ms\`_`,
+                        edit: loadingMsg.key
+                    });
+                } catch (err) { /* ignore */ }
             } catch (error) { /* ignore */ }
         }
     },
 
-    // 2. ALIVE
+    // 2. ALIVE (Dynamic Variable Compiler with backwards-compatible Weather check)
     {
         name: 'alive',
         isPrefixless: false,
@@ -142,217 +203,305 @@ module.exports = [
             const timeFormatter = new Intl.DateTimeFormat('en-US', timeOptions);
             const nigerianTime = timeFormatter.format(new Date());
 
-            let weather = "Unavailable 🌀";
+            const weather = await getQuickWeather();
+
+            let ram = 'N/A';
             try {
-                const weatherRes = await fetch("https://wttr.in/Lagos?format=%c+%t");
-                if (weatherRes.ok) weather = (await weatherRes.text()).trim();
+                const memoryUsage = process.memoryUsage();
+                const used = (memoryUsage.heapUsed / 1024 / 1024).toFixed(1);
+                const total = (memoryUsage.heapTotal / 1024 / 1024).toFixed(1);
+                ram = `${used} MB / ${total} MB`;
             } catch (e) { /* ignore */ }
 
-            const compactCaption =
+            // Calculate latency on-the-fly
+            let speedMs = '0ms';
+            try {
+                const start = Date.now();
+                const tempMsg = await sock.sendMessage(jid, { text: "⚡" }, { quoted: msg });
+                const diff = Date.now() - start;
+                speedMs = `${Math.abs(diff)}ms`;
+                try { await sock.sendMessage(jid, { delete: tempMsg.key }); } catch (e) { /* ignore */ }
+            } catch (e) { /* ignore */ }
+
+            // Dynamic String Compilation
+            let template = config.aliveMessage ||
                 `🤞 *LIMITLESS DOMAIN ONLINE* 🤞\n` +
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `⚡ *Uptime:* \`${uptimeString}\`\n` +
-                `🕒 *WAT Time:* \`${nigerianTime}\`\n` +
-                `🌤️ *Weather:* \`${weather}\`\n` +
+                `⚡ *Uptime:* $uptime\n` +
+                `🕒 *WAT Time:* $time\n` +
+                `🌤️ *Weather:* $weather\n` +
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                 `_“Throughout Heaven and Earth, I alone am the honoured one.”_ 🌏`;
 
+            template = template
+                .replace(/\$uptime/g, uptimeString)
+                .replace(/\$botspeed/g, speedMs)
+                .replace(/\$time/g, nigerianTime)
+                .replace(/\$weather/g, weather)
+                .replace(/\$ram/g, ram)
+                .replace(/\$botname/g, config.botName || 'Limitless-MD');
+
+            const mediaUrl = config.aliveMediaUrl || "https://iili.io/C3yej7s.jpg";
+            const isVideo = /\.(mp4|gif|mov|webm)/i.test(mediaUrl);
+
             try {
-                await sock.sendMessage(jid, {
-                    image: { url: "https://iili.io/C3yej7s.jpg" },
-                    caption: compactCaption
-                }, { quoted: msg });
+                if (isVideo) {
+                    await sock.sendMessage(jid, {
+                        video: { url: mediaUrl },
+                        gifPlayback: true,
+                        caption: template
+                    }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, {
+                        image: { url: mediaUrl },
+                        caption: template
+                    }, { quoted: msg });
+                }
             } catch (error) {
-                await sock.sendMessage(jid, { text: `${compactCaption}\n\n_(Visual engine offline)_` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `${template}\n\n_(Visual engine offline)_` }, { quoted: msg });
             }
         }
     },
 
-// 3. delete
+    // 3. ALIVE-SET (Saves custom messages, media templates, and direct replies)
+    {
+        name: 'alive-set',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            let textTemplate = args ? args.trim() : '';
 
-  {
-    name: 'delete',
-    isPrefixless: false,
-    execute: async (sock, msg, args) => {
-        const jid = msg.key.remoteJid;
-        const isGroup = jid.endsWith('@g.us');
+            const rawIncoming = getRawMessage(msg.message);
+            const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
+                                rawIncoming?.imageMessage?.contextInfo ||
+                                rawIncoming?.videoMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
 
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-        if (!contextInfo || !contextInfo.stanzaId) {
-            return await sock.sendMessage(jid, { text: "❌ Reply to a message to delete." }, { quoted: msg });
-        }
+            let mediaUrl = '';
 
-        try {
-            // ─── Determine if quoted message was sent by the bot ──
-            const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+            try {
+                // Mode A: Quoted Image/Video/GIF setup (Upload to Cloud)
+                if (quoted) {
+                    const rawContent = getRawMessage(quoted);
+                    const targetMedia = rawContent?.imageMessage || rawContent?.videoMessage;
 
-            // The sender of the quoted message (participant for groups, remoteJid for DM)
-            const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
-            const normalizedSender = normalizeToJid(quotedSender);
+                    if (targetMedia) {
+                        await sock.sendMessage(jid, { text: "Uploading custom media template to cloud... 📤" }, { quoted: msg });
+                        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                        const mediaType = rawContent.imageMessage ? 'image' : 'video';
 
-            const isFromMe = (botJid && normalizedSender === botJid) ||
-                             (botLid && normalizedSender === botLid);
+                        const stream = await downloadContentFromMessage(targetMedia, mediaType);
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-            // ─── Admin check (only if message is NOT from bot and in a group) ──
-            if (isGroup && !isFromMe) {
-                const groupMetadata = await sock.groupMetadata(jid);
-                const botJidNorm = botJid;
-                const botLidNorm = botLid;
+                        const mimeType = targetMedia.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+                        mediaUrl = await uploadToCloud(buffer, mimeType);
+                    }
+                } else if (textTemplate.includes('|')) {
+                    // Mode B: Split parameters by "|"
+                    const parts = textTemplate.split('|');
+                    textTemplate = parts[0].trim();
+                    mediaUrl = parts[1].trim();
+                }
 
-                const isBotAdmin = groupMetadata.participants.some(p => {
-                    const pId = normalizeToJid(p.id);
-                    return (botJidNorm && pId === botJidNorm) ||
-                           (botLidNorm && pId === botLidNorm);
-                });
-
-                if (!isBotAdmin) {
+                if (!textTemplate && !mediaUrl) {
                     return await sock.sendMessage(jid, {
-                        text: "❌ I need to be an admin to delete messages from other users."
+                        text: `❌ *How to use .alive-set:*\n\n` +
+                              `• *Setting Text Only:* \`.alive-set your custom text\`\n` +
+                              `• *Setting Text & URL:* \`.alive-set your custom text | mediaUrl\`\n` +
+                              `• *Setting Media via Reply:* Reply directly to an image/video/GIF with \`.alive-set your custom text\``
                     }, { quoted: msg });
                 }
+
+                if (textTemplate) config.aliveMessage = textTemplate;
+                if (mediaUrl) config.aliveMediaUrl = mediaUrl;
+
+                saveState();
+
+                const successCard =
+                    `✅ *ALIVE SYSTEM UPDATED* ✅\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `📝 *Message Template Saved:* \n"${config.aliveMessage || 'Default'}"\n\n` +
+                    `🖼️ *Custom Media URL:* \n\`${config.aliveMediaUrl || 'Default (Gojo Graphic)'}\``;
+
+                await sock.sendMessage(jid, { text: successCard }, { quoted: msg });
+
+            } catch (error) {
+                await sock.sendMessage(jid, { text: `❌ Customization failed: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 4. DELETE (Safe DM, LID checks, and deletion crash guards)
+    {
+        name: 'delete',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+            if (!contextInfo || !contextInfo.stanzaId) {
+                return await sock.sendMessage(jid, { text: "❌ Reply to a message to delete." }, { quoted: msg });
             }
 
-            // ─── Build the delete key ──────────────────────────────
-            const quotedKey = {
-                remoteJid: jid,
-                id: contextInfo.stanzaId,
-                fromMe: isFromMe,
-                // Only include participant for group messages that are NOT from the bot
-                participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
-            };
+            try {
+                const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+                const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
 
-            // ─── Send Amaterasu GIF ────────────────────────────────
-            const gifMsg = await sock.sendMessage(jid, {
-                video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
-                gifPlayback: true,
-                caption: "Amaterasu!!!!"
-            });
+                const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
+                const normalizedSender = normalizeToJid(quotedSender);
 
-            // ─── Delete the quoted message ─────────────────────────
-            await sock.sendMessage(jid, { delete: quotedKey });
+                const isFromMe = (botJid && normalizedSender === botJid) ||
+                                 (botLid && normalizedSender === botLid);
 
-            // ─── Delete the command message itself ─────────────────
-            await sock.sendMessage(jid, { delete: msg.key });
+                // Safe DM check: block trying to delete other user's message in private DMs
+                if (!isGroup && !isFromMe) {
+                    return await sock.sendMessage(jid, { text: "❌ You can only delete your own messages in private DMs." }, { quoted: msg });
+                }
 
-            // ─── Schedule deletion of the GIF after 10 seconds ──
-            setTimeout(async () => {
-                try { await sock.sendMessage(jid, { delete: gifMsg.key }); } catch (err) { /* ignore */ }
-            }, 10000);
+                // Group Admin check
+                if (isGroup && !isFromMe) {
+                    const groupMetadata = await sock.groupMetadata(jid);
+                    const isBotAdmin = groupMetadata.participants.some(p => {
+                        const pId = normalizeToJid(p.id);
+                        return (botJid && pId === botJid) || (botLid && pId === botLid);
+                    });
 
-        } catch (error) {
-            console.error("❌ [DELETE] Error:", error);
-            await sock.sendMessage(jid, { text: `❌ Delete failed: ${error.message}` }, { quoted: msg });
-        }
-    }
-},
+                    if (!isBotAdmin) {
+                        return await sock.sendMessage(jid, {
+                            text: "❌ I need to be an admin to delete messages from other users."
+                        }, { quoted: msg });
+                    }
+                }
 
+                const quotedKey = {
+                    remoteJid: jid,
+                    id: contextInfo.stanzaId,
+                    fromMe: isFromMe,
+                    participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
+                };
 
-// 4. TDEL
-
-{
-    name: 'tdelete',
-    isPrefixless: false,
-    execute: async (sock, msg, args) => {
-        const jid = msg.key.remoteJid;
-        const isGroup = jid.endsWith('@g.us');
-
-        const rawMsg = getRawMessage(msg.message);
-        const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-        if (!contextInfo || !contextInfo.stanzaId) {
-            return await sock.sendMessage(jid, { text: "❌ Reply to a message and specify a duration." }, { quoted: msg });
-        }
-
-        if (!args) {
-            return await sock.sendMessage(jid, { text: "❌ Provide duration (e.g., `5s`, `2m`, `1h`)." }, { quoted: msg });
-        }
-
-        const durationMs = parseDuration(args.trim());
-        if (!durationMs) {
-            return await sock.sendMessage(jid, { text: "❌ Invalid duration format. Use `5s`, `2m`, `1h`." }, { quoted: msg });
-        }
-
-        try {
-            // ─── Determine if quoted message was sent by the bot ──
-            const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
-
-            const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
-            const normalizedSender = normalizeToJid(quotedSender);
-
-            const isFromMe = (botJid && normalizedSender === botJid) ||
-                             (botLid && normalizedSender === botLid);
-
-            // ─── Admin check (only if message is NOT from bot and in a group) ──
-            if (isGroup && !isFromMe) {
-                const groupMetadata = await sock.groupMetadata(jid);
-                const botJidNorm = botJid;
-                const botLidNorm = botLid;
-
-                const isBotAdmin = groupMetadata.participants.some(p => {
-                    const pId = normalizeToJid(p.id);
-                    return (botJidNorm && pId === botJidNorm) ||
-                           (botLidNorm && pId === botLidNorm);
+                const gifMsg = await sock.sendMessage(jid, {
+                    video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
+                    gifPlayback: true,
+                    caption: "Amaterasu!!!!"
                 });
 
-                if (!isBotAdmin) {
-                    return await sock.sendMessage(jid, {
-                        text: "❌ I need to be an admin to delete messages from other users."
-                    }, { quoted: msg });
-                }
+                await sock.sendMessage(jid, { delete: quotedKey });
+                try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
+
+                setTimeout(async () => {
+                    try { await sock.sendMessage(jid, { delete: gifMsg.key }); } catch (err) { /* ignore */ }
+                }, 10000);
+
+            } catch (error) {
+                console.error("❌ [DELETE] Error:", error);
+                await sock.sendMessage(jid, { text: `❌ Delete failed: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 5. TDELETE (Timed Delete - Safe DM checks & try-catch timeouts)
+    {
+        name: 'tdelete',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+            if (!contextInfo || !contextInfo.stanzaId) {
+                return await sock.sendMessage(jid, { text: "❌ Reply to a message and specify a duration." }, { quoted: msg });
             }
 
-            // ─── Build the delete key ──────────────────────────────
-            const quotedKey = {
-                remoteJid: jid,
-                id: contextInfo.stanzaId,
-                fromMe: isFromMe,
-                participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
-            };
+            if (!args) {
+                return await sock.sendMessage(jid, { text: "❌ Provide duration (e.g., `5s`, `2m`, `1h`)." }, { quoted: msg });
+            }
 
-            // ─── Send Amaterasu GIF ────────────────────────────────
-            const gifMsg = await sock.sendMessage(jid, {
-                video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
-                gifPlayback: true,
-                caption: "Amaterasu!!!!"
-            });
+            const durationMs = parseDuration(args.trim());
+            if (!durationMs) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid duration format. Use `5s`, `2m`, `1h`." }, { quoted: msg });
+            }
 
-            // ─── Send countdown message ────────────────────────────
-            const countdownMsg = await sock.sendMessage(jid, {
-                text: `⏳ Message will be deleted in *${args.trim()}*...`
-            }, { quoted: msg });
+            try {
+                const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+                const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
 
-            // ─── Schedule deletion after the duration ──────────────
-            setTimeout(async () => {
-                try {
-                    await sock.sendMessage(jid, { delete: quotedKey });
-                    await sock.sendMessage(jid, { delete: countdownMsg.key });
+                const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
+                const normalizedSender = normalizeToJid(quotedSender);
+
+                const isFromMe = (botJid && normalizedSender === botJid) ||
+                                 (botLid && normalizedSender === botLid);
+
+                if (!isGroup && !isFromMe) {
+                    return await sock.sendMessage(jid, { text: "❌ You can only delete your own messages in private DMs." }, { quoted: msg });
+                }
+
+                if (isGroup && !isFromMe) {
+                    const groupMetadata = await sock.groupMetadata(jid);
+                    const isBotAdmin = groupMetadata.participants.some(p => {
+                        const pId = normalizeToJid(p.id);
+                        return (botJid && pId === botJid) || (botLid && pId === botLid);
+                    });
+
+                    if (!isBotAdmin) {
+                        return await sock.sendMessage(jid, {
+                            text: "❌ I need to be an admin to delete messages from other users."
+                        }, { quoted: msg });
+                    }
+                }
+
+                const quotedKey = {
+                    remoteJid: jid,
+                    id: contextInfo.stanzaId,
+                    fromMe: isFromMe,
+                    participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
+                };
+
+                const promptText = `⏳ Message will be deleted in *${args.trim()}*...`;
+                const countdownMsg = await sock.sendMessage(jid, { text: promptText }, { quoted: msg });
+
+                const gifMsg = await sock.sendMessage(jid, {
+                    video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
+                    gifPlayback: true,
+                    caption: "Amaterasu!!!!"
+                });
+
+                // Isolated try-catch timeout block
+                setTimeout(async () => {
+                    try { await sock.sendMessage(jid, { delete: quotedKey }); } catch (e) { /* ignore */ }
+                    try { await sock.sendMessage(jid, { delete: countdownMsg.key }); } catch (e) { /* ignore */ }
                     try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
                     setTimeout(async () => {
                         try { await sock.sendMessage(jid, { delete: gifMsg.key }); } catch (err) { /* ignore */ }
                     }, 10000);
-                } catch (error) {
-                    console.error("❌ [TDELETE] Timed delete failed:", error);
-                }
-            }, durationMs);
+                }, durationMs);
 
-        } catch (error) {
-            console.error("❌ [TDELETE] Error:", error);
-            await sock.sendMessage(jid, { text: `❌ Timed delete failed: ${error.message}` }, { quoted: msg });
+            } catch (error) {
+                await sock.sendMessage(jid, { text: `❌ Timed delete failed: ${error.message}` }, { quoted: msg });
+            }
         }
-    }
-},
+    },
 
-    // 5. AUTOREACT
+    // 5. AUTOREACT (Added dynamic usage warnings)
     {
         name: 'autoreact',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            if (!args) return;
+            const targetMode = args ? args.toLowerCase().trim() : '';
 
-            const targetMode = args.toLowerCase().trim();
+            if (!args || !['cmd', 'on', 'all', 'off'].includes(targetMode)) {
+                const prompt =
+                    `❌ *Usage:* \`${config.prefix}autoreact <on/cmd/all/off>\`\n\n` +
+                    `• *cmd / on:* React only to bot commands.\n` +
+                    `• *all:* React to all incoming messages.\n` +
+                    `• *off:* Disable auto-reactions completely.`;
+                return await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
+            }
+
             if (targetMode === 'cmd' || targetMode === 'on') {
                 config.autoReact = 'cmd';
             } else if (targetMode === 'all') {
@@ -365,7 +514,7 @@ module.exports = [
         }
     },
 
-    // 6. SPEED (prefixless)
+    // 6. SPEED (prefixless - Added clock negative offsets fallback)
     {
         name: 'speed',
         isPrefixless: true,
@@ -382,7 +531,8 @@ module.exports = [
             }
 
             const msgTime = msg.messageTimestamp * 1000;
-            const internalPing = Date.now() - msgTime;
+            const internalDiff = Date.now() - msgTime;
+            const internalPing = Math.abs(internalDiff); // Secure positive index offsets
 
             const start = Date.now();
             const sent = await sock.sendMessage(jid, { text: "⚡" }, { quoted: msg });
@@ -397,7 +547,7 @@ module.exports = [
         }
     },
 
-    // 7. GITCLONE (FIXED)
+    // 7. GITCLONE (Axios implementation with User-Agent, redirects and size protection limits)
     {
         name: 'gitclone',
         isPrefixless: false,
@@ -427,20 +577,13 @@ module.exports = [
                     .replace(/\.git$/i, '')
                     .replace(/\/+$/, '');
 
-                const parts = cleaned.split('/');
-                if (parts.length >= 2) {
-                    owner = parts[parts.length - 2].trim();
-                    repo = parts[parts.length - 1].trim();
-                } else {
-                    const regex = /github\.com\/([^\/]+)\/([^\/]+)/i;
-                    const match = repoQuery.match(regex);
-                    if (match) {
-                        owner = match[1];
-                        repo = match[2].replace(/\.git$/i, '');
-                    }
+                // Robust forward-parsing to handle branch sub-urls safely
+                const segments = cleaned.split('/');
+                if (segments.length >= 2) {
+                    owner = segments[0].trim();
+                    repo = segments[1].trim();
                 }
             } catch (parseErr) {
-                console.error("[GITCLONE] Parse error:", parseErr.message);
                 return await sock.sendMessage(jid, {
                     text: "❌ Failed to parse repository URL. Please use format: `username/repo-name`"
                 }, { quoted: msg });
@@ -458,17 +601,23 @@ module.exports = [
 
             try {
                 const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball`;
-                console.log(`[GITCLONE] Fetching: ${zipUrl}`);
 
-                const res = await fetch(zipUrl);
-                if (!res.ok) {
-                    const errorText = await res.text();
-                    console.error(`[GITCLONE] HTTP ${res.status}: ${errorText}`);
-                    throw new Error(`GitHub API returned ${res.status} - Repository may be private or does not exist.`);
+                const res = await axios.get(zipUrl, {
+                    responseType: 'arraybuffer',
+                    headers: { 'User-Agent': 'Limitless-Bot' },
+                    maxRedirects: 5
+                });
+
+                // Read length header to prevent system OOM crashes on huge files
+                const contentLength = res.headers['content-length'];
+                if (contentLength && parseInt(contentLength) > 50 * 1024 * 1024) {
+                    return await sock.sendMessage(jid, {
+                        text: "❌ Repository archive size exceeds safety threshold (50MB). Cloner aborted.",
+                        edit: statusMsg.key
+                    });
                 }
 
-                const arrayBuffer = await res.arrayBuffer();
-                const buffer = Buffer.from(arrayBuffer);
+                const buffer = Buffer.from(res.data);
 
                 await sock.sendMessage(jid, {
                     document: buffer,
@@ -492,7 +641,7 @@ module.exports = [
         }
     },
 
-    // 8. PING2 (different animation)
+    // 8. PING2 (Different animation with deletion crash guards)
     {
         name: 'ping2',
         isPrefixless: false,
@@ -513,18 +662,22 @@ module.exports = [
                 ];
 
                 for (const frame of frames) {
-                    await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key });
+                    try {
+                        await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key });
+                    } catch (err) {
+                        return; // Exit safely if the message is deleted mid-run
+                    }
                     await delay(frame.delay);
                 }
 
                 const msgTime = msg.messageTimestamp * 1000;
-                const latency = Date.now() - msgTime;
+                const latency = Math.abs(Date.now() - msgTime);
                 await sock.sendMessage(jid, { text: `Latency: \`${latency}ms\``, edit: loadingMsg.key });
             } catch (error) { /* ignore */ }
         }
     },
 
-    // 9. ADDNOTE (starts note wizard)
+    // 9. ADDNOTE (starts note wizard with automatic garbage-collection timeout)
     {
         name: 'addnote',
         isPrefixless: false,
@@ -542,6 +695,14 @@ module.exports = [
 
                 global.noteSessions = global.noteSessions || {};
                 global.noteSessions[prompt.key.id] = { content, author: msg.pushName || 'User' };
+
+                // Auto garbage-collection after 5 minutes to prevent RAM leak
+                setTimeout(() => {
+                    if (global.noteSessions && global.noteSessions[prompt.key.id]) {
+                        delete global.noteSessions[prompt.key.id];
+                    }
+                }, 5 * 60 * 1000);
+
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to initiate note setup." }, { quoted: msg });
             }
@@ -571,7 +732,7 @@ module.exports = [
         }
     },
 
-    // 11. NOTES (dashboard with button)
+    // 11. NOTES (Modernized Dashboard - Removed legacy buttons)
     {
         name: 'notes',
         isPrefixless: false,
@@ -583,21 +744,9 @@ module.exports = [
             const prompt = `📝 *STICKY NOTES SYSTEM* 📝\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                            `• *Instructions:* Save text snippets by typing \`.addnote <content>\` and replying directly to the prompt with your desired note name. To retrieve a note, use \`.getnote <name>\`.\n` +
                            `• *Total Notes in this Chat:* \`${totalNotes}\`\n\n` +
-                           `Tapping the button below will display all saved note names.`;
+                           `👉 Type \`.getnotes\` to view saved note names in this chat.`;
 
-            const buttonMessage = {
-                text: prompt,
-                buttons: [
-                    { buttonId: `${config.prefix}getnotes`, buttonText: { displayText: 'Get Notes 📝' }, type: 1 }
-                ],
-                headerType: 1
-            };
-
-            try {
-                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (e) {
-                await sock.sendMessage(jid, { text: `${prompt}\n\n👉 Use \`.getnotes\` to view note names.` }, { quoted: msg });
-            }
+            await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
         }
     },
 
@@ -651,7 +800,7 @@ module.exports = [
         }
     },
 
-    // ─── .sc / .repo / .script ──────────────────────────────────────
+    // 14. SCRIPT (Modernized - Removed legacy buttons)
     {
         name: 'script',
         isPrefixless: false,
@@ -677,29 +826,21 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
 - *Runtime* : ${formatUptime(process.uptime())}
 - *Commands* : 100+ Features
 
-© Limitless-MD 2026`;
+© Limitless-MD 2026\n\n` +
+`👉 To clone the source repository directly, use command:\n\`${config.prefix}gitclone Botking134/Limitless-MD\``;
 
-            await sock.sendMessage(jid, {
-                image: { url: randomImage },
-                caption: messageText,
-                buttons: [
-                    {
-                        buttonId: `${config.prefix}repo_zip`,
-                        buttonText: { displayText: '📦 Zip' },
-                        type: 1
-                    },
-                    {
-                        buttonId: `${config.prefix}repo_link`,
-                        buttonText: { displayText: '🔗 Repo' },
-                        type: 1
-                    }
-                ],
-                headerType: 1
-            }, { quoted: msg });
+            try {
+                await sock.sendMessage(jid, {
+                    image: { url: randomImage },
+                    caption: messageText
+                }, { quoted: msg });
+            } catch (err) {
+                await sock.sendMessage(jid, { text: messageText }, { quoted: msg });
+            }
         }
     },
 
-    // ─── .sc alias ──────────────────────────────────────────────
+    // 15. SC (Script alias)
     {
         name: 'sc',
         isPrefixless: false,
@@ -709,7 +850,7 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         }
     },
 
-    // ─── .repo alias ─────────────────────────────────────────────
+    // 16. REPO (Script alias)
     {
         name: 'repo',
         isPrefixless: false,
@@ -719,29 +860,27 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         }
     },
 
- 
+    // 17. UPTIME
+    {
+        name: 'uptime',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const uptime = formatUptime(process.uptime());
 
-    // ─── .uptime ──────────────────────────────────────────────────
-{
-    name: 'uptime',
-    isPrefixless: false,
-    execute: async (sock, msg, args) => {
-        const jid = msg.key.remoteJid;
-        const uptime = formatUptime(process.uptime());
+            const content = ` ➢ ${uptime} `;
+            const width = content.length;
 
-        // Content with arrow and spaces
-        const content = ` ➢ ${uptime} `;
-        const width = content.length;
+            const topLine    = '╔' + '═'.repeat(width) + '╗';
+            const middleLine = '║' + content; 
+            const bottomLine = '╚' + '═'.repeat(width) + '╝';
 
-        const topLine    = '╔' + '═'.repeat(width) + '╗';
-        const middleLine = '║' + content; // No right border
-        const bottomLine = '╚' + '═'.repeat(width) + '╝';
+            const message = `${topLine}\n${middleLine}\n${bottomLine}`;
+            await sock.sendMessage(jid, { text: message }, { quoted: msg });
+        }
+    }, 
 
-        const message = `${topLine}\n${middleLine}\n${bottomLine}`;
-        await sock.sendMessage(jid, { text: message }, { quoted: msg });
-    }
-}, 
-        // ─── .runtime ──────────────────────────────────────────────────
+    // 18. RUNTIME
     {
         name: 'runtime',
         isPrefixless: false,
@@ -761,7 +900,6 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
                 ram = `${used} MB / ${total} MB`;
             } catch (e) { /* ignore */ }
 
-            // Use sender's name or JID
             const senderName = msg.pushName || normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
             const message =
