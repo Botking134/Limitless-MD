@@ -7,7 +7,7 @@ const config = require('./config');
 const { DEV_LIDS } = require('./plugins/devs');
 const commands = require('./commands');
 const { handleDeletion } = require('./helpers/log');
-const { handleIncomingMessage } = require('./helpers/messageHandlers');
+const { handleIncomingMessage } = require('./helpers/Infinity');
 
 // ─── READLINE FOR AUTH ──────────────────────────────────────────
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
