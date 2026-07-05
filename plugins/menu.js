@@ -1,10 +1,160 @@
-// plugins/menu.js
 const config = require('../config');
 const path = require('path');
+const axios = require('axios');
+const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
+const commands = require('../commands');
 
-// ─── AUDIO ASSETS ──────────────────────────────────────────────────────
+// ─── NOTES PATH ──────────────────────────────────────────────────
+const notesPath = path.join(__dirname, '../storage/notes.json');
 
-// Combined audio pool for .menu (7 files – all updated)
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+// ─── HELPERS ──────────────────────────────────────────────────────
+
+function formatUptime(seconds) {
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
+}
+
+function parseDuration(str) {
+    const match = str.match(/^(\d+)([smh])$/i);
+    if (!match) return null;
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    if (unit === 's') return value * 1000;
+    if (unit === 'm') return value * 60 * 1000;
+    if (unit === 'h') return value * 60 * 60 * 1000;
+    return null;
+}
+
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
+function readNotes() {
+    try {
+        if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
+    } catch (e) { /* ignore */ }
+    return {};
+}
+
+function saveNotes(notes) {
+    try {
+        const dir = path.dirname(notesPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
+    } catch (e) { /* ignore */ }
+}
+
+async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
+    const apiKey = config.groqApiKey;
+    if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
+    const response = await fetch(GROQ_BASE_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ model, messages, temperature: 0.7 })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "";
+}
+
+// Robust JID, LID, Mention, and Reply Matcher for Gojo
+function isBotAddressed(sock, msg) {
+    const rawIncoming = getRawMessage(msg.message);
+    const contextInfo = rawIncoming?.extendedTextMessage?.contextInfo ||
+                        rawIncoming?.imageMessage?.contextInfo ||
+                        rawIncoming?.videoMessage?.contextInfo ||
+                        rawIncoming?.contextInfo ||
+                        msg.message?.contextInfo;
+
+    const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+    const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
+
+    const cleanBotJid = botJid ? botJid.split('@')[0] : '';
+    const cleanBotLid = botLid ? botLid.split('@')[0] : '';
+
+    // Check replies
+    const quotedParticipant = contextInfo?.participant ? normalizeToJid(contextInfo.participant) : '';
+    if (quotedParticipant) {
+        const cleanQuoted = quotedParticipant.split('@')[0];
+        if (quotedParticipant === botJid || quotedParticipant === botLid || cleanQuoted === cleanBotJid || cleanQuoted === cleanBotLid) {
+            return true;
+        }
+    }
+
+    // Check mention metadata array
+    const mentions = contextInfo?.mentionedJid || [];
+    const normalizedMentions = mentions.map(m => normalizeToJid(m));
+    if (normalizedMentions.includes(botJid) || (botLid && normalizedMentions.includes(botLid))) {
+        return true;
+    }
+
+    // Check text-based mentions
+    const body = rawIncoming?.conversation || rawIncoming?.extendedTextMessage?.text || rawIncoming?.imageMessage?.caption || rawIncoming?.videoMessage?.caption || '';
+    const lowerMessage = body.toLowerCase();
+    if (cleanBotJid && lowerMessage.includes(`@${cleanBotJid}`)) return true;
+    if (cleanBotLid && lowerMessage.includes(`@${cleanBotLid}`)) return true;
+
+    return false;
+}
+
+async function handleNaturalDelay(sock, jid, responseText, presenceType = 'composing') {
+    await sock.sendPresenceUpdate(presenceType, jid);
+    const wordCount = responseText.split(/\s+/).length;
+    let delayMs = 3000; // default 3 seconds
+
+    if (wordCount > 100) {
+        delayMs = 6000; // 6 seconds for longer responses
+    }
+    await delay(delayMs);
+}
+
+// ─── NOTE SESSION HANDLER (also used by tools/addnote) ────────
+async function handleNoteSession(sock, msg) {
+    try {
+        const jid = msg.key.remoteJid;
+        const rawContent = getRawMessage(msg.message);
+        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+        const quotedMsgId = rawContent?.contextInfo?.stanzaId;
+
+        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
+            const session = global.noteSessions[quotedMsgId];
+            const noteName = text.trim();
+            if (!noteName) return false;
+
+            const notes = readNotes();
+            notes[jid] = notes[jid] || {};
+            notes[jid][noteName.toLowerCase()] = {
+                title: noteName,
+                content: session.content,
+                author: session.author,
+                time: Date.now()
+            };
+            saveNotes(notes);
+            delete global.noteSessions[quotedMsgId];
+            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
+            return true;
+        }
+    } catch (e) {
+        console.error("Note session handler error:", e);
+    }
+    return false;
+}
+
+// Combined audio pool for .menu
 const menuAudios = [
     "https://files.catbox.moe/pj7qrm.mp3",
     "https://files.catbox.moe/4adjoq.mp3",
@@ -14,15 +164,6 @@ const menuAudios = [
     "https://files.catbox.moe/h75gjf.mp3",
     "https://files.catbox.moe/5nku92.mp3"
 ];
-
-// ─── HELPER: FORMAT UPTIME ──────────────────────────────────────────
-function formatUptime(seconds) {
-    const d = Math.floor(seconds / (3600 * 24));
-    const h = Math.floor((seconds % (3600 * 24)) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
-}
 
 // ─── MENU IMAGES ──────────────────────────────────────────────────────
 const menuImages = [
@@ -38,13 +179,11 @@ const menuImages = [
     "https://i.ibb.co/zWLKzy6N/c7d785c9bf81d4bb8a75547b75f7cd62.jpg"
 ];
 
-// ─── HELPER: FETCH IMAGE BUFFER (for carousel) ──────────────────────
+// ─── HELPER: FETCH IMAGE BUFFER (Fixed standard Axios buffer download) ──
 async function fetchImageBuffer(url) {
     try {
-        const response = await fetch(url, { timeout: 5000 });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const arrayBuffer = await response.arrayBuffer();
-        return Buffer.from(arrayBuffer);
+        const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 5000 });
+        return Buffer.from(response.data);
     } catch (e) {
         console.error(`[MENU] Failed to fetch image: ${url}`, e.message);
         return null;
@@ -101,27 +240,19 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
     };
 }
 
-// ─── RENDER TEXT MENU ───────────────────────────────────────────────
-async function renderMenu(sock, msg) {
-    const jid = msg.key.remoteJid;
-    const uptime = formatUptime(process.uptime());
-    const readMore = String.fromCharCode(8206).repeat(4001);
-    const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
-
-    const menuText =
+const menuText =
 `┌──────────────────┐
 │   *Limitless-MD*   │
 └──────────────────┘
 _Owner: ${config.ownerName}_
-_User: ${msg.pushName || 'User'}_
-_Uptime: ${uptime}_
+_User: User_
 _Version: 1.0.0_
 ════════════════════════
 _Throughout Heaven And Earth _
 ┌────────────────────────────────────┐
 │ _I alone am the Honoured one_ │
 └────────────────────────────────────┘
-${readMore}
+
 _❖ ── [ AI & CHATBOT ] ── ❖_
 _┃ ⊱ ai_
 _┃ ⊱ groq_
@@ -218,15 +349,13 @@ _┃ ⊱ block_
 _┃ ⊱ unblock_
 _┃ ⊱ aza_
 _┃ ⊱ time_
-_┃ ⊱ weather_ (AI Search)
+_┃ ⊱ weather_
 _┃ ⊱ device_
 _┃ ⊱ ss_
 _┃ ⊱ calc_
-_┃ ⊱ trt_ (AI dependent)
+_┃ ⊱ trt_
 _┃ ⊱ translate_
 _┃ ⊱ spam_
-_┃ ⊱ livescore_ / .live (AI Search)
-_┃ ⊱ score_ (AI Search)
 
 _❖ ── [ DOWNLOADER ] ── ❖_
 _┃ ⊱ play_
@@ -327,7 +456,6 @@ _┃ ⊱ delcmd_
 _┃ ⊱ tovv_
 _┃ ⊱ tourl_
 _┃ ⊱ kamui_
-_┃ ⊱ vvs_router_ (hidden)
 _┃ ⊱ emix_
 _┃ ⊱ smeme_
 _┃ ⊱ addnote_
@@ -345,14 +473,37 @@ _┃ ⊱ qty_
 _┃ ⊱ currency
 `;
 
+// ─── RENDER TEXT MENU ───────────────────────────────────────────────
+async function renderMenu(sock, msg) {
+    const jid = msg.key.remoteJid;
+    const uptime = formatUptime(process.uptime());
+    const readMore = String.fromCharCode(8206).repeat(4001);
+    const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
+
+    const menuTextCompiled =
+`┌──────────────────┐
+│   *Limitless-MD*   │
+└──────────────────┘
+_Owner: ${config.ownerName}_
+_User: ${msg.pushName || 'User'}_
+_Uptime: ${uptime}_
+_Version: 1.0.0_
+════════════════════════
+_Throughout Heaven And Earth _
+┌────────────────────────────────────┐
+│ _I alone am the Honoured one_ │
+└────────────────────────────────────┘
+${readMore}
+${menuText}`;
+
     try {
         await sock.sendMessage(jid, {
             image: { url: randomImage },
-            caption: menuText
+            caption: menuTextCompiled
         }, { quoted: msg });
     } catch (error) {
         console.error("Menu Image Render Error:", error);
-        await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
+        await sock.sendMessage(jid, { text: menuTextCompiled }, { quoted: msg });
     }
 }
 
@@ -380,7 +531,7 @@ _Swipe through the cards below to explore command categories._ 🔮`;
     try {
         const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
 
-        // Loading animation
+        // Loading animation (Protected against deletion crashes)
         const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
 
         const frames = [
@@ -401,7 +552,6 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             await sock.sendMessage(jid, { delete: loadingMsg.key });
         } catch (e) { /* ignore */ }
 
-        // Build carousel
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
         const categories = [
@@ -474,17 +624,146 @@ _Swipe through the cards below to explore command categories._ 🔮`;
 // ─── EXPORT COMMANDS ──────────────────────────────────────────────
 
 module.exports = [
-    // ─── .menu (Text Menu – No GIF, 7 Audio Files) ──────────────
+    // 1. GOJO (prefixless - On by default, togglable, connected to .asst, with smart execution layers)
+    {
+        name: 'gojo',
+        isPrefixless: true,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, senderNumber }) => {
+            const jid = msg.key.remoteJid;
+            const cleanArgs = args || '';
+
+            // Bypass if it's a prefixed command
+            if (cleanArgs.startsWith(config.prefix)) return;
+
+            const cleanQuery = cleanArgs.toLowerCase().startsWith('gojo ') ? cleanArgs.slice(5).trim() : cleanArgs.trim();
+
+            const isAuthorized = isOwner || isSudo || isDev;
+            const action = cleanQuery.toLowerCase();
+
+            if (isAuthorized && (action === 'rise' || action === 'sleep')) {
+                if (action === 'sleep') {
+                    config.gojoGlobalSleep = true;
+                    await sock.sendMessage(jid, { text: "😴 *Satoru Gojo is now asleep globally.* (Prefixless triggers disabled bot-wide)" }, { quoted: msg });
+                } else if (action === 'rise') {
+                    config.gojoGlobalSleep = false;
+                    await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* (Prefixless triggers activated bot-wide)" }, { quoted: msg });
+                }
+                saveState();
+                return;
+            }
+
+            // Gojo is awake by default (unless global sleep configuration is explicitly true)
+            if (config.gojoGlobalSleep === true) {
+                return;
+            }
+
+            // Trigger if directly addressed, mentioned, replied to, or contains his name anywhere in the sentence
+            const isAddressed = isBotAddressed(sock, msg) || /\bgojo\b/i.test(cleanArgs);
+            if (!isAddressed) return;
+
+            if (!cleanQuery) {
+                return await sock.sendMessage(jid, {
+                    text: isDev
+                        ? "Yo, Master Isaac! You called? What does the creator of Limitless need today? 😏"
+                        : (isOwner ? `Yo! What's up, ${config.ownerName}? You need my help? 😏` : "Yo! What's on your mind? 😏")
+                }, { quoted: msg });
+            }
+
+            try {
+                let gojoSystemPrompt =
+                    "You are Satoru Gojo, the strongest Jujutsu Sorcerer. " +
+                    "Your personality is extremely conversational, playful, lazy, informal, and a massive tease. " +
+                    "Frequently refer to yourself as 'the strongest'. Mention your 'Six Eyes' or 'Infinity' naturally. " +
+                    "Do NOT repeat greetings. Respond with organic variety. Your reply length must depend on the complexity of the query.\n\n" +
+                    "You have absolute expert knowledge of the WhatsApp bot you reside in, called 'Limitless-MD'. Here is the directory of all system commands you have access to:\n" +
+                    menuText + "\n\n" +
+                    "COMMAND EXECUTION PROTOCOL:\n" +
+                    "If the user asks you to perform an action (like muting/locking the group, deleting a message, translating text, or checking weather) that matches any of the commands in your directory, respond normally in-character, but append a command execution tag at the very end of your response like this: [CMD: .commandName arguments] (e.g., [CMD: .mute close] or [CMD: .delete]). If they don't ask you to perform an action, do NOT append any tag.";
+
+                if (isDev) {
+                    gojoSystemPrompt += ` You are speaking directly to your developer, Master Isaac. Address him playfully as 'Master Isaac' or 'Master' with your usual playful, teasing attitude, treating him like a dear friend who created your universe.`;
+                } else if (isOwner) {
+                    gojoSystemPrompt += ` You are speaking directly to your owner. Address him playfully as '${config.ownerName}' with your usual cocky, teasing attitude, but never refer to him as Master, Infinity, or Isaac.`;
+                } else if (isSudo) {
+                    gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac.`;
+                }
+
+                global.aiMemory[jid] = global.aiMemory[jid] || {};
+                global.aiMemory[jid].gojo = global.aiMemory[jid].gojo || [];
+
+                const messages = [
+                    { role: "system", content: gojoSystemPrompt },
+                    ...global.aiMemory[jid].gojo,
+                    { role: "user", content: cleanQuery }
+                ];
+
+                await sock.sendPresenceUpdate('composing', jid);
+
+                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+
+                global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
+                global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
+
+                while (global.aiMemory[jid].gojo.length > 50) {
+                    global.aiMemory[jid].gojo.shift();
+                }
+
+                // Parser layer for the Dynamic Command Triggering tag
+                const cmdRegex = /\[CMD:\s*(\.[a-zA-Z0-9_-]+.*?)\s*\]/;
+                const match = responseText.match(cmdRegex);
+                let cleanResponse = responseText;
+                let extractedCmd = null;
+
+                if (match) {
+                    extractedCmd = match[1].trim();
+                    cleanResponse = responseText.replace(cmdRegex, '').trim();
+                }
+
+                await handleNaturalDelay(sock, jid, cleanResponse, 'composing');
+
+                const sent = await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
+                if (sent?.key?.id) {
+                    global.botMessageAgents[sent.key.id] = 'gojo';
+                }
+
+                // Background Executive Command Execution Handler
+                if (extractedCmd) {
+                    try {
+                        const parts = extractedCmd.split(' ');
+                        const cmdName = parts[0]; 
+                        const cmdArgs = parts.slice(1).join(' '); 
+
+                        let commandFunction;
+                        if (typeof commands === 'object' && !Array.isArray(commands)) {
+                            commandFunction = commands[cmdName];
+                        } else if (Array.isArray(commands)) {
+                            const targetCmd = commands.find(c => `.${c.name}` === cmdName || c.name === cmdName);
+                            if (targetCmd) commandFunction = targetCmd.execute;
+                        }
+
+                        if (commandFunction) {
+                            await commandFunction(sock, msg, cmdArgs, { isOwner, isSudo, isDev, senderNumber });
+                        }
+                    } catch (cmdErr) {
+                        console.error("❌ Gojo dynamic execution failed:", cmdErr.message);
+                    }
+                }
+
+            } catch (error) {
+                await sock.sendMessage(jid, { text: "Tch, looks like something interfered with my Infinity." }, { quoted: msg });
+            }
+        }
+    },
+
+    // 2. .menu (Text Menu – No GIF, 7 Audio Files)
     {
         name: 'menu',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            // Show text menu (image + caption)
             await renderMenu(sock, msg);
 
-            // Send random audio directly from URL (no fetch)
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
             await sock.sendMessage(jid, {
                 audio: { url: randomAudio },
@@ -494,7 +773,7 @@ module.exports = [
         }
     },
 
-    // ─── .list alias for .menu ──────────────────────────────────
+    // 3. .list alias for .menu
     {
         name: 'list',
         isPrefixless: false,
@@ -512,23 +791,36 @@ module.exports = [
         }
     },
 
-    // ─── .menu2 (Carousel – Loading Animation Only, No Audio) ──
+    // 4. .menu2 (Carousel – Loading Animation Only, No Audio)
     {
         name: 'menu2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
             await renderCarouselMenu(sock, msg);
         }
     },
 
-    // ─── .list2 alias for .menu2 ─────────────────────────────────
+    // 5. .list2 alias for .menu2
     {
         name: 'list2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
             await renderCarouselMenu(sock, msg);
         }
     }
 ];
+
+// ─── ALIASES ──────────────────────────────────────────────────────
+
+const aliases = [];
+module.exports.forEach(cmd => {
+    if (cmd.name === 'delete') {
+        aliases.push({ ...cmd, name: 'del' });
+        aliases.push({ ...cmd, name: 'dlt' });
+    }
+    if (cmd.name === 'tdelete') {
+        aliases.push({ ...cmd, name: 'tdel' });
+        aliases.push({ ...cmd, name: 'tdlt' });
+    }
+});
+module.exports.push(...aliases);
