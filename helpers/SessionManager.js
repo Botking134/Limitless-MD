@@ -1,4 +1,4 @@
-helpers/SessionManager.js
+// helpers/SessionManager.js
 
 const config = require('../config');
 const { saveState } = require('../stateManager');
