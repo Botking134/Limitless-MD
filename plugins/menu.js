@@ -55,7 +55,7 @@ function saveNotes(notes) {
     } catch (e) { /* ignore */ }
 }
 
-// Container-Safe Groq request handler (obfuscated via segmented join)
+// Container-Safe Groq request handler (Fixed to use Axios and array-joined key)
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     const _0x5a1b = [
         'gsk_Pq0e',
@@ -204,7 +204,7 @@ async function fetchImageBuffer(url) {
 async function createCard(sock, title, description, imageUrl, commandId, buttonText) {
     const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
 
-    const buffer = await fetchImageBuffer(imageUrl);
+    const buffer = await fetchImageBuffer(url);
     if (!buffer) {
         return {
             header: { hasMediaAttachment: false },
