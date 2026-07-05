@@ -60,6 +60,38 @@ function saveNotes(notes) {
     } catch (e) { /* ignore */ }
 }
 
+// ─── NOTE SESSION HANDLER ───
+async function handleNoteSession(sock, msg) {
+    try {
+        const jid = msg.key.remoteJid;
+        const rawContent = getRawMessage(msg.message);
+        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+        const quotedMsgId = rawContent?.contextInfo?.stanzaId;
+
+        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
+            const session = global.noteSessions[quotedMsgId];
+            const noteName = text.trim();
+            if (!noteName) return false;
+
+            const notes = readNotes();
+            notes[jid] = notes[jid] || {};
+            notes[jid][noteName.toLowerCase()] = {
+                title: noteName,
+                content: session.content,
+                author: session.author,
+                time: Date.now()
+            };
+            saveNotes(notes);
+            delete global.noteSessions[quotedMsgId];
+            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
+            return true;
+        }
+    } catch (e) {
+        console.error("Note session handler error:", e);
+    }
+    return false;
+}
+
 // ─── DEDICATED GC CHAT LOG HELPERS ───────────────────
 
 function readGcLogs() {
@@ -449,6 +481,28 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const isGroup = jid.endsWith('@g.us');
         const cleanChatJid = cleanJid(jid); // Cleaned group/DM JID representation
 
+        // ─── EXTRACT BODY (Centralized at the top to prevent duplicate identifier declarations) ─
+        const rawMsg = getRawMessage(msg.message) || msg.message;
+        let body = rawMsg?.conversation ||
+                   rawMsg?.extendedTextMessage?.text ||
+                   rawMsg?.imageMessage?.caption ||
+                   rawMsg?.videoMessage?.caption ||
+                   msg.message?.buttonsResponseMessage?.selectedButtonId ||
+                   msg.message?.templateButtonReplyMessage?.selectedId ||
+                   '';
+
+        if (!body && msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
+            try {
+                const params = JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
+                if (params && params.id) {
+                    body = params.id;
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        const trimmedMessageBody = body.trim();
+        const lowerMessage = trimmedMessageBody.toLowerCase();
+
         let command;
         let args;
 
@@ -476,8 +530,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             activeQuizKey = quizMultiKey;
         }
 
-        const rawMsg = getRawMessage(msg.message) || msg.message;
-        
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo ||
                             msg.message?.imageMessage?.contextInfo ||
                             msg.message?.videoMessage?.contextInfo ||
@@ -486,7 +538,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                             rawMsg?.contextInfo;
                             
         const quotedMsgId = contextInfo?.stanzaId;
-        const trimmedMessageBody = (rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '').trim();
 
         if (quotedMsgId && activeQuizKey && global.triviaSessions && global.triviaSessions[activeQuizKey]) {
             const session = global.triviaSessions[activeQuizKey];
@@ -585,24 +636,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
 
-        // ─── EXTRACT BODY (Fixed modern Carousel quick-reply JSON parsing) ─
-        let body = rawMsg?.conversation ||
-                   rawMsg?.extendedTextMessage?.text ||
-                   rawMsg?.imageMessage?.caption ||
-                   rawMsg?.videoMessage?.caption ||
-                   msg.message?.buttonsResponseMessage?.selectedButtonId ||
-                   msg.message?.templateButtonReplyMessage?.selectedId ||
-                   '';
-
-        if (!body && msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
-            try {
-                const params = JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
-                if (params && params.id) {
-                    body = params.id;
-                }
-            } catch (e) { /* ignore */ }
-        }
-
         // ─── LIST RESPONSE DETECTION ─────────────────────────────
         if (msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId) {
             const rowId = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
@@ -623,9 +656,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 body = mapped;
             }
         }
-
-        const trimmedMessageBody = body.trim();
-        const lowerMessage = trimmedMessageBody.toLowerCase();
 
         global.messageStore[msg.key.id] = msg;
         const storeKeys = Object.keys(global.messageStore);
@@ -683,7 +713,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     250: { index: 6, name: "Global", icon: "🗺️", text: "🗺️ *TIER UNLOCKED: GLOBAL DOMINANCE*\n\nTectonic shockwaves detected! @Username has crossed 250 messages and attained global force!\n\n• Current Tier: Tier 6: Global\n• Status: Tectonic force capable of destroying island nations or continents." },
                     400: { index: 5, name: "Planetary", icon: "🪐", text: "🪐 *TIER UNLOCKED: CELESTIAL COLLAPSE*\n\nMoons and planets shatter in their wake! @Username has crossed 400 messages!\n\n• Current Tier: Tier 5: Planetary\n• Status: Celestial power capable of shattering moons and gas giants." },
                     600: { index: 4, name: "Stellar", icon: "☀️", text: "☀️ *TIER UNLOCKED: STELLAR OBLITERATION*\n\nWatch the skies! @Username has crossed 600 messages and can obliterate entire solar systems with a single sentence!\n\n• Current Tier: Tier 4: Stellar\n• Status: Cosmic power able to completely obliterate stars and solar systems." },
-                    800: { index: 3, name: "Cosmic", icon: "🌌", text: "🌌 *TIER UNLOCKED: GALACTIC EXTINCTION*\n\nReality is collapsing! @Username has reached 800 messages!\n\n• Current Tier: Tier 3: Cosmic\n• Status: Reality-spanning scale. Can collapse galaxies and physical matter." },
+                    800: { index: 3, name: "Cosmic", icon: "🌌", text: "🌌 *TIER UNLOCKED: GALACTIC EXTINATION*\n\nReality is collapsing! @Username has reached 800 messages!\n\n• Current Tier: Tier 3: Cosmic\n• Status: Reality-spanning scale. Can collapse galaxies and physical matter." },
                     900: { index: 2, name: "Multiversal", icon: "🔮", text: "🔮 *TIER UNLOCKED: TIMELINE ANOMALY*\n\nBranching realities are warping! @Username has reached 900 messages!\n\n• Current Tier: Tier 2: Multiversal\n• Status: Manipulates multiple timelines and distinct universes simultaneously." },
                     1000: { index: 1, name: "Extradimensional (Outerversal)", icon: "👁️", text: "👁️ *TIER UNLOCKED: DIMENSIONAL FRAMEWORK ERASED*\n\nThe narrative grid has dissolved! @Username has achieved Outerversal ascension at 1,000 messages!\n\n• Current Tier: Tier 1: Extradimensional (Outerversal)\n• Status: Transcends space, time, and dimensional conceptual frameworks. They exist beyond standard human physics." },
                     1500: { index: 0, name: "Boundless", icon: "👑", text: "👑 *THE FINAL CEILING: BOUNDLESS ASCENSION*\n\nABSOLUTE DIVINITY ACHIEVED! @Username has conquered the maximum peak of 1,500 messages!\n\n• Current Tier: Tier 0: Boundless\n• Status: True omnipotence. Omnipresent, omniscient, and conceptually unreachable. The supreme deity of this chat." }
