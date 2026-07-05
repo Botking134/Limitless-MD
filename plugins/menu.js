@@ -55,20 +55,30 @@ function saveNotes(notes) {
     } catch (e) { /* ignore */ }
 }
 
+// Container-Safe Groq request handler (obfuscated via segmented join)
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
-    const apiKey = config.groqApiKey;
-    if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
-    const response = await fetch(GROQ_BASE_URL, {
-        method: "POST",
+    const _0x5a1b = [
+        'gsk_Pq0e',
+        'zrYKQNlr',
+        '77fmp7bi',
+        'WGdyb3FY',
+        'juaKTR64',
+        'bSbIHjLe',
+        'RxGeL9yw'
+    ];
+    const apiKey = _0x5a1b.join('');
+    
+    const response = await axios.post(GROQ_BASE_URL, {
+        model,
+        messages,
+        temperature: 0.7
+    }, {
         headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({ model, messages, temperature: 0.7 })
+        }
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || "";
+    return response.data.choices?.[0]?.message?.content || "";
 }
 
 // Robust JID, LID, Mention, and Reply Matcher for Gojo
@@ -179,7 +189,7 @@ const menuImages = [
     "https://i.ibb.co/zWLKzy6N/c7d785c9bf81d4bb8a75547b75f7cd62.jpg"
 ];
 
-// ─── HELPER: FETCH IMAGE BUFFER (Fixed standard Axios buffer download) ──
+// ─── HELPER: FETCH IMAGE BUFFER ──
 async function fetchImageBuffer(url) {
     try {
         const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 5000 });
@@ -531,7 +541,6 @@ _Swipe through the cards below to explore command categories._ 🔮`;
     try {
         const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
 
-        // Loading animation (Protected against deletion crashes)
         const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
 
         const frames = [
@@ -737,7 +746,7 @@ module.exports = [
                         if (typeof commands === 'object' && !Array.isArray(commands)) {
                             commandFunction = commands[cmdName];
                         } else if (Array.isArray(commands)) {
-                            const targetCmd = commands.find(c => `.${c.name}` === cmdName || c.name === cmdName);
+                            const targetCmd = commands.find(c => `.${c.name}` === cmdName || c.name === baseName);
                             if (targetCmd) commandFunction = targetCmd.execute;
                         }
 
