@@ -1,5 +1,6 @@
 const config = require('../config');
 const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
+const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -893,12 +894,11 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
             const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
 
             let ram = 'N/A';
-            try {
-                const memoryUsage = process.memoryUsage();
-                const used = (memoryUsage.heapUsed / 1024 / 1024).toFixed(1);
-                const total = (memoryUsage.heapTotal / 1024 / 1024).toFixed(1);
-                ram = `${used} MB / ${total} MB`;
-            } catch (e) { /* ignore */ }
+try {
+    const totalMem = (os.totalmem() / 1024 / 1024 / 1024).toFixed(1);
+    const usedMem = ((os.totalmem() - os.freemem()) / 1024 / 1024 / 1024).toFixed(1);
+    ram = `${usedMem} GB / ${totalMem} GB`;
+} catch (e) { /* ignore */ }
 
             const senderName = msg.pushName || normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
 
