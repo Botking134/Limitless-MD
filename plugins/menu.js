@@ -1,6 +1,6 @@
 const config = require('../config');
 const path = require('path');
-const fs = require('fs'); // Added fs import
+const fs = require('fs');
 const axios = require('axios');
 const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
 const commands = require('../commands');
@@ -12,7 +12,7 @@ const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms)); // Added delay helper
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
@@ -58,7 +58,7 @@ function saveNotes(notes) {
     } catch (e) { /* ignore */ }
 }
 
-// Container-Safe Groq request handler (Updated to use config file)
+// Container-Safe Groq request handler
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
     const apiKey = config.groqApiKey;
     
@@ -123,10 +123,10 @@ function isBotAddressed(sock, msg) {
 async function handleNaturalDelay(sock, jid, responseText, presenceType = 'composing') {
     await sock.sendPresenceUpdate(presenceType, jid);
     const wordCount = responseText.split(/\s+/).length;
-    let delayMs = 3000; // default 3 seconds
+    let delayMs = 3000;
 
     if (wordCount > 100) {
-        delayMs = 6000; // 6 seconds for longer responses
+        delayMs = 6000;
     }
     await delay(delayMs);
 }
@@ -203,7 +203,7 @@ async function fetchImageBuffer(url) {
 async function createCard(sock, title, description, imageUrl, commandId, buttonText) {
     const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
 
-    const buffer = await fetchImageBuffer(imageUrl); // Fixed reference: url -> imageUrl
+    const buffer = await fetchImageBuffer(imageUrl);
     if (!buffer) {
         return {
             header: { hasMediaAttachment: false },
@@ -683,10 +683,16 @@ module.exports = [
                     "Your personality is extremely conversational, playful, lazy, informal, and a massive tease. " +
                     "Frequently refer to yourself as 'the strongest'. Mention your 'Six Eyes' or 'Infinity' naturally. " +
                     "Do NOT repeat greetings. Respond with organic variety. Your reply length must depend on the complexity of the query.\n\n" +
-                    "You have absolute expert knowledge of the WhatsApp bot you reside in, called 'Limitless-MD'. Here is the directory of all system commands you have access to:\n" +
+                    "You reside in 'Limitless-MD', a WhatsApp bot. You have the authorization to trigger administrative and utility commands on behalf of users by parsing their natural language intent. " +
+                    "When a user asks you to perform a task, check if it matches any capability in your command list. Respond normally in-character, but append a command execution tag at the very end of your response: [CMD: .commandName arguments]\n\n" +
+                    "COMMAND TRIGGER RULES:\n" +
+                    "- If the user asks to see their menu, view all commands, list commands, or open menus: trigger '.menu' or '.menu2' (e.g., [CMD: .menu] or [CMD: .menu2]).\n" +
+                    "- If the user references deleting a message, and asks to 'delete this', 'delete', or 'remove' in a reply context: trigger '.delete' (e.g., [CMD: .delete]).\n" +
+                    "- If the user specifies a delay to delete, such as 'delete this in 10s', 'delete in 5m', or 'delete in 2h': extract the duration parameter and trigger '.tdelete [duration]' (e.g., [CMD: .tdelete 10s] or [CMD: .tdelete 5m]).\n" +
+                    "- Map other natural commands dynamically if they match operations in your command list (e.g., locking the group with '.close', muting with '.mute', translating with '.translate'). If they are just chatting, do NOT append any tag.\n\n" +
+                    "Here is your command directory:\n" +
                     menuText + "\n\n" +
-                    "COMMAND EXECUTION PROTOCOL:\n" +
-                    "If the user asks you to perform an action (like muting/locking the group, deleting a message, translating text, or checking weather) that matches any of the commands in your directory, respond normally in-character, but append a command execution tag at the very end of your response like this: [CMD: .commandName arguments] (e.g., [CMD: .mute close] or [CMD: .delete]). If they don't ask you to perform an action, do NOT append any tag.";
+                    "Always place the [CMD: ...] tag at the absolute end of your output, with no trailing text.";
 
                 if (isDev) {
                     gojoSystemPrompt += ` You are speaking directly to your developer, Master Isaac. Address him playfully as 'Master Isaac' or 'Master' with your usual playful, teasing attitude, treating him like a dear friend who created your universe.`;
@@ -696,7 +702,7 @@ module.exports = [
                     gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac.`;
                 }
 
-                global.aiMemory = global.aiMemory || {}; // Safe global initializer
+                global.aiMemory = global.aiMemory || {};
                 global.aiMemory[jid] = global.aiMemory[jid] || {};
                 global.aiMemory[jid].gojo = global.aiMemory[jid].gojo || [];
 
@@ -732,7 +738,7 @@ module.exports = [
 
                 const sent = await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
                 if (sent?.key?.id) {
-                    global.botMessageAgents = global.botMessageAgents || {}; // Safe global initializer
+                    global.botMessageAgents = global.botMessageAgents || {};
                     global.botMessageAgents[sent.key.id] = 'gojo';
                 }
 
@@ -742,14 +748,14 @@ module.exports = [
                         const parts = extractedCmd.split(' ');
                         const cmdName = parts[0]; 
                         const cmdArgs = parts.slice(1).join(' '); 
-                        const baseName = cmdName.startsWith('.') ? cmdName.slice(1) : cmdName; // Fixed reference
+                        const cleanCmdName = cmdName.startsWith('.') ? cmdName.slice(1) : cmdName;
 
                         let commandFunction;
-                        if (typeof commands === 'object' && !Array.isArray(commands)) {
-                            commandFunction = commands[cmdName] || commands[baseName];
-                        } else if (Array.isArray(commands)) {
-                            const targetCmd = commands.find(c => `.${c.name}` === cmdName || c.name === baseName);
+                        if (Array.isArray(commands)) {
+                            const targetCmd = commands.find(c => c.name === cleanCmdName);
                             if (targetCmd) commandFunction = targetCmd.execute;
+                        } else if (typeof commands === 'object' && commands !== null) {
+                            commandFunction = commands[cleanCmdName] || commands[cmdName];
                         }
 
                         if (commandFunction) {
