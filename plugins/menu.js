@@ -1,5 +1,6 @@
 const config = require('../config');
 const path = require('path');
+const fs = require('fs'); // Added fs import
 const axios = require('axios');
 const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
 const commands = require('../commands');
@@ -10,6 +11,8 @@ const notesPath = path.join(__dirname, '../storage/notes.json');
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 // ─── HELPERS ──────────────────────────────────────────────────────
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms)); // Added delay helper
 
 function formatUptime(seconds) {
     const d = Math.floor(seconds / (3600 * 24));
@@ -55,18 +58,14 @@ function saveNotes(notes) {
     } catch (e) { /* ignore */ }
 }
 
-// Container-Safe Groq request handler (Fixed to use Axios and array-joined key)
+// Container-Safe Groq request handler (Updated to use config file)
 async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
-    const _0x5a1b = [
-        'gsk_Pq0e',
-        'zrYKQNlr',
-        '77fmp7bi',
-        'WGdyb3FY',
-        'juaKTR64',
-        'bSbIHjLe',
-        'RxGeL9yw'
-    ];
-    const apiKey = _0x5a1b.join('');
+    const apiKey = config.groqApiKey;
+    
+    if (!apiKey) {
+        console.error("[GROQ] API key is missing. Please define 'groqApiKey' in your config file.");
+        return "Tch, looks like my connection details are missing.";
+    }
     
     const response = await axios.post(GROQ_BASE_URL, {
         model,
@@ -204,7 +203,7 @@ async function fetchImageBuffer(url) {
 async function createCard(sock, title, description, imageUrl, commandId, buttonText) {
     const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
 
-    const buffer = await fetchImageBuffer(url);
+    const buffer = await fetchImageBuffer(imageUrl); // Fixed reference: url -> imageUrl
     if (!buffer) {
         return {
             header: { hasMediaAttachment: false },
@@ -539,7 +538,7 @@ _Throughout Heaven And Earth_
 _Swipe through the cards below to explore command categories._ 🔮`;
 
     try {
-        const { generateWAMessageFromContent, delay } = await import('@itsliaaa/baileys');
+        const { generateWAMessageFromContent } = await import('@itsliaaa/baileys');
 
         const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
 
@@ -697,6 +696,7 @@ module.exports = [
                     gojoSystemPrompt += ` You are speaking directly to a Sudo user. Address him as 'dude'. Never refer to him as Master, Infinity, or Isaac.`;
                 }
 
+                global.aiMemory = global.aiMemory || {}; // Safe global initializer
                 global.aiMemory[jid] = global.aiMemory[jid] || {};
                 global.aiMemory[jid].gojo = global.aiMemory[jid].gojo || [];
 
@@ -732,6 +732,7 @@ module.exports = [
 
                 const sent = await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
                 if (sent?.key?.id) {
+                    global.botMessageAgents = global.botMessageAgents || {}; // Safe global initializer
                     global.botMessageAgents[sent.key.id] = 'gojo';
                 }
 
@@ -741,10 +742,11 @@ module.exports = [
                         const parts = extractedCmd.split(' ');
                         const cmdName = parts[0]; 
                         const cmdArgs = parts.slice(1).join(' '); 
+                        const baseName = cmdName.startsWith('.') ? cmdName.slice(1) : cmdName; // Fixed reference
 
                         let commandFunction;
                         if (typeof commands === 'object' && !Array.isArray(commands)) {
-                            commandFunction = commands[cmdName];
+                            commandFunction = commands[cmdName] || commands[baseName];
                         } else if (Array.isArray(commands)) {
                             const targetCmd = commands.find(c => `.${c.name}` === cmdName || c.name === baseName);
                             if (targetCmd) commandFunction = targetCmd.execute;
