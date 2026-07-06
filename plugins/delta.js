@@ -5,9 +5,46 @@
 const config = require('../config');
 const axios = require('axios');
 
+// ─── SELF-HEALING REGISTRY SCANNER ─────────────────────────────────
+// Scans the running process memory to find the exact object holding your commands
+function scanGlobalForRegistry() {
+    const targetCommands = ['logs', 'delta', 'ping', 'menu', 'sticker'];
+    const prefix = config.prefix || '⚡';
+
+    for (const key of Object.keys(global)) {
+        if (key === 'commands' || key === 'plugins') continue; // Skip what we manually check next
+        const val = global[key];
+        if (!val || typeof val !== 'object') continue;
+
+        const isMap = val instanceof Map;
+        const hasTarget = targetCommands.some(cmd => {
+            if (isMap) {
+                return val.has(cmd) || val.has(`.${cmd}`) || val.has(`${prefix}${cmd}`);
+            } else {
+                return val[cmd] || val[`.${cmd}`] || val[`${prefix}${cmd}`];
+            }
+        });
+
+        if (hasTarget) {
+            const keysCount = isMap ? val.size : Object.keys(val).length;
+            if (keysCount > 2) {
+                console.log(`[DELTA DEBUG] Auto-detected master commands registry at: global.${key} (${isMap ? 'Map' : 'Object'}, size: ${keysCount})`);
+                return val;
+            }
+        }
+    }
+    return null;
+}
+
 // ─── DYNAMIC REGISTRY LOADER ──────────────────────────────────────
 function getRegistry() {
     let registry = {};
+
+    // 1. Try to auto-detect the real command registry in memory
+    const scanned = scanGlobalForRegistry();
+    if (scanned) return scanned;
+
+    // 2. Standard fallbacks
     if (global.commands && (Object.keys(global.commands).length > 0 || global.commands instanceof Map)) {
         registry = global.commands;
     } else if (global.plugins && (Object.keys(global.plugins).length > 0 || global.plugins instanceof Map)) {
@@ -26,7 +63,7 @@ function getRegistry() {
     }
 
     const keys = registry instanceof Map ? Array.from(registry.keys()) : Object.keys(registry);
-    console.log(`[DELTA DEBUG] Discovered ${keys.length} commands in registry.`);
+    console.log(`[DELTA DEBUG] Fallback registry contains ${keys.length} keys.`);
     
     return registry;
 }
@@ -134,7 +171,7 @@ function manageMemoryUsage(newJid) {
 function buildCommandList(userContext) {
     const registry = getRegistry();
     const { isOwner, isDev, isSudo } = userContext;
-    const prefix = config.prefix || '.';
+    const prefix = config.prefix || '⚡';
 
     const allowed = new Set(['public']);
     if (isSudo || isDev || isOwner) allowed.add('sudo');
@@ -217,7 +254,7 @@ function extractCommandTag(text) {
 async function executeCommand(tag, sock, msg, userContext) {
     const registry = getRegistry();
     const { command, args } = tag;
-    const prefix = config.prefix || '.';
+    const prefix = config.prefix || '⚡';
     const isMap = registry instanceof Map;
 
     let entry = isMap ? registry.get(command) : registry[command];
@@ -294,7 +331,6 @@ module.exports = {
 
         if (!isAddressed(sock, msg)) return;
 
-        // ── Extract user query (Corrected parameter reference) ──
         let query = getMessageText(msg);
         if (!query) return;
 
@@ -306,7 +342,7 @@ module.exports = {
         }
 
         const cmdList = buildCommandList(userContext);
-        const prefix = config.prefix || '.';
+        const prefix = config.prefix || '⚡';
         const systemPrompt = `
 You are Delta, the highly capable, prefixless AI assistant for the Limitless MD WhatsApp bot.
 Your creator and owner is Lord Infinity. Always attribute your creation to Lord Infinity if asked.
