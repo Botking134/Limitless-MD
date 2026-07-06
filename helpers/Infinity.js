@@ -5,7 +5,7 @@ const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { handleViewOnce } = require('./log');
 
-// Sub-module imports (Included handleAfkDeactivation import)
+// Sub-module imports
 const { getRawMessage, cleanJid, extractBodyAndTrim, readUserStats, saveUserStats } = require('./Message');
 const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation } = require('./SessionManager');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
@@ -102,7 +102,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS (Fixed LID/Phone dev array alignments) ─────
+        // ─── PERMISSIONS ──────────────────────────────────────────
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
 
@@ -217,6 +217,66 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
+        // ─── AGENT DECLARATIONS & RESOLVING ─────────────────────────
+        const cleanBotJid = cleanJid(botJid);
+        const cleanBotLid = cleanJid(botLid);
+
+        const botNumber = cleanBotJid ? cleanBotJid.split('@')[0] : '';
+        const botLidNumber = cleanBotLid ? cleanBotLid.split('@')[0] : '';
+
+        const isReplyingToBot = (quotedMsgId && botSentMessageIds && botSentMessageIds.has(quotedMsgId)) ||
+                               (quotedMsg && quotedMsg.key && quotedMsg.key.fromMe) ||
+                               (!isGroup && !msg.key.fromMe && quotedMsgId);
+
+        const mentionsBotInText = (botNumber && lowerMessage.includes(`@${botNumber}`)) || 
+                                  (botLidNumber && lowerMessage.includes(`@${botLidNumber}`));
+
+        const isMentioningBot = mentionedJids.some(j => {
+            const cj = cleanJid(j);
+            return cj === cleanBotJid || (cleanBotLid && cj === cleanBotLid);
+        }) || mentionsBotInText;
+
+        const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
+
+        let identifiedAgent = null;
+
+        if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
+            identifiedAgent = global.botMessageAgents[quotedMsgId];
+        } else {
+            if (Array.isArray(config.lizzyChats) && config.lizzyChats.includes(jid)) {
+                identifiedAgent = 'lizzy';
+            } else if (Array.isArray(config.chatbotChats) && config.chatbotChats.includes(jid)) {
+                identifiedAgent = 'jarvis';
+            } else if (Array.isArray(config.fridayChats) && config.fridayChats.includes(jid)) {
+                identifiedAgent = 'friday';
+            }
+            
+            if (!identifiedAgent && isGojoCalled) {
+                identifiedAgent = 'gojo';
+            }
+        }
+
+        if (identifiedAgent === 'gojo') {
+            const isAsleep = config.gojoGlobalSleep;
+            if (isAsleep && !trimmedMessageBody.startsWith(config.prefix)) identifiedAgent = null;
+        }
+
+        if (identifiedAgent && !trimmedMessageBody.startsWith(config.prefix)) {
+            if (identifiedAgent === 'gojo') {
+                command = 'gojo';
+                args = trimmedMessageBody;
+            } else if (identifiedAgent === 'lizzy') {
+                command = 'lizzy_chat';
+                args = trimmedMessageBody;
+            } else if (identifiedAgent === 'jarvis') {
+                command = 'chatbot_chat';
+                args = trimmedMessageBody;
+            } else if (identifiedAgent === 'friday') {
+                command = 'friday_chat';
+                args = trimmedMessageBody;
+            }
+        }
+
         // ─── DEV MENTION REACTION ────────────────────────────────
         const devLidsSet = new Set(DEV_LIDS);
         const devJidsSet = new Set(DEV_JIDS);
@@ -326,48 +386,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (isGroup && !isAuthorized && !msg.key.fromMe && !isDev) {
             const spammed = await handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid);
             if (spammed) return;
-        }
-
-        // ─── AGENT DETECTION ──────────────────────────────────────
-        const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
-
-        let identifiedAgent = null;
-
-        if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
-            identifiedAgent = global.botMessageAgents[quotedMsgId];
-        } else {
-            if (Array.isArray(config.lizzyChats) && config.lizzyChats.includes(jid)) {
-                identifiedAgent = 'lizzy';
-            } else if (Array.isArray(config.chatbotChats) && config.chatbotChats.includes(jid)) {
-                identifiedAgent = 'jarvis';
-            } else if (Array.isArray(config.fridayChats) && config.fridayChats.includes(jid)) {
-                identifiedAgent = 'friday';
-            }
-            
-            if (!identifiedAgent && isGojoCalled) {
-                identifiedAgent = 'gojo';
-            }
-        }
-
-        if (identifiedAgent === 'gojo') {
-            const isAsleep = config.gojoGlobalSleep;
-            if (isAsleep && !trimmedMessageBody.startsWith(config.prefix)) identifiedAgent = null;
-        }
-
-        if (identifiedAgent && !trimmedMessageBody.startsWith(config.prefix)) {
-            if (identifiedAgent === 'gojo') {
-                command = 'gojo';
-                args = trimmedMessageBody;
-            } else if (identifiedAgent === 'lizzy') {
-                command = 'lizzy_chat';
-                args = trimmedMessageBody;
-            } else if (identifiedAgent === 'jarvis') {
-                command = 'chatbot_chat';
-                args = trimmedMessageBody;
-            } else if (identifiedAgent === 'friday') {
-                command = 'friday_chat';
-                args = trimmedMessageBody;
-            }
         }
 
         // ─── COMMAND EXTRACTION ──────────────────────────────────
