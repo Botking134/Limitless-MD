@@ -5,7 +5,7 @@ const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { handleViewOnce } = require('./log');
 
-// Sub-module imports (Importing handleNoteSession correctly)
+// Sub-module imports
 const { getRawMessage, cleanJid, extractBodyAndTrim, readUserStats, saveUserStats } = require('./Message');
 const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation, handleNoteSession } = require('./SessionManager');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
@@ -22,19 +22,24 @@ const ownerCommands = [
 const primaryOnlyCommands = ['addowner', 'delowner'];
 const devOnlyCommands = ['upgrade'];
 
-// ─── BULLETPROOF COMMAND EXECUTION HELPER ────────────────────────
+// ─── BULLETPROOF COMMAND EXECUTION HELPER (Fixed to support metadata objects) ───
 async function executeBotCommand(cmdName, sock, msg, args, opts) {
     let commandFunction;
     const cleanCmd = cmdName.startsWith(config.prefix) ? cmdName : `${config.prefix}${cmdName}`;
     const baseName = cmdName.startsWith(config.prefix) ? cmdName.slice(config.prefix.length) : cmdName;
 
     if (typeof commands === 'object' && !Array.isArray(commands)) {
-        commandFunction = commands[cleanCmd] || commands[baseName];
+        const entry = commands[cleanCmd] || commands[baseName];
+        if (entry) {
+            // Safely extracts the execute function if wrapped inside a metadata object
+            commandFunction = typeof entry.execute === 'function' ? entry.execute : entry;
+        }
     } else if (Array.isArray(commands)) {
-        commandFunction = commands.find(c => `.${c.name}` === cleanCmd || c.name === baseName)?.execute;
+        const targetCmd = commands.find(c => `${config.prefix}${c.name}` === cleanCmd || c.name === baseName);
+        if (targetCmd) commandFunction = targetCmd.execute;
     }
 
-    if (commandFunction) {
+    if (typeof commandFunction === 'function') {
         await commandFunction(sock, msg, args, opts);
         return true;
     }
@@ -55,7 +60,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const isGroup = jid.endsWith('@g.us');
         const cleanChatJid = cleanJid(jid); // Cleaned group JID
 
-        // ─── EXTRACT BODY (Centralized at the top!) ───
+        // ─── EXTRACT BODY ───
         const { rawMsg, body, trimmedMessageBody, lowerMessage } = extractBodyAndTrim(msg);
 
         let command;
@@ -69,6 +74,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
         const quotedMsgId = contextInfo?.stanzaId;
+        
+        // Re-defined quotedMsg scope cleanly for the agent-detection checks below
+        const quotedMsg = quotedMsgId ? global.messageStore[quotedMsgId] : null;
 
         const handled = await handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMsgId, cleanChatJid);
         if (handled) return;
@@ -102,9 +110,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS (Fixed LID/Phone dev array alignments) ─────
+        // ─── PERMISSIONS ──────────────────────────────────────────
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
-        const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
+        const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : (config.botLid || ''));
 
         global.activeSock = sock;
 
@@ -387,16 +395,18 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (spammed) return;
         }
 
-        // ─── COMMAND EXTRACTION ──────────────────────────────────
+        // ─── COMMAND EXTRACTION (Fixed space-after-prefix slicing) ───
         if (!command) {
             if (trimmedMessageBody.startsWith(config.prefix)) {
-                const spaceIndex = trimmedMessageBody.indexOf(' ');
+                // Slices off prefix and trims outer whitespace first
+                const withoutPrefix = trimmedMessageBody.slice(config.prefix.length).trim();
+                const spaceIndex = withoutPrefix.indexOf(' ');
                 if (spaceIndex === -1) {
-                    command = trimmedMessageBody.slice(config.prefix.length).toLowerCase();
+                    command = withoutPrefix.toLowerCase();
                     args = '';
                 } else {
-                    command = trimmedMessageBody.slice(config.prefix.length, spaceIndex).toLowerCase();
-                    args = trimmedMessageBody.slice(spaceIndex + 1);
+                    command = withoutPrefix.slice(0, spaceIndex).toLowerCase();
+                    args = withoutPrefix.slice(spaceIndex + 1).trim();
                 }
             } else if (commands[trimmedMessageBody.toLowerCase()]) {
                 command = trimmedMessageBody.toLowerCase();
