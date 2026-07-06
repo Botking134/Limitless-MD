@@ -5,9 +5,9 @@ const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { handleViewOnce } = require('./log');
 
-// Sub-module imports
+// Sub-module imports (Importing handleNoteSession correctly)
 const { getRawMessage, cleanJid, extractBodyAndTrim, readUserStats, saveUserStats } = require('./Message');
-const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation } = require('./SessionManager');
+const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation, handleNoteSession } = require('./SessionManager');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 const { readGcLogs, saveGcLogs, triggerSummary } = require('./Summary');
@@ -143,7 +143,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
-        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR (Fixed payload configurations) ───
+        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR (Fixed to pass contextInfo payload directly) ───
         const redirectedGame = handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody);
         if (redirectedGame) {
             command = redirectedGame.command;
