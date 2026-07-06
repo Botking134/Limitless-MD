@@ -1,4 +1,3 @@
-
 // commands.js
 const fs = require('fs');
 const path = require('path');
@@ -41,8 +40,7 @@ function getFilesRecursive(dir) {
 // ─── COMMAND REGISTRATION ────────────────────────────────────────
 /**
  * Registers a single command into the exports map.
- * If the command is prefixless, it's stored as-is.
- * Otherwise, it's prefixed with config.prefix.
+ * Stores the execute function AND metadata for Delta/Gojo.
  */
 function register(cmd) {
     if (!cmd.name || typeof cmd.execute !== 'function') return;
@@ -54,7 +52,17 @@ function register(cmd) {
     // Avoid overwriting core methods (like 'reload')
     if (key === 'reload') return;
 
-    commands[key] = cmd.execute;
+    // ─── STORE METADATA (Critical for Delta/Gojo) ──────────────
+    commands[key] = {
+        execute: cmd.execute,
+        metadata: {
+            description: cmd.description || `${cmd.name} command`,
+            category: cmd.category || 'tools',
+            usage: cmd.usage || key,
+            permission: cmd.permission || 'public',
+            isPrefixless: cmd.isPrefixless || false
+        }
+    };
 }
 
 // ─── HOT RELOAD ──────────────────────────────────────────────────
@@ -117,4 +125,6 @@ for (const filePath of pluginFiles) {
 // ─── ATTACH RELOAD METHOD ────────────────────────────────────────
 commands.reload = reloadCommands;
 
-console.log(`✅ [LOADER] Loaded ${Object.keys(commands).length - 1} commands with prefix "${config.prefix}"`);
+// Count total commands loaded (excluding the 'reload' method)
+const commandCount = Object.keys(commands).filter(k => k !== 'reload').length;
+console.log(`✅ [LOADER] Loaded ${commandCount} commands with prefix "${config.prefix}"`);
