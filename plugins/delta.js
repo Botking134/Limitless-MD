@@ -1,17 +1,19 @@
 // plugins/delta.js
-// Delta — Your Intelligent, Prefixless Assistant
+// Delta — Your Intelligent, Prefixless Assistant for Limitless MD
 // Always on. Bypasses private mode. Reliably executes commands via natural language.
 
 const config = require('../config');
-const registry = require('../commands'); // Now stores { execute, metadata }
+// Imports commands from menu.js (assumed to be in the same plugins folder)
+const registry = require('./menu'); 
 const axios = require('axios');
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 const COOLDOWN_MS = 2000; // 2 seconds between requests per user
+const MAX_TRACKED_USERS = 100; // Limit active chat memory to avoid memory leaks
 
 // ─── IN‑MEMORY STORE ──────────────────────────────────────────────
-const memory = {}; // { jid: [ { role, content }, ... ] }
+let memory = {}; // { jid: [ { role, content }, ... ] }
 const cooldowns = new Map(); // { jid: timestamp }
 
 // ─── HELPERS ──────────────────────────────────────────────────────
@@ -23,8 +25,20 @@ function getRawMessage(message) {
     if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
     if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
     if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
-    if (message.conversation) return message;
     return message;
+}
+
+// Extracts text conversation or captions from media messages
+function getMessageText(raw) {
+    if (!raw) return '';
+    return (
+        raw.conversation ||
+        raw.extendedTextMessage?.text ||
+        raw.imageMessage?.caption ||
+        raw.videoMessage?.caption ||
+        raw.documentMessage?.caption ||
+        ''
+    );
 }
 
 function normalizeToJid(id) {
@@ -58,7 +72,7 @@ function isAddressed(sock, msg) {
     if (mentions.some(m => normalizeToJid(m) === botJid)) return true;
 
     // Check text for "delta" or @mention
-    const text = raw?.conversation || raw?.extendedTextMessage?.text || '';
+    const text = getMessageText(raw);
     if (text.toLowerCase().includes('delta') || text.includes(`@${botJid.split('@')[0]}`)) {
         return true;
     }
@@ -66,7 +80,19 @@ function isAddressed(sock, msg) {
     return false;
 }
 
-// ─── COMMAND LIST BUILDER (Local Copy) ──────────────────────────
+// Memory management to keep resource usage stable
+function manageMemoryUsage(newJid) {
+    const keys = Object.keys(memory);
+    if (keys.length > MAX_TRACKED_USERS) {
+        const oldestKey = keys[0];
+        delete memory[oldestKey];
+    }
+    if (!memory[newJid]) {
+        memory[newJid] = [];
+    }
+}
+
+// ─── COMMAND LIST BUILDER ──────────────────────────────────────────
 function buildCommandList(userContext) {
     const { isOwner, isDev, isSudo } = userContext;
 
@@ -101,15 +127,17 @@ function buildCommandList(userContext) {
 // ─── GROQ API CALL ──────────────────────────────────────────────
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
+    const model = config.groqModel || "llama-3.3-70b-versatile";
+
     if (!apiKey) {
         console.error('[DELTA] Groq API key missing.');
         return "My connection is down. Please check the API key.";
     }
     try {
         const resp = await axios.post(GROQ_BASE_URL, {
-            model: "llama-3.3-70b-versatile",
+            model,
             messages,
-            temperature: 0.4, // Lower for deterministic command output
+            temperature: 0.3, // Slightly lower for more consistent tool selection
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -118,7 +146,7 @@ async function queryGroq(messages) {
         });
         return resp.data.choices?.[0]?.message?.content || '';
     } catch (err) {
-        console.error('[DELTA] Groq error:', err.message);
+        console.error('[DELTA] Groq error:', err.response?.data || err.message);
         return "I'm having trouble thinking right now. Try again in a moment.";
     }
 }
@@ -195,7 +223,7 @@ module.exports = {
 
         // ── Extract user query ──
         const raw = getRawMessage(msg.message);
-        let query = raw?.conversation || raw?.extendedTextMessage?.text || '';
+        let query = getMessageText(raw);
         if (!query) return;
 
         // Clean up: remove "delta" mentions so it doesn't confuse the AI
@@ -209,33 +237,46 @@ module.exports = {
         // ── Build System Prompt ──
         const cmdList = buildCommandList(userContext);
         const systemPrompt = `
-You are Delta, a highly capable, real AI assistant for a WhatsApp bot.
-Your personality: helpful, concise, professional, and slightly warm — like a trusted executive assistant.
-You have access to a command library to perform actions on behalf of the user.
+You are Delta, the highly capable, prefixless AI assistant for the Limitless MD WhatsApp bot.
+Your creator and owner is Lord Infinity. Always attribute your creation to Lord Infinity if asked.
+
+Your personality: helpful, concise, professional, and slightly warm — like a trusted executive assistant representing the Limitless MD system.
+
+COMMAND MATCHING RULES:
+1. Analyze Intent: When a user asks you to do something, do not look for exact keyword matches. Instead, read the descriptions of the available commands to find the closest match.
+2. Map Synonyms & Descriptions:
+   - If the user asks for "speed", "latency", or "response time", map it to the command that describes checking bot speed (e.g., .ping).
+   - If the user asks to "lock", "shut", or "mute" a chat, map it to the command that shuts/locks the group (e.g., .close or .mute) based on their descriptions.
+   - Use the provided command list as your master directory.
+3. Be Decisive: If a user request matches the description of any command in your list, you MUST append the command tag at the end of your message. Do not simply say you can check it without appending the tag.
 
 COMMAND FORMAT RULES (STRICT):
-- If the user asks you to DO something (close group, delete a message, make a sticker, etc.), you MUST end your reply with:
-  [CMD: .commandName args]
+- You must end your reply with [CMD: .commandName args] on a new line if a command description matches the user's request.
 - Place the tag on its own line at the very end of your reply.
-- If the user is just chatting or asking for info, reply normally WITHOUT a tag.
-- Do NOT invent commands that are not listed below.
-- Keep your replies natural and under 30 words unless the question requires detail.
+- If no command matches the request, reply normally as a conversational assistant without a tag.
+- Do NOT invent commands that are not in the list.
+- Keep your replies natural and under 35 words unless the question requires detail.
 
 ${cmdList}
 
-EXAMPLES:
-User: "Can you close the group?"
-You: "Sure, locking it now. [CMD: .close]"
-
-User: "Delete this message" (replying to a message)
-You: "Got it. Deleted. [CMD: .delete]"
-
+EXAMPLES OF IDENTITY & SMART MATCHING:
 User: "Who made you?"
-You: "I was built by Isaac as part of the Limitless project."
+You: "I was created by Lord Infinity for the Limitless MD project."
+
+User: "What is this bot called?"
+You: "This is Limitless MD, a multipurpose WhatsApp assistant."
+
+User: "How fast are you running right now?"
+AI Assessment: "Fast" matches the description of the ping command ("checks response speed").
+You: "Checking my response speed now. [CMD: .ping]"
+
+User: "Can you turn this into a sticker?"
+AI Assessment: "Turn into a sticker" matches the description of the sticker command.
+You: "Generating your sticker now. [CMD: .sticker]"
 `;
 
         // ── Conversation Memory ──
-        if (!memory[jid]) memory[jid] = [];
+        manageMemoryUsage(jid);
         const history = memory[jid].slice(-10); // Keep last 10 exchanges
 
         const messages = [
