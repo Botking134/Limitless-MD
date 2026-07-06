@@ -1,17 +1,17 @@
 // helpers/GameInterceptors.js
-
-
 const config = require('../config');
 const { getRawMessage } = require('./Message');
 
 // Handles text reply redirections for Vault 8, Escape, Guess, Millionaire, TTT, Anagrams, etc.
-function handleGameRedirects(sock, msg, quotedMsg, trimmedMessageBody) {
-    // Strict null-guard to prevent crashes on non-reply messages
-    if (!quotedMsg) return null;
+function handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody) {
+    // Guard: If there is no quoted message payload, exit immediately
+    if (!contextInfo || !contextInfo.quotedMessage) return null;
 
-    const quotedRaw = getRawMessage(quotedMsg.message) || quotedMsg.message;
+    const quotedRaw = getRawMessage(contextInfo.quotedMessage) || contextInfo.quotedMessage;
     const quotedText = quotedRaw?.conversation || 
                        quotedRaw?.extendedTextMessage?.text || 
+                       quotedRaw?.imageMessage?.caption || 
+                       quotedRaw?.videoMessage?.caption || 
                        '';
 
     if (quotedText) {
