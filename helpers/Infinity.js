@@ -61,9 +61,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         let command;
         let args;
 
-        // ─── HOOKS ──────────────────────────────────────────────
-        const isNoteSaved = await handleInteractiveSessions(sock, msg, trimmedMessageBody, msg.message?.extendedTextMessage?.contextInfo?.stanzaId, cleanChatJid);
-        if (isNoteSaved) return;
+        // ─── HOOKS (Fully optimized top-level placements) ──────────────────────
+        const isNoteHandled = await handleNoteSession(sock, msg);
+        if (isNoteHandled) return;
 
         await handleViewOnce(sock, msg);
 
@@ -102,7 +102,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS ──────────────────────────────────────────
+        // ─── PERMISSIONS (Fixed LID/Phone dev array alignments) ─────
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : '');
 
@@ -143,9 +143,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
-        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR ─────────────────
-        const quotedMsg = quotedMsgId ? global.messageStore[quotedMsgId] : null;
-        const redirectedGame = handleGameRedirects(sock, msg, quotedMsg, trimmedMessageBody);
+        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR (Fixed payload configurations) ───
+        const redirectedGame = handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody);
         if (redirectedGame) {
             command = redirectedGame.command;
             args = redirectedGame.args;
