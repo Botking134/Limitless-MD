@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const remindersPath = path.join(__dirname, '../storage/reminders.json');
+const notesPath = path.join(__dirname, '../storage/notes.json');
 
 // ─── DECOUPLED REMINDERS STORAGE HANDLERS ───────────────────────
 
@@ -12,7 +13,7 @@ function readReminders() {
     try {
         if (fs.existsSync(remindersPath)) {
             const data = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
-            if (Array.isArray(data)) return data; // Strictly verify array layout
+            if (Array.isArray(data)) return data; 
         }
     } catch (e) { /* ignore */ }
     return [];
@@ -24,6 +25,59 @@ function saveReminders(reminders) {
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8');
     } catch (e) { /* ignore */ }
+}
+
+// ─── DECOUPLED STICKY NOTES STORAGE HANDLERS ─────────────────────
+
+function readNotes() {
+    try {
+        if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
+    } catch (e) { /* ignore */ }
+    return {};
+}
+
+function saveNotes(notes) {
+    try {
+        const dir = path.dirname(notesPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
+    } catch (e) { /* ignore */ }
+}
+
+// ─── STICKY NOTE SESSION HANDLER ─────────────────────────────────
+async function handleNoteSession(sock, msg) {
+    try {
+        const jid = msg.key.remoteJid;
+        const rawContent = getRawMessage(msg.message);
+        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
+        
+        const contextInfo = rawContent?.extendedTextMessage?.contextInfo ||
+                            rawContent?.contextInfo ||
+                            msg.message?.contextInfo;
+        const quotedMsgId = contextInfo?.stanzaId;
+
+        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
+            const session = global.noteSessions[quotedMsgId];
+            const noteName = text.trim();
+            if (!noteName) return false;
+
+            const notes = readNotes();
+            notes[jid] = notes[jid] || {};
+            notes[jid][noteName.toLowerCase()] = {
+                title: noteName,
+                content: session.content,
+                author: session.author,
+                time: Date.now()
+            };
+            saveNotes(notes);
+            delete global.noteSessions[quotedMsgId];
+            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
+            return true;
+        }
+    } catch (e) {
+        console.error("Note session handler error:", e);
+    }
+    return false;
 }
 
 // ─── AFK DEACTIVATION INTERCEPTOR ──────────────────────────────
@@ -211,7 +265,6 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
                 key: {
                     remoteJid: jid,
                     id: session.originalMsgKey,
-                    // Participant is strictly forbidden on DM remoteJids
                     participant: jid.endsWith('@g.us') ? session.originalParticipant : undefined
                 },
                 message: session.msgToForward
@@ -255,11 +308,23 @@ async function handleDownloaderSessions(sock, msg, text, quotedMsgId) {
     return false;
 }
 
+// ─── GET RAW MESSAGE FALLBACK ────────────────────────────────────
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
 module.exports = {
     readReminders,
     saveReminders,
     registerSession,
     handleInteractiveSessions,
     handleDownloaderSessions,
-    handleAfkDeactivation
+    handleAfkDeactivation,
+    handleNoteSession
 };
