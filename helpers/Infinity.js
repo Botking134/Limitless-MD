@@ -31,7 +31,6 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
     if (typeof commands === 'object' && !Array.isArray(commands)) {
         const entry = commands[cleanCmd] || commands[baseName];
         if (entry) {
-            // Safely extracts the execute function if wrapped inside a metadata object
             commandFunction = typeof entry.execute === 'function' ? entry.execute : entry;
         }
     } else if (Array.isArray(commands)) {
@@ -75,7 +74,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
         const quotedMsgId = contextInfo?.stanzaId;
         
-        // Re-defined quotedMsg scope cleanly for the agent-detection checks below
         const quotedMsg = quotedMsgId ? global.messageStore[quotedMsgId] : null;
 
         const handled = await handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMsgId, cleanChatJid);
@@ -110,7 +108,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS ──────────────────────────────────────────
+        // ─── PERMISSIONS (Fixed LID/Phone dev array alignments) ─────
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : (config.botLid || ''));
 
@@ -244,6 +242,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }) || mentionsBotInText;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
+        const isDeltaCalled = /\bdelta\b/i.test(lowerMessage); // Case-insensitive Delta mention check
 
         let identifiedAgent = null;
 
@@ -258,8 +257,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 identifiedAgent = 'friday';
             }
             
+            // Gojo and Delta name checks remain the prefixless exceptions
             if (!identifiedAgent && isGojoCalled) {
                 identifiedAgent = 'gojo';
+            } else if (!identifiedAgent && isDeltaCalled) {
+                identifiedAgent = 'delta';
             }
         }
 
@@ -271,6 +273,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (identifiedAgent && !trimmedMessageBody.startsWith(config.prefix)) {
             if (identifiedAgent === 'gojo') {
                 command = 'gojo';
+                args = trimmedMessageBody;
+            } else if (identifiedAgent === 'delta') {
+                command = 'delta';
                 args = trimmedMessageBody;
             } else if (identifiedAgent === 'lizzy') {
                 command = 'lizzy_chat';
@@ -418,6 +423,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── AGENT CONTEXT ─────────────────────────────────────────
         if (command === 'gojo') global.activeAgentContext = 'gojo';
+        else if (command === 'delta') global.activeAgentContext = 'delta';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
         else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
         else if (command === 'friday_chat') global.activeAgentContext = 'friday';
