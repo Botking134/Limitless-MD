@@ -1,5 +1,4 @@
 // helpers/SessionManager.js
-
 const config = require('../config');
 const { saveState, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
@@ -7,11 +6,14 @@ const path = require('path');
 
 const remindersPath = path.join(__dirname, '../storage/reminders.json');
 
-// ─── DECOUPLED GC CHAT LOG HELPERS ───────────────────
+// ─── DECOUPLED REMINDERS STORAGE HANDLERS ───────────────────────
 
 function readReminders() {
     try {
-        if (fs.existsSync(remindersPath)) return JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
+        if (fs.existsSync(remindersPath)) {
+            const data = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
+            if (Array.isArray(data)) return data; // Strictly verify array layout
+        }
     } catch (e) { /* ignore */ }
     return [];
 }
@@ -209,6 +211,7 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
                 key: {
                     remoteJid: jid,
                     id: session.originalMsgKey,
+                    // Participant is strictly forbidden on DM remoteJids
                     participant: jid.endsWith('@g.us') ? session.originalParticipant : undefined
                 },
                 message: session.msgToForward
