@@ -6,21 +6,30 @@ const config = require('../config');
 const axios = require('axios');
 
 // ─── DYNAMIC REGISTRY LOADER ──────────────────────────────────────
-// Dynamically finds commands wherever your bot stores them in runtime memory.
+// Dynamically finds commands and prints discovered keys for debugging.
 function getRegistry() {
-    if (global.commands && Object.keys(global.commands).length > 0) return global.commands;
-    if (global.plugins && Object.keys(global.plugins).length > 0) return global.plugins;
-
-    try {
-        return require('./menu');
-    } catch (e) {
+    let registry = {};
+    if (global.commands && Object.keys(global.commands).length > 0) {
+        registry = global.commands;
+    } else if (global.plugins && Object.keys(global.plugins).length > 0) {
+        registry = global.plugins;
+    } else {
         try {
-            return require('../commands');
-        } catch (err) {
-            console.error('[DELTA] Could not locate commands registry source.');
-            return {};
+            registry = require('./menu');
+        } catch (e) {
+            try {
+                registry = require('../commands');
+            } catch (err) {
+                console.error('[DELTA] Could not locate commands registry source.');
+                registry = {};
+            }
         }
     }
+
+    // DIAGNOSTIC LOG: Prints every command Delta can find to your server console
+    console.log("[DELTA DEBUG] Active Registry Command Keys:", Object.keys(registry));
+    
+    return registry;
 }
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
