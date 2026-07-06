@@ -4,15 +4,58 @@
 
 const config = require('../config');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+
+// ─── MASTER CACHE ──────────────────────────────────────────────────
+let cachedRegistry = null;
+
+// ─── LOCAL DIRECTORY SCANNER ───────────────────────────────────────
+// Reads the plugins folder directly from disk to assemble your commands
+function loadLocalPlugins() {
+    const plugins = {};
+    try {
+        const files = fs.readdirSync(__dirname);
+        for (const file of files) {
+            if (file === 'delta.js' || !file.endsWith('.js')) continue;
+            try {
+                const pluginPath = path.join(__dirname, file);
+                const module = require(pluginPath);
+                
+                if (module && typeof module === 'object') {
+                    // Map command by its metadata name, fallback to file name
+                    const name = module.name || module.metadata?.name || path.basename(file, '.js');
+                    plugins[name] = module;
+                    
+                    // Support sub-command arrays or aliases if defined
+                    if (module.commands && Array.isArray(module.commands)) {
+                        for (const sub of module.commands) {
+                            plugins[sub] = module;
+                        }
+                    }
+                    if (module.metadata?.commands && Array.isArray(module.metadata.commands)) {
+                        for (const sub of module.metadata.commands) {
+                            plugins[sub] = module;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Ignore loading errors for individual broken plugins
+            }
+        }
+    } catch (err) {
+        console.error('[DELTA] Failed to scan local plugins directory:', err.message);
+    }
+    return plugins;
+}
 
 // ─── SELF-HEALING REGISTRY SCANNER ─────────────────────────────────
-// Scans the running process memory to find the exact object holding your commands
 function scanGlobalForRegistry() {
     const targetCommands = ['logs', 'delta', 'ping', 'menu', 'sticker'];
     const prefix = config.prefix || '⚡';
 
     for (const key of Object.keys(global)) {
-        if (key === 'commands' || key === 'plugins') continue; // Skip what we manually check next
+        if (key === 'commands' || key === 'plugins') continue;
         const val = global[key];
         if (!val || typeof val !== 'object') continue;
 
@@ -28,7 +71,6 @@ function scanGlobalForRegistry() {
         if (hasTarget) {
             const keysCount = isMap ? val.size : Object.keys(val).length;
             if (keysCount > 2) {
-                console.log(`[DELTA DEBUG] Auto-detected master commands registry at: global.${key} (${isMap ? 'Map' : 'Object'}, size: ${keysCount})`);
                 return val;
             }
         }
@@ -36,35 +78,56 @@ function scanGlobalForRegistry() {
     return null;
 }
 
-// ─── DYNAMIC REGISTRY LOADER ──────────────────────────────────────
-function getRegistry() {
-    let registry = {};
-
-    // 1. Try to auto-detect the real command registry in memory
-    const scanned = scanGlobalForRegistry();
-    if (scanned) return scanned;
-
-    // 2. Standard fallbacks
-    if (global.commands && (Object.keys(global.commands).length > 0 || global.commands instanceof Map)) {
-        registry = global.commands;
-    } else if (global.plugins && (Object.keys(global.plugins).length > 0 || global.plugins instanceof Map)) {
-        registry = global.plugins;
-    } else {
-        try {
-            registry = require('./menu');
-        } catch (e) {
-            try {
-                registry = require('../commands');
-            } catch (err) {
-                console.error('[DELTA] Could not locate commands registry source.');
-                registry = {};
-            }
+// Helper to safely merge Maps or Objects into our master registry
+function mergeIntoRegistry(target, source) {
+    if (!source) return;
+    const isMap = source instanceof Map;
+    const entries = isMap ? Array.from(source.entries()) : Object.entries(source);
+    for (const [key, val] of entries) {
+        if (key && typeof key === 'string') {
+            target[key] = val;
         }
     }
+}
 
-    const keys = registry instanceof Map ? Array.from(registry.keys()) : Object.keys(registry);
-    console.log(`[DELTA DEBUG] Fallback registry contains ${keys.length} keys.`);
-    
+// ─── MASTER REGISTRY BUILDER ──────────────────────────────────────
+function getRegistry() {
+    if (cachedRegistry) return cachedRegistry;
+
+    const registry = {};
+
+    // 1. Scan filesystem directory for peer plugin files (Highest reliability)
+    const localPlugins = loadLocalPlugins();
+    Object.assign(registry, localPlugins);
+
+    // 2. Scan active process memory as backup
+    const scanned = scanGlobalForRegistry();
+    mergeIntoRegistry(registry, scanned);
+
+    // 3. Fallback standard global holders
+    mergeIntoRegistry(registry, global.commands);
+    mergeIntoRegistry(registry, global.plugins);
+
+    // 4. File fallbacks
+    try {
+        const fileMenu = require('./menu');
+        mergeIntoRegistry(registry, fileMenu);
+    } catch (e) {}
+
+    try {
+        const fileCommands = require('../commands');
+        mergeIntoRegistry(registry, fileCommands);
+    } catch (e) {}
+
+    const keys = Object.keys(registry);
+    console.log(`[DELTA DEBUG] Master Registry Compiled. Total commands: ${keys.length}`);
+    console.log(`[DELTA DEBUG] Discovered Keys:`, keys);
+
+    // Cache the completed registry if it includes system commands
+    if (keys.includes('logs') || keys.includes('ping') || keys.includes('menu')) {
+        cachedRegistry = registry;
+    }
+
     return registry;
 }
 
