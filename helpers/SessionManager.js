@@ -1,19 +1,17 @@
 // helpers/SessionManager.js
 
 const config = require('../config');
-const { saveState } = require('../stateManager');
+const { saveState, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
 
 const remindersPath = path.join(__dirname, '../storage/reminders.json');
 
-// ─── DECOUPLED REMINDERS STORAGE HANDLERS ───────────────────────
+// ─── DECOUPLED GC CHAT LOG HELPERS ───────────────────
 
 function readReminders() {
     try {
-        if (fs.existsSync(remindersPath)) {
-            return JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
-        }
+        if (fs.existsSync(remindersPath)) return JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
     } catch (e) { /* ignore */ }
     return [];
 }
@@ -24,6 +22,22 @@ function saveReminders(reminders) {
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8');
     } catch (e) { /* ignore */ }
+}
+
+// ─── AFK DEACTIVATION INTERCEPTOR ──────────────────────────────
+async function handleAfkDeactivation(sock, msg) {
+    const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+    if (!senderJid) return false;
+
+    if (config.afk && config.afk[senderJid]) {
+        delete config.afk[senderJid];
+        saveState();
+        await sock.sendMessage(msg.key.remoteJid, {
+            text: `👋 *Welcome back!* Your AFK mode has been deactivated.`
+        }, { quoted: msg });
+        return true;
+    }
+    return false;
 }
 
 // ─── SESSION REGISTER ───────────────────────────────────────────
@@ -38,10 +52,9 @@ function registerSession(sessionType, promptId, data) {
     const registry = registries[sessionType];
     if (registry) {
         registry[promptId] = data;
-        // Auto-delete session after 5 minutes to prevent RAM leaks
         setTimeout(() => {
             if (registry[promptId]) delete registry[promptId];
-        }, 5 * 60 * 1000);
+        }, 5 * 60 * 1000); 
     }
 }
 
@@ -173,7 +186,7 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
         }
     }
 
-    // ─── FORWARD SESSION (Fixed XML-not-well-formed validation) ──
+    // ─── FORWARD SESSION (Fixed native copyNForward payload delivery) ──
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
         try {
             const target = text.trim();
@@ -196,7 +209,6 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
                 key: {
                     remoteJid: jid,
                     id: session.originalMsgKey,
-                    // Participant is strictly forbidden on DM remoteJids
                     participant: jid.endsWith('@g.us') ? session.originalParticipant : undefined
                 },
                 message: session.msgToForward
@@ -245,5 +257,6 @@ module.exports = {
     saveReminders,
     registerSession,
     handleInteractiveSessions,
-    handleDownloaderSessions
+    handleDownloaderSessions,
+    handleAfkDeactivation
 };
