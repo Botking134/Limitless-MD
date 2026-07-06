@@ -10,7 +10,20 @@ const path = require('path');
 // ─── MASTER CACHE ──────────────────────────────────────────────────
 let cachedRegistry = null;
 
+// ─── DYNAMIC PREFIX RESOLVER ───────────────────────────────────────
+// Resolves active prefix (handles string, array of prefixes, or fallback)
+function getPrefix() {
+    if (config.prefix) {
+        if (Array.isArray(config.prefix)) {
+            return config.prefix[0] || '.';
+        }
+        return config.prefix;
+    }
+    return '.'; // Safe standard fallback
+}
+
 // ─── RECURSIVE DIRECTORY SCANNER ───────────────────────────────────
+// Recursively scans the plugins directory to auto-compile all command files
 function loadPluginsFromDir(dir, plugins = {}) {
     try {
         const files = fs.readdirSync(dir);
@@ -67,7 +80,7 @@ function loadPluginsFromDir(dir, plugins = {}) {
 // ─── SELF-HEALING REGISTRY SCANNER ─────────────────────────────────
 function scanGlobalForRegistry() {
     const targetCommands = ['logs', 'uriel', 'ping', 'menu', 'sticker'];
-    const prefix = config.prefix || '⚡';
+    const prefix = getPrefix();
 
     for (const key of Object.keys(global)) {
         if (key === 'commands' || key === 'plugins') continue;
@@ -238,7 +251,7 @@ function manageMemoryUsage(newJid) {
     }
 }
 
-// Manually decorates msg.quoted if the framework bypassed it on prefixless triggers
+// Manually structures msg.quoted on prefixless sentences so plugins can read context safely
 function decorateQuotedMessage(msg) {
     if (!msg || msg.quoted) return;
 
@@ -267,7 +280,7 @@ function decorateQuotedMessage(msg) {
 function buildCommandList(userContext) {
     const registry = getRegistry();
     const { isOwner, isDev, isSudo } = userContext;
-    const prefix = config.prefix || '⚡';
+    const prefix = getPrefix();
 
     const allowed = new Set(['public']);
     if (isSudo || isDev || isOwner) allowed.add('sudo');
@@ -290,7 +303,6 @@ function buildCommandList(userContext) {
         if (!categories[cat]) categories[cat] = [];
         
         const display = meta.isPrefixless ? key : `${prefix}${key}`;
-        const usage = meta.usage || display;
         categories[cat].push(`  ${display} — ${meta.description || 'No description'}`);
     }
 
@@ -350,7 +362,7 @@ function extractCommandTag(text) {
 async function executeCommand(tag, sock, msg, userContext) {
     const registry = getRegistry();
     const { command, args } = tag;
-    const prefix = config.prefix || '⚡';
+    const prefix = getPrefix();
     const isMap = registry instanceof Map;
 
     const cleanCommandName = command.toLowerCase().replace(prefix, '');
@@ -363,7 +375,7 @@ async function executeCommand(tag, sock, msg, userContext) {
     }
 
     if (!entry) {
-        console.warn(`[URIEL] Command not found in compiled registry: "${cleanCommandName}".`);
+        console.warn(`[URIEL] Command not found in registry: "${cleanCommandName}".`);
         return null;
     }
 
@@ -382,12 +394,13 @@ async function executeCommand(tag, sock, msg, userContext) {
         return null;
     }
 
-    // Explicitly rebuild msg.quoted helper if the framework bypassed decoration
+    // Decorate the quoted message properties manually before execution
     decorateQuotedMessage(msg);
 
+    // Pass args strictly as a String so commands can run .trim() safely
     const executionContext = {
-        args: args, // Passed as raw String to prevent crash on commands calling `.trim()`
-        text: args, // Passed as raw String
+        args: args, // String representation
+        text: args, // String representation
         prefix: prefix,
         command: cleanCommandName,
         isOwner,
@@ -397,7 +410,7 @@ async function executeCommand(tag, sock, msg, userContext) {
     };
 
     try {
-        console.log(`[URIEL] Executing compiled plugin: "${cleanCommandName}" with args: "${args}"`);
+        console.log(`[URIEL] Executing command: "${cleanCommandName}" with args: "${args}"`);
         await entry.execute(sock, msg, executionContext, args, userContext);
         return true;
     } catch (err) {
@@ -411,11 +424,6 @@ async function executeCommand(tag, sock, msg, userContext) {
 module.exports = {
     name: 'uriel',
     isPrefixless: true,
-    isPublic: true,        // Bypasses private mode
-    onlyOwner: false,      // Bypasses private mode
-    alwaysOnline: true,    // Bypasses private mode
-    on: 'message',         // Intercepts replies and mentions anywhere in the chat
-    noPrefix: true,        // Intercepts replies and mentions anywhere in the chat
     category: 'ai',
     permission: 'public',
     execute: async (sock, msg, args, userContext) => {
@@ -441,7 +449,7 @@ module.exports = {
         }
 
         const cmdList = buildCommandList(userContext);
-        const prefix = config.prefix || '⚡';
+        const prefix = getPrefix();
         
         const systemPrompt = `
 You are Uriel, an extremely human, warm, and casual AI assistant for the Limitless MD WhatsApp bot.
