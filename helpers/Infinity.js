@@ -5,9 +5,9 @@ const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { handleViewOnce } = require('./log');
 
-// Sub-module imports
+// Sub-module imports (Included handleAfkDeactivation import)
 const { getRawMessage, cleanJid, extractBodyAndTrim, readUserStats, saveUserStats } = require('./Message');
-const { handleInteractiveSessions, handleDownloaderSessions } = require('./SessionManager');
+const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation } = require('./SessionManager');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 const { readGcLogs, saveGcLogs, triggerSummary } = require('./Summary');
