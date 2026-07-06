@@ -3,14 +3,32 @@
 // Always on. Bypasses private mode. Reliably executes commands via natural language.
 
 const config = require('../config');
-// Imports commands from menu.js (assumed to be in the same plugins folder)
-const registry = require('./menu'); 
 const axios = require('axios');
+
+// ─── DYNAMIC REGISTRY LOADER ──────────────────────────────────────
+// This helper tries to find your commands wherever your bot stores them.
+function getRegistry() {
+    // 1. Check common global objects used by WhatsApp bots
+    if (global.commands && Object.keys(global.commands).length > 0) return global.commands;
+    if (global.plugins && Object.keys(global.plugins).length > 0) return global.plugins;
+
+    // 2. Fallback to local files
+    try {
+        return require('./menu');
+    } catch (e) {
+        try {
+            return require('../commands');
+        } catch (err) {
+            console.error('[DELTA] Could not locate commands registry source.');
+            return {};
+        }
+    }
+}
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 const COOLDOWN_MS = 2000; // 2 seconds between requests per user
-const MAX_TRACKED_USERS = 100; // Limit active chat memory to avoid memory leaks
+const MAX_TRACKED_USERS = 100;
 
 // ─── IN‑MEMORY STORE ──────────────────────────────────────────────
 let memory = {}; // { jid: [ { role, content }, ... ] }
@@ -28,7 +46,6 @@ function getRawMessage(message) {
     return message;
 }
 
-// Extracts text conversation or captions from media messages
 function getMessageText(raw) {
     if (!raw) return '';
     return (
@@ -49,7 +66,6 @@ function normalizeToJid(id) {
 function isAddressed(sock, msg) {
     const jid = msg.key.remoteJid;
 
-    // Private chat = always addressed
     if (jid.endsWith('@s.whatsapp.net') && !jid.includes('g.us')) return true;
 
     const raw = getRawMessage(msg.message);
@@ -61,17 +77,14 @@ function isAddressed(sock, msg) {
 
     const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
 
-    // Check reply to bot
     if (contextInfo?.participant) {
         const quoted = normalizeToJid(contextInfo.participant);
         if (quoted === botJid) return true;
     }
 
-    // Check mentions
     const mentions = contextInfo?.mentionedJid || [];
     if (mentions.some(m => normalizeToJid(m) === botJid)) return true;
 
-    // Check text for "delta" or @mention
     const text = getMessageText(raw);
     if (text.toLowerCase().includes('delta') || text.includes(`@${botJid.split('@')[0]}`)) {
         return true;
@@ -80,7 +93,6 @@ function isAddressed(sock, msg) {
     return false;
 }
 
-// Memory management to keep resource usage stable
 function manageMemoryUsage(newJid) {
     const keys = Object.keys(memory);
     if (keys.length > MAX_TRACKED_USERS) {
@@ -94,6 +106,7 @@ function manageMemoryUsage(newJid) {
 
 // ─── COMMAND LIST BUILDER ──────────────────────────────────────────
 function buildCommandList(userContext) {
+    const registry = getRegistry();
     const { isOwner, isDev, isSudo } = userContext;
 
     const allowed = new Set(['public']);
@@ -105,9 +118,11 @@ function buildCommandList(userContext) {
 
     for (const [key, entry] of Object.entries(registry)) {
         if (key === 'reload') continue;
-        const meta = entry.metadata;
+        const meta = entry.metadata || entry; // Support direct object mapping
         if (!meta) continue;
-        if (!allowed.has(meta.permission)) continue;
+        
+        const permission = meta.permission || 'public';
+        if (!allowed.has(permission)) continue;
 
         const cat = meta.category || 'tools';
         if (!categories[cat]) categories[cat] = [];
@@ -137,7 +152,7 @@ async function queryGroq(messages) {
         const resp = await axios.post(GROQ_BASE_URL, {
             model,
             messages,
-            temperature: 0.3, // Slightly lower for more consistent tool selection
+            temperature: 0.3,
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -166,16 +181,17 @@ function extractCommandTag(text) {
 
 // ─── SECURE COMMAND EXECUTOR ─────────────────────────────────────
 async function executeCommand(tag, sock, msg, userContext) {
+    const registry = getRegistry();
     const { command, args } = tag;
+    
+    // Find command by raw name or dot prefix
     const entry = registry[command] || registry[`.${command}`];
     if (!entry) {
-        console.warn(`[DELTA] Unknown command: ${command}`);
+        console.warn(`[DELTA] Command matching tag not found in active registry: "${command}"`);
         return null;
     }
 
-    const meta = entry.metadata;
-    if (!meta) return null;
-
+    const meta = entry.metadata || entry;
     const { isOwner, isDev, isSudo } = userContext;
     let allowed = false;
     const perm = meta.permission || 'public';
@@ -186,15 +202,16 @@ async function executeCommand(tag, sock, msg, userContext) {
     else if (perm === 'owner' && (isOwner || isDev)) allowed = true;
 
     if (!allowed) {
-        console.warn(`[DELTA] Permission denied for ${command} (requires ${perm})`);
+        console.warn(`[DELTA] Permission denied for execution of: ${command}`);
         return null;
     }
 
     try {
+        console.log(`[DELTA] Executing registered command: ${command} with args: "${args}"`);
         await entry.execute(sock, msg, args, userContext);
         return true;
     } catch (err) {
-        console.error(`[DELTA] Execution failed for ${command}:`, err.message);
+        console.error(`[DELTA] Execution failed for command ${command}:`, err.message);
         return false;
     }
 }
@@ -211,22 +228,18 @@ module.exports = {
         const jid = msg.key.remoteJid;
         const sender = msg.key.participant || jid;
 
-        // ── Cooldown (prevent spam) ──
         const now = Date.now();
         if (cooldowns.has(sender) && now - cooldowns.get(sender) < COOLDOWN_MS) {
-            return; // Silent ignore
+            return;
         }
         cooldowns.set(sender, now);
 
-        // ── Addressing Check ──
         if (!isAddressed(sock, msg)) return;
 
-        // ── Extract user query ──
         const raw = getRawMessage(msg.message);
         let query = getMessageText(raw);
         if (!query) return;
 
-        // Clean up: remove "delta" mentions so it doesn't confuse the AI
         query = query.replace(/@?delta\s*/gi, '').trim();
 
         if (!query) {
@@ -234,7 +247,6 @@ module.exports = {
             return;
         }
 
-        // ── Build System Prompt ──
         const cmdList = buildCommandList(userContext);
         const systemPrompt = `
 You are Delta, the highly capable, prefixless AI assistant for the Limitless MD WhatsApp bot.
@@ -275,9 +287,8 @@ AI Assessment: "Turn into a sticker" matches the description of the sticker comm
 You: "Generating your sticker now. [CMD: .sticker]"
 `;
 
-        // ── Conversation Memory ──
         manageMemoryUsage(jid);
-        const history = memory[jid].slice(-10); // Keep last 10 exchanges
+        const history = memory[jid].slice(-10);
 
         const messages = [
             { role: 'system', content: systemPrompt },
@@ -285,28 +296,27 @@ You: "Generating your sticker now. [CMD: .sticker]"
             { role: 'user', content: query }
         ];
 
-        // ── AI Processing ──
         await sock.sendPresenceUpdate('composing', jid);
         const response = await queryGroq(messages);
 
-        // ── Parse Tag ──
+        // Debug logging to your terminal console
+        console.log(`[DELTA] Raw Response: "${response}"`);
+
         const tag = extractCommandTag(response);
         let cleanReply = response;
         if (tag) {
             cleanReply = response.replace(/\[CMD:.*?\]/, '').trim();
+            console.log(`[DELTA] Parsed Tag:`, tag);
         }
 
-        // ── Send Reply ──
         if (cleanReply) {
             await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
         }
 
-        // ── Update Memory ──
         memory[jid].push({ role: 'user', content: query });
         memory[jid].push({ role: 'assistant', content: cleanReply || response });
         if (memory[jid].length > 30) memory[jid].splice(0, 10);
 
-        // ── Execute Command (Bypasses private mode) ──
         if (tag) {
             await executeCommand(tag, sock, msg, userContext);
         }
