@@ -4,6 +4,11 @@
 
 const config = require('../config');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+
+// ─── MASTER CACHE ──────────────────────────────────────────────────
+let cachedRegistry = null;
 
 // ─── DYNAMIC PREFIX RESOLVER ───────────────────────────────────────
 function getPrefix() {
@@ -16,8 +21,46 @@ function getPrefix() {
     return '.'; 
 }
 
+// ─── LOCAL DIRECTORY SCANNER ───────────────────────────────────────
+// Reads the plugins folder directly from disk to assemble your commands
+function loadLocalPlugins() {
+    const plugins = {};
+    try {
+        const files = fs.readdirSync(__dirname);
+        for (const file of files) {
+            if (file === 'uriel.js' || !file.endsWith('.js')) continue;
+            try {
+                const pluginPath = path.join(__dirname, file);
+                const module = require(pluginPath);
+                
+                if (module && typeof module === 'object') {
+                    // Map command by its metadata name, fallback to file name
+                    const name = module.name || module.metadata?.name || path.basename(file, '.js');
+                    plugins[name] = module;
+                    
+                    // Support sub-command arrays or aliases if defined
+                    if (module.commands && Array.isArray(module.commands)) {
+                        for (const sub of module.commands) {
+                            plugins[sub] = module;
+                        }
+                    }
+                    if (module.metadata?.commands && Array.isArray(module.metadata.commands)) {
+                        for (const sub of module.metadata.commands) {
+                            plugins[sub] = module;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Ignore loading errors for individual broken plugins
+            }
+        }
+    } catch (err) {
+        console.error('[URIEL] Failed to scan local plugins directory:', err.message);
+    }
+    return plugins;
+}
+
 // ─── SELF-HEALING REGISTRY SCANNER ─────────────────────────────────
-// Scans active memory safely, ignoring protected properties that throw on read
 function scanGlobalForRegistry() {
     try {
         const targetCommands = ['logs', 'uriel', 'ping', 'menu', 'sticker'];
@@ -55,33 +98,56 @@ function scanGlobalForRegistry() {
     return null;
 }
 
-// ─── DYNAMIC REGISTRY LOADER ──────────────────────────────────────
-function getRegistry() {
-    let registry = {};
-
-    const scanned = scanGlobalForRegistry();
-    if (scanned) return scanned;
-
-    if (global.commands && (Object.keys(global.commands).length > 0 || global.commands instanceof Map)) {
-        registry = global.commands;
-    } else if (global.plugins && (Object.keys(global.plugins).length > 0 || global.plugins instanceof Map)) {
-        registry = global.plugins;
-    } else {
-        try {
-            registry = require('./menu');
-        } catch (e) {
-            try {
-                registry = require('../commands');
-            } catch (err) {
-                console.error('[URIEL] Could not locate commands registry source.');
-                registry = {};
-            }
+// Helper to safely merge Maps or Objects into our master registry
+function mergeIntoRegistry(target, source) {
+    if (!source) return;
+    const isMap = source instanceof Map;
+    const entries = isMap ? Array.from(source.entries()) : Object.entries(source);
+    for (const [key, val] of entries) {
+        if (key && typeof key === 'string') {
+            target[key] = val;
         }
     }
+}
 
-    const keys = registry instanceof Map ? Array.from(registry.keys()) : Object.keys(registry);
-    console.log(`[URIEL DEBUG] Fallback registry contains ${keys.length} keys.`);
-    
+// ─── MASTER REGISTRY BUILDER ──────────────────────────────────────
+function getRegistry() {
+    if (cachedRegistry) return cachedRegistry;
+
+    const registry = {};
+
+    // 1. Scan filesystem directory for peer plugin files (Highest reliability)
+    const localPlugins = loadLocalPlugins();
+    Object.assign(registry, localPlugins);
+
+    // 2. Scan active process memory as backup
+    const scanned = scanGlobalForRegistry();
+    mergeIntoRegistry(registry, scanned);
+
+    // 3. Fallback standard global holders
+    mergeIntoRegistry(registry, global.commands);
+    mergeIntoRegistry(registry, global.plugins);
+
+    // 4. File fallbacks
+    try {
+        const fileMenu = require('./menu');
+        mergeIntoRegistry(registry, fileMenu);
+    } catch (e) {}
+
+    try {
+        const fileCommands = require('../commands');
+        mergeIntoRegistry(registry, fileCommands);
+    } catch (e) {}
+
+    const keys = Object.keys(registry);
+    console.log(`[URIEL DEBUG] Master Registry Compiled. Total commands: ${keys.length}`);
+    console.log(`[URIEL DEBUG] Discovered Keys:`, keys);
+
+    // Cache the completed registry if it includes system commands
+    if (keys.includes('logs') || keys.includes('ping') || keys.includes('menu')) {
+        cachedRegistry = registry;
+    }
+
     return registry;
 }
 
@@ -163,7 +229,6 @@ function isAddressed(sock, msg) {
     }
 
     const text = getMessageText(msg).toLowerCase();
-    // Strict Uriel trigger
     if (text.includes('uriel')) {
         return true;
     }
@@ -262,7 +327,7 @@ async function queryGroq(messages) {
         const resp = await axios.post(GROQ_BASE_URL, {
             model,
             messages,
-            temperature: 0.5,
+            temperature: 0.3,
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -300,17 +365,20 @@ async function executeCommand(tag, sock, msg, userContext) {
     const prefix = getPrefix();
     const isMap = registry instanceof Map;
 
-    const cleanCommandName = command.toLowerCase().replace(prefix, '');
-
-    let entry = isMap ? registry.get(cleanCommandName) : registry[cleanCommandName];
+    let entry = isMap ? registry.get(command) : registry[command];
 
     if (!entry) {
-        const commandWithPrefix = `${prefix}${cleanCommandName}`;
-        entry = isMap ? registry.get(commandWithPrefix) : registry[commandWithPrefix];
+        if (command.startsWith(prefix)) {
+            const noPrefix = command.slice(prefix.length);
+            entry = isMap ? registry.get(noPrefix) : registry[noPrefix];
+        } else {
+            const withPrefix = `${prefix}${command}`;
+            entry = isMap ? registry.get(withPrefix) : registry[withPrefix];
+        }
     }
 
     if (!entry) {
-        console.warn(`[URIEL] Command not found in active registry: "${cleanCommandName}".`);
+        console.warn(`[URIEL] Command not found in active registry: "${command}".`);
         return null;
     }
 
@@ -325,19 +393,18 @@ async function executeCommand(tag, sock, msg, userContext) {
     else if (perm === 'owner' && (isOwner || isDev)) allowed = true;
 
     if (!allowed) {
-        console.warn(`[URIEL] Permission denied for execution of: ${cleanCommandName}`);
+        console.warn(`[URIEL] Permission denied for execution of: ${command}`);
         return null;
     }
 
-    // Decorate raw quoted message object if missing on prefixless triggers
     decorateQuotedMessage(msg);
 
-    // Pass args strictly as a String to satisfy plugins calling `.trim()`
+    const formattedArgs = args ? args.split(/\s+/) : [];
     const executionContext = {
-        args: args, // Fixed String argument mapping
-        text: args, // Passed as String
+        args: formattedArgs,
+        text: args,
         prefix: prefix,
-        command: cleanCommandName,
+        command: command.replace(prefix, ''),
         isOwner,
         isDev,
         isSudo,
@@ -357,7 +424,7 @@ async function executeCommand(tag, sock, msg, userContext) {
 // ─── COMMAND EXPORT ──────────────────────────────────────────────
 
 module.exports = {
-    name: 'uriel', // Fully Uriel branded
+    name: 'uriel',
     isPrefixless: true,
     category: 'ai',
     permission: 'public',
@@ -376,7 +443,6 @@ module.exports = {
         let query = getMessageText(msg);
         if (!query) return;
 
-        // Cleans out Uriel name references cleanly
         query = query.replace(/@?uriel\s*/gi, '').trim();
 
         if (!query) {
@@ -450,12 +516,7 @@ You: "Generating your sticker now. [CMD: ${prefix}sticker]"
             console.log(`[URIEL] Parsed Tag:`, tag);
         }
 
-        // ── Execute Command FIRST ──
-        if (tag) {
-            await executeCommand(tag, sock, msg, userContext);
-        }
-
-        // ── Send Reply SECOND ──
+        // Send Reply FIRST (from Delta's workflow)
         if (cleanReply) {
             await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
         }
@@ -463,5 +524,10 @@ You: "Generating your sticker now. [CMD: ${prefix}sticker]"
         memory[jid].push({ role: 'user', content: query });
         memory[jid].push({ role: 'assistant', content: cleanReply || response });
         if (memory[jid].length > 30) memory[jid].splice(0, 10);
+
+        // Execute Command SECOND (from Delta's workflow)
+        if (tag) {
+            await executeCommand(tag, sock, msg, userContext);
+        }
     }
 };
