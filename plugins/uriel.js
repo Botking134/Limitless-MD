@@ -353,7 +353,7 @@ async function queryGemini(messages) {
 
         const resp = await axios.post(url, payload, {
             headers: { 'Content-Type': 'application/json' },
-            timeout: 30000 // Extended to 30 seconds to absorb backend server latency spikes
+            timeout: 30000 
         });
         
         return resp.data.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -444,10 +444,18 @@ async function executeCommand(tag, sock, msg, userContext) {
         ...userContext
     };
 
+    // Safely resolve either raw-function style or object.execute style commands
+    const commandFunction = typeof entry.execute === 'function' ? entry.execute : entry;
+
+    if (typeof commandFunction !== 'function') {
+        console.warn(`[URIEL] Resolved entry for "${command}" is not a valid executable function.`);
+        return null;
+    }
+
     try {
         console.log(`[URIEL] Attempting execution of command: "${command}" with args: "${args}"`);
         // FIXED PARAMETER ALIGNMENT: (sock, msg, args, opts)
-        await entry.execute(sock, msg, args, executionContext);
+        await commandFunction(sock, msg, args, executionContext);
         return true;
     } catch (err) {
         console.error(`[URIEL] Execution failed for command "${command}":`, err.message);
@@ -564,4 +572,4 @@ You: "Generating your sticker now. [CMD: ${prefix}sticker]"
             await executeCommand(tag, sock, msg, userContext);
         }
     }
-}
+};
