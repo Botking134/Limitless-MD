@@ -1,4 +1,4 @@
-l// plugins/uriel.js
+// plugins/uriel.js
 // Uriel — Your Intelligent, Prefixless Assistant for Limitless MD
 // Always on. Bypasses private mode. Reliably executes commands via natural language.
 
@@ -17,31 +17,40 @@ function getPrefix() {
 }
 
 // ─── SELF-HEALING REGISTRY SCANNER ─────────────────────────────────
+// Scans active memory safely, ignoring protected properties that throw on read
 function scanGlobalForRegistry() {
-    const targetCommands = ['logs', 'uriel', 'ping', 'menu', 'sticker'];
-    const prefix = getPrefix();
+    try {
+        const targetCommands = ['logs', 'uriel', 'ping', 'menu', 'sticker'];
+        const prefix = getPrefix();
 
-    for (const key of Object.keys(global)) {
-        if (key === 'commands' || key === 'plugins') continue; 
-        const val = global[key];
-        if (!val || typeof val !== 'object') continue;
+        for (const key of Object.keys(global)) {
+            if (key === 'commands' || key === 'plugins') continue; 
+            try {
+                const val = global[key];
+                if (!val || typeof val !== 'object') continue;
 
-        const isMap = val instanceof Map;
-        const hasTarget = targetCommands.some(cmd => {
-            if (isMap) {
-                return val.has(cmd) || val.has(`.${cmd}`) || val.has(`${prefix}${cmd}`);
-            } else {
-                return val[cmd] || val[`.${cmd}`] || val[`${prefix}${cmd}`];
-            }
-        });
+                const isMap = val instanceof Map;
+                const hasTarget = targetCommands.some(cmd => {
+                    if (isMap) {
+                        return val.has(cmd) || val.has(`.${cmd}`) || val.has(`${prefix}${cmd}`);
+                    } else {
+                        return val[cmd] || val[`.${cmd}`] || val[`${prefix}${cmd}`];
+                    }
+                });
 
-        if (hasTarget) {
-            const keysCount = isMap ? val.size : Object.keys(val).length;
-            if (keysCount > 2) {
-                console.log(`[URIEL DEBUG] Auto-detected master commands registry at: global.${key} (${isMap ? 'Map' : 'Object'}, size: ${keysCount})`);
-                return val;
+                if (hasTarget) {
+                    const keysCount = isMap ? val.size : Object.keys(val).length;
+                    if (keysCount > 2) {
+                        console.log(`[URIEL DEBUG] Auto-detected master commands registry at: global.${key} (${isMap ? 'Map' : 'Object'}, size: ${keysCount})`);
+                        return val;
+                    }
+                }
+            } catch (innerErr) {
+                // Safely ignore secure getters
             }
         }
+    } catch (e) {
+        // Fallback gracefully
     }
     return null;
 }
@@ -154,6 +163,7 @@ function isAddressed(sock, msg) {
     }
 
     const text = getMessageText(msg).toLowerCase();
+    // Strict Uriel trigger
     if (text.includes('uriel')) {
         return true;
     }
@@ -347,7 +357,7 @@ async function executeCommand(tag, sock, msg, userContext) {
 // ─── COMMAND EXPORT ──────────────────────────────────────────────
 
 module.exports = {
-    name: 'uriel', // Command name is set to uriel
+    name: 'uriel', // Fully Uriel branded
     isPrefixless: true,
     category: 'ai',
     permission: 'public',
@@ -366,6 +376,7 @@ module.exports = {
         let query = getMessageText(msg);
         if (!query) return;
 
+        // Cleans out Uriel name references cleanly
         query = query.replace(/@?uriel\s*/gi, '').trim();
 
         if (!query) {
