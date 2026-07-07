@@ -4,14 +4,8 @@
 
 const config = require('../config');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-
-// ─── MASTER CACHE ──────────────────────────────────────────────────
-let cachedRegistry = null;
 
 // ─── DYNAMIC PREFIX RESOLVER ───────────────────────────────────────
-// Resolves active prefix (handles string, array of prefixes, or fallback)
 function getPrefix() {
     if (config.prefix) {
         if (Array.isArray(config.prefix)) {
@@ -19,62 +13,7 @@ function getPrefix() {
         }
         return config.prefix;
     }
-    return '.'; // Safe standard fallback
-}
-
-// ─── RECURSIVE DIRECTORY SCANNER ───────────────────────────────────
-// Recursively scans the plugins directory to auto-compile all command files
-function loadPluginsFromDir(dir, plugins = {}) {
-    try {
-        const files = fs.readdirSync(dir);
-        for (const file of files) {
-            const fullPath = path.join(dir, file);
-            const stat = fs.statSync(fullPath);
-
-            if (stat.isDirectory()) {
-                loadPluginsFromDir(fullPath, plugins);
-            } else if (file.endsWith('.js') && file !== 'uriel.js' && file !== 'delta.js') {
-                try {
-                    const module = require(fullPath);
-                    if (module && typeof module === 'object') {
-                        const name = module.name || module.metadata?.name || module.cmdName || path.basename(file, '.js');
-                        plugins[name.toLowerCase()] = module;
-
-                        const cmdTrigger = module.command || module.metadata?.command;
-                        if (cmdTrigger) {
-                            if (Array.isArray(cmdTrigger)) {
-                                for (const cmd of cmdTrigger) {
-                                    if (cmd && typeof cmd === 'string') plugins[cmd.toLowerCase()] = module;
-                                }
-                            } else if (typeof cmdTrigger === 'string') {
-                                plugins[cmdTrigger.toLowerCase()] = module;
-                            }
-                        }
-
-                        const aliases = module.commands || 
-                                        module.metadata?.commands || 
-                                        module.alias || 
-                                        module.metadata?.alias;
-                                        
-                        if (aliases) {
-                            if (Array.isArray(aliases)) {
-                                for (const alias of aliases) {
-                                    if (alias && typeof alias === 'string') plugins[alias.toLowerCase()] = module;
-                                }
-                            } else if (typeof aliases === 'string') {
-                                plugins[aliases.toLowerCase()] = module;
-                            }
-                        }
-                    }
-                } catch (e) {
-                    // Ignore syntax errors in other plugin files
-                }
-            }
-        }
-    } catch (err) {
-        console.error(`[URIEL] Failed to scan plugins directory ${dir}:`, err.message);
-    }
-    return plugins;
+    return '.'; 
 }
 
 // ─── SELF-HEALING REGISTRY SCANNER ─────────────────────────────────
@@ -83,7 +22,7 @@ function scanGlobalForRegistry() {
     const prefix = getPrefix();
 
     for (const key of Object.keys(global)) {
-        if (key === 'commands' || key === 'plugins') continue;
+        if (key === 'commands' || key === 'plugins') continue; 
         const val = global[key];
         if (!val || typeof val !== 'object') continue;
 
@@ -99,6 +38,7 @@ function scanGlobalForRegistry() {
         if (hasTarget) {
             const keysCount = isMap ? val.size : Object.keys(val).length;
             if (keysCount > 2) {
+                console.log(`[URIEL DEBUG] Auto-detected master commands registry at: global.${key} (${isMap ? 'Map' : 'Object'}, size: ${keysCount})`);
                 return val;
             }
         }
@@ -106,49 +46,33 @@ function scanGlobalForRegistry() {
     return null;
 }
 
-function mergeIntoRegistry(target, source) {
-    if (!source) return;
-    const isMap = source instanceof Map;
-    const entries = isMap ? Array.from(source.entries()) : Object.entries(source);
-    for (const [key, val] of entries) {
-        if (key && typeof key === 'string') {
-            target[key.toLowerCase()] = val;
-        }
-    }
-}
-
-// ─── MASTER REGISTRY BUILDER ──────────────────────────────────────
+// ─── DYNAMIC REGISTRY LOADER ──────────────────────────────────────
 function getRegistry() {
-    if (cachedRegistry) return cachedRegistry;
-
-    const registry = {};
-
-    const localPlugins = loadPluginsFromDir(__dirname, {});
-    Object.assign(registry, localPlugins);
+    let registry = {};
 
     const scanned = scanGlobalForRegistry();
-    mergeIntoRegistry(registry, scanned);
+    if (scanned) return scanned;
 
-    mergeIntoRegistry(registry, global.commands);
-    mergeIntoRegistry(registry, global.plugins);
-
-    try {
-        const fileMenu = require('./menu');
-        mergeIntoRegistry(registry, fileMenu);
-    } catch (e) {}
-
-    try {
-        const fileCommands = require('../commands');
-        mergeIntoRegistry(registry, fileCommands);
-    } catch (e) {}
-
-    const keys = Object.keys(registry);
-    console.log(`[URIEL DEBUG] Master Registry Compiled. Total commands: ${keys.length}`);
-
-    if (keys.includes('logs') || keys.includes('ping') || keys.includes('menu') || keys.includes('addnote')) {
-        cachedRegistry = registry;
+    if (global.commands && (Object.keys(global.commands).length > 0 || global.commands instanceof Map)) {
+        registry = global.commands;
+    } else if (global.plugins && (Object.keys(global.plugins).length > 0 || global.plugins instanceof Map)) {
+        registry = global.plugins;
+    } else {
+        try {
+            registry = require('./menu');
+        } catch (e) {
+            try {
+                registry = require('../commands');
+            } catch (err) {
+                console.error('[URIEL] Could not locate commands registry source.');
+                registry = {};
+            }
+        }
     }
 
+    const keys = registry instanceof Map ? Array.from(registry.keys()) : Object.keys(registry);
+    console.log(`[URIEL DEBUG] Fallback registry contains ${keys.length} keys.`);
+    
     return registry;
 }
 
@@ -303,7 +227,8 @@ function buildCommandList(userContext) {
         if (!categories[cat]) categories[cat] = [];
         
         const display = meta.isPrefixless ? key : `${prefix}${key}`;
-        categories[cat].push(`  ${display} — ${meta.description || 'No description'}`);
+        const usage = meta.usage || display;
+        categories[cat].push(`  ${usage} — ${meta.description || 'No description'}`);
     }
 
     let output = "AVAILABLE COMMANDS:\n\n";
@@ -365,17 +290,20 @@ async function executeCommand(tag, sock, msg, userContext) {
     const prefix = getPrefix();
     const isMap = registry instanceof Map;
 
-    const cleanCommandName = command.toLowerCase().replace(prefix, '');
-
-    let entry = isMap ? registry.get(cleanCommandName) : registry[cleanCommandName];
+    let entry = isMap ? registry.get(command) : registry[command];
 
     if (!entry) {
-        const commandWithPrefix = `${prefix}${cleanCommandName}`;
-        entry = isMap ? registry.get(commandWithPrefix) : registry[commandWithPrefix];
+        if (command.startsWith(prefix)) {
+            const noPrefix = command.slice(prefix.length);
+            entry = isMap ? registry.get(noPrefix) : registry[noPrefix];
+        } else {
+            const withPrefix = `${prefix}${command}`;
+            entry = isMap ? registry.get(withPrefix) : registry[withPrefix];
+        }
     }
 
     if (!entry) {
-        console.warn(`[URIEL] Command not found in registry: "${cleanCommandName}".`);
+        console.warn(`[URIEL] Command not found in active registry: "${command}".`);
         return null;
     }
 
@@ -390,19 +318,19 @@ async function executeCommand(tag, sock, msg, userContext) {
     else if (perm === 'owner' && (isOwner || isDev)) allowed = true;
 
     if (!allowed) {
-        console.warn(`[URIEL] Permission denied for execution of: ${cleanCommandName}`);
+        console.warn(`[URIEL] Permission denied for execution of: ${command}`);
         return null;
     }
 
-    // Decorate the quoted message properties manually before execution
+    // Decorate raw quoted message object if missing on prefixless triggers
     decorateQuotedMessage(msg);
 
-    // Pass args strictly as a String so commands can run .trim() safely
+    // Pass args strictly as a String to satisfy plugins calling `.trim()`
     const executionContext = {
-        args: args, // String representation
-        text: args, // String representation
+        args: args, // Fixed String argument mapping
+        text: args, // Passed as String
         prefix: prefix,
-        command: cleanCommandName,
+        command: command.replace(prefix, ''),
         isOwner,
         isDev,
         isSudo,
@@ -410,11 +338,11 @@ async function executeCommand(tag, sock, msg, userContext) {
     };
 
     try {
-        console.log(`[URIEL] Executing command: "${cleanCommandName}" with args: "${args}"`);
+        console.log(`[URIEL] Attempting execution of command: "${command}" with args: "${args}"`);
         await entry.execute(sock, msg, executionContext, args, userContext);
         return true;
     } catch (err) {
-        console.error(`[URIEL] Execution failed for command "${cleanCommandName}":`, err.message);
+        console.error(`[URIEL] Execution failed for command "${command}":`, err.message);
         return false;
     }
 }
