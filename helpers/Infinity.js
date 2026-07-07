@@ -12,6 +12,9 @@ const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handle
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 const { readGcLogs, saveGcLogs, triggerSummary } = require('./Summary');
 
+// Extract current active prefix safely supporting arrays
+const activePrefix = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+
 const ownerCommands = [
     'diagnose', 'update', 'mode', 'setsudo', 'delsudo',
     'restart', 'shutdown', 'ban', 'unban',
@@ -22,11 +25,11 @@ const ownerCommands = [
 const primaryOnlyCommands = ['addowner', 'delowner'];
 const devOnlyCommands = ['upgrade'];
 
-// ─── BULLETPROOF COMMAND EXECUTION HELPER (Fixed to support metadata objects) ───
+// ─── BULLETPROOF COMMAND EXECUTION HELPER (Fixed prefix alignment) ───
 async function executeBotCommand(cmdName, sock, msg, args, opts) {
     let commandFunction;
-    const cleanCmd = cmdName.startsWith(config.prefix) ? cmdName : `${config.prefix}${cmdName}`;
-    const baseName = cmdName.startsWith(config.prefix) ? cmdName.slice(config.prefix.length) : cmdName;
+    const cleanCmd = cmdName.startsWith(activePrefix) ? cmdName : `${activePrefix}${cmdName}`;
+    const baseName = cmdName.startsWith(activePrefix) ? cmdName.slice(activePrefix.length) : cmdName;
 
     if (typeof commands === 'object' && !Array.isArray(commands)) {
         const entry = commands[cleanCmd] || commands[baseName];
@@ -34,7 +37,7 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
             commandFunction = typeof entry.execute === 'function' ? entry.execute : entry;
         }
     } else if (Array.isArray(commands)) {
-        const targetCmd = commands.find(c => `${config.prefix}${c.name}` === cleanCmd || c.name === baseName);
+        const targetCmd = commands.find(c => `${activePrefix}${c.name}` === cleanCmd || c.name === baseName);
         if (targetCmd) commandFunction = targetCmd.execute;
     }
 
@@ -74,7 +77,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
         const quotedMsgId = contextInfo?.stanzaId;
         
-        const quotedMsg = quotedMsgId ? global.messageStore[quotedMsgId] : null;
+        // Safety check for messageStore presence
+        const quotedMsg = (quotedMsgId && global.messageStore) ? global.messageStore[quotedMsgId] : null;
 
         const handled = await handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMsgId, cleanChatJid);
         if (handled) return;
@@ -149,7 +153,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
-        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR (Fixed to pass contextInfo payload directly) ───
+        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR (Fixed target parameters) ───
         const redirectedGame = handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody);
         if (redirectedGame) {
             command = redirectedGame.command;
@@ -162,7 +166,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             userStats[jid] = userStats[jid] || {};
             userStats[jid][senderJid] = userStats[jid][senderJid] || { msgCount: 0, level: 11 };
 
-            const isCommand = trimmedMessageBody.startsWith(config.prefix);
+            const isCommand = trimmedMessageBody.startsWith(activePrefix);
             if (!isCommand && trimmedMessageBody.length > 0) {
                 userStats[jid][senderJid].msgCount += 1;
                 const newCount = userStats[jid][senderJid].msgCount;
@@ -242,11 +246,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }) || mentionsBotInText;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
-        const isDeltaCalled = /\bdelta\b/i.test(lowerMessage); // Case-insensitive Delta mention check
+        const isUrielCalled = /\buriel\b/i.test(lowerMessage); // Replaced Delta with Uriel detection
 
         let identifiedAgent = null;
 
-        if (isReplyingToBot && quotedMsgId && global.botMessageAgents[quotedMsgId]) {
+        if (isReplyingToBot && quotedMsgId && global.botMessageAgents && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         } else {
             if (Array.isArray(config.lizzyChats) && config.lizzyChats.includes(jid)) {
@@ -257,25 +261,25 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 identifiedAgent = 'friday';
             }
             
-            // Gojo and Delta name checks remain the prefixless exceptions
+            // Gojo and Uriel name checks remain the prefixless exceptions
             if (!identifiedAgent && isGojoCalled) {
                 identifiedAgent = 'gojo';
-            } else if (!identifiedAgent && isDeltaCalled) {
-                identifiedAgent = 'delta';
+            } else if (!identifiedAgent && isUrielCalled) {
+                identifiedAgent = 'uriel';
             }
         }
 
         if (identifiedAgent === 'gojo') {
             const isAsleep = config.gojoGlobalSleep;
-            if (isAsleep && !trimmedMessageBody.startsWith(config.prefix)) identifiedAgent = null;
+            if (isAsleep && !trimmedMessageBody.startsWith(activePrefix)) identifiedAgent = null;
         }
 
-        if (identifiedAgent && !trimmedMessageBody.startsWith(config.prefix)) {
+        if (identifiedAgent && !trimmedMessageBody.startsWith(activePrefix)) {
             if (identifiedAgent === 'gojo') {
                 command = 'gojo';
                 args = trimmedMessageBody;
-            } else if (identifiedAgent === 'delta') {
-                command = 'delta';
+            } else if (identifiedAgent === 'uriel') {
+                command = 'uriel';
                 args = trimmedMessageBody;
             } else if (identifiedAgent === 'lizzy') {
                 command = 'lizzy_chat';
@@ -338,7 +342,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             const gcLogs = readGcLogs();
             if (!gcLogs[cleanChatJid]) gcLogs[cleanChatJid] = [];
 
-            if (trimmedMessageBody && !trimmedMessageBody.startsWith(config.prefix)) {
+            if (trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix)) {
                 const senderName = msg.pushName || senderNumber || 'Unknown';
                 gcLogs[cleanChatJid].push({
                     sender: senderName,
@@ -385,7 +389,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // ─── GROUP STATUS PROTECTION ─────────────────────────────
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
         if (isGroup && isGroupStatus && !msg.key.fromMe && !isAuthorized && !isDev) {
-            await handleGroupStatusProtection(sock, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev);
+            await handleGroupStatusProtection(cleanChatJid, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev);
         }
 
         // ─── ANTIBUG RATE-LIMIT (Fixed non-silent block warnings) ──
@@ -402,9 +406,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── COMMAND EXTRACTION (Fixed space-after-prefix slicing) ───
         if (!command) {
-            if (trimmedMessageBody.startsWith(config.prefix)) {
+            if (trimmedMessageBody.startsWith(activePrefix)) {
                 // Slices off prefix and trims outer whitespace first
-                const withoutPrefix = trimmedMessageBody.slice(config.prefix.length).trim();
+                const withoutPrefix = trimmedMessageBody.slice(activePrefix.length).trim();
                 const spaceIndex = withoutPrefix.indexOf(' ');
                 if (spaceIndex === -1) {
                     command = withoutPrefix.toLowerCase();
@@ -423,14 +427,14 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── AGENT CONTEXT ─────────────────────────────────────────
         if (command === 'gojo') global.activeAgentContext = 'gojo';
-        else if (command === 'delta') global.activeAgentContext = 'delta';
+        else if (command === 'uriel') global.activeAgentContext = 'uriel'; // Swapped delta with uriel
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
         else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
         else if (command === 'friday_chat') global.activeAgentContext = 'friday';
         else global.activeAgentContext = null;
 
         const isPublicMode = config.isPublic ?? false;
-        const cleanCommand = command.startsWith(config.prefix) ? command.slice(config.prefix.length) : command;
+        const cleanCommand = command.startsWith(activePrefix) ? command.slice(activePrefix.length) : command;
 
         // ─── PERMISSION CHECKS ─────────────────────────────────────
         const isOwnerCmd = ownerCommands.includes(cleanCommand);
