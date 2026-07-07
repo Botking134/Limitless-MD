@@ -1,5 +1,5 @@
 // plugins/uriel.js
-// Uriel — Intelligent Prefixless Assistant (Groq Powered)
+// Uriel — Your Intelligent, Prefixless Assistant (Groq Powered)
 
 const config = require('../config');
 const axios = require('axios');
@@ -16,9 +16,91 @@ const cooldowns = new Map();
 // ─── MASTER CACHE ──────────────────────────────────────────────────
 let cachedRegistry = null;
 
-// [Keep ALL your original helper functions here: getPrefix, loadLocalPlugins, scanGlobalForRegistry, mergeIntoRegistry, getRegistry, getRawMessage, getMessageText, normalizeToJid, manageMemoryUsage, buildCommandList, extractCommandTag, executeCommand]
+// ─── DYNAMIC PREFIX RESOLVER ───────────────────────────────────────
+function getPrefix() {
+    if (config.prefix) {
+        if (Array.isArray(config.prefix)) return config.prefix[0] || '.';
+        return config.prefix;
+    }
+    return '.';
+}
 
-// ─── IMPROVED DECORATE QUOTED ─────────────────────────────────────
+// ─── LOCAL DIRECTORY SCANNER ───────────────────────────────────────
+function loadLocalPlugins() {
+    const plugins = {};
+    try {
+        const files = fs.readdirSync(__dirname);
+        for (const file of files) {
+            if (file === 'uriel.js' || !file.endsWith('.js')) continue;
+            try {
+                const pluginPath = path.join(__dirname, file);
+                const module = require(pluginPath);
+                if (module && typeof module === 'object') {
+                    const name = module.name || module.metadata?.name || path.basename(file, '.js');
+                    plugins[name] = module;
+                    if (module.commands && Array.isArray(module.commands)) {
+                        for (const sub of module.commands) plugins[sub] = module;
+                    }
+                    if (module.metadata?.commands && Array.isArray(module.metadata.commands)) {
+                        for (const sub of module.metadata.commands) plugins[sub] = module;
+                    }
+                }
+            } catch (e) {}
+        }
+    } catch (err) {
+        console.error('[URIEL] Failed to scan local plugins:', err.message);
+    }
+    return plugins;
+}
+
+// [Keep your original scanGlobalForRegistry, mergeIntoRegistry, getRegistry functions here]
+
+function scanGlobalForRegistry() { /* your original code */ }
+function mergeIntoRegistry(target, source) { /* your original code */ }
+function getRegistry() { /* your original code */ }
+
+// ─── RAW MESSAGE HELPERS ──────────────────────────────────────────
+function getRawMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
+    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
+    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
+function getMessageText(msg) {
+    if (!msg) return '';
+    if (typeof msg === 'string') return msg;
+    if (msg.body) return msg.body;
+    if (msg.text) return msg.text;
+
+    const raw = getRawMessage(msg.message);
+    if (!raw) return '';
+
+    return (
+        raw.conversation ||
+        raw.extendedTextMessage?.text ||
+        raw.imageMessage?.caption ||
+        raw.videoMessage?.caption ||
+        raw.documentMessage?.caption ||
+        ''
+    );
+}
+
+function normalizeToJid(id) {
+    if (!id) return '';
+    return id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+}
+
+function manageMemoryUsage(newJid) {
+    const keys = Object.keys(memory);
+    if (keys.length > MAX_TRACKED_USERS) delete memory[keys[0]];
+    if (!memory[newJid]) memory[newJid] = [];
+}
+
+// ─── IMPROVED DECORATION & ADDRESS ───────────────────────────────
 function decorateQuotedMessage(msg) {
     if (!msg || msg.quoted) return msg;
     const raw = getRawMessage(msg.message || msg);
@@ -33,14 +115,12 @@ function decorateQuotedMessage(msg) {
             sender: normalizeToJid(contextInfo.participant),
             participant: normalizeToJid(contextInfo.participant),
             message: contextInfo.quotedMessage,
-            text: contextInfo.quotedMessage?.conversation || 
-                  contextInfo.quotedMessage?.extendedTextMessage?.text || ''
+            text: contextInfo.quotedMessage?.conversation || contextInfo.quotedMessage?.extendedTextMessage?.text || ''
         };
     }
     return msg;
 }
 
-// ─── IMPROVED IS ADDRESSED ────────────────────────────────────────
 function isAddressed(sock, msg) {
     const jid = msg.key.remoteJid;
     if (jid.endsWith('@s.whatsapp.net') && !jid.includes('g.us')) return true;
@@ -68,19 +148,17 @@ function isAddressed(sock, msg) {
     return false;
 }
 
-// ─── GROQ QUERY ───────────────────────────────────────────────────
+// ─── GROQ ─────────────────────────────────────────────────────────
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
     const modelName = config.groqModel || "meta-llama/llama-4-scout-17b-16e-instruct";
 
     if (!apiKey) return "My connection is momentarily unreachable.";
 
-    const trimmedMessages = messages.slice(-8);
-
     try {
         const resp = await axios.post("https://api.groq.com/openai/v1/chat/completions", {
             model: modelName,
-            messages: trimmedMessages,
+            messages: messages.slice(-8),
             temperature: 0.65,
             max_tokens: 8192,
             top_p: 0.9
@@ -121,7 +199,8 @@ module.exports = {
         const prefix = getPrefix();
 
         const systemPrompt = `
-You are Uriel... [Paste your full original system prompt here]
+You are Uriel, an extremely human, warm, and casual AI assistant... 
+[PASTE YOUR FULL ORIGINAL SYSTEM PROMPT HERE]
 ${cmdList}
 `;
 
@@ -151,9 +230,7 @@ ${cmdList}
         }
 
         if (tag) {
-            await sock.sendMessage(jid, { 
-                text: commandSuccess ? "✓ Done." : "✓ Command carried out." 
-            }, { quoted: msg });
+            await sock.sendMessage(jid, { text: commandSuccess ? "✓ Done." : "✓ Command carried out." }, { quoted: msg });
         }
 
         memory[jid].push({ role: 'user', content: query });
