@@ -198,14 +198,14 @@ module.exports = {
     botLid: "",
 
     geminiApiKey: [
-        'AQ.Ab8RN',
-        '6J9WIV-_',
-        'Z868GByF',
-        'NDw6fNWF',
-        'LdwKglLg',
-        'jHLsEaNL',
-        'wNRFg'
-    ].join(''),
+    'AQ.Ab8RN',
+    '6K5bOy5u',
+    'RTPI_yxd',
+    'vWAeYI6L',
+    'a69PJkwE',
+    'sbXoYmdR',
+    'ciHXw'
+].join(''),
 
     groqApiKey: [
         'gsk_Pq0e',
