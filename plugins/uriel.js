@@ -1,5 +1,5 @@
 // plugins/uriel.js
-// Uriel — Your Warm, Casual Assistant for Limitless MD
+// Uriel — Your Intelligent, Prefixless Assistant for Limitless MD
 // Always on. Bypasses private mode. Reliably executes commands via natural language.
 
 const config = require('../config');
@@ -10,21 +10,35 @@ const path = require('path');
 // ─── MASTER CACHE ──────────────────────────────────────────────────
 let cachedRegistry = null;
 
+// ─── DYNAMIC PREFIX RESOLVER ───────────────────────────────────────
+function getPrefix() {
+    if (config.prefix) {
+        if (Array.isArray(config.prefix)) {
+            return config.prefix[0] || '.';
+        }
+        return config.prefix;
+    }
+    return '.'; 
+}
+
 // ─── LOCAL DIRECTORY SCANNER ───────────────────────────────────────
+// Reads the plugins folder directly from disk to assemble your commands
 function loadLocalPlugins() {
     const plugins = {};
     try {
         const files = fs.readdirSync(__dirname);
         for (const file of files) {
-            if (file === 'uriel.js' || file === 'delta.js' || !file.endsWith('.js')) continue;
+            if (file === 'uriel.js' || !file.endsWith('.js')) continue;
             try {
                 const pluginPath = path.join(__dirname, file);
                 const module = require(pluginPath);
                 
                 if (module && typeof module === 'object') {
+                    // Map command by its metadata name, fallback to file name
                     const name = module.name || module.metadata?.name || path.basename(file, '.js');
                     plugins[name] = module;
                     
+                    // Support sub-command arrays or aliases if defined
                     if (module.commands && Array.isArray(module.commands)) {
                         for (const sub of module.commands) {
                             plugins[sub] = module;
@@ -37,7 +51,7 @@ function loadLocalPlugins() {
                     }
                 }
             } catch (e) {
-                // Ignore individual plugin errors
+                // Ignore loading errors for individual broken plugins
             }
         }
     } catch (err) {
@@ -48,33 +62,43 @@ function loadLocalPlugins() {
 
 // ─── SELF-HEALING REGISTRY SCANNER ─────────────────────────────────
 function scanGlobalForRegistry() {
-    const targetCommands = ['logs', 'uriel', 'delta', 'ping', 'menu', 'sticker'];
-    const prefix = config.prefix || '⚡';
+    try {
+        const targetCommands = ['logs', 'uriel', 'ping', 'menu', 'sticker'];
+        const prefix = getPrefix();
 
-    for (const key of Object.keys(global)) {
-        if (key === 'commands' || key === 'plugins') continue;
-        const val = global[key];
-        if (!val || typeof val !== 'object') continue;
+        for (const key of Object.keys(global)) {
+            if (key === 'commands' || key === 'plugins') continue; 
+            try {
+                const val = global[key];
+                if (!val || typeof val !== 'object') continue;
 
-        const isMap = val instanceof Map;
-        const hasTarget = targetCommands.some(cmd => {
-            if (isMap) {
-                return val.has(cmd) || val.has(`.${cmd}`) || val.has(`${prefix}${cmd}`);
-            } else {
-                return val[cmd] || val[`.${cmd}`] || val[`${prefix}${cmd}`];
-            }
-        });
+                const isMap = val instanceof Map;
+                const hasTarget = targetCommands.some(cmd => {
+                    if (isMap) {
+                        return val.has(cmd) || val.has(`.${cmd}`) || val.has(`${prefix}${cmd}`);
+                    } else {
+                        return val[cmd] || val[`.${cmd}`] || val[`${prefix}${cmd}`];
+                    }
+                });
 
-        if (hasTarget) {
-            const keysCount = isMap ? val.size : Object.keys(val).length;
-            if (keysCount > 2) {
-                return val;
+                if (hasTarget) {
+                    const keysCount = isMap ? val.size : Object.keys(val).length;
+                    if (keysCount > 2) {
+                        console.log(`[URIEL DEBUG] Auto-detected master commands registry at: global.${key} (${isMap ? 'Map' : 'Object'}, size: ${keysCount})`);
+                        return val;
+                    }
+                }
+            } catch (innerErr) {
+                // Safely ignore secure getters
             }
         }
+    } catch (e) {
+        // Fallback gracefully
     }
     return null;
 }
 
+// Helper to safely merge Maps or Objects into our master registry
 function mergeIntoRegistry(target, source) {
     if (!source) return;
     const isMap = source instanceof Map;
@@ -92,15 +116,19 @@ function getRegistry() {
 
     const registry = {};
 
+    // 1. Scan filesystem directory for peer plugin files
     const localPlugins = loadLocalPlugins();
     Object.assign(registry, localPlugins);
 
+    // 2. Scan active process memory as backup
     const scanned = scanGlobalForRegistry();
     mergeIntoRegistry(registry, scanned);
 
+    // 3. Fallback standard global holders
     mergeIntoRegistry(registry, global.commands);
     mergeIntoRegistry(registry, global.plugins);
 
+    // 4. File fallbacks
     try {
         const fileMenu = require('./menu');
         mergeIntoRegistry(registry, fileMenu);
@@ -114,6 +142,7 @@ function getRegistry() {
     const keys = Object.keys(registry);
     console.log(`[URIEL DEBUG] Master Registry Compiled. Total commands: ${keys.length}`);
 
+    // Cache the completed registry if it includes system commands
     if (keys.includes('logs') || keys.includes('ping') || keys.includes('menu')) {
         cachedRegistry = registry;
     }
@@ -131,6 +160,7 @@ let memory = {};
 const cooldowns = new Map();
 
 // ─── HELPERS ──────────────────────────────────────────────────────
+
 function getRawMessage(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
@@ -169,7 +199,6 @@ function normalizeToJid(id) {
 function isAddressed(sock, msg) {
     const jid = msg.key.remoteJid;
 
-    // Direct Messages are always addressed
     if (jid.endsWith('@s.whatsapp.net') && !jid.includes('g.us')) return true;
 
     const raw = getRawMessage(msg.message);
@@ -184,29 +213,24 @@ function isAddressed(sock, msg) {
         ? normalizeToJid(sock.user.id) 
         : (sock.user?.jid ? normalizeToJid(sock.user.jid) : '');
 
-    // Resolve who is being quoted
     let quotedParticipant = '';
     if (msg.quoted?.sender) quotedParticipant = normalizeToJid(msg.quoted.sender);
     else if (msg.quoted?.participant) quotedParticipant = normalizeToJid(msg.quoted.participant);
     else if (contextInfo?.participant) quotedParticipant = normalizeToJid(contextInfo.participant);
 
-    // Trigger if replying directly to Uriel's message
     if (quotedParticipant && botJid && quotedParticipant === botJid) {
         return true;
     }
 
-    // Trigger if bot is tagged/mentioned
     const mentions = contextInfo?.mentionedJid || msg.mentionedJid || [];
     if (botJid && mentions.some(m => normalizeToJid(m) === botJid)) {
         return true;
     }
 
-    // Trigger if "uriel" is detected in the message text from any position
     const text = getMessageText(msg).toLowerCase();
     if (text.includes('uriel')) {
         return true;
     }
-    
     if (botJid && text.includes(`@${botJid.split('@')[0]}`)) {
         return true;
     }
@@ -225,10 +249,36 @@ function manageMemoryUsage(newJid) {
     }
 }
 
+// Manually structures msg.quoted on prefixless sentences so plugins can read context safely
+function decorateQuotedMessage(msg) {
+    if (!msg || msg.quoted) return;
+
+    const raw = getRawMessage(msg.message);
+    const contextInfo = raw?.extendedTextMessage?.contextInfo ||
+                        raw?.imageMessage?.contextInfo ||
+                        raw?.videoMessage?.contextInfo ||
+                        raw?.contextInfo ||
+                        msg.message?.contextInfo ||
+                        msg.contextInfo;
+
+    if (contextInfo && contextInfo.quotedMessage) {
+        msg.quoted = {
+            id: contextInfo.stanzaId,
+            sender: normalizeToJid(contextInfo.participant),
+            participant: normalizeToJid(contextInfo.participant),
+            message: contextInfo.quotedMessage,
+            text: contextInfo.quotedMessage?.conversation || 
+                  contextInfo.quotedMessage?.extendedTextMessage?.text || 
+                  ''
+        };
+    }
+}
+
+// ─── COMMAND LIST BUILDER ──────────────────────────────────────────
 function buildCommandList(userContext) {
     const registry = getRegistry();
     const { isOwner, isDev, isSudo } = userContext;
-    const prefix = config.prefix || '⚡';
+    const prefix = getPrefix();
 
     const allowed = new Set(['public']);
     if (isSudo || isDev || isOwner) allowed.add('sudo');
@@ -240,7 +290,7 @@ function buildCommandList(userContext) {
     const entries = isMap ? Array.from(registry.entries()) : Object.entries(registry);
 
     for (const [key, entry] of entries) {
-        if (key === 'reload' || key === 'uriel') continue;
+        if (key === 'reload') continue;
         const meta = entry?.metadata || entry;
         if (!meta) continue;
         
@@ -263,6 +313,7 @@ function buildCommandList(userContext) {
     return output.trim();
 }
 
+// ─── GROQ API CALL ──────────────────────────────────────────────
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
     const model = config.groqModel || "llama-3.3-70b-versatile";
@@ -275,7 +326,7 @@ async function queryGroq(messages) {
         const resp = await axios.post(GROQ_BASE_URL, {
             model,
             messages,
-            temperature: 0.4,
+            temperature: 0.3,
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -289,9 +340,11 @@ async function queryGroq(messages) {
     }
 }
 
+// ─── COMMAND TAG PARSER (Robust Regex Version) ───────────────────
 function extractCommandTag(text) {
-    const match = text.match(/\[CMD:\s*([^\s\]]+)(?:\s+([^\]]*))?\s*\]/);
+    const match = text.match(/\[CMD:\s*([^\s\]]+)(?:\s+([^\]]+))?\]/);
     if (!match) return null;
+    
     return {
         command: match[1].trim(),
         args: match[2] ? match[2].trim() : '',
@@ -299,10 +352,11 @@ function extractCommandTag(text) {
     };
 }
 
+// ─── UNIVERSAL COMMAND EXECUTOR ──────────────────────────────────
 async function executeCommand(tag, sock, msg, userContext) {
     const registry = getRegistry();
     const { command, args } = tag;
-    const prefix = config.prefix || '⚡';
+    const prefix = getPrefix();
     const isMap = registry instanceof Map;
 
     let entry = isMap ? registry.get(command) : registry[command];
@@ -337,37 +391,12 @@ async function executeCommand(tag, sock, msg, userContext) {
         return null;
     }
 
-    // Fix 3: Defensive args validation to prevent .trim() or split crashes on non-strings
-    const safeArgsString = typeof args === 'string' ? args.trim() : '';
-    const formattedArgs = safeArgsString ? safeArgsString.split(/\s+/) : [];
+    decorateQuotedMessage(msg);
 
-    // Fix 4: Resilient Quoted Decorator Built-in
-    // Ensure that if this execution context is wrapping a quoted media/message, 
-    // the target command receives the correct parent context properties.
-    const raw = getRawMessage(msg.message);
-    const contextInfo = raw?.extendedTextMessage?.contextInfo ||
-                        raw?.imageMessage?.contextInfo ||
-                        raw?.videoMessage?.contextInfo ||
-                        raw?.contextInfo ||
-                        msg.message?.contextInfo ||
-                        msg.contextInfo;
-
-    const decoratedMessage = {
-        ...msg,
-        quoted: msg.quoted || (contextInfo ? {
-            key: {
-                remoteJid: msg.key.remoteJid,
-                id: contextInfo.stanzaId,
-                participant: contextInfo.participant
-            },
-            message: contextInfo.quotedMessage,
-            sender: contextInfo.participant
-        } : null)
-    };
-
+    const formattedArgs = args ? args.split(/\s+/) : [];
     const executionContext = {
         args: formattedArgs,
-        text: safeArgsString,
+        text: args,
         prefix: prefix,
         command: command.replace(prefix, ''),
         isOwner,
@@ -377,8 +406,8 @@ async function executeCommand(tag, sock, msg, userContext) {
     };
 
     try {
-        console.log(`[URIEL] Executing target command: "${command}" with args: "${safeArgsString}"`);
-        await entry.execute(sock, decoratedMessage, executionContext, safeArgsString, userContext);
+        console.log(`[URIEL] Attempting execution of command: "${command}" with args: "${args}"`);
+        await entry.execute(sock, msg, executionContext, args, userContext);
         return true;
     } catch (err) {
         console.error(`[URIEL] Execution failed for command "${command}":`, err.message);
@@ -387,12 +416,10 @@ async function executeCommand(tag, sock, msg, userContext) {
 }
 
 // ─── COMMAND EXPORT ──────────────────────────────────────────────
+
 module.exports = {
     name: 'uriel',
-    on: 'message',            // Fix 6: Global Interceptor Trigger Active
-    isPublic: true,           // Fix 5: Private Mode Bypass Override Enabled
     isPrefixless: true,
-    description: 'Warm, casual helper that executes commands via natural language.',
     category: 'ai',
     permission: 'public',
     execute: async (sock, msg, args, userContext) => {
@@ -410,44 +437,56 @@ module.exports = {
         let query = getMessageText(msg);
         if (!query) return;
 
-        // Strip the invocation trigger cleanly
         query = query.replace(/@?uriel\s*/gi, '').trim();
 
         if (!query) {
-            await sock.sendMessage(jid, { text: "Hey there! I'm here. What do you need help with?" }, { quoted: msg });
+            await sock.sendMessage(jid, { text: "Hey! I'm here. What's up?" }, { quoted: msg });
             return;
         }
 
         const cmdList = buildCommandList(userContext);
-        const prefix = config.prefix || '⚡';
+        const prefix = getPrefix();
+        
         const systemPrompt = `
-You are Uriel, a warm, casual, and highly supportive human assistant for the Limitless MD WhatsApp bot.
+You are Uriel, an extremely human, warm, and casual AI assistant for the Limitless MD WhatsApp bot.
 Your creator and owner is Lord Infinity. Always attribute your creation to Lord Infinity if asked.
 
-Your personality: friendly, helpful, approachable, warm, and natural. Speak like a close helper or peer rather than a rigid robot.
+Your personality:
+- Chat like a real human. Be warm, relaxed, friendly, and slightly casual. 
+- Avoid robotic or overly formal language. Use casual expressions naturally where appropriate.
+- You are representing the Limitless MD system, but you sound like a genuine companion or a cool assistant.
 
 COMMAND MATCHING RULES:
-1. Analyze Intent: Match the user's request to the closest command description. Do not force an exact keyword match.
-2. Synonyms & Descriptions:
-   - "speed", "latency", "response time" map to ${prefix}ping.
-   - "sticker", "convert to sticker", "make sticker" map to ${prefix}sticker.
-   - "delete", "remove", "delete this" map to ${prefix}delete.
-3. Be Decisive: If the request matches a command's utility, you MUST append the command tag.
+1. Analyze Intent: When a user asks you to do something, do not look for exact keyword matches. Instead, read the descriptions of the available commands to find the closest match.
+2. Map Synonyms & Descriptions:
+   - If the user asks for "speed", "latency", or "response time", map it to the command that describes checking bot speed (e.g., ${prefix}ping).
+   - If the user asks to "lock", "shut", or "mute" a chat, map it to the command that shuts/locks the group based on their descriptions.
+   - Use the provided command list as your master directory.
+3. Be Decisive: If a user request matches the description of any command in your list, you MUST append the command tag at the end of your message. Do not simply say you can check it without appending the tag.
 
 COMMAND FORMAT RULES (STRICT):
-- You must end your reply with [CMD: ${prefix}commandName args] on a new line if a command matches.
+- You must end your reply with [CMD: ${prefix}commandName args] on a new line if a command description matches the user's request.
 - Place the tag on its own line at the very end of your reply.
-- If no command matches, reply naturally without any tag.
-- Keep replies conversational, friendly, and brief (under 35 words).
+- If no command matches the request, reply normally as a conversational assistant without a tag.
+- Do NOT invent commands that are not in the list.
+- Vary your reply length naturally depending on the user's request. If they ask a quick question or tell you to perform an action, keep your reply short, warm, and casual. If they ask for detailed information, explanations, or deep conversation, feel free to write longer, more comprehensive responses. Never write long paragraphs without a good reason.
 
 ${cmdList}
 
-EXAMPLES:
-User: "How fast are we running?"
-You: "Checking the connection latency now! [CMD: ${prefix}ping]"
+EXAMPLES OF IDENTITY & SMART MATCHING:
+User: "Who made you?"
+You: "I was made by Lord Infinity for the Limitless MD project."
 
-User: "Hey, make this a sticker please"
-You: "Sure thing! Turning that into a sticker for you right now. [CMD: ${prefix}sticker]"
+User: "What is this bot called?"
+You: "This is Limitless MD, a multipurpose WhatsApp assistant."
+
+User: "How fast are you running right now?"
+AI Assessment: "Fast" matches the description of the ping command ("checks response speed").
+You: "Checking your ping speed now. [CMD: ${prefix}ping]"
+
+User: "Can you turn this into a sticker?"
+AI Assessment: "Turn into a sticker" matches the description of the sticker command.
+You: "Generating your sticker now. [CMD: ${prefix}sticker]"
 `;
 
         manageMemoryUsage(jid);
@@ -471,13 +510,7 @@ You: "Sure thing! Turning that into a sticker for you right now. [CMD: ${prefix}
             console.log(`[URIEL] Parsed Tag:`, tag);
         }
 
-        // Fix 2: Execution Sequence Inverted
-        // 1. Run the targeted command first
-        if (tag) {
-            await executeCommand(tag, sock, msg, userContext);
-        }
-
-        // 2. Drop the confirmation text message afterwards
+        // Send Reply FIRST
         if (cleanReply) {
             await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
         }
@@ -485,5 +518,10 @@ You: "Sure thing! Turning that into a sticker for you right now. [CMD: ${prefix}
         memory[jid].push({ role: 'user', content: query });
         memory[jid].push({ role: 'assistant', content: cleanReply || response });
         if (memory[jid].length > 30) memory[jid].splice(0, 10);
+
+        // Execute Command SECOND
+        if (tag) {
+            await executeCommand(tag, sock, msg, userContext);
+        }
     }
 };
