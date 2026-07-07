@@ -22,7 +22,6 @@ function getPrefix() {
 }
 
 // ─── LOCAL DIRECTORY SCANNER ───────────────────────────────────────
-// Reads the plugins folder directly from disk to assemble your commands
 function loadLocalPlugins() {
     const plugins = {};
     try {
@@ -34,11 +33,9 @@ function loadLocalPlugins() {
                 const module = require(pluginPath);
                 
                 if (module && typeof module === 'object') {
-                    // Map command by its metadata name, fallback to file name
                     const name = module.name || module.metadata?.name || path.basename(file, '.js');
                     plugins[name] = module;
                     
-                    // Support sub-command arrays or aliases if defined
                     if (module.commands && Array.isArray(module.commands)) {
                         for (const sub of module.commands) {
                             plugins[sub] = module;
@@ -116,19 +113,15 @@ function getRegistry() {
 
     const registry = {};
 
-    // 1. Scan filesystem directory for peer plugin files
     const localPlugins = loadLocalPlugins();
     Object.assign(registry, localPlugins);
 
-    // 2. Scan active process memory as backup
     const scanned = scanGlobalForRegistry();
     mergeIntoRegistry(registry, scanned);
 
-    // 3. Fallback standard global holders
     mergeIntoRegistry(registry, global.commands);
     mergeIntoRegistry(registry, global.plugins);
 
-    // 4. File fallbacks
     try {
         const fileMenu = require('./menu');
         mergeIntoRegistry(registry, fileMenu);
@@ -142,7 +135,6 @@ function getRegistry() {
     const keys = Object.keys(registry);
     console.log(`[URIEL DEBUG] Master Registry Compiled. Total commands: ${keys.length}`);
 
-    // Cache the completed registry if it includes system commands
     if (keys.includes('logs') || keys.includes('ping') || keys.includes('menu')) {
         cachedRegistry = registry;
     }
@@ -151,7 +143,7 @@ function getRegistry() {
 }
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
-const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions";
 const COOLDOWN_MS = 2000;
 const MAX_TRACKED_USERS = 100;
 
@@ -249,7 +241,6 @@ function manageMemoryUsage(newJid) {
     }
 }
 
-// Manually structures msg.quoted on prefixless sentences so plugins can read context safely
 function decorateQuotedMessage(msg) {
     if (!msg || msg.quoted) return;
 
@@ -313,17 +304,17 @@ function buildCommandList(userContext) {
     return output.trim();
 }
 
-// ─── GROQ API CALL ──────────────────────────────────────────────
-async function queryGroq(messages) {
-    const apiKey = config.groqApiKey;
-    const model = config.groqModel || "llama-3.3-70b-versatile";
+// ─── GEMINI API CALL ──────────────────────────────────────────────
+async function queryGemini(messages) {
+    const apiKey = config.geminiApiKey;
+    const model = config.geminiModel || "gemini-3.5-flash";
 
     if (!apiKey) {
-        console.error('[URIEL] Groq API key missing.');
+        console.error('[URIEL] Gemini API key missing.');
         return "My connection is down. Please check the API key.";
     }
     try {
-        const resp = await axios.post(GROQ_BASE_URL, {
+        const resp = await axios.post(GEMINI_BASE_URL, {
             model,
             messages,
             temperature: 0.3,
@@ -335,19 +326,39 @@ async function queryGroq(messages) {
         });
         return resp.data.choices?.[0]?.message?.content || '';
     } catch (err) {
-        console.error('[URIEL] Groq error:', err.response?.data || err.message);
+        console.error('[URIEL] Gemini error:', err.response?.data || err.message);
         return "I'm having trouble thinking right now. Try again in a moment.";
     }
 }
 
-// ─── COMMAND TAG PARSER (Robust Regex Version) ───────────────────
+// ─── COMMAND TAG PARSER (Fixed spacing & prefix removal) ─────────
 function extractCommandTag(text) {
-    const match = text.match(/\[CMD:\s*([^\s\]]+)(?:\s+([^\]]+))?\]/);
+    const match = text.match(/\[CMD:\s*([^\]]+)\]/i);
     if (!match) return null;
-    
+
+    const rawContent = match[1].trim(); 
+    const prefix = getPrefix();
+
+    let cleanContent = rawContent;
+    if (cleanContent.startsWith(prefix)) {
+        cleanContent = cleanContent.slice(prefix.length).trim();
+    }
+
+    const spaceIndex = cleanContent.indexOf(' ');
+    let command = '';
+    let args = '';
+
+    if (spaceIndex === -1) {
+        command = cleanContent.toLowerCase();
+        args = '';
+    } else {
+        command = cleanContent.slice(0, spaceIndex).toLowerCase();
+        args = cleanContent.slice(spaceIndex + 1).trim();
+    }
+
     return {
-        command: match[1].trim(),
-        args: match[2] ? match[2].trim() : '',
+        command: command, // Pure clean command name
+        args: args,       // Clear string arguments
         raw: match[0]
     };
 }
@@ -355,20 +366,16 @@ function extractCommandTag(text) {
 // ─── UNIVERSAL COMMAND EXECUTOR ──────────────────────────────────
 async function executeCommand(tag, sock, msg, userContext) {
     const registry = getRegistry();
-    const { command, args } = tag;
+    const { command, args } = tag; 
     const prefix = getPrefix();
     const isMap = registry instanceof Map;
 
+    // Directly look up the clean command name
     let entry = isMap ? registry.get(command) : registry[command];
 
     if (!entry) {
-        if (command.startsWith(prefix)) {
-            const noPrefix = command.slice(prefix.length);
-            entry = isMap ? registry.get(noPrefix) : registry[noPrefix];
-        } else {
-            const withPrefix = `${prefix}${command}`;
-            entry = isMap ? registry.get(withPrefix) : registry[withPrefix];
-        }
+        const withPrefix = `${prefix}${command}`;
+        entry = isMap ? registry.get(withPrefix) : registry[withPrefix];
     }
 
     if (!entry) {
@@ -398,7 +405,7 @@ async function executeCommand(tag, sock, msg, userContext) {
         args: formattedArgs,
         text: args,
         prefix: prefix,
-        command: command.replace(prefix, ''),
+        command: command,
         isOwner,
         isDev,
         isSudo,
@@ -407,7 +414,8 @@ async function executeCommand(tag, sock, msg, userContext) {
 
     try {
         console.log(`[URIEL] Attempting execution of command: "${command}" with args: "${args}"`);
-        await entry.execute(sock, msg, executionContext, args, userContext);
+        // FIXED PARAMETER ALIGNMENT: (sock, msg, args, opts)
+        await entry.execute(sock, msg, args, executionContext);
         return true;
     } catch (err) {
         console.error(`[URIEL] Execution failed for command "${command}":`, err.message);
@@ -499,7 +507,7 @@ You: "Generating your sticker now. [CMD: ${prefix}sticker]"
         ];
 
         await sock.sendPresenceUpdate('composing', jid);
-        const response = await queryGroq(messages);
+        const response = await queryGemini(messages);
 
         console.log(`[URIEL] Raw Response: "${response}"`);
 
