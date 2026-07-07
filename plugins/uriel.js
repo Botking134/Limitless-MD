@@ -304,30 +304,48 @@ function buildCommandList(userContext) {
     return output.trim();
 }
 
-// ─── GEMINI API CALL ──────────────────────────────────────────────
+// ─── GEMINI API CALL (With automatic failover / retry) ───────────
 async function queryGemini(messages) {
     const apiKey = config.geminiApiKey;
-    const model = config.geminiModel || "gemini-3.5-flash";
+    const primaryModel = config.geminiModel || "gemini-3.5-flash";
+    const backupModel = "gemini-1.5-flash";
 
     if (!apiKey) {
         console.error('[URIEL] Gemini API key missing.');
         return "My connection is down. Please check the API key.";
     }
-    try {
-        const resp = await axios.post(GEMINI_BASE_URL, {
-            model,
+
+    const makeRequest = async (modelName) => {
+        return await axios.post(GEMINI_BASE_URL, {
+            model: modelName,
             messages,
             temperature: 0.3,
         }, {
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`
-            }
+            },
+            timeout: 10000 
         });
+    };
+
+    try {
+        // Attempt 1: Primary Model (3.5 flash)
+        const resp = await makeRequest(primaryModel);
         return resp.data.choices?.[0]?.message?.content || '';
     } catch (err) {
-        console.error('[URIEL] Gemini error:', err.response?.data || err.message);
-        return "I'm having trouble thinking right now. Try again in a moment.";
+        const statusCode = err.response?.status;
+        console.warn(`[URIEL] Primary model (${primaryModel}) failed with status ${statusCode || err.message}. Attempting failover...`);
+
+        try {
+            // Attempt 2: Fallback Model (Universal stable free tier model)
+            const fallbackResp = await makeRequest(backupModel);
+            console.log(`[URIEL] Failover successful using backup model (${backupModel}).`);
+            return fallbackResp.data.choices?.[0]?.message?.content || '';
+        } catch (fallbackErr) {
+            console.error('[URIEL] Both primary and backup Gemini endpoints are unavailable:', fallbackErr.response?.data || fallbackErr.message);
+            return "I'm having trouble thinking right now. Try again in a moment.";
+        }
     }
 }
 
@@ -414,7 +432,7 @@ async function executeCommand(tag, sock, msg, userContext) {
 
     try {
         console.log(`[URIEL] Attempting execution of command: "${command}" with args: "${args}"`);
-        // FIXED PARAMETER ALIGNMENT: (sock, msg, args, opts)
+        // PARAMETER ALIGNMENT: (sock, msg, args, opts)
         await entry.execute(sock, msg, args, executionContext);
         return true;
     } catch (err) {
