@@ -303,48 +303,15 @@ function buildCommandList(userContext) {
     return output.trim();
 }
 
-// ─── NATIVE GEMINI API CALL (With failover and direct REST parsing) ──
+// ─── NATIVE GEMINI API CALL (Configured for custom keys) ───────────
 async function queryGemini(messages) {
     const apiKey = config.geminiApiKey;
-    const primaryModel = config.geminiModel || "gemini-3.5-flash";
-    const backupModel = "gemini-1.5-flash";
+    const modelName = config.geminiModel || "gemini-3.5-flash";
 
     if (!apiKey) {
         console.error('[URIEL] Gemini API key missing.');
         return "My connection is down. Please check the API key.";
     }
-
-    // Convert standard chat history message array to Gemini Native REST format
-    const contents = [];
-    let systemPrompt = "";
-
-    for (const msg of messages) {
-        if (msg.role === 'system') {
-            systemPrompt = msg.content;
-        } else {
-            contents.push({
-                role: msg.role === 'assistant' ? 'model' : 'user',
-                parts: [{ text: msg.content }]
-            });
-        }
-    }
-
-    const makeRequest = async (modelName) => {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey(modelName)}:generateContent?key=${apiKey}`;
-        const payload = {
-            contents: contentsFormat(messages),
-            generationConfig: {
-                temperature: 0.3
-            }
-        };
-
-        const resp = await axios.post(url, payload, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 10000
-        });
-        
-        return resp.data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    };
 
     // Formatter to clean up content arrays for Gemini REST APIs
     function contentsFormat(msgs) {
@@ -364,20 +331,35 @@ async function queryGemini(messages) {
         return name.toLowerCase().includes('gemini-') ? name : `gemini-${name}`;
     }
 
-    try {
-        // Attempt 1: Primary Model (3.5 flash)
-        return await makeRequest(primaryModel);
-    } catch (err) {
-        const statusCode = err.response?.status;
-        console.warn(`[URIEL] Primary model (${primaryModel}) failed with status ${statusCode || err.message}. Attempting native failover...`);
+    // Locate system prompt
+    let systemPrompt = "";
+    const sysMsg = messages.find(m => m.role === 'system');
+    if (sysMsg) systemPrompt = sysMsg.content;
 
-        try {
-            // Attempt 2: Fallover Model (1.5 flash)
-            return await makeRequest(backupModel);
-        } catch (fallbackErr) {
-            console.error('[URIEL] Both primary and backup Gemini native endpoints are unavailable:', fallbackErr.response?.data || fallbackErr.message);
-            return "I'm having trouble thinking right now. Try again in a moment.";
+    try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey(modelName)}:generateContent?key=${apiKey}`;
+        const payload = {
+            contents: contentsFormat(messages),
+            generationConfig: {
+                temperature: 0.3
+            }
+        };
+
+        if (systemPrompt) {
+            payload.systemInstruction = {
+                parts: [{ text: systemPrompt }]
+            };
         }
+
+        const resp = await axios.post(url, payload, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30000 // Extended to 30 seconds to absorb backend server latency spikes
+        });
+        
+        return resp.data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } catch (err) {
+        console.error('[URIEL] Gemini error:', err.response?.data || err.message);
+        return "I'm having trouble thinking right now. Try again in a moment.";
     }
 }
 
@@ -582,4 +564,4 @@ You: "Generating your sticker now. [CMD: ${prefix}sticker]"
             await executeCommand(tag, sock, msg, userContext);
         }
     }
-};
+}
