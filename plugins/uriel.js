@@ -6,13 +6,19 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
+// ─── CONSTANTS & IN-MEMORY STORE ───────────────────────────────────
+const COOLDOWN_MS = 2000;
+const MAX_TRACKED_USERS = 100;
+
+let memory = {};
+const cooldowns = new Map();
+
 // ─── MASTER CACHE ──────────────────────────────────────────────────
 let cachedRegistry = null;
 
-// ─── Existing helper functions (getPrefix, loadLocalPlugins, scanGlobalForRegistry, etc.) ───
-// ... [All your original registry, memory, cooldown, getRawMessage, getMessageText, normalizeToJid functions remain unchanged] ...
+// [Keep ALL your original helper functions here: getPrefix, loadLocalPlugins, scanGlobalForRegistry, mergeIntoRegistry, getRegistry, getRawMessage, getMessageText, normalizeToJid, manageMemoryUsage, buildCommandList, extractCommandTag, executeCommand]
 
-// ─── IMPROVED DECORATION ───────────────────────────────────────────
+// ─── IMPROVED DECORATE QUOTED ─────────────────────────────────────
 function decorateQuotedMessage(msg) {
     if (!msg || msg.quoted) return msg;
     const raw = getRawMessage(msg.message || msg);
@@ -34,7 +40,7 @@ function decorateQuotedMessage(msg) {
     return msg;
 }
 
-// ─── IMPROVED IS ADDRESSED ───────────────────────────────────────
+// ─── IMPROVED IS ADDRESSED ────────────────────────────────────────
 function isAddressed(sock, msg) {
     const jid = msg.key.remoteJid;
     if (jid.endsWith('@s.whatsapp.net') && !jid.includes('g.us')) return true;
@@ -62,12 +68,12 @@ function isAddressed(sock, msg) {
     return false;
 }
 
-// ─── GROQ QUERY (Optimized) ───────────────────────────────────────
+// ─── GROQ QUERY ───────────────────────────────────────────────────
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
     const modelName = config.groqModel || "meta-llama/llama-4-scout-17b-16e-instruct";
 
-    if (!apiKey) return "My thoughts are unreachable at the moment.";
+    if (!apiKey) return "My connection is momentarily unreachable.";
 
     const trimmedMessages = messages.slice(-8);
 
@@ -89,7 +95,7 @@ async function queryGroq(messages) {
     }
 }
 
-// ─── COMMAND EXECUTION ───────────────────────────────────────────
+// ─── MAIN EXECUTE ─────────────────────────────────────────────────
 module.exports = {
     name: 'uriel',
     isPrefixless: true,
@@ -109,12 +115,15 @@ module.exports = {
         if (!query) return;
 
         query = query.replace(/@?uriel\s*/gi, '').trim();
-        if (!query) query = "Hello";
+        if (!query) query = "Hello, how can I help you?";
 
         const cmdList = buildCommandList(userContext);
         const prefix = getPrefix();
 
-        const systemPrompt = `... [Your original long system prompt here] ${cmdList}`;
+        const systemPrompt = `
+You are Uriel... [Paste your full original system prompt here]
+${cmdList}
+`;
 
         manageMemoryUsage(jid);
         const history = memory[jid].slice(-8);
@@ -131,26 +140,22 @@ module.exports = {
         const tag = extractCommandTag(response);
         let cleanReply = tag ? response.replace(/\[CMD:.*?\]/, '').trim() : response;
 
-        // Execute command silently first
         let commandSuccess = false;
         if (tag) {
             decorateQuotedMessage(msg);
             commandSuccess = await executeCommand(tag, sock, msg, userContext);
         }
 
-        // Send main reply
         if (cleanReply) {
             await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
         }
 
-        // Success message
         if (tag) {
             await sock.sendMessage(jid, { 
                 text: commandSuccess ? "✓ Done." : "✓ Command carried out." 
             }, { quoted: msg });
         }
 
-        // Memory update
         memory[jid].push({ role: 'user', content: query });
         memory[jid].push({ role: 'assistant', content: cleanReply || response });
         if (memory[jid].length > 30) memory[jid].splice(0, 10);
