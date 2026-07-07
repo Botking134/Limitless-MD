@@ -1,4 +1,4 @@
-// plugins/uriel.js
+l// plugins/uriel.js
 // Uriel — Your Intelligent, Prefixless Assistant for Limitless MD
 // Always on. Bypasses private mode. Reliably executes commands via natural language.
 
@@ -153,8 +153,8 @@ function isAddressed(sock, msg) {
         return true;
     }
 
-    const text = getMessageText(msg);
-    if (text.toLowerCase().includes('uriel')) {
+    const text = getMessageText(msg).toLowerCase();
+    if (text.includes('uriel')) {
         return true;
     }
     if (botJid && text.includes(`@${botJid.split('@')[0]}`)) {
@@ -290,20 +290,17 @@ async function executeCommand(tag, sock, msg, userContext) {
     const prefix = getPrefix();
     const isMap = registry instanceof Map;
 
-    let entry = isMap ? registry.get(command) : registry[command];
+    const cleanCommandName = command.toLowerCase().replace(prefix, '');
+
+    let entry = isMap ? registry.get(cleanCommandName) : registry[cleanCommandName];
 
     if (!entry) {
-        if (command.startsWith(prefix)) {
-            const noPrefix = command.slice(prefix.length);
-            entry = isMap ? registry.get(noPrefix) : registry[noPrefix];
-        } else {
-            const withPrefix = `${prefix}${command}`;
-            entry = isMap ? registry.get(withPrefix) : registry[withPrefix];
-        }
+        const commandWithPrefix = `${prefix}${cleanCommandName}`;
+        entry = isMap ? registry.get(commandWithPrefix) : registry[commandWithPrefix];
     }
 
     if (!entry) {
-        console.warn(`[URIEL] Command not found in active registry: "${command}".`);
+        console.warn(`[URIEL] Command not found in active registry: "${cleanCommandName}".`);
         return null;
     }
 
@@ -318,7 +315,7 @@ async function executeCommand(tag, sock, msg, userContext) {
     else if (perm === 'owner' && (isOwner || isDev)) allowed = true;
 
     if (!allowed) {
-        console.warn(`[URIEL] Permission denied for execution of: ${command}`);
+        console.warn(`[URIEL] Permission denied for execution of: ${cleanCommandName}`);
         return null;
     }
 
@@ -330,7 +327,7 @@ async function executeCommand(tag, sock, msg, userContext) {
         args: args, // Fixed String argument mapping
         text: args, // Passed as String
         prefix: prefix,
-        command: command.replace(prefix, ''),
+        command: cleanCommandName,
         isOwner,
         isDev,
         isSudo,
@@ -350,7 +347,7 @@ async function executeCommand(tag, sock, msg, userContext) {
 // ─── COMMAND EXPORT ──────────────────────────────────────────────
 
 module.exports = {
-    name: 'uriel',
+    name: 'uriel', // Command name is set to uriel
     isPrefixless: true,
     category: 'ai',
     permission: 'public',
