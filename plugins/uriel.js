@@ -143,7 +143,6 @@ function getRegistry() {
 }
 
 // ─── CONSTANTS ──────────────────────────────────────────────────────
-const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions";
 const COOLDOWN_MS = 2000;
 const MAX_TRACKED_USERS = 100;
 
@@ -304,7 +303,7 @@ function buildCommandList(userContext) {
     return output.trim();
 }
 
-// ─── GEMINI API CALL (With automatic failover / retry) ───────────
+// ─── NATIVE GEMINI API CALL (With failover and direct REST parsing) ──
 async function queryGemini(messages) {
     const apiKey = config.geminiApiKey;
     const primaryModel = config.geminiModel || "gemini-3.5-flash";
@@ -315,35 +314,68 @@ async function queryGemini(messages) {
         return "My connection is down. Please check the API key.";
     }
 
+    // Convert standard chat history message array to Gemini Native REST format
+    const contents = [];
+    let systemPrompt = "";
+
+    for (const msg of messages) {
+        if (msg.role === 'system') {
+            systemPrompt = msg.content;
+        } else {
+            contents.push({
+                role: msg.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: msg.content }]
+            });
+        }
+    }
+
     const makeRequest = async (modelName) => {
-        return await axios.post(GEMINI_BASE_URL, {
-            model: modelName,
-            messages,
-            temperature: 0.3,
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            },
-            timeout: 10000 
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey(modelName)}:generateContent?key=${apiKey}`;
+        const payload = {
+            contents: contentsFormat(messages),
+            generationConfig: {
+                temperature: 0.3
+            }
+        };
+
+        const resp = await axios.post(url, payload, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 10000
         });
+        
+        return resp.data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     };
+
+    // Formatter to clean up content arrays for Gemini REST APIs
+    function contentsFormat(msgs) {
+        const list = [];
+        for (const m of msgs) {
+            if (m.role === 'system') continue;
+            list.push({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: m.content }]
+            });
+        }
+        return list;
+    }
+
+    // Helper to format model strings into Gemini API keys
+    function modelKey(name) {
+        return name.toLowerCase().includes('gemini-') ? name : `gemini-${name}`;
+    }
 
     try {
         // Attempt 1: Primary Model (3.5 flash)
-        const resp = await makeRequest(primaryModel);
-        return resp.data.choices?.[0]?.message?.content || '';
+        return await makeRequest(primaryModel);
     } catch (err) {
         const statusCode = err.response?.status;
-        console.warn(`[URIEL] Primary model (${primaryModel}) failed with status ${statusCode || err.message}. Attempting failover...`);
+        console.warn(`[URIEL] Primary model (${primaryModel}) failed with status ${statusCode || err.message}. Attempting native failover...`);
 
         try {
-            // Attempt 2: Fallback Model (Universal stable free tier model)
-            const fallbackResp = await makeRequest(backupModel);
-            console.log(`[URIEL] Failover successful using backup model (${backupModel}).`);
-            return fallbackResp.data.choices?.[0]?.message?.content || '';
+            // Attempt 2: Fallover Model (1.5 flash)
+            return await makeRequest(backupModel);
         } catch (fallbackErr) {
-            console.error('[URIEL] Both primary and backup Gemini endpoints are unavailable:', fallbackErr.response?.data || fallbackErr.message);
+            console.error('[URIEL] Both primary and backup Gemini native endpoints are unavailable:', fallbackErr.response?.data || fallbackErr.message);
             return "I'm having trouble thinking right now. Try again in a moment.";
         }
     }
@@ -432,7 +464,7 @@ async function executeCommand(tag, sock, msg, userContext) {
 
     try {
         console.log(`[URIEL] Attempting execution of command: "${command}" with args: "${args}"`);
-        // PARAMETER ALIGNMENT: (sock, msg, args, opts)
+        // FIXED PARAMETER ALIGNMENT: (sock, msg, args, opts)
         await entry.execute(sock, msg, args, executionContext);
         return true;
     } catch (err) {
