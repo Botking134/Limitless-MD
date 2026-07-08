@@ -569,7 +569,8 @@ module.exports = [
         }
     },
 
-    // 11. Song (interactive)
+
+// 11. Song (interactive search with split image + audio delivery)
     {
         name: 'song',
         isPrefixless: false,
@@ -577,17 +578,20 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const query = args?.trim();
             if (!query) return await sock.sendMessage(jid, { text: "❌ Provide a song name." }, { quoted: msg });
+            
             await sock.sendMessage(jid, { text: "🔍 Searching..." }, { quoted: msg });
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 5 });
                 if (!data?.result) return await sock.sendMessage(jid, { text: "❌ No songs found." });
                 const song = data.result;
+                
                 let list = `🎵 *Song Found:*\n\n1. *${song.title}*\n`;
                 if (song.duration) list += `   ⏱️ ${song.duration}\n`;
                 list += `\n📌 Reply with **1** to download.`;
+                
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
                 
-                // Registered via safe session helper
+                // Registered via safe session helper, pointing to the handleSongReply function above
                 registerSession('song', prompt.key.id, { results: [song], handle: handleSongReply });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Search failed: ${err.message}` });
@@ -595,7 +599,7 @@ module.exports = [
         }
     },
 
-    // 12. Play (direct with native music card previews)
+    // 12. Play (direct song fetch with safe split delivery)
     {
         name: 'play',
         isPrefixless: false,
@@ -603,6 +607,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const query = args?.trim();
             if (!query) return await sock.sendMessage(jid, { text: "❌ Provide a song name." }, { quoted: msg });
+            
             await sock.sendMessage(jid, { text: "⏳ Fetching song..." }, { quoted: msg });
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 1 });
@@ -610,30 +615,30 @@ module.exports = [
                 const song = data.result;
                 const downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
                 if (!downloadUrl) throw new Error('No download link');
+                
                 const audioBuffer = await fetchBuffer(downloadUrl);
                 let thumbBuffer = null;
-                if (song.thumbnail) try { thumbBuffer = await fetchBuffer(song.thumbnail); } catch (e) {}
-                
-                const audioPayload = {
+                if (song.thumbnail) {
+                    try { 
+                        thumbBuffer = await fetchBuffer(song.thumbnail); 
+                    } catch (e) {
+                        console.log("[Play Command] Failed to download thumbnail fallback.");
+                    }
+                }
+
+                // 1. Send high-quality image with song details in caption (keeps layout compatible)
+                if (thumbBuffer) {
+                    const caption = `🎵 *${song.title}*\n👤 *Artist:* ${song.artist || 'Limitless Music'}\n⏱️ *Duration:* ${song.duration || 'N/A'}`;
+                    await sock.sendMessage(jid, { image: thumbBuffer, caption: caption }, { quoted: msg });
+                }
+
+                // 2. Send clean audio bubble immediately after
+                await sock.sendMessage(jid, {
                     audio: audioBuffer,
                     mimetype: 'audio/mpeg',
                     ptt: false
-                };
+                }, { quoted: msg });
 
-                if (thumbBuffer) {
-                    audioPayload.contextInfo = {
-                        externalAdReply: {
-                            title: song.title,
-                            body: song.artist || 'Limitless Music',
-                            thumbnail: thumbBuffer,
-                            mediaType: 2, // Tells WhatsApp to render as a native music card
-                            mediaUrl: downloadUrl,
-                            sourceUrl: downloadUrl
-                        }
-                    };
-                }
-
-                await sock.sendMessage(jid, audioPayload, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
             }
@@ -687,7 +692,7 @@ module.exports = [
                 let list = `📦 *${data.result.title || 'Stickers'}*\n\n`;
                 for (let i = 0; i < maxShow; i++) {
                     const s = stickers[i];
-                    list += `${i+1}. ${s.emoji || '📌'} ${s.is_animated ? '🔄' : ''}\n`;
+                    list += `${i+1}. ${s.emoji || '📌'} ${s.is_animated ? '🔄 (Animated)' : ''}\n`;
                 }
                 if (stickers.length > 20) {
                     list += `\n*Showing first 20 of ${stickers.length}*`;
@@ -696,7 +701,7 @@ module.exports = [
 
                 const prompt = await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
                 
-                // Registered via safe session helper
+                // Registered via safe session helper, pointing to the handleTgsReply function above
                 registerSession('tgs', prompt.key.id, {
                     stickers: stickers,
                     token: token,
@@ -711,8 +716,8 @@ module.exports = [
                 });
             }
         }
-    }, 
-
+    },
+    
     // 14. APK
     {
         name: 'apk',
