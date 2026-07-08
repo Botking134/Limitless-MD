@@ -1218,6 +1218,7 @@ module.exports = [
         }
     },
 
+
 // 20. TOJID (Uploads status restricted to members of a specific group JID)
     {
         name: 'tojid',
@@ -1225,14 +1226,18 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
 
-            // 1. Check Permissions
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'tojid');
-            if (!isAuthorized) return;
+            // 1. Direct Permission Check (Bypasses missing verifyPermissions function)
+            const isAuthorized = isOwner || isSudo || isDev;
+            if (!isAuthorized) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ You are not authorized to use this command." 
+                }, { quoted: msg });
+            }
 
             // 2. Parse Arguments
             const parts = args ? args.trim().split(/\s+/) : [];
-            const targetGroupJid = parts[0]; // First argument must be the group JID
-            const statusText = parts.slice(1).join(' '); // Rest of the arguments are the custom text
+            const targetGroupJid = parts[0]; 
+            const statusText = parts.slice(1).join(' '); 
 
             // Validate Group JID format
             if (!targetGroupJid || !targetGroupJid.endsWith('@g.us')) {
@@ -1256,7 +1261,7 @@ module.exports = [
                     throw new Error("Could not retrieve group metadata. Ensure the bot is a member of that group.");
                 }
 
-                // Extract participant JIDs as the target list
+                // Extract participant JIDs
                 const targetParticipants = groupMetadata.participants.map(p => p.id);
 
                 // Case A: User replied to media (Image, Video, or Audio)
@@ -1271,7 +1276,6 @@ module.exports = [
                         buffer = Buffer.concat([buffer, chunk]);
                     }
 
-                    // Caption prioritizes statusText, then falls back to original caption
                     const finalCaption = statusText || targetMessage.caption || '';
 
                     let mediaOptions = {};
@@ -1298,7 +1302,6 @@ module.exports = [
                 } else {
                     let textToUpload = statusText;
 
-                    // If no statusText was typed, check if they replied to a text message
                     if (!textToUpload && rawContent) {
                         textToUpload = rawContent.conversation || rawContent.extendedTextMessage?.text || '';
                     }
@@ -1331,6 +1334,8 @@ module.exports = [
             }
         }
     },
+
+
 
 
     // 32. VV (Manual ViewOnce Decryption - Fixed media pulling using getRawMessage)
