@@ -659,7 +659,7 @@ module.exports = [
             const token = config.telegramBotToken;
             if (!token) {
                 return await sock.sendMessage(jid, {
-                    text: "❌ Telegram Bot Token not configured. Please add TELEGRAM_BOT_TOKEN to your .env file.",
+                    text: "❌ Telegram Bot Token not configured. Please add TELEGRAM_BOT_TOKEN to your config file",
                     edit: statusMsg.key
                 });
             }
