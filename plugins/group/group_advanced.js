@@ -1021,16 +1021,28 @@ const advancedGroupCommands = [
         }
     },
 
-    // 19. GCSTATUS (Uploads text or replied media to status)
+
+// 19. GCSTATUS (Uploads text or replied media to status)
     {
         name: 'gcstatus',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
 
-            // 1. Check Permissions
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'gcstatus');
-            if (!isAuthorized) return;
+            if (!isGroup) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ This command must be executed inside a group chat." 
+                }, { quoted: msg });
+            }
+
+            // 1. Direct Permission Check (Bypasses missing verifyPermissions function)
+            const isAuthorized = isOwner || isSudo || isDev;
+            if (!isAuthorized) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ You are not authorized to use this command." 
+                }, { quoted: msg });
+            }
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = quoted ? getRawMessage(quoted) : null;
@@ -1038,6 +1050,12 @@ const advancedGroupCommands = [
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+
+                // 2. Fetch the group participants (Audience) to make the status visible to them
+                await sock.sendMessage(jid, { text: "⏳ Fetching group members to target status..." }, { quoted: msg });
+                
+                const groupMetadata = await sock.groupMetadata(jid);
+                const targetParticipants = groupMetadata.participants.map(p => p.id);
 
                 // Case A: User replied to media (Image, Video, or Audio)
                 if (rawContent && (rawContent.videoMessage || rawContent.imageMessage || rawContent.audioMessage)) {
@@ -1051,7 +1069,7 @@ const advancedGroupCommands = [
                         buffer = Buffer.concat([buffer, chunk]);
                     }
 
-                    // Determine caption: prioritize user argument (gcstatus <text>), then fallback to original caption
+                    // Determine caption
                     const finalCaption = args?.trim() || targetMessage.caption || '';
 
                     let mediaOptions = {};
@@ -1060,7 +1078,6 @@ const advancedGroupCommands = [
                     } else if (mediaType === "video") {
                         mediaOptions = { video: buffer, caption: finalCaption };
                     } else if (mediaType === "audio") {
-                        // For audio status, we configure it as a voice status if supported
                         mediaOptions = { 
                             audio: buffer, 
                             mimetype: targetMessage.mimetype || 'audio/mp4',
@@ -1068,16 +1085,17 @@ const advancedGroupCommands = [
                         };
                     }
 
-                    await sock.sendMessage(statusJid, mediaOptions);
+                    // Upload to status with target audience
+                    await sock.sendMessage(statusJid, mediaOptions, { statusJidList: targetParticipants });
+                    
                     await sock.sendMessage(jid, { 
-                        text: `✅ Successfully uploaded ${mediaType} to Status!` 
+                        text: `✅ Successfully uploaded ${mediaType} to Status restricted to *${groupMetadata.subject}* members!` 
                     }, { quoted: msg });
 
-                // Case B: Text-only status (User typed: .gcstatus <text> OR replied to a text message)
+                // Case B: Text-only status
                 } else {
                     let textToUpload = args?.trim();
 
-                    // If no direct args, check if they replied to a text message
                     if (!textToUpload && rawContent) {
                         textToUpload = rawContent.conversation || rawContent.extendedTextMessage?.text || '';
                     }
@@ -1088,15 +1106,17 @@ const advancedGroupCommands = [
                         }, { quoted: msg });
                     }
 
-                    // Send text status with background color configuration
+                    // Upload text to status with target audience
                     await sock.sendMessage(statusJid, { 
                         text: textToUpload,
-                        backgroundColor: '#111b21', // Dark WhatsApp background theme
+                        backgroundColor: '#111b21',
                         font: 1
+                    }, { 
+                        statusJidList: targetParticipants 
                     });
 
                     await sock.sendMessage(jid, { 
-                        text: "✅ Successfully uploaded text to Status!" 
+                        text: `✅ Successfully uploaded text status restricted to *${groupMetadata.subject}* members!` 
                     }, { quoted: msg });
                 }
 
@@ -1108,7 +1128,7 @@ const advancedGroupCommands = [
             }
         }
     },
-
+   
 
     // 20. POLL
     {
