@@ -448,12 +448,13 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return;
         }
 
+        // FIXED LIST: Added 'uriel' to interactive whitelist to bypass private mode checks cleanly
         const interactiveResponses = [
             'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
             'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend',
             'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download',
-            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans'
+            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans', 'uriel'
         ];
 
         if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) {
