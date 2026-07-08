@@ -1219,118 +1219,70 @@ module.exports = [
     },
 
 
-// 20. TOJID (Uploads status restricted to members of a specific group JID)
+// 20. TOJID (Direct Group JID Status Upload)
     {
         name: 'tojid',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
 
-            // 1. Direct Permission Check (Bypasses missing verifyPermissions function)
+            // Direct permission check (bypasses missing verifyPermissions function)
             const isAuthorized = isOwner || isSudo || isDev;
-            if (!isAuthorized) {
-                return await sock.sendMessage(jid, { 
-                    text: "❌ You are not authorized to use this command." 
-                }, { quoted: msg });
+            if (!isAuthorized) return;
+
+            const argsStr = Array.isArray(args) ? args.join(' ').trim() : (args || '').trim();
+            const targetJid = argsStr ? argsStr.split(' ')[0] : '';
+            if (!targetJid || !targetJid.endsWith('@g.us')) {
+                return await sock.sendMessage(jid, { text: "❌ Provide a valid group JID." });
             }
-
-            // 2. Parse Arguments
-            const parts = args ? args.trim().split(/\s+/) : [];
-            const targetGroupJid = parts[0]; 
-            const statusText = parts.slice(1).join(' '); 
-
-            // Validate Group JID format
-            if (!targetGroupJid || !targetGroupJid.endsWith('@g.us')) {
-                return await sock.sendMessage(jid, { 
-                    text: "❌ Please provide a valid group JID as the first argument.\nExample: `.tojid 120363123456789@g.us Hello members!`" 
-                }, { quoted: msg });
-            }
-
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const remaining = argsStr.replace(targetJid, '').trim();
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = quoted ? getRawMessage(quoted) : null;
-            const statusJid = 'status@broadcast';
-
             try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const { downloadContentFromMessage, prepareWAMessageMedia, generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
+                let messagePayload = {};
+                let mediaType = null;
+                let buffer = null;
+                let caption = '';
+                let targetMsg = null; // Correctly scoped outside the block
 
-                // 3. Fetch Group Participants to target the status
-                await sock.sendMessage(jid, { text: "⏳ Fetching group members to target status..." }, { quoted: msg });
-                
-                const groupMetadata = await sock.groupMetadata(targetGroupJid);
-                if (!groupMetadata || !groupMetadata.participants) {
-                    throw new Error("Could not retrieve group metadata. Ensure the bot is a member of that group.");
+                if (rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage) {
+                    mediaType = rawContent.imageMessage ? 'image' : (rawContent.videoMessage ? 'video' : 'audio');
+                    targetMsg = rawContent[mediaType + 'Message'];
+                    const stream = await downloadContentFromMessage(targetMsg, mediaType);
+                    let buf = Buffer.from([]);
+                    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+                    buffer = buf;
+                    caption = targetMsg.caption || '';
                 }
 
-                // Extract participant JIDs
-                const targetParticipants = groupMetadata.participants.map(p => p.id);
-
-                // Case A: User replied to media (Image, Video, or Audio)
-                if (rawContent && (rawContent.videoMessage || rawContent.imageMessage || rawContent.audioMessage)) {
-                    const mediaType = rawContent.videoMessage ? "video" : (rawContent.imageMessage ? "image" : "audio");
-                    const targetMessage = rawContent[mediaType + "Message"];
-
-                    // Download the media buffer
-                    const stream = await downloadContentFromMessage(targetMessage, mediaType);
-                    let buffer = Buffer.from([]);
-                    for await (const chunk of stream) {
-                        buffer = Buffer.concat([buffer, chunk]);
-                    }
-
-                    const finalCaption = statusText || targetMessage.caption || '';
-
-                    let mediaOptions = {};
-                    if (mediaType === "image") {
-                        mediaOptions = { image: buffer, caption: finalCaption };
-                    } else if (mediaType === "video") {
-                        mediaOptions = { video: buffer, caption: finalCaption };
-                    } else if (mediaType === "audio") {
-                        mediaOptions = { 
-                            audio: buffer, 
-                            mimetype: targetMessage.mimetype || 'audio/mp4',
-                            ptt: true 
-                        };
-                    }
-
-                    // Send media status restricted to target participants
-                    await sock.sendMessage(statusJid, mediaOptions, { statusJidList: targetParticipants });
-                    
-                    await sock.sendMessage(jid, { 
-                        text: `✅ Successfully uploaded ${mediaType} to Status restricted to *${groupMetadata.subject}* members!` 
-                    }, { quoted: msg });
-
-                // Case B: Text-only status
+                if (buffer) {
+                    const mediaOptions = mediaType === 'image' ? { image: buffer, caption } :
+                                       (mediaType === 'video' ? { video: buffer, caption } :
+                                       { audio: buffer, mimetype: targetMsg.mimetype, ptt: targetMsg.ptt || false, seconds: targetMsg.seconds });
+                    const prepared = await prepareWAMessageMedia(mediaOptions, { upload: sock.waUploadToServer });
+                    const msgObj = {};
+                    if (mediaType === 'image') msgObj.imageMessage = prepared.imageMessage;
+                    else if (mediaType === 'video') msgObj.videoMessage = prepared.videoMessage;
+                    else msgObj.audioMessage = prepared.audioMessage;
+                    messagePayload = { groupStatusMessageV2: { message: msgObj } };
                 } else {
-                    let textToUpload = statusText;
-
-                    if (!textToUpload && rawContent) {
-                        textToUpload = rawContent.conversation || rawContent.extendedTextMessage?.text || '';
+                    const text = remaining || quoted?.conversation || quoted?.extendedTextMessage?.text || '';
+                    if (!text) {
+                        return await sock.sendMessage(jid, { text: "❌ Provide text or reply to media." });
                     }
-
-                    if (!textToUpload) {
-                        return await sock.sendMessage(jid, { 
-                            text: "❌ Provide text to upload or reply to a message.\nExample: `.tojid <group-jid> status message`" 
-                        }, { quoted: msg });
-                    }
-
-                    // Send text status restricted to target participants
-                    await sock.sendMessage(statusJid, { 
-                        text: textToUpload,
-                        backgroundColor: '#111b21',
-                        font: 1
-                    }, { 
-                        statusJidList: targetParticipants 
-                    });
-
-                    await sock.sendMessage(jid, { 
-                        text: `✅ Successfully uploaded text status restricted to *${groupMetadata.subject}* members!` 
-                    }, { quoted: msg });
+                    const randomHex = Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+                    const bgColor = (0xff000000 + parseInt(randomHex, 16)) | 0; // Force signed 32-bit conversion
+                    messagePayload = { groupStatusMessageV2: { message: { extendedTextMessage: { text, backgroundArgb: bgColor, font: 2 } } } };
                 }
 
+                const statusMsg = generateWAMessageFromContent(targetJid, proto.Message.fromObject(messagePayload), { userJid: sock.user.id });
+                await sock.relayMessage(targetJid, statusMsg.message, { messageId: statusMsg.key.id });
+                
+                // Only sends the final success reaction confirmation (no intermediate processing logs)
+                await sock.sendMessage(jid, { react: { text: '✓', key: msg.key } });
             } catch (e) {
-                console.error("tojid error:", e);
-                await sock.sendMessage(jid, { 
-                    text: `❌ Failed to target status: ${e.message}` 
-                }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `❌ Failed: ${e.message}` });
             }
         }
     },
