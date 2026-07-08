@@ -1021,114 +1021,67 @@ const advancedGroupCommands = [
         }
     },
 
-
-// 19. GCSTATUS (Uploads text or replied media to status)
+// 19. GCSTATUS (Silent Group Status Upload)
     {
         name: 'gcstatus',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
+            if (!jid.endsWith('@g.us')) return;
 
-            if (!isGroup) {
-                return await sock.sendMessage(jid, { 
-                    text: "❌ This command must be executed inside a group chat." 
-                }, { quoted: msg });
-            }
-
-            // 1. Direct Permission Check (Bypasses missing verifyPermissions function)
+            // Direct permission check (bypasses missing verifyPermissions function)
             const isAuthorized = isOwner || isSudo || isDev;
-            if (!isAuthorized) {
-                return await sock.sendMessage(jid, { 
-                    text: "❌ You are not authorized to use this command." 
-                }, { quoted: msg });
-            }
+            if (!isAuthorized) return;
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = quoted ? getRawMessage(quoted) : null;
-            const statusJid = 'status@broadcast';
-
             try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const { downloadContentFromMessage, prepareWAMessageMedia, generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
+                let messagePayload = {};
+                let mediaType = null;
+                let buffer = null;
+                let caption = '';
+                let targetMsg = null; // Correctly scoped outside the block
 
-                // 2. Fetch the group participants (Audience) to make the status visible to them
-                await sock.sendMessage(jid, { text: "⏳ Fetching group members to target status..." }, { quoted: msg });
-                
-                const groupMetadata = await sock.groupMetadata(jid);
-                const targetParticipants = groupMetadata.participants.map(p => p.id);
-
-                // Case A: User replied to media (Image, Video, or Audio)
-                if (rawContent && (rawContent.videoMessage || rawContent.imageMessage || rawContent.audioMessage)) {
-                    const mediaType = rawContent.videoMessage ? "video" : (rawContent.imageMessage ? "image" : "audio");
-                    const targetMessage = rawContent[mediaType + "Message"];
-
-                    // Download the media buffer
-                    const stream = await downloadContentFromMessage(targetMessage, mediaType);
-                    let buffer = Buffer.from([]);
-                    for await (const chunk of stream) {
-                        buffer = Buffer.concat([buffer, chunk]);
-                    }
-
-                    // Determine caption
-                    const finalCaption = args?.trim() || targetMessage.caption || '';
-
-                    let mediaOptions = {};
-                    if (mediaType === "image") {
-                        mediaOptions = { image: buffer, caption: finalCaption };
-                    } else if (mediaType === "video") {
-                        mediaOptions = { video: buffer, caption: finalCaption };
-                    } else if (mediaType === "audio") {
-                        mediaOptions = { 
-                            audio: buffer, 
-                            mimetype: targetMessage.mimetype || 'audio/mp4',
-                            ptt: true 
-                        };
-                    }
-
-                    // Upload to status with target audience
-                    await sock.sendMessage(statusJid, mediaOptions, { statusJidList: targetParticipants });
-                    
-                    await sock.sendMessage(jid, { 
-                        text: `✅ Successfully uploaded ${mediaType} to Status restricted to *${groupMetadata.subject}* members!` 
-                    }, { quoted: msg });
-
-                // Case B: Text-only status
-                } else {
-                    let textToUpload = args?.trim();
-
-                    if (!textToUpload && rawContent) {
-                        textToUpload = rawContent.conversation || rawContent.extendedTextMessage?.text || '';
-                    }
-
-                    if (!textToUpload) {
-                        return await sock.sendMessage(jid, { 
-                            text: "❌ Provide text or reply to a media/text message to upload to status." 
-                        }, { quoted: msg });
-                    }
-
-                    // Upload text to status with target audience
-                    await sock.sendMessage(statusJid, { 
-                        text: textToUpload,
-                        backgroundColor: '#111b21',
-                        font: 1
-                    }, { 
-                        statusJidList: targetParticipants 
-                    });
-
-                    await sock.sendMessage(jid, { 
-                        text: `✅ Successfully uploaded text status restricted to *${groupMetadata.subject}* members!` 
-                    }, { quoted: msg });
+                if (rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.audioMessage) {
+                    mediaType = rawContent.imageMessage ? 'image' : (rawContent.videoMessage ? 'video' : 'audio');
+                    targetMsg = rawContent[mediaType + 'Message'];
+                    const stream = await downloadContentFromMessage(targetMsg, mediaType);
+                    let buf = Buffer.from([]);
+                    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+                    buffer = buf;
+                    caption = targetMsg.caption || '';
                 }
 
+                if (buffer) {
+                    const mediaOptions = mediaType === 'image' ? { image: buffer, caption } :
+                                       (mediaType === 'video' ? { video: buffer, caption } :
+                                       { audio: buffer, mimetype: targetMsg.mimetype, ptt: targetMsg.ptt || false, seconds: targetMsg.seconds });
+                    const prepared = await prepareWAMessageMedia(mediaOptions, { upload: sock.waUploadToServer });
+                    const msgObj = {};
+                    if (mediaType === 'image') msgObj.imageMessage = prepared.imageMessage;
+                    else if (mediaType === 'video') msgObj.videoMessage = prepared.videoMessage;
+                    else msgObj.audioMessage = prepared.audioMessage;
+                    messagePayload = { groupStatusMessageV2: { message: msgObj } };
+                } else {
+                    const text = (Array.isArray(args) ? args.join(' ').trim() : args) || quoted?.conversation || quoted?.extendedTextMessage?.text || '';
+                    if (!text) return; // Silent exit
+                    const randomHex = Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+                    const bgColor = (0xff000000 + parseInt(randomHex, 16)) | 0; // Force signed 32-bit conversion
+                    messagePayload = { groupStatusMessageV2: { message: { extendedTextMessage: { text, backgroundArgb: bgColor, font: 2 } } } };
+                }
+
+                const statusMsg = generateWAMessageFromContent(jid, proto.Message.fromObject(messagePayload), { userJid: sock.user.id });
+                await sock.relayMessage(jid, statusMsg.message, { messageId: statusMsg.key.id });
+                
+                // Silent execution: No message reactions, success messages, or error notifications are sent to the chat.
             } catch (e) {
-                console.error("gcstatus error:", e);
-                await sock.sendMessage(jid, { 
-                    text: `❌ Failed to upload status: ${e.message}` 
-                }, { quoted: msg });
+                console.error("[gcstatus Error]:", e.message);
             }
         }
     },
-   
+
+  
 
     // 20. POLL
     {
