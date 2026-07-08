@@ -205,7 +205,7 @@ function isAddressed(sock, msg) {
         ? normalizeToJid(sock.user.id) 
         : (sock.user?.jid ? normalizeToJid(sock.user.jid) : '');
 
-    // Point 6: Highly improved reply detection checks (since we decorateQuoted early)
+    // Point 6: Highly improved reply-context detection (Fully parsed due to early execution of decorateQuoted)
     let quotedParticipant = '';
     if (msg.quoted?.sender) quotedParticipant = normalizeToJid(msg.quoted.sender);
     else if (msg.quoted?.participant) quotedParticipant = normalizeToJid(msg.quoted.participant);
@@ -313,10 +313,10 @@ function buildCommandList(userContext) {
     return output.trim();
 }
 
-// ─── Point 1 & 2: GROQ API CALL WITH 10S TIMEOUT & 8192 TOKENS ───
+// ─── Point 1 & 2: HIGH THROUGHPUT GROQ API CALL ────────────────────
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
-    const model = "Llama-4-Scout-17B-16E-Instruct";
+    const model = config.groqModel || "llama-3.1-8b-instant"; // Configured for highest daily throughput
 
     if (!apiKey) {
         console.error('[URIEL] Groq API key missing.');
@@ -333,7 +333,7 @@ async function queryGroq(messages) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`
             },
-            timeout: 10000 // Point 2: 10s strict timeout
+            timeout: 10000 // Point 2: 10s strict timeout for faster thinking cycles
         });
         return resp.data.choices?.[0]?.message?.content || '';
     } catch (err) {
