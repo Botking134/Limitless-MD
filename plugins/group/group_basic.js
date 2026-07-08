@@ -437,7 +437,7 @@ module.exports = [
             const code = await sock.groupInviteCode(jid);
             const inviteLink = `https://chat.whatsapp.com/${code}`;
 
-            await sock.sendMessage(jid, { text: `🔮 *Limitless Domain Link:*\n\n${inviteLink}` }, { quoted: msg });
+            await sock.sendMessage(jid, { text: `${inviteLink}` }, { quoted: msg });
         }
     },
 
