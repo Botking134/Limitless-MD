@@ -215,7 +215,7 @@ module.exports = {
         'juaKTR64',
         'bSbIHjLe',
         'RxGeL9yw'
-    ].join('')
+    ].join(''),
 
 
 
