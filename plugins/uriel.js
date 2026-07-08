@@ -536,6 +536,8 @@ module.exports = {
     execute: async (sock, msg, args, userContext) => {
         const jid = msg.key.remoteJid;
         const sender = msg.key.participant || jid;
+        const prefix = getPrefix();
+        const textMessageBody = getMessageText(msg).trim();
 
         const now = Date.now();
         if (cooldowns.has(sender) && now - cooldowns.get(sender) < COOLDOWN_MS) {
@@ -543,11 +545,44 @@ module.exports = {
         }
         cooldowns.set(sender, now);
 
+        // ─── STEP 0.1: COMMAND ACTIVE/TOGGLE CHECKS ───
+        if (!config.urielActive) config.urielActive = {};
+
+        // If the user runs the command with the prefix (e.g., .uriel on / .uriel off)
+        if (textMessageBody.startsWith(`${prefix}uriel`)) {
+            const { isOwner, isSudo, isDev } = userContext;
+            const canToggle = isOwner || isSudo || isDev;
+            
+            if (!canToggle) {
+                return await sock.sendMessage(jid, { text: "❌ Only authorized users (Owner, Sudo, Dev) can toggle Uriel." }, { quoted: msg });
+            }
+
+            const commandArg = textMessageBody.slice(`${prefix}uriel`.length).trim().toLowerCase();
+            if (commandArg === 'on') {
+                config.urielActive[jid] = true;
+                saveState();
+                return await sock.sendMessage(jid, { text: "🟢 *Uriel has been activated in this chat.*" }, { quoted: msg });
+            } else if (commandArg === 'off') {
+                config.urielActive[jid] = false;
+                saveState();
+                return await sock.sendMessage(jid, { text: "💤 *Uriel has been deactivated in this chat.*" }, { quoted: msg });
+            } else {
+                const currentStatus = config.urielActive[jid] !== false ? "Active 🟢" : "Inactive 💤";
+                return await sock.sendMessage(jid, { 
+                    text: `🤖 *Uriel AI Assistant Status:* \`${currentStatus}\`\n\nUse \`${prefix}uriel on\` or \`${prefix}uriel off\` to toggle.` 
+                }, { quoted: msg });
+            }
+        }
+
+        // Global check: Uriel defaults to ON (true) unless explicitly toggled OFF (false)
+        const isUrielEnabled = config.urielActive[jid] !== false;
+        if (!isUrielEnabled) return;
+
         const botJid = sock.user?.id 
             ? normalizeToJid(sock.user.id) 
             : (sock.user?.jid ? normalizeToJid(sock.user.jid) : '');
 
-        // ─── STEP 0: INTERACTIVE SESSION BYPASS ───
+        // ─── STEP 0.2: INTERACTIVE DOWNLOADER SESSION BYPASS ───
         const rawMsgContent = getRawMessage(msg.message);
         const contextInfo = rawMsgContent?.extendedTextMessage?.contextInfo ||
                             rawMsgContent?.imageMessage?.contextInfo ||
@@ -571,6 +606,33 @@ module.exports = {
                 console.log(`[URIEL] Bypassing AI processing: Reply is targeting an active downloader/interactive session (${quotedMsgId}).`);
                 return; // Silence exit so SessionManager can process the selection
             }
+        }
+
+        // ─── STEP 0.3: GAME REDIRECT & ACTIVE GAME SESSION BYPASS ───
+        const quotedUpper = (contextInfo?.quotedMessage ? getMessageText({ message: contextInfo.quotedMessage }) : '').toUpperCase();
+        const isGameReply = quotedUpper && (
+            quotedUpper.includes('VAULT 8: STEP') ||
+            quotedUpper.includes('ESCAPE: STEP') ||
+            quotedUpper.includes('GUESS THE NUMBER') ||
+            quotedUpper.includes('MILLIONAIRE') ||
+            quotedUpper.includes('TIC-TAC-TOE') ||
+            quotedUpper.includes('TIC TAC TOE') ||
+            quotedUpper.includes('ROCK PAPER SCISSORS') ||
+            quotedUpper.includes('TRUE OR FALSE') ||
+            quotedUpper.includes('CHARADE') ||
+            quotedUpper.includes('SHARADE') ||
+            quotedUpper.includes('WORD CHAIN GAME') ||
+            quotedUpper.includes('ANAGRAM')
+        );
+
+        const isActiveGame = quotedMsgId && (
+            (global.triviaSessions && Object.values(global.triviaSessions).some(s => s.lastQuestionMsgId === quotedMsgId)) ||
+            (global.pvpSessions && Object.values(global.pvpSessions).some(s => s.lastQuestionMsgId === quotedMsgId))
+        );
+
+        if (isGameReply || isActiveGame) {
+            console.log(`[URIEL] Bypassing AI processing: Reply is targeting an active game session or game redirect.`);
+            return; // Silence exit so GameInterceptors can process the reply
         }
 
         // Decorates nested quoted message context immediately before the addressing checks execute
@@ -600,7 +662,6 @@ module.exports = {
         } else {
             // Standard API LLM Reasoning Fallback
             const cmdList = buildCommandList(userContext);
-            const prefix = getPrefix();
             
             const systemPrompt = `
 You are Uriel, an extremely human, warm, and casual AI assistant for the Limitless MD WhatsApp bot.
