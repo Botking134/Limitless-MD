@@ -216,4 +216,16 @@ module.exports = {
         'bSbIHjLe',
         'RxGeL9yw'
     ].join('')
+
+
+
+telegramBotToken: [
+    '89891615',
+    '11:AAEjE',
+    'O3nvYMH1',
+    'almQy_8O',
+    'xzLCgmE9',
+    'sBdMDg'
+].join('')
+
 };
