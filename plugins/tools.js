@@ -1218,6 +1218,121 @@ module.exports = [
         }
     },
 
+// 20. TOJID (Uploads status restricted to members of a specific group JID)
+    {
+        name: 'tojid',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            // 1. Check Permissions
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'tojid');
+            if (!isAuthorized) return;
+
+            // 2. Parse Arguments
+            const parts = args ? args.trim().split(/\s+/) : [];
+            const targetGroupJid = parts[0]; // First argument must be the group JID
+            const statusText = parts.slice(1).join(' '); // Rest of the arguments are the custom text
+
+            // Validate Group JID format
+            if (!targetGroupJid || !targetGroupJid.endsWith('@g.us')) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ Please provide a valid group JID as the first argument.\nExample: `.tojid 120363123456789@g.us Hello members!`" 
+                }, { quoted: msg });
+            }
+
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawContent = quoted ? getRawMessage(quoted) : null;
+            const statusJid = 'status@broadcast';
+
+            try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+
+                // 3. Fetch Group Participants to target the status
+                await sock.sendMessage(jid, { text: "⏳ Fetching group members to target status..." }, { quoted: msg });
+                
+                const groupMetadata = await sock.groupMetadata(targetGroupJid);
+                if (!groupMetadata || !groupMetadata.participants) {
+                    throw new Error("Could not retrieve group metadata. Ensure the bot is a member of that group.");
+                }
+
+                // Extract participant JIDs as the target list
+                const targetParticipants = groupMetadata.participants.map(p => p.id);
+
+                // Case A: User replied to media (Image, Video, or Audio)
+                if (rawContent && (rawContent.videoMessage || rawContent.imageMessage || rawContent.audioMessage)) {
+                    const mediaType = rawContent.videoMessage ? "video" : (rawContent.imageMessage ? "image" : "audio");
+                    const targetMessage = rawContent[mediaType + "Message"];
+
+                    // Download the media buffer
+                    const stream = await downloadContentFromMessage(targetMessage, mediaType);
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) {
+                        buffer = Buffer.concat([buffer, chunk]);
+                    }
+
+                    // Caption prioritizes statusText, then falls back to original caption
+                    const finalCaption = statusText || targetMessage.caption || '';
+
+                    let mediaOptions = {};
+                    if (mediaType === "image") {
+                        mediaOptions = { image: buffer, caption: finalCaption };
+                    } else if (mediaType === "video") {
+                        mediaOptions = { video: buffer, caption: finalCaption };
+                    } else if (mediaType === "audio") {
+                        mediaOptions = { 
+                            audio: buffer, 
+                            mimetype: targetMessage.mimetype || 'audio/mp4',
+                            ptt: true 
+                        };
+                    }
+
+                    // Send media status restricted to target participants
+                    await sock.sendMessage(statusJid, mediaOptions, { statusJidList: targetParticipants });
+                    
+                    await sock.sendMessage(jid, { 
+                        text: `✅ Successfully uploaded ${mediaType} to Status restricted to *${groupMetadata.subject}* members!` 
+                    }, { quoted: msg });
+
+                // Case B: Text-only status
+                } else {
+                    let textToUpload = statusText;
+
+                    // If no statusText was typed, check if they replied to a text message
+                    if (!textToUpload && rawContent) {
+                        textToUpload = rawContent.conversation || rawContent.extendedTextMessage?.text || '';
+                    }
+
+                    if (!textToUpload) {
+                        return await sock.sendMessage(jid, { 
+                            text: "❌ Provide text to upload or reply to a message.\nExample: `.tojid <group-jid> status message`" 
+                        }, { quoted: msg });
+                    }
+
+                    // Send text status restricted to target participants
+                    await sock.sendMessage(statusJid, { 
+                        text: textToUpload,
+                        backgroundColor: '#111b21',
+                        font: 1
+                    }, { 
+                        statusJidList: targetParticipants 
+                    });
+
+                    await sock.sendMessage(jid, { 
+                        text: `✅ Successfully uploaded text status restricted to *${groupMetadata.subject}* members!` 
+                    }, { quoted: msg });
+                }
+
+            } catch (e) {
+                console.error("tojid error:", e);
+                await sock.sendMessage(jid, { 
+                    text: `❌ Failed to target status: ${e.message}` 
+                }, { quoted: msg });
+            }
+        }
+    },
+
+
     // 32. VV (Manual ViewOnce Decryption - Fixed media pulling using getRawMessage)
     {
         name: 'vv',
