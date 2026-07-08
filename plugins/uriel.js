@@ -274,11 +274,19 @@ function decorateQuotedMessage(msg) {
     }
 }
 
-// ─── COMMAND LIST BUILDER ──────────────────────────────────────────
+// ─── COMMAND LIST BUILDER (Optimized via Strategy 1, 2, & 3) ───────
 function buildCommandList(userContext) {
     const registry = getRegistry();
     const { isOwner, isDev, isSudo } = userContext;
     const prefix = getPrefix();
+
+    // Strategy 2: Admin/Host modification commands to omit dynamically for regular members
+    const privilegedCommands = new Set([
+        'addowner', 'delowner', 'upgrade', 'diagnose', 'update', 
+        'mode', 'setsudo', 'delsudo', 'restart', 'shutdown', 
+        'ban', 'unban', 'setvar', 'settings', 'games_closeall', 
+        'creategc', 'antipm'
+    ]);
 
     const allowed = new Set(['public']);
     if (isSudo || isDev || isOwner) allowed.add('sudo');
@@ -289,34 +297,54 @@ function buildCommandList(userContext) {
     const isMap = registry instanceof Map;
     const entries = isMap ? Array.from(registry.entries()) : Object.entries(registry);
 
+    // Strategy 1: Remove redundant alias logs, processing only the primary metadata commands
+    const seenCommands = new Set();
+
     for (const [key, entry] of entries) {
-        if (key === 'reload') continue;
+        if (key === 'reload' || key === 'uriel') continue;
         const meta = entry?.metadata || entry;
         if (!meta) continue;
         
         const permission = meta.permission || 'public';
         if (!allowed.has(permission)) continue;
 
+        const cleanKey = key.toLowerCase().replace(prefix, '');
+        
+        // Strategy 2 Check: Omit administrative entries for standard public users
+        if (!isOwner && !isDev && !isSudo && privilegedCommands.has(cleanKey)) {
+            continue;
+        }
+
+        // Strategy 1 Check: Omit aliases pointing to already mapped files
+        const primaryName = meta.name || cleanKey;
+        if (seenCommands.has(primaryName)) {
+            continue;
+        }
+        seenCommands.add(primaryName);
+
         const cat = meta.category || 'tools';
         if (!categories[cat]) categories[cat] = [];
         
-        const display = meta.isPrefixless ? key : `${prefix}${key}`;
-        const usage = meta.usage || display;
-        categories[cat].push(`  ${usage} — ${meta.description || 'No description'}`);
+        const display = meta.isPrefixless ? primaryName : `${prefix}${primaryName}`;
+        const desc = (meta.description || 'No description').trim();
+        
+        // Strategy 3: Dense and highly compact inline formatting
+        categories[cat].push(`${display}(${desc})`);
     }
 
-    let output = "AVAILABLE COMMANDS:\n\n";
+    // Strategy 3: Single-line category consolidation
+    let output = "AVAILABLE COMMANDS:\n";
     for (const [cat, cmds] of Object.entries(categories)) {
-        output += `📂 ${cat.toUpperCase()}\n`;
-        output += cmds.join('\n') + '\n\n';
+        if (cmds.length === 0) continue;
+        output += `• ${cat.toUpperCase()}: ${cmds.join(', ')}\n`;
     }
     return output.trim();
 }
 
-// ─── Point 1 & 2: HIGH THROUGHPUT GROQ API CALL ────────────────────
+// ─── Point 1 & 2: HIGH-THROUGHPUT GROQ API CALL ────────────────────
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
-    const model = config.groqModel || "llama-3.1-8b-instant"; // Configured for highest daily throughput
+    const model = "llama-3.1-8b-instant"; // High-throughput model
 
     if (!apiKey) {
         console.error('[URIEL] Groq API key missing.');
@@ -327,13 +355,13 @@ async function queryGroq(messages) {
             model,
             messages,
             temperature: 0.5,
-            max_tokens: 8192 // Point 1: 8192 max tokens
+            max_tokens: 300 // OPTIMIZED VALUE: Prevents daily rate limits and matches free tier TPM quotas perfectly
         }, {
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`
             },
-            timeout: 10000 // Point 2: 10s strict timeout for faster thinking cycles
+            timeout: 10000 // Point 2: 10s strict timeout
         });
         return resp.data.choices?.[0]?.message?.content || '';
     } catch (err) {
@@ -518,7 +546,7 @@ You: "Generating your sticker now. [CMD: ${prefix}sticker]"
 
         manageMemoryUsage(jid);
         // Point 2: Trimmed history length for speed optimization
-        const history = memory[jid].slice(-6);
+        const history = memory[jid].slice(-5);
 
         const messages = [
             { role: 'system', content: systemPrompt },
