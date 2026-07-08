@@ -183,9 +183,12 @@ function getMessageText(msg) {
     );
 }
 
+// Upgraded to preserve `@lid` domains for modern account authentication
 function normalizeToJid(id) {
     if (!id) return '';
-    return id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+    const clean = id.split(':')[0].split('@')[0];
+    const domain = id.includes('@lid') ? '@lid' : '@s.whatsapp.net';
+    return clean + domain;
 }
 
 function isAddressed(sock, msg) {
@@ -515,7 +518,6 @@ async function executeCommand(tag, sock, msg, userContext) {
 
     try {
         console.log(`[URIEL] Attempting execution of command: "${command}" with args: "${args}"`);
-        // FIXED CALL REF: Executes the resolved raw command function directly to ensure perfect compatibility
         await commandFunction(sock, msg, args, executionContext);
         return true;
     } catch (err) {
@@ -544,6 +546,32 @@ module.exports = {
         const botJid = sock.user?.id 
             ? normalizeToJid(sock.user.id) 
             : (sock.user?.jid ? normalizeToJid(sock.user.jid) : '');
+
+        // ─── STEP 0: INTERACTIVE SESSION BYPASS ───
+        const rawMsgContent = getRawMessage(msg.message);
+        const contextInfo = rawMsgContent?.extendedTextMessage?.contextInfo ||
+                            rawMsgContent?.imageMessage?.contextInfo ||
+                            rawMsgContent?.videoMessage?.contextInfo ||
+                            rawMsgContent?.contextInfo ||
+                            msg.message?.contextInfo ||
+                            msg.contextInfo;
+        const quotedMsgId = contextInfo?.stanzaId;
+
+        if (quotedMsgId) {
+            const isSessionReply = 
+                (global.songSessions && global.songSessions[quotedMsgId]) ||
+                (global.tgsSessions && global.tgsSessions[quotedMsgId]) ||
+                (global.lyricsSessions && global.lyricsSessions[quotedMsgId]) ||
+                (global.xvidSessions && global.xvidSessions[quotedMsgId]) ||
+                (global.noteSessions && global.noteSessions[quotedMsgId]) ||
+                (global.reminderSessions && global.reminderSessions[quotedMsgId]) ||
+                (global.azaSessions && global.azaSessions[quotedMsgId]);
+
+            if (isSessionReply) {
+                console.log(`[URIEL] Bypassing AI processing: Reply is targeting an active downloader/interactive session (${quotedMsgId}).`);
+                return; // Silence exit so SessionManager can process the selection
+            }
+        }
 
         // Decorates nested quoted message context immediately before the addressing checks execute
         decorateQuotedMessage(msg, botJid);
