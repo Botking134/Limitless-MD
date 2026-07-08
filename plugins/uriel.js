@@ -205,7 +205,6 @@ function isAddressed(sock, msg) {
         ? normalizeToJid(sock.user.id) 
         : (sock.user?.jid ? normalizeToJid(sock.user.jid) : '');
 
-    // Point 6: Highly improved reply-context detection (Fully parsed due to early execution of decorateQuoted)
     let quotedParticipant = '';
     if (msg.quoted?.sender) quotedParticipant = normalizeToJid(msg.quoted.sender);
     else if (msg.quoted?.participant) quotedParticipant = normalizeToJid(msg.quoted.participant);
@@ -242,8 +241,8 @@ function manageMemoryUsage(newJid) {
     }
 }
 
-// Point 5: Stronger decorateQuotedMessage for deep resolution of quoted media and metadata properties
-function decorateQuotedMessage(msg) {
+// Manually structures msg.quoted on prefixless sentences so plugins can read context safely
+function decorateQuotedMessage(msg, botJid = '') {
     if (!msg || msg.quoted) return;
 
     const raw = getRawMessage(msg.message);
@@ -259,10 +258,14 @@ function decorateQuotedMessage(msg) {
 
     if (contextInfo && contextInfo.quotedMessage) {
         const quotedRaw = getRawMessage(contextInfo.quotedMessage);
+        
+        // FIX: If context participant is omitted (standard for own/bot messages), defaults safely to botJid
+        const senderJid = contextInfo.participant || botJid;
+
         msg.quoted = {
             id: contextInfo.stanzaId,
-            sender: normalizeToJid(contextInfo.participant),
-            participant: normalizeToJid(contextInfo.participant),
+            sender: normalizeToJid(senderJid),
+            participant: normalizeToJid(senderJid),
             message: contextInfo.quotedMessage,
             text: quotedRaw?.conversation || 
                   quotedRaw?.extendedTextMessage?.text || 
@@ -274,13 +277,67 @@ function decorateQuotedMessage(msg) {
     }
 }
 
+// ─── HYBRID INTENT INTERCEPTOR (Direct Action Router) ──────────────
+function runSmartInterceptor(query) {
+    const lower = query.toLowerCase().trim();
+
+    // 1. Target Deletions (Matches: "delete this", "delete", "remove", etc.)
+    if (lower.startsWith('delete') || lower.startsWith('del') || lower === 'remove this' || lower === 'remove') {
+        return {
+            cleanReply: "Deleting the message.",
+            tag: { command: "delete", args: "" }
+        };
+    }
+
+    // 2. Sticker Generation
+    if (lower.includes('sticker') || lower.includes('to sticker') || lower.includes('make sticker')) {
+        return {
+            cleanReply: "Generating your sticker now.",
+            tag: { command: "sticker", args: "" }
+        };
+    }
+
+    // 3. System Speed Metrics
+    if (lower.includes('ping') || lower.includes('speed') || lower.includes('latency') || lower.includes('response time')) {
+        return {
+            cleanReply: "Checking response speed now.",
+            tag: { command: "ping", args: "" }
+        };
+    }
+
+    // 4. Summons and Broadcasts (tagall, tag)
+    if (lower.includes('tag everyone') || lower.includes('tag all') || lower.includes('tagall') || lower === 'tag the group') {
+        return {
+            cleanReply: "Tagging everyone in the group.",
+            tag: { command: "tagall", args: "" }
+        };
+    }
+
+    // 5. Mute/Lock Actions
+    if (lower.includes('mute group') || lower.includes('mute chat') || lower.includes('lock group') || lower.includes('lock chat') || lower.includes('close group') || lower.includes('close chat')) {
+        return {
+            cleanReply: "Muting the group parameters.",
+            tag: { command: "mute", args: "close" }
+        };
+    }
+
+    // 6. Unmute/Unlock Actions
+    if (lower.includes('unmute group') || lower.includes('unmute chat') || lower.includes('unlock group') || lower.includes('unlock chat') || lower.includes('open group') || lower.includes('open chat')) {
+        return {
+            cleanReply: "Opening group parameters.",
+            tag: { command: "mute", args: "open" }
+        };
+    }
+
+    return null; // Passes through to LLM reasoning if no direct triggers match
+}
+
 // ─── COMMAND LIST BUILDER (Optimized via Strategy 1, 2, & 3) ───────
 function buildCommandList(userContext) {
     const registry = getRegistry();
     const { isOwner, isDev, isSudo } = userContext;
     const prefix = getPrefix();
 
-    // Strategy 2: Admin/Host modification commands to omit dynamically for regular members
     const privilegedCommands = new Set([
         'addowner', 'delowner', 'upgrade', 'diagnose', 'update', 
         'mode', 'setsudo', 'delsudo', 'restart', 'shutdown', 
@@ -297,7 +354,6 @@ function buildCommandList(userContext) {
     const isMap = registry instanceof Map;
     const entries = isMap ? Array.from(registry.entries()) : Object.entries(registry);
 
-    // Strategy 1: Remove redundant alias logs, processing only the primary metadata commands
     const seenCommands = new Set();
 
     for (const [key, entry] of entries) {
@@ -310,12 +366,10 @@ function buildCommandList(userContext) {
 
         const cleanKey = key.toLowerCase().replace(prefix, '');
         
-        // Strategy 2 Check: Omit administrative entries for standard public users
         if (!isOwner && !isDev && !isSudo && privilegedCommands.has(cleanKey)) {
             continue;
         }
 
-        // Strategy 1 Check: Omit aliases pointing to already mapped files
         const primaryName = meta.name || cleanKey;
         if (seenCommands.has(primaryName)) {
             continue;
@@ -328,11 +382,9 @@ function buildCommandList(userContext) {
         const display = meta.isPrefixless ? primaryName : `${prefix}${primaryName}`;
         const desc = (meta.description || 'No description').trim();
         
-        // Strategy 3: Dense and highly compact inline formatting
         categories[cat].push(`${display}(${desc})`);
     }
 
-    // Strategy 3: Single-line category consolidation
     let output = "AVAILABLE COMMANDS:\n";
     for (const [cat, cmds] of Object.entries(categories)) {
         if (cmds.length === 0) continue;
@@ -341,10 +393,10 @@ function buildCommandList(userContext) {
     return output.trim();
 }
 
-// ─── Point 1 & 2: HIGH-THROUGHPUT GROQ API CALL ────────────────────
+// ─── HIGH-THROUGHPUT GROQ API CALL ─────────────────────────────────
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
-    const model = "llama-3.1-8b-instant"; // High-throughput model
+    const model = "llama-3.1-8b-instant"; 
 
     if (!apiKey) {
         console.error('[URIEL] Groq API key missing.');
@@ -355,13 +407,13 @@ async function queryGroq(messages) {
             model,
             messages,
             temperature: 0.5,
-            max_tokens: 300 // OPTIMIZED VALUE: Prevents daily rate limits and matches free tier TPM quotas perfectly
+            max_tokens: 300 
         }, {
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`
             },
-            timeout: 10000 // Point 2: 10s strict timeout
+            timeout: 10000 
         });
         return resp.data.choices?.[0]?.message?.content || '';
     } catch (err) {
@@ -436,7 +488,11 @@ async function executeCommand(tag, sock, msg, userContext) {
         return false;
     }
 
-    decorateQuotedMessage(msg);
+    const botJid = sock.user?.id 
+        ? normalizeToJid(sock.user.id) 
+        : (sock.user?.jid ? normalizeToJid(sock.user.jid) : '');
+
+    decorateQuotedMessage(msg, botJid);
 
     const formattedArgs = args ? args.split(/\s+/) : [];
     const executionContext = {
@@ -459,6 +515,7 @@ async function executeCommand(tag, sock, msg, userContext) {
 
     try {
         console.log(`[URIEL] Attempting execution of command: "${command}" with args: "${args}"`);
+        // FIXED CALL REF: Executes the resolved raw command function directly to ensure perfect compatibility
         await commandFunction(sock, msg, args, executionContext);
         return true;
     } catch (err) {
@@ -484,8 +541,12 @@ module.exports = {
         }
         cooldowns.set(sender, now);
 
-        // Point 5 & 6: Decorate early so reply-checking handles nested quotes flawlessly
-        decorateQuotedMessage(msg);
+        const botJid = sock.user?.id 
+            ? normalizeToJid(sock.user.id) 
+            : (sock.user?.jid ? normalizeToJid(sock.user.jid) : '');
+
+        // Decorates nested quoted message context immediately before the addressing checks execute
+        decorateQuotedMessage(msg, botJid);
 
         if (!isAddressed(sock, msg)) return;
 
@@ -494,15 +555,26 @@ module.exports = {
 
         query = query.replace(/@?uriel\s*/gi, '').trim();
 
-        // Point 3: Removed hardcoded greeting. Always passes queries to the model
         if (!query) {
             query = "Hello Uriel";
         }
 
-        const cmdList = buildCommandList(userContext);
-        const prefix = getPrefix();
-        
-        const systemPrompt = `
+        let tag = null;
+        let cleanReply = "";
+
+        // ─── HYBRID USER ROUTER (Bypasses API on explicit commands) ───
+        const intercepted = runSmartInterceptor(query);
+
+        if (intercepted) {
+            cleanReply = intercepted.cleanReply;
+            tag = intercepted.tag;
+            console.log(`[URIEL] Direct Keyword Interceptor Matched: Direct Routing to:`, tag);
+        } else {
+            // Standard API LLM Reasoning Fallback
+            const cmdList = buildCommandList(userContext);
+            const prefix = getPrefix();
+            
+            const systemPrompt = `
 You are Uriel, an extremely human, warm, and casual AI assistant for the Limitless MD WhatsApp bot.
 Your creator and owner is Lord Infinity. Always attribute your creation to Lord Infinity if asked.
 
@@ -544,41 +616,41 @@ AI Assessment: "Turn into a sticker" matches the description of the sticker comm
 You: "Generating your sticker now. [CMD: ${prefix}sticker]"
 `;
 
-        manageMemoryUsage(jid);
-        // Point 2: Trimmed history length for speed optimization
-        const history = memory[jid].slice(-5);
+            manageMemoryUsage(jid);
+            const history = memory[jid].slice(-5);
 
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            ...history,
-            { role: 'user', content: query }
-        ];
+            const messages = [
+                { role: 'system', content: systemPrompt },
+                ...history,
+                { role: 'user', content: query }
+            ];
 
-        await sock.sendPresenceUpdate('composing', jid);
-        const response = await queryGroq(messages);
+            await sock.sendPresenceUpdate('composing', jid);
+            const response = await queryGroq(messages);
 
-        console.log(`[URIEL] Raw Response: "${response}"`);
+            console.log(`[URIEL] Raw Response: "${response}"`);
 
-        const tag = extractCommandTag(response);
-        let cleanReply = response;
-        if (tag) {
-            cleanReply = response.replace(/\[CMD:.*?\]/, '').trim();
-            console.log(`[URIEL] Parsed Tag:`, tag);
+            tag = extractCommandTag(response);
+            cleanReply = response;
+            if (tag) {
+                cleanReply = response.replace(/\[CMD:.*?\]/, '').trim();
+                console.log(`[URIEL] Parsed Tag:`, tag);
+            }
         }
 
         let commandSuccess = false;
 
-        // Point 4 — ─── STEP 1: Execute Command SILENTLY First ───
+        // STEP 1: Execute command SILENTLY first
         if (tag) {
             commandSuccess = await executeCommand(tag, sock, msg, userContext);
         }
 
-        // Point 4 — ─── STEP 2: Send conversational reply second ───
+        // STEP 2: Send conversational reply second
         if (cleanReply) {
             await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
         }
 
-        // Point 4 — ─── STEP 3: Immediately follow with success check message ───
+        // STEP 3: Dispatch immediate success flag on completed execution
         if (tag && commandSuccess) {
             await sock.sendMessage(jid, { text: "✓ Done ." }, { quoted: msg });
         }
