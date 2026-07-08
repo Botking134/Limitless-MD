@@ -197,32 +197,62 @@ module.exports = [
         }
     },
 
-    // 4. .summon — Roleplay Character
+    // 4. .summon — Roleplay Character (Fixed media handling and isolated try-catch blocks)
     {
         name: 'summon',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const spaceIndex = args ? args.indexOf(' ') : -1;
-            if (spaceIndex === -1) return await sock.sendMessage(jid, { text: "❌ Format: .summon Character Prompt" }, { quoted: msg });
+            if (spaceIndex === -1) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ Format: .summon Character Prompt" 
+                }, { quoted: msg });
+            }
 
             const character = args.slice(0, spaceIndex).trim();
             const query = args.slice(spaceIndex + 1).trim();
 
+            // 1. Attempt to play the summoning animation (isolated so failure here won't stop the AI response)
             try {
-                // Summoning animation trigger with custom caption
+                // Direct link to the media file on Catbox
+                const summonVideoUrl = "https://files.catbox.moe/2bg9l1.mp4"; 
+
                 await sock.sendMessage(jid, {
-                    video: { url: "https://klipy.com/gifs/madara-37" },
-                    caption: `Summoning Jutsu!!\n*${character}* Rise...🧙‍♂️`,
+                    video: { url: summonVideoUrl },
+                    caption: `🔮 Summoning Jutsu!!\n*${character}* Rise...🧙‍♂️`,
                     gifPlayback: true
                 }, { quoted: msg });
+            } catch (mediaError) {
+                // If the video fails, log the error but still proceed with the AI response
+                console.error("[Summon Media Error] Failed to send summoning animation:", mediaError.message);
+                
+                // Send a simple text fallback instead
+                await sock.sendMessage(jid, { 
+                    text: `🔮 *Summoning Jutsu... establishing contact with ${character}...*` 
+                }, { quoted: msg });
+            }
 
+            // 2. Query the character response via Groq
+            try {
                 const summonPrompt = `[System: You are '${character}'. Respond strictly in character using their lore and tone. Keep it concise.]\nQuery: ${query}`;
 
-                const responseText = await queryGroq([{ role: "user", content: summonPrompt }], "llama-3.3-70b-versatile");
-                await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+                // Switched to 'llama-3.1-8b-instant' for much faster roleplay response times
+                const responseText = await queryGroq(
+                    [{ role: "user", content: summonPrompt }], 
+                    "llama-3.1-8b-instant"
+                );
+
+                if (responseText) {
+                    await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+                } else {
+                    throw new Error("Empty response from AI");
+                }
             } catch (error) {
-                await sock.sendMessage(jid, { text: `❌ Failed to establish communication with ${character}.` }, { quoted: msg });
+                console.error("[Summon AI Error]:", error);
+                await sock.sendMessage(jid, { 
+                    text: `❌ Failed to establish communication with ${character}.` 
+                }, { quoted: msg });
             }
         }
     },
