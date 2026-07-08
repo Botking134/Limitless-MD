@@ -3,9 +3,16 @@ const config = require('../config');
 const { saveState, normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios'); // Added for API and sticker downloads
 
 const remindersPath = path.join(__dirname, '../storage/reminders.json');
 const notesPath = path.join(__dirname, '../storage/notes.json');
+
+// Helper to fetch files as buffers safely
+async function fetchBuffer(url) {
+    const response = await axios.get(url, { responseType: 'arraybuffer' });
+    return Buffer.from(response.data);
+}
 
 // ─── DECOUPLED REMINDERS STORAGE HANDLERS ───────────────────────
 
@@ -308,6 +315,105 @@ async function handleDownloaderSessions(sock, msg, text, quotedMsgId) {
     return false;
 }
 
+// ─── STABLE DOWNLOADER SESSION REPLIES ───────────────────────────
+
+// Safe split image/caption + audio reply handler
+async function handleSongReply(sock, msg, session, text) {
+    const jid = msg.key.remoteJid;
+    const num = parseInt(text.trim());
+    if (isNaN(num)) return;
+
+    const song = session.results[num - 1];
+    if (!song) return;
+
+    await sock.sendMessage(jid, { text: "⏳ Downloading and preparing your audio..." }, { quoted: msg });
+
+    try {
+        const downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
+        if (!downloadUrl) throw new Error('No download link found');
+
+        const audioBuffer = await fetchBuffer(downloadUrl);
+        let thumbBuffer = null;
+        if (song.thumbnail) {
+            try { 
+                thumbBuffer = await fetchBuffer(song.thumbnail); 
+            } catch (e) {
+                console.log("[Song Reply] Could not download thumbnail.");
+            }
+        }
+
+        // 1. Send the thumbnail first as a standalone image message with song details
+        if (thumbBuffer) {
+            const caption = `🎵 *${song.title}*\n👤 *Artist:* ${song.artist || 'Limitless Music'}\n⏱️ *Duration:* ${song.duration || 'N/A'}`;
+            await sock.sendMessage(jid, { image: thumbBuffer, caption: caption }, { quoted: msg });
+        }
+
+        // 2. Send the raw audio block separately to avoid WhatsApp Messenger layout errors
+        await sock.sendMessage(jid, {
+            audio: audioBuffer,
+            mimetype: 'audio/mpeg',
+            ptt: false
+        }, { quoted: msg });
+
+    } catch (err) {
+        console.error('[Song Reply Error]:', err.message);
+        await sock.sendMessage(jid, { text: `❌ Download failed: ${err.message}` }, { quoted: msg });
+    }
+}
+
+// Safe WebP static-only sticker downloader reply handler
+async function handleTgsReply(sock, msg, session, text) {
+    const jid = msg.key.remoteJid;
+    const num = parseInt(text.trim());
+    if (isNaN(num)) return;
+
+    const stickers = session.stickers || [];
+    if (num < 1 || num > stickers.length) {
+        return await sock.sendMessage(jid, { 
+            text: `❌ Invalid choice. Please reply with a number between 1 and ${stickers.length}.` 
+        }, { quoted: msg });
+    }
+
+    const sticker = stickers[num - 1];
+    if (!sticker) return;
+
+    // Filter out animated/video stickers immediately to prevent server crashes
+    if (sticker.is_animated || sticker.is_video) {
+        return await sock.sendMessage(jid, { 
+            text: "❌ Animated and video stickers are currently not supported. Please choose a static (non-animated) sticker from the list." 
+        }, { quoted: msg });
+    }
+
+    await sock.sendMessage(jid, { text: "⏳ Fetching sticker from Telegram..." }, { quoted: msg });
+
+    try {
+        const token = session.token;
+        
+        // Fetch filePath from Telegram API
+        const fileResponse = await axios.get(`https://api.telegram.org/bot${token}/getFile?file_id=${sticker.file_id}`);
+        const fileData = fileResponse.data;
+        if (!fileData.ok) {
+            throw new Error(fileData.description || 'Failed to locate file path.');
+        }
+
+        const filePath = fileData.result.file_path;
+        const downloadUrl = `https://api.telegram.org/file/bot${token}/${filePath}`;
+
+        // Download WebP buffer
+        const stickerResponse = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+        const buffer = Buffer.from(stickerResponse.data);
+
+        // Deliver native WebP sticker to WhatsApp
+        await sock.sendMessage(jid, { sticker: buffer }, { quoted: msg });
+
+    } catch (err) {
+        console.error('[TGS Reply Error]:', err.message);
+        await sock.sendMessage(jid, { 
+            text: `❌ Failed to download and send sticker: ${err.message}` 
+        }, { quoted: msg });
+    }
+}
+
 // ─── GET RAW MESSAGE FALLBACK ────────────────────────────────────
 function getRawMessage(message) {
     if (!message) return null;
@@ -326,5 +432,7 @@ module.exports = {
     handleInteractiveSessions,
     handleDownloaderSessions,
     handleAfkDeactivation,
-    handleNoteSession
+    handleNoteSession,
+    handleSongReply, // Exported to use in commands
+    handleTgsReply  // Exported to use in commands
 };
