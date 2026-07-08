@@ -1029,67 +1029,94 @@ const advancedGroupCommands = [
         }
     },
 
-    // 19. TOGCSTATUS
+    // 19. GCSTATUS (Uploads text or replied media to status)
     {
-        name: 'togcstatus',
+        name: 'gcstatus',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'togcstatus');
+            // 1. Check Permissions
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'gcstatus');
             if (!isAuthorized) return;
 
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             const rawContent = quoted ? getRawMessage(quoted) : null;
+            const statusJid = 'status@broadcast';
 
             try {
-                const {
-                    downloadContentFromMessage,
-                    prepareWAMessageMedia,
-                    generateWAMessageFromContent,
-                    proto
-                } = await import('@itsliaaa/baileys');
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
 
-                let targetJid = jid;
-                let sendToStatus = false;
-
-                if (args && args.trim().endsWith('@g.us')) {
-                    targetJid = args.trim();
-                    sendToStatus = true;
-                }
-
-                let messagePayload = {};
-
+                // Case A: User replied to media (Image, Video, or Audio)
                 if (rawContent && (rawContent.videoMessage || rawContent.imageMessage || rawContent.audioMessage)) {
                     const mediaType = rawContent.videoMessage ? "video" : (rawContent.imageMessage ? "image" : "audio");
                     const targetMessage = rawContent[mediaType + "Message"];
 
+                    // Download the media buffer
                     const stream = await downloadContentFromMessage(targetMessage, mediaType);
                     let buffer = Buffer.from([]);
-                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                    for await (const chunk of stream) {
+                        buffer = Buffer.concat([buffer, chunk]);
+                    }
+
+                    // Determine caption: prioritize user argument (gcstatus <text>), then fallback to original caption
+                    const finalCaption = args?.trim() || targetMessage.caption || '';
 
                     let mediaOptions = {};
                     if (mediaType === "image") {
-                        mediaOptions = { image: buffer, caption: targetMessage.caption || '' };
+                        mediaOptions = { image: buffer, caption: finalCaption };
                     } else if (mediaType === "video") {
-                        mediaOptions = { video: buffer, caption: targetMessage.caption || '' };
+                        mediaOptions = { video: buffer, caption: finalCaption };
                     } else if (mediaType === "audio") {
-                        mediaOptions = { video: buffer, mimetype: rawContent.videoMessage.mimetype || "video/mp4", caption: rawContent.videoMessage.caption || "Saved status update 👁️" };
+                        // For audio status, we configure it as a voice status if supported
+                        mediaOptions = { 
+                            audio: buffer, 
+                            mimetype: targetMessage.mimetype || 'audio/mp4',
+                            ptt: true 
+                        };
                     }
 
-                    await sock.updateProfilePicture(jid, buffer);
+                    await sock.sendMessage(statusJid, mediaOptions);
                     await sock.sendMessage(jid, { 
-                        text: "✅ Successfully updated Group Profile Picture!" 
+                        text: `✅ Successfully uploaded ${mediaType} to Status!` 
+                    }, { quoted: msg });
+
+                // Case B: Text-only status (User typed: .gcstatus <text> OR replied to a text message)
+                } else {
+                    let textToUpload = args?.trim();
+
+                    // If no direct args, check if they replied to a text message
+                    if (!textToUpload && rawContent) {
+                        textToUpload = rawContent.conversation || rawContent.extendedTextMessage?.text || '';
+                    }
+
+                    if (!textToUpload) {
+                        return await sock.sendMessage(jid, { 
+                            text: "❌ Provide text or reply to a media/text message to upload to status." 
+                        }, { quoted: msg });
+                    }
+
+                    // Send text status with background color configuration
+                    await sock.sendMessage(statusJid, { 
+                        text: textToUpload,
+                        backgroundColor: '#111b21', // Dark WhatsApp background theme
+                        font: 1
+                    });
+
+                    await sock.sendMessage(jid, { 
+                        text: "✅ Successfully uploaded text to Status!" 
                     }, { quoted: msg });
                 }
+
             } catch (e) {
-                console.error("setgpp error:", e.message);
+                console.error("gcstatus error:", e);
                 await sock.sendMessage(jid, { 
-                    text: `❌ Failed to update profile picture: ${e.message}` 
+                    text: `❌ Failed to upload status: ${e.message}` 
                 }, { quoted: msg });
             }
         }
     },
+
 
     // 20. POLL
     {
