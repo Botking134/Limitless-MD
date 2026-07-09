@@ -1,6 +1,8 @@
 // helpers/SessionManager.js
 const config = require('../config');
-const { saveState, normalizeToJid } = require('../stateManager');
+// CIRCULAR DEPENDENCY FIX: Only import normalizeToJid here.
+// saveState is loaded dynamically inside the functions when needed.
+const { normalizeToJid } = require('../stateManager');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios'); // Added for API and sticker downloads
@@ -94,7 +96,10 @@ async function handleAfkDeactivation(sock, msg) {
 
     if (config.afk && config.afk[senderJid]) {
         delete config.afk[senderJid];
-        saveState();
+        
+        // LAZY-LOADING FIX: Prevent circular dependency loop crash
+        require('../stateManager').saveState();
+
         await sock.sendMessage(msg.key.remoteJid, {
             text: `👋 *Welcome back!* Your AFK mode has been deactivated.`
         }, { quoted: msg });
@@ -171,7 +176,10 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
                     return true;
                 }
                 config.aza = { set: true, account: session.account, bank: session.bank, name: name };
-                saveState();
+                
+                // LAZY-LOADING FIX: Prevent circular dependency loop crash
+                require('../stateManager').saveState();
+
                 await sock.sendMessage(jid, {
                     text: `✅ *Bank details saved successfully!*\n\n🏦 *Bank:* ${session.bank}\n💳 *Account:* ${session.account}\n👤 *Name:* ${name}`
                 });
