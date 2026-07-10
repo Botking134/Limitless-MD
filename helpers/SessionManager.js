@@ -10,6 +10,17 @@ const axios = require('axios'); // Added for API and sticker downloads
 const remindersPath = path.join(__dirname, '../storage/reminders.json');
 const notesPath = path.join(__dirname, '../storage/notes.json');
 
+// ─── SAFE GLOBAL REGISTRY INITIALIZERS ─────────────────────────
+global.songSessions = global.songSessions || {};
+global.tgsSessions = global.tgsSessions || {};
+global.lyricsSessions = global.lyricsSessions || {};
+global.xvidSessions = global.xvidSessions || {};
+global.noteSessions = global.noteSessions || {};
+global.reminderSessions = global.reminderSessions || {};
+global.azaSessions = global.azaSessions || {};
+global.cancelSessions = global.cancelSessions || {};
+global.forwardSessions = global.forwardSessions || {};
+
 // Helper to fetch files as buffers safely
 async function fetchBuffer(url) {
     const response = await axios.get(url, { responseType: 'arraybuffer' });
@@ -131,12 +142,15 @@ function registerSession(sessionType, promptId, data) {
 async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
     if (!quotedMsgId) return false;
 
+    // Defensive mapping to safeguard against undefined/type trim errors on media payloads
+    const messageText = (text || '').trim();
+
     // ─── AZA SESSION ───────────────────────────────────────────
     if (global.azaSessions && global.azaSessions[quotedMsgId]) {
         try {
             const session = global.azaSessions[quotedMsgId];
             if (session.step === 1) {
-                const account = text.trim();
+                const account = messageText;
                 if (!account || account.length < 5) {
                     await sock.sendMessage(jid, { text: "❌ Account number must be at least 5 digits. Please try again." });
                     return true;
@@ -153,7 +167,7 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
                 return true;
             }
             if (session.step === 2) {
-                const bank = text.trim();
+                const bank = messageText;
                 if (!bank) {
                     await sock.sendMessage(jid, { text: "❌ Bank name cannot be empty. Please try again." });
                     return true;
@@ -170,7 +184,7 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
                 return true;
             }
             if (session.step === 3) {
-                const name = text.trim();
+                const name = messageText;
                 if (!name) {
                     await sock.sendMessage(jid, { text: "❌ Account name cannot be empty. Please try again." });
                     return true;
@@ -205,7 +219,7 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
                 delete global.reminderSessions[quotedMsgId];
                 return true;
             }
-            const title = text.trim();
+            const title = messageText;
             if (!title) {
                 await sock.sendMessage(jid, { text: "❌ Reminder title cannot be empty." });
                 return true;
@@ -234,7 +248,7 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
     // ─── CANCEL SESSION ──────────────────────────────────────
     if (global.cancelSessions && global.cancelSessions[quotedMsgId]) {
         try {
-            const num = parseInt(text.trim());
+            const num = parseInt(messageText);
             if (isNaN(num)) {
                 await sock.sendMessage(jid, { text: "❌ Please enter a valid number from the list." });
                 return true;
@@ -260,7 +274,7 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
     // ─── FORWARD SESSION (Fixed native copyNForward payload delivery) ──
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
         try {
-            const target = text.trim();
+            const target = messageText;
             if (!target) return true;
             
             const targetJid = target.endsWith('@g.us') ? target : (target.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
@@ -337,7 +351,8 @@ async function handleSongReply(sock, msg, session, text) {
     await sock.sendMessage(jid, { text: "⏳ Downloading and preparing your audio..." }, { quoted: msg });
 
     try {
-        const downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
+        // FIX: Replaced custom missing function extractDownloadUrl with a robust fallback checks to prevent ReferenceErrors
+        const downloadUrl = song.download_url || song.download || song.url || song.link || '';
         if (!downloadUrl) throw new Error('No download link found');
 
         const audioBuffer = await fetchBuffer(downloadUrl);
