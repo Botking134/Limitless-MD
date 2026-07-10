@@ -645,7 +645,8 @@ module.exports = [
         }
     },
 
-    // 13. Telegram Stickers (using Telegram Bot API)
+    
+// 13. Telegram Stickers (using Telegram Bot API - Fixed Edit ID Reply Bug)
     {
         name: 'tgs',
         isPrefixless: false,
@@ -654,12 +655,13 @@ module.exports = [
             const url = args?.trim();
             if (!url) return await sock.sendMessage(jid, { text: "❌ Provide Telegram sticker pack URL.\nExample: `.tgs https://t.me/addstickers/doakesreactions`" }, { quoted: msg });
 
+            // 1. Send the initial loading message container (gets the persistent ID)
             const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack via Telegram API..." }, { quoted: msg });
 
             const token = config.telegramBotToken;
             if (!token) {
                 return await sock.sendMessage(jid, {
-                    text: "❌ Telegram Bot Token not configured. Please add TELEGRAM_BOT_TOKEN to your config file",
+                    text: "❌ Telegram Bot Token not configured. Please add TELEGRAM_BOT_TOKEN to your .env file.",
                     edit: statusMsg.key
                 });
             }
@@ -699,10 +701,12 @@ module.exports = [
                 }
                 list += `\n\n📌 Reply with number to download.`;
 
-                const prompt = await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
+                // 2. Edit the loading message to display the list
+                await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
                 
-                // Registered via safe session helper, pointing to the handleTgsReply function above
-                registerSession('tgs', prompt.key.id, {
+                // 3. FIX: Register the session under statusMsg.key.id (the original message container)
+                // This ensures replies to the edited message match correctly.
+                registerSession('tgs', statusMsg.key.id, {
                     stickers: stickers,
                     token: token,
                     handle: handleTgsReply,
