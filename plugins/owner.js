@@ -86,6 +86,11 @@ function getRawMessage(message) {
     return message;
 }
 
+// ─── HELPER: REPOSITORY URL (For Git Updates) ───────────────────
+function getRepoUrl() {
+    return config.repoUrl || 'https://github.com/itsliaaa/Limitless.git';
+}
+
 // ─── HELPER: PARSE TARGET ────────────────────────────────────────
 function parseTarget(msg, args) {
     const rawMsg = getRawMessage(msg.message);
@@ -214,26 +219,28 @@ async function ensureGitSetup(jid, sock, msg) {
 
 module.exports = [
 
-    // ─── DIAGNOSE ────────────────────────────────────────────────
-    {
-
-// 1. setprefix
+    // ─── SETPREFIX ───────────────────────────────────────────────
     {
         name: 'setprefix',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
-            const newPrefix = (args && args[0]) ? args[0].trim() : '';
+            const newPrefix = args ? args.trim() : '';
             if (!newPrefix) return await sock.sendMessage(jid, { text: '❌ Provide a new prefix.' });
-            config.prefix = newPrefix;
-            const state = readState();
-            state.prefix = newPrefix;
-            writeState(state);
-            await sock.sendMessage(jid, { text: `✅ Prefix set to: \`${newPrefix}\`` });
-            try { require('../commands').reload(); } catch (e) {}
+            
+            const success = setVar('prefix', newPrefix);
+            if (success) {
+                await sock.sendMessage(jid, { text: `✅ Prefix set to: \`${newPrefix}\`` });
+                try { require('../commands').reload(); } catch (e) {}
+            } else {
+                await sock.sendMessage(jid, { text: '❌ Failed to save prefix to vars.' });
+            }
         }
     },
+
+    // ─── DIAGNOSE ────────────────────────────────────────────────
+    {
         name: 'diagnose',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
@@ -282,110 +289,108 @@ module.exports = [
         }
     },
 
-    
-// ─── UPDATE ──────────────────────────────────────────────────────
-{
-    name: 'update',
-    isPrefixless: false,
-    execute: async (sock, msg, args, { isOwner }) => {
-        const jid = msg.key.remoteJid;
-        if (!isOwner) return;
+    // ─── UPDATE ──────────────────────────────────────────────────────
+    {
+        name: 'update',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner) return;
 
-        // ─── Ensure Git is set up ──────────────────────────────
-        await ensureGitSetup(jid, sock, msg);
+            // ─── Ensure Git is set up ──────────────────────────────
+            await ensureGitSetup(jid, sock, msg);
 
-        // ─── Extract action from args or button ──────────────────
-        let action = '';
-        if (args && args.trim() !== '') {
-            action = args.trim().toLowerCase();
-        } else {
-            const rawMsg = getRawMessage(msg.message);
-            const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
-                             rawMsg?.templateButtonReplyMessage?.selectedId ||
-                             '';
-            if (buttonId) {
-                const parts = buttonId.trim().split(' ');
-                if (parts.length > 1) {
-                    action = parts[1]?.toLowerCase().trim() || '';
+            // ─── Extract action from args or button ──────────────────
+            let action = '';
+            if (args && args.trim() !== '') {
+                action = args.trim().toLowerCase();
+            } else {
+                const rawMsg = getRawMessage(msg.message);
+                const buttonId = rawMsg?.buttonsResponseMessage?.selectedButtonId ||
+                                 rawMsg?.templateButtonReplyMessage?.selectedId ||
+                                 '';
+                if (buttonId) {
+                    const parts = buttonId.trim().split(' ');
+                    if (parts.length > 1) {
+                        action = parts[1]?.toLowerCase().trim() || '';
+                    }
                 }
             }
-        }
 
-        console.log(`[UPDATE] Action: "${action}"`);
+            console.log(`[UPDATE] Action: "${action}"`);
 
-        // ─── If action is "proceed" or "pull", just git pull ──
-        if (action === 'proceed' || action === 'pull') {
-            await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
+            // ─── If action is "proceed" or "pull", just git pull ──
+            if (action === 'proceed' || action === 'pull') {
+                await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
 
-            // Directly pull – no status check
-            execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
-                if (pullErr) {
-                    if (pullErr.message.includes('CONFLICT')) {
-                        return await sock.sendMessage(jid, {
-                            text: `❌ *Merge conflict detected!*\n${pullErr.message}\n\nResolve manually or use \`.git force\` if you're sure.`
-                        }, { quoted: msg });
+                // Directly pull – no status check
+                execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
+                    if (pullErr) {
+                        if (pullErr.message.includes('CONFLICT')) {
+                            return await sock.sendMessage(jid, {
+                                text: `❌ *Merge conflict detected!*\n${pullErr.message}\n\nResolve manually or use \`.git force\` if you're sure.`
+                            }, { quoted: msg });
+                        }
+                        return await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
                     }
-                    return await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
-                }
-                await sendUpdateSuccess(jid, sock, pullOut, msg);
-            });
-            return;
-        }
+                    await sendUpdateSuccess(jid, sock, pullOut, msg);
+                });
+                return;
+            }
 
-        // ─── Show update info (no status check) ──────────────────
-        execWithTimeout('git rev-parse --abbrev-ref HEAD', 10000, async (branchErr, branch) => {
-            branch = (branch || 'master').trim();
+            // ─── Show update info (no status check) ──────────────────
+            execWithTimeout('git rev-parse --abbrev-ref HEAD', 10000, async (branchErr, branch) => {
+                branch = (branch || 'master').trim();
 
-            execWithTimeout('git fetch', 30000, async (fetchErr) => {
-                if (fetchErr) {
-                    return await sock.sendMessage(jid, { text: `❌ *Error fetching updates:* ${fetchErr.message}` }, { quoted: msg });
-                }
-
-                execWithTimeout(`git rev-list HEAD..origin/${branch} --count`, 10000, async (countErr, stdout) => {
-                    if (countErr) {
-                        return await sock.sendMessage(jid, { text: `❌ *Error checking behind count:* ${countErr.message}` }, { quoted: msg });
-                    }
-                    const behind = parseInt(stdout.trim()) || 0;
-
-                    if (behind === 0) {
-                        return await sock.sendMessage(jid, { text: "❄️ *No updates available.*" }, { quoted: msg });
+                execWithTimeout('git fetch', 30000, async (fetchErr) => {
+                    if (fetchErr) {
+                        return await sock.sendMessage(jid, { text: `❌ *Error fetching updates:* ${fetchErr.message}` }, { quoted: msg });
                     }
 
-                    execWithTimeout(`git log --oneline -5 HEAD..origin/${branch}`, 10000, async (logErr, commitLog) => {
-                        if (logErr) {
-                            return await sock.sendMessage(jid, { text: `❌ *Error getting commit log:* ${logErr.message}` }, { quoted: msg });
+                    execWithTimeout(`git rev-list HEAD..origin/${branch} --count`, 10000, async (countErr, stdout) => {
+                        if (countErr) {
+                            return await sock.sendMessage(jid, { text: `❌ *Error checking behind count:* ${countErr.message}` }, { quoted: msg });
+                        }
+                        const behind = parseInt(stdout.trim()) || 0;
+
+                        if (behind === 0) {
+                            return await sock.sendMessage(jid, { text: "❄️ *No updates available.*" }, { quoted: msg });
                         }
 
-                        const techMsg =
-                            `🖥️  *SYSTEM UPDATE DETECTED*  🖥️\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                            `📡  Branch: \`${branch}\`\n` +
-                            `🔀  Commits behind: \`${behind}\`\n` +
-                            `📝  Latest commits:\n${commitLog || '  (no details)'}\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                            `Tap "Proceed" to pull and restart.`;
+                        execWithTimeout(`git log --oneline -5 HEAD..origin/${branch}`, 10000, async (logErr, commitLog) => {
+                            if (logErr) {
+                                return await sock.sendMessage(jid, { text: `❌ *Error getting commit log:* ${logErr.message}` }, { quoted: msg });
+                            }
 
-                        const buttonMessage = {
-                            text: techMsg,
-                            footer: "⚡ Limitless Update System",
-                            buttons: [
-                                {
-                                    buttonId: `${config.prefix}update proceed`,
-                                    buttonText: { displayText: "✅ Proceed" },
-                                    type: 1
-                                }
-                            ],
-                            headerType: 1
-                        };
+                            const techMsg =
+                                `🖥️  *SYSTEM UPDATE DETECTED*  🖥️\n` +
+                                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                `📡  Branch: \`${branch}\`\n` +
+                                `🔀  Commits behind: \`${behind}\`\n` +
+                                `📝  Latest commits:\n${commitLog || '  (no details)'}\n` +
+                                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                                `Tap "Proceed" to pull and restart.`;
 
-                        await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                            const buttonMessage = {
+                                text: techMsg,
+                                footer: "⚡ Limitless Update System",
+                                buttons: [
+                                    {
+                                        buttonId: `${config.prefix}update proceed`,
+                                        buttonText: { displayText: "✅ Proceed" },
+                                        type: 1
+                                    }
+                                ],
+                                headerType: 1
+                            };
+
+                            await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+                        });
                     });
                 });
             });
-        });
-    }
-}, 
-
+        }
+    }, 
 
     // ─── MODE ────────────────────────────────────────────────────
     {
@@ -630,7 +635,7 @@ module.exports = [
     {
         name: 'afk',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, senderNumber }) => {
+        execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
