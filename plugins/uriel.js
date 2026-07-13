@@ -6,6 +6,7 @@ const config = require('../config');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { saveState } = require('../stateManager');
 
 // ─── MASTER CACHE ──────────────────────────────────────────────────
 let cachedRegistry = null;
@@ -295,7 +296,7 @@ function runSmartInterceptor(query) {
     // 2. Sticker Generation
     if (lower.includes('sticker') || lower.includes('to sticker') || lower.includes('make sticker')) {
         return {
-            cleanReply: "Generating your sticker now.",
+            cleanReply: "Alright! Here's your sticker, let me know if you need anything else!",
             tag: { command: "sticker", args: "" }
         };
     }
@@ -303,7 +304,7 @@ function runSmartInterceptor(query) {
     // 3. System Speed Metrics
     if (lower.includes('ping') || lower.includes('speed') || lower.includes('latency') || lower.includes('response time')) {
         return {
-            cleanReply: "Checking response speed now.",
+            cleanReply: "Sure thing! Checking that speed for you now...",
             tag: { command: "ping", args: "" }
         };
     }
@@ -311,7 +312,7 @@ function runSmartInterceptor(query) {
     // 4. Summons and Broadcasts (tagall, tag)
     if (lower.includes('tag everyone') || lower.includes('tag all') || lower.includes('tagall') || lower === 'tag the group') {
         return {
-            cleanReply: "Tagging everyone in the group.",
+            cleanReply: "Okay! Summoning everyone in the group now.",
             tag: { command: "tagall", args: "" }
         };
     }
@@ -319,7 +320,7 @@ function runSmartInterceptor(query) {
     // 5. Mute/Lock Actions
     if (lower.includes('mute group') || lower.includes('mute chat') || lower.includes('lock group') || lower.includes('lock chat') || lower.includes('close group') || lower.includes('close chat')) {
         return {
-            cleanReply: "Muting the group parameters.",
+            cleanReply: "Locking down the group parameters now.",
             tag: { command: "mute", args: "close" }
         };
     }
@@ -327,7 +328,7 @@ function runSmartInterceptor(query) {
     // 6. Unmute/Unlock Actions
     if (lower.includes('unmute group') || lower.includes('unmute chat') || lower.includes('unlock group') || lower.includes('unlock chat') || lower.includes('open group') || lower.includes('open chat')) {
         return {
-            cleanReply: "Opening group parameters.",
+            cleanReply: "Opening up the group parameters for everyone.",
             tag: { command: "mute", args: "open" }
         };
     }
@@ -545,10 +546,7 @@ module.exports = {
         }
         cooldowns.set(sender, now);
 
-        // ─── STEP 0.1: COMMAND ACTIVE/TOGGLE CHECKS ───
-        if (!config.urielActive) config.urielActive = {};
-
-        // If the user runs the command with the prefix (e.g., .uriel on / .uriel off)
+        // ─── STEP 0.1: GLOBAL COMMAND ACTIVE/TOGGLE CHECKS ───
         if (textMessageBody.startsWith(`${prefix}uriel`)) {
             const { isOwner, isSudo, isDev } = userContext;
             const canToggle = isOwner || isSudo || isDev;
@@ -559,23 +557,23 @@ module.exports = {
 
             const commandArg = textMessageBody.slice(`${prefix}uriel`.length).trim().toLowerCase();
             if (commandArg === 'on') {
-                config.urielActive[jid] = true;
+                config.urielGlobalActive = true;
                 saveState();
-                return await sock.sendMessage(jid, { text: "🟢 *Uriel has been activated in this chat.*" }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "🟢 *𝘜𝘳𝘪𝘦𝘭 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘨𝘭𝘰𝘣𝘢𝘭𝘭𝘺 𝘢𝘤𝘳𝘰𝘴𝘴 𝘢𝘭𝘭 𝘤𝘩𝘢𝘵𝘴.*" }, { quoted: msg });
             } else if (commandArg === 'off') {
-                config.urielActive[jid] = false;
+                config.urielGlobalActive = false;
                 saveState();
-                return await sock.sendMessage(jid, { text: "💤 *Uriel has been deactivated in this chat.*" }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "💤 *𝘜𝘳𝘪𝘦𝘭 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘥𝘦𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘨𝘭𝘰𝘣𝘢𝘭𝘭𝘺 𝘢𝘤𝘳𝘰𝘴𝘴 𝘢𝘭𝘭 𝘤𝘩𝘢𝘵𝘴.*" }, { quoted: msg });
             } else {
-                const currentStatus = config.urielActive[jid] !== false ? "Active 🟢" : "Inactive 💤";
+                const currentStatus = config.urielGlobalActive !== false ? "Active 🟢" : "Inactive 💤";
                 return await sock.sendMessage(jid, { 
-                    text: `🤖 *Uriel AI Assistant Status:* \`${currentStatus}\`\n\nUse \`${prefix}uriel on\` or \`${prefix}uriel off\` to toggle.` 
+                    text: `🤖 *𝘜𝘳𝘪𝘦𝘭 𝘈𝘉 𝘈𝘴𝘴𝘪𝘴𝘵𝘢𝘯𝘵 𝘚𝘵𝘢𝘵𝘶𝘴:* \`${currentStatus}\`\n\nUse \`${prefix}uriel on\` or \`${prefix}uriel off\` to toggle globally.` 
                 }, { quoted: msg });
             }
         }
 
-        // Global check: Uriel defaults to ON (true) unless explicitly toggled OFF (false)
-        const isUrielEnabled = config.urielActive[jid] !== false;
+        // Global Active Check: Uriel defaults to active (true) unless globally toggled off (false)
+        const isUrielEnabled = config.urielGlobalActive !== false;
         if (!isUrielEnabled) return;
 
         const botJid = sock.user?.id 
@@ -685,7 +683,7 @@ COMMAND FORMAT RULES (STRICT):
 - Place the tag on its own line at the very end of your reply.
 - If no command matches the request, reply normally as a conversational assistant without a tag.
 - Do NOT invent commands that are not in the list.
-- Vary your reply length naturally depending on the user's request. If they ask a quick question or tell you to perform an action, keep your reply short, warm, and casual. If they ask for detailed information, explanations, or deep conversation, feel free to write longer, more comprehensive responses. Never write long paragraphs without a good reason.
+- Vary your reply length naturally depending on the user's request. Keep your tone highly casual and natural. For example, instead of saying "Generating your sticker now", say something warm and casual like: "Alright! Here's your sticker, I'll be here if you need anything else!" or "Sure thing! Checking that speed for you now...". Never write long paragraphs without a good reason.
 
 ${cmdList}
 
@@ -702,7 +700,7 @@ You: "Checking your ping speed now. [CMD: ${prefix}ping]"
 
 User: "Can you turn this into a sticker?"
 AI Assessment: "Turn into a sticker" matches the description of the sticker command.
-You: "Generating your sticker now. [CMD: ${prefix}sticker]"
+You: "Alright! Here's your sticker, let me know if you need anything else! [CMD: ${prefix}sticker]"
 `;
 
             manageMemoryUsage(jid);
@@ -734,14 +732,9 @@ You: "Generating your sticker now. [CMD: ${prefix}sticker]"
             commandSuccess = await executeCommand(tag, sock, msg, userContext);
         }
 
-        // STEP 2: Send conversational reply second
+        // STEP 2: Send conversational reply second (Third-step confirmation removed)
         if (cleanReply) {
             await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
-        }
-
-        // STEP 3: Dispatch immediate success flag on completed execution
-        if (tag && commandSuccess) {
-            await sock.sendMessage(jid, { text: "✓ Done ." }, { quoted: msg });
         }
 
         memory[jid].push({ role: 'user', content: query });
