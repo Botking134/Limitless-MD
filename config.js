@@ -84,7 +84,7 @@ module.exports = {
     gojoSleepChats: [],
 
     /** Global Gojo sleep toggle (true = prefixless Gojo is disabled everywhere). */
-    gojoGlobalSleep: false,
+    gojoGlobalSleep: true,
 
     // --- Group Security Protections (per group JID) ---
 
