@@ -216,6 +216,24 @@ module.exports = [
 
     // ─── DIAGNOSE ────────────────────────────────────────────────
     {
+
+// 1. setprefix
+    {
+        name: 'setprefix',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner) return;
+            const newPrefix = (args && args[0]) ? args[0].trim() : '';
+            if (!newPrefix) return await sock.sendMessage(jid, { text: '❌ Provide a new prefix.' });
+            config.prefix = newPrefix;
+            const state = readState();
+            state.prefix = newPrefix;
+            writeState(state);
+            await sock.sendMessage(jid, { text: `✅ Prefix set to: \`${newPrefix}\`` });
+            try { require('../commands').reload(); } catch (e) {}
+        }
+    },
         name: 'diagnose',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
