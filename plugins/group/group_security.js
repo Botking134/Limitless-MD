@@ -6,6 +6,12 @@ const { DEV_LIDS } = require('../devs');
 // ─── GLOBAL ──────────────────────────────────────────────────────
 global.silencedUsers = global.silencedUsers || {};
 
+// Safe Config Property Initializations
+config.antilink = config.antilink || {};
+config.antitag = config.antitag || {};
+config.antibot = config.antibot || {};
+config.antigm = config.antigm || {};
+
 // ─── HELPERS ──────────────────────────────────────────────────────
 
 function cleanJid(jid) {
@@ -45,7 +51,9 @@ function parseTargetUser(msg, args) {
     }
 
     if (args) {
-        const cleanDigits = args.replace(/[^0-9]/g, '');
+        const parts = args.trim().split(/\s+/);
+        const firstPart = parts[0];
+        const cleanDigits = firstPart.replace(/[^0-9]/g, '');
         if (cleanDigits.length >= 7) {
             return `${cleanDigits}@s.whatsapp.net`;
         }
@@ -135,54 +143,6 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
-// ─── SECURITY POLICY HELPER ────────────────────────────────────
-async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
-    if (!policy || policy === 'off') return;
-
-    if (policy === 'delete') {
-        try {
-            await sock.sendMessage(jid, { delete: msg.key });
-            await sock.sendMessage(jid, {
-                text: `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`,
-                mentions: [senderJid]
-            });
-        } catch (e) { /* ignore */ }
-    } else if (policy === 'warn') {
-        try {
-            await sock.sendMessage(jid, { delete: msg.key });
-            const warnKey = `${jid}_${senderNumber}`;
-            config.warns = config.warns || {};
-            config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
-            const count = config.warns[warnKey];
-            const threshold = config.warnThreshold || 5;
-
-            if (count >= threshold) {
-                await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-                await sock.sendMessage(jid, {
-                    text: `👋 @${senderNumber} kicked. Warnings exceeded (${count}/${threshold}) for violating ${violationReason} rules.`,
-                    mentions: [senderJid]
-                });
-                config.warns[warnKey] = 0;
-            } else {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ @${senderNumber} ${violationReason} is not allowed here! (${count}/${threshold})`,
-                    mentions: [senderJid]
-                });
-            }
-            saveState();
-        } catch (e) { /* ignore */ }
-    } else if (policy === 'kick') {
-        try {
-            await sock.sendMessage(jid, { delete: msg.key });
-            await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
-            await sock.sendMessage(jid, {
-                text: `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`,
-                mentions: [senderJid]
-            });
-        } catch (e) { /* ignore */ }
-    }
-}
-
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 const securityCommands = [
@@ -197,6 +157,8 @@ const securityCommands = [
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antilink');
             if (!isAuthorized) return;
+
+            config.antilink = config.antilink || {};
 
             if (!args) {
                 const current = config.antilink[jid] || 'off';
@@ -236,6 +198,8 @@ const securityCommands = [
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antitag');
             if (!isAuthorized) return;
+
+            config.antitag = config.antitag || {};
 
             if (!args) {
                 const current = config.antitag[jid] || 'off';
@@ -278,6 +242,8 @@ const securityCommands = [
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antibot');
             if (!isAuthorized) return;
 
+            config.antibot = config.antibot || {};
+
             if (!args) {
                 const current = config.antibot[jid] || 'off';
                 const prompt = `🔮 *Limitless Antibot Setting:* (Current: \`${current}\`)\n\nSelect an option:`;
@@ -316,6 +282,8 @@ const securityCommands = [
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antigm');
             if (!isAuthorized) return;
+
+            config.antigm = config.antigm || {};
 
             if (!args) {
                 const current = config.antigm[jid] || 'off';
@@ -444,7 +412,7 @@ const securityCommands = [
         }
     },
 
-    // 7. ANTIPROMOTE (Polished & Prepared)
+    // 7. ANTIPROMOTE
     {
         name: 'antipromote',
         isPrefixless: false,
@@ -473,7 +441,7 @@ const securityCommands = [
         }
     },
 
-    // 8. ANTIDEMOTE (Polished & Prepared)
+    // 8. ANTIDEMOTE
     {
         name: 'antidemote',
         isPrefixless: false,
@@ -502,7 +470,7 @@ const securityCommands = [
         }
     },
 
-    // 9. WARN
+    // 9. WARN (Thematic Sukuna Style)
     {
         name: 'warn',
         isPrefixless: false,
@@ -530,6 +498,37 @@ const securityCommands = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot warn a registered system owner." }, { quoted: msg });
             }
 
+            // Extract custom warning reason if provided
+            let reason = '';
+            if (args) {
+                const parts = args.trim().split(/\s+/);
+                const reasonParts = parts.filter(p => {
+                    if (p.startsWith('@')) return false;
+                    const cleanP = p.replace(/[^0-9]/g, '');
+                    if (cleanP.length >= 7 && targetJid.includes(cleanP)) return false;
+                    return true;
+                });
+                reason = reasonParts.join(' ').trim();
+            }
+
+            // Fallback to random Sukuna Warning Quote
+            if (!reason) {
+                const sukunaQuotes = [
+                    "Know your place, fool.",
+                    "Any line you cross will be your last.",
+                    "You dare look down on me? Your head is too high.",
+                    "I don't care about your rules. Cross me again and you'll be divided.",
+                    "You're getting bold, brat.",
+                    "A warning is a mercy you do not deserve.",
+                    "The next time you speak without permission, it'll cost you your head.",
+                    "Stand proud. You're strong... but you are still beneath me.",
+                    "Are you prepared to die for that mistake?",
+                    "If you value your life, keep your head on the ground."
+                ];
+                reason = sukunaQuotes[Math.floor(Math.random() * sukunaQuotes.length)];
+            }
+
+            // Delete message if warned via reply
             const rawMsg = getRawMessage(msg.message);
             const quoted = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
             if (quoted && quoted.stanzaId) {
@@ -554,11 +553,20 @@ const securityCommands = [
             if (count >= threshold) {
                 try {
                     await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
-                    await sock.sendMessage(jid, { text: `Sayonara! @${targetNumber} (${count}/${threshold} warnings)`, mentions: [targetJid] });
+                    
+                    // Domain Expansion kick message
+                    const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${targetNumber}. Warnings exceeded (${count}/${threshold}).`;
+                    await sock.sendMessage(jid, { text: kickText, mentions: [targetJid] });
                     config.warns[warnKey] = 0;
                 } catch (err) { /* ignore */ }
             } else {
-                await sock.sendMessage(jid, { text: `⚠️ *Warning Issued:* @${targetNumber}\n\n*Warns:* ${count}/${threshold}`, mentions: [targetJid] });
+                // Customized Warning response
+                const warningText = `            ☯ *Warning!!!!* ☯\n\n` +
+                                    `👤 *Violator:* @${targetNumber}\n\n` +
+                                    `📝 *Reason:* _${reason}_\n\n` +
+                                    `📈 *Count:* ${count} / ${threshold}`;
+                                    
+                await sock.sendMessage(jid, { text: warningText, mentions: [targetJid] });
             }
             saveState();
         }
@@ -589,19 +597,42 @@ const securityCommands = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot silence a registered system owner." }, { quoted: msg });
             }
 
-            const targetNum = targetJid.split('@')[0];
-            const cleanArgs = args ? args.replace(/@[^ ]+/g, '').trim() : '';
-            const parts = cleanArgs.split(' ');
+            // Resolve both standard JID and LID for the target using group metadata
+            const groupMetadata = await sock.groupMetadata(jid);
+            const participants = groupMetadata.participants;
+            const targetParticipant = participants.find(p => {
+                const pId = cleanJid(p.id);
+                const pLid = p.lid ? cleanJid(p.lid) : '';
+                return pId === targetJid || pLid === targetJid;
+            });
+
+            if (!targetParticipant) {
+                return await sock.sendMessage(jid, { text: "❌ Target user not found in this group." }, { quoted: msg });
+            }
+
+            const standardJid = cleanJid(targetParticipant.id);
+            const lidJid = targetParticipant.lid ? cleanJid(targetParticipant.lid) : '';
+            const targetNum = standardJid.split('@')[0];
 
             let mode = '';
             let timerStr = '1h';
 
-            if (parts[0]) {
-                if (['-s', '-m', 'all'].includes(parts[0])) {
-                    mode = parts[0];
-                    if (parts[1]) timerStr = parts[1];
-                } else {
-                    timerStr = parts[0];
+            if (args) {
+                const parts = args.trim().split(/\s+/);
+                const optionParts = parts.filter(p => {
+                    if (p.startsWith('@')) return false;
+                    const cleanP = p.replace(/[^0-9]/g, '');
+                    if (cleanP.length >= 7 && (standardJid.includes(cleanP) || (lidJid && lidJid.includes(cleanP)))) return false;
+                    return true;
+                });
+
+                if (optionParts[0]) {
+                    if (['-s', '-m', 'all'].includes(optionParts[0])) {
+                        mode = optionParts[0];
+                        if (optionParts[1]) timerStr = optionParts[1];
+                    } else {
+                        timerStr = optionParts[0];
+                    }
                 }
             }
 
@@ -612,12 +643,13 @@ const securityCommands = [
                 const buttonMessage = {
                     text: prompt,
                     buttons: [
-                        { buttonId: `${config.prefix}silence_ans sticker ${targetNum} ${timerStr}`, buttonText: { displayText: 'Stickers Only' }, type: 1 },
-                        { buttonId: `${config.prefix}silence_ans message ${targetNum} ${timerStr}`, buttonText: { displayText: 'Messages' }, type: 1 },
-                        { buttonId: `${config.prefix}silence_ans all ${targetNum} ${timerStr}`, buttonText: { displayText: 'Silence All' }, type: 1 }
+                        // Safe: Pass full JID payloads to avoid any truncation or domain-mismatch errors
+                        { buttonId: `${config.prefix}silence_ans sticker ${standardJid} ${timerStr}`, buttonText: { displayText: 'Stickers Only' }, type: 1 },
+                        { buttonId: `${config.prefix}silence_ans message ${standardJid} ${timerStr}`, buttonText: { displayText: 'Messages' }, type: 1 },
+                        { buttonId: `${config.prefix}silence_ans all ${standardJid} ${timerStr}`, buttonText: { displayText: 'Silence All' }, type: 1 }
                     ],
                     headerType: 1,
-                    mentions: [targetJid]
+                    mentions: [standardJid]
                 };
                 try { return await sock.sendMessage(jid, buttonMessage, { quoted: msg }); } catch (e) {
                     return await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
@@ -629,11 +661,16 @@ const securityCommands = [
             if (mode === '-m') mappedType = 'message';
 
             global.silencedUsers[jid] = global.silencedUsers[jid] || {};
-            global.silencedUsers[jid][cleanJid(targetJid)] = { type: mappedType, endTime: Date.now() + durationMs };
+            
+            // Dual map standard JID and LID for robust interceptor checking
+            global.silencedUsers[jid][standardJid] = { type: mappedType, endTime: Date.now() + durationMs };
+            if (lidJid) {
+                global.silencedUsers[jid][lidJid] = { type: mappedType, endTime: Date.now() + durationMs };
+            }
 
             await sock.sendMessage(jid, {
                 text: `⛓️ *Target @${targetNum} silenced:* \`${mappedType.toUpperCase()}\` for *${timerStr}*.`,
-                mentions: [targetJid]
+                mentions: [standardJid]
             }, { quoted: msg });
         }
     },
@@ -650,13 +687,15 @@ const securityCommands = [
             if (!isAuthorized) return;
 
             const parts = args.split(' ');
-            const type = parts[0]?.toLowerCase().trim();
-            const targetNum = parts[1]?.trim();
+            const type = parts[0]?.toLowerCase().trim(); // 'sticker', 'message', or 'all'
+            const rawTarget = parts[1]?.trim();
             const timerStr = parts[2]?.trim() || '1h';
 
-            if (!type || !targetNum) return;
+            if (!type || !rawTarget) return;
 
-            const targetJid = `${targetNum}@s.whatsapp.net`;
+            // Retains original JID structure safely (supports standard JID and LID)
+            const targetJid = rawTarget.includes('@') ? cleanJid(rawTarget) : `${rawTarget}@s.whatsapp.net`;
+
             if (isDeveloper(targetJid)) {
                 return await sock.sendMessage(jid, { text: "🛡️ *Immunity Triggered:* Cannot restrict a Core Developer of this domain." }, { quoted: msg });
             }
@@ -665,14 +704,36 @@ const securityCommands = [
                 return await sock.sendMessage(jid, { text: "❌ You cannot silence a registered system owner." }, { quoted: msg });
             }
 
+            // Resolve both Standard JID and LID using group metadata
+            const groupMetadata = await sock.groupMetadata(jid);
+            const participants = groupMetadata.participants;
+            const targetParticipant = participants.find(p => {
+                const pId = cleanJid(p.id);
+                const pLid = p.lid ? cleanJid(p.lid) : '';
+                return pId === targetJid || pLid === targetJid;
+            });
+
+            if (!targetParticipant) {
+                return await sock.sendMessage(jid, { text: "❌ Target user not found in this group." }, { quoted: msg });
+            }
+
+            const standardJid = cleanJid(targetParticipant.id);
+            const lidJid = targetParticipant.lid ? cleanJid(targetParticipant.lid) : '';
+            const targetNum = standardJid.split('@')[0];
+
             const durationMs = parseDuration(timerStr) || 3600000;
 
             global.silencedUsers[jid] = global.silencedUsers[jid] || {};
-            global.silencedUsers[jid][cleanJid(targetJid)] = { type: type, endTime: Date.now() + durationMs };
+            
+            // Dual map Standard JID and LID
+            global.silencedUsers[jid][standardJid] = { type: type, endTime: Date.now() + durationMs };
+            if (lidJid) {
+                global.silencedUsers[jid][lidJid] = { type: type, endTime: Date.now() + durationMs };
+            }
 
             await sock.sendMessage(jid, {
                 text: `⛓️ *Target @${targetNum} silenced:* \`${type.toUpperCase()}\` for *${timerStr}*.`,
-                mentions: [targetJid]
+                mentions: [standardJid]
             }, { quoted: msg });
         }
     },
@@ -692,25 +753,46 @@ const securityCommands = [
             const targetJid = parseTargetUser(msg, args);
             if (!targetJid) return await sock.sendMessage(jid, { text: "❌ Specify target user." }, { quoted: msg });
 
-            const targetNum = targetJid.split('@')[0];
-            const cleanedTarget = cleanJid(targetJid);
+            // Resolve both JID and LID for complete database deletion
+            const groupMetadata = await sock.groupMetadata(jid);
+            const participants = groupMetadata.participants;
+            const targetParticipant = participants.find(p => {
+                const pId = cleanJid(p.id);
+                const pLid = p.lid ? cleanJid(p.lid) : '';
+                return pId === targetJid || pLid === targetJid;
+            });
 
-            if (global.silencedUsers[jid] && global.silencedUsers[jid][cleanedTarget]) {
-                delete global.silencedUsers[jid][cleanedTarget];
+            const standardJid = targetParticipant ? cleanJid(targetParticipant.id) : cleanJid(targetJid);
+            const lidJid = targetParticipant?.lid ? cleanJid(targetParticipant.lid) : '';
+            const targetNum = standardJid.split('@')[0];
+
+            let removed = false;
+            if (global.silencedUsers[jid]) {
+                if (global.silencedUsers[jid][standardJid]) {
+                    delete global.silencedUsers[jid][standardJid];
+                    removed = true;
+                }
+                if (lidJid && global.silencedUsers[jid][lidJid]) {
+                    delete global.silencedUsers[jid][lidJid];
+                    removed = true;
+                }
+            }
+
+            if (removed) {
                 await sock.sendMessage(jid, {
                     text: `⛓️ *Target @${targetNum} unsilenced.*`,
-                    mentions: [targetJid]
+                    mentions: [standardJid]
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, {
                     text: `❌ Target @${targetNum} is not currently silenced.`,
-                    mentions: [targetJid]
+                    mentions: [standardJid]
                 }, { quoted: msg });
             }
         }
     },
 
-    // ─── DELSPAM ─────────────────────────────────────────────────────
+    // 13. DELSPAM
     {
         name: 'delspam',
         isPrefixless: false,
@@ -722,13 +804,11 @@ const securityCommands = [
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delspam');
             if (!isAuthorized) return;
 
-            // Get target from mention/reply/args safely
             const targetJid = parseTargetUser(msg, args);
             if (!targetJid) {
                 return await sock.sendMessage(jid, { text: "❌ Please mention or reply to the target user." }, { quoted: msg });
             }
 
-            // Parse count from args
             let count = 10;
             if (args) {
                 const parts = args.trim().split(/\s+/);
@@ -741,15 +821,32 @@ const securityCommands = [
                 }
             }
 
-            // Get messages from global store for this chat and target sender
-            const store = global.messageStore || {};
-            const messages = Object.values(store)
-                .filter(m => {
+            // Universal message store collector (supports official Baileys stores, cache arrays, and custom fallback stores)
+            let messages = [];
+            const cleanTarget = cleanJid(targetJid);
+
+            if (global.store && typeof global.store.loadMessages === 'function') {
+                try {
+                    const loaded = await global.store.loadMessages(jid, 100);
+                    messages = (loaded || []).filter(m => {
+                        const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
+                        return cleanJid(sender) === cleanTarget;
+                    });
+                } catch (e) { /* ignore */ }
+            } else if (global.store?.messages?.[jid]) {
+                const chatMsgs = Array.isArray(global.store.messages[jid]) ? global.store.messages[jid] : [];
+                messages = chatMsgs.filter(m => {
+                    const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
+                    return cleanJid(sender) === cleanTarget;
+                });
+            } else {
+                const localStore = global.messageStore || {};
+                messages = Object.values(localStore).filter(m => {
                     const mJid = m.key.remoteJid;
                     const sender = normalizeToJid(m.key.participant || m.key.remoteJid || '');
-                    return mJid === jid && cleanJid(sender) === cleanJid(targetJid);
-                })
-                .sort((a, b) => (a.messageTimestamp || 0) - (b.messageTimestamp || 0));
+                    return mJid === jid && cleanJid(sender) === cleanTarget;
+                });
+            }
 
             if (messages.length === 0) {
                 return await sock.sendMessage(jid, {
@@ -758,7 +855,7 @@ const securityCommands = [
                 }, { quoted: msg });
             }
 
-            // Determine how many to delete (most recent first)
+            // Take the most recent messages up to requested count
             const toDelete = messages.slice(-Math.min(count, messages.length));
 
             let deletedCount = 0;
@@ -766,7 +863,6 @@ const securityCommands = [
                 try {
                     await sock.sendMessage(jid, { delete: msgToDelete.key });
                     deletedCount++;
-                    // Remove from store to avoid double deletion
                     if (global.messageStore && global.messageStore[msgToDelete.key.id]) {
                         delete global.messageStore[msgToDelete.key.id];
                     }
