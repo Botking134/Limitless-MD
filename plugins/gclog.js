@@ -3,7 +3,6 @@
 // Leverages helpers/Summary.js and handles group configuration states
 
 const config = require('../config');
-const { cleanJid } = require('../helpers/Message'); // Adjust the path if cleanJid is located elsewhere
 const { 
     readGcLogs, 
     saveGcLogs, 
@@ -11,11 +10,25 @@ const {
     triggerSummary 
 } = require('../helpers/Summary');
 
+// ─── CIRCULAR-DEPENDENCY SAFE JID CLEANER ────────────────────────
+let cleanJid;
+try {
+    cleanJid = require('../helpers/Message').cleanJid;
+} catch (e) { /* ignore circular import blockages */ }
+
+if (!cleanJid) {
+    cleanJid = function(jid) {
+        if (!jid) return '';
+        const raw = String(jid);
+        return raw.split('@')[0].split(':')[0] + '@' + (raw.split('@')[1] || 's.whatsapp.net');
+    };
+}
+
 module.exports = {
     name: 'gclog',
     isPrefixless: false,
     category: 'admin',
-    permission: 'public', // Set to public since permissions are checked inside execute
+    permission: 'public', // Checked inside execute
     execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
         const jid = msg.key.remoteJid;
         const isGroup = jid.endsWith('@g.us');
@@ -27,7 +40,7 @@ module.exports = {
             }, { quoted: msg });
         }
 
-        // Direct Boolean Permission Validation (Bypasses missing verifyPermissions)
+        // Direct Permission Check
         const isAuthorized = isOwner || isSudo || isDev;
         if (!isAuthorized) {
             return await sock.sendMessage(jid, { 
@@ -105,7 +118,7 @@ module.exports = {
 
             global.gclogIntervals = global.gclogIntervals || {};
             
-            // Define 3-hour summary cycle (3 hours * 60 minutes * 60 seconds * 1000 milliseconds)
+            // Define 3-hour summary cycle (3 hours)
             global.gclogIntervals[cleanChatJid] = setInterval(async () => {
                 await triggerSummary(sock, cleanChatJid);
             }, 3 * 60 * 60 * 1000);
@@ -114,8 +127,7 @@ module.exports = {
                 text: "🔒 *GCLOG Activated. A Satoru Gojo 10‑point summary will be generated every 3 hours.*" 
             }, { quoted: msg });
 
-            // LAZY-LOADING FIX: Dynamically load stateManager to execute saveState()
-            // This prevents Circular Dependency (require loop) crashes at runtime
+            // Dynamically load stateManager to execute saveState() without require loop crashes
             require('../stateManager').saveState();
             return;
         }
@@ -138,7 +150,6 @@ module.exports = {
                 text: "🔓 *GCLOG Deactivated. Automated timers cleared and log file reset.*" 
             }, { quoted: msg });
 
-            // LAZY-LOADING FIX: Prevent Circular Dependency loops
             require('../stateManager').saveState();
             return;
         }
