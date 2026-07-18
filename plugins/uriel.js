@@ -574,15 +574,15 @@ module.exports = {
             if (commandArg === 'on') {
                 config.urielGlobalActive = true;
                 saveState();
-                return await sock.sendMessage(jid, { text: "🟢 *𝘜𝘳𝘪𝘦𝘭 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘨𝘭𝘰𝘣𝘢𝘭𝘭𝘺 𝘢𝘤𝘳𝘰𝘴𝘴 𝘢𝘭𝘭 𝘤𝘩𝘢𝘵𝘴.*" }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "🟢 *𝘜𝘳𝘪𝘦𝘭 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘨𝘭𝘰𝘣𝘢𝘭𝘭𝘺 𝘢𝘤𝘳𝘰𝘴σ 𝘢𝘭𝘭 𝘤𝘩𝘢𝘵𝘴.*" }, { quoted: msg });
             } else if (commandArg === 'off') {
                 config.urielGlobalActive = false;
                 saveState();
-                return await sock.sendMessage(jid, { text: "💤 *𝘜𝘳𝘪𝘦𝘭 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘥𝘦𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘨𝘭𝘰𝘣𝘢𝘭𝘭𝘺 𝘢𝘤𝘳𝘰𝘴𝘴 𝘢𝘭𝘭 𝘤𝘩𝘢𝘵𝘴.*" }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "💤 *𝘜𝘳𝘪𝘦𝘭 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘥𝘦𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘨𝘭𝘰𝘣𝘢𝘭𝘭𝘺 𝘢𝘤𝘳𝘰𝘴σ 𝘢𝘭𝘭 𝘤𝘩𝘢𝘵𝘴.*" }, { quoted: msg });
             } else {
                 const currentStatus = config.urielGlobalActive !== false ? "Active 🟢" : "Inactive 💤";
                 return await sock.sendMessage(jid, { 
-                    text: `🤖 *𝘜𝘳𝘪𝘦𝘭 𝘈𝘉 𝘈𝘴𝘴𝘪𝘴𝘵𝘢𝘯𝘵 𝘚𝘵𝘢𝘵𝘶𝘴:* \`${currentStatus}\`\n\nUse \`${prefix}uriel on\` or \`${prefix}uriel off\` to toggle globally.` 
+                    text: `🤖 *𝘜𝘳𝘪𝘦𝘭 𝘈𝘉 𝘈𝘴𝘴𝘪𝘴𝘵𝘢𝘯τ 𝘚𝘵𝘢𝘵𝘶𝘴:* \`${currentStatus}\`\n\nUse \`${prefix}uriel on\` or \`${prefix}uriel off\` to toggle globally.` 
                 }, { quoted: msg });
             }
         }
@@ -727,7 +727,8 @@ You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${
                 { role: 'user', content: query }
             ];
 
-            await sock.sendPresenceUpdate('composing', jid);
+            // Show recording state immediately when thinking/synthesizing starts (never composing/typing)
+            await sock.sendPresenceUpdate('recording', jid);
             const response = await queryGroq(messages);
 
             console.log(`[URIEL] Raw Response: "${response}"`);
@@ -747,15 +748,16 @@ You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${
             commandSuccess = await executeCommand(tag, sock, msg, userContext);
         }
 
-        // STEP 2: Send conversational reply as Voice Note (Option B: audio/mp4 container) second
+        // STEP 2: Send conversational reply as standard playable audio (Way 1)
         if (cleanReply) {
             const voiceBuffer = await synthesizeUrielVoice(cleanReply);
             if (voiceBuffer) {
+                // Ensure presence continues as recording until message delivery finishes
                 await sock.sendPresenceUpdate('recording', jid);
                 await sock.sendMessage(jid, { 
                     audio: voiceBuffer, 
-                    mimetype: 'audio/mp4', // Sends as a WhatsApp-compatible container to bypass decoder crashes
-                    ptt: true 
+                    mimetype: 'audio/mpeg', // Raw MP3 stream matching standard audio formatting
+                    ptt: false // Sends as standard playback block to ensure high decoder compatibility
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
