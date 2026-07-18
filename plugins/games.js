@@ -733,7 +733,7 @@ module.exports = [
                 delete global.vault8Sessions[sessionKey];
                 delete global.vault8SavedStories[sessionKey];
                 await sock.sendMessage(jid, { text: "🔄 `[SYSTEM] Connection wiped.`" });
-                return await commands[`${config.prefix}vault8`](sock, msg, '', { isOwner: false });
+                return await commands[`${config.prefix}vault8`]?.execute(sock, msg, '', { isOwner: false });
             } else if (action === 'cancel' || action === 'giveup') {
                 delete global.vault8Sessions[sessionKey];
                 await sock.sendMessage(jid, { text: "🛑 Terminal connection closed safely." }, { quoted: msg });
