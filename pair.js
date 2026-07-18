@@ -1,3 +1,4 @@
+
 // pair.js
 const readline = require('readline');
 const { Boom } = require('@hapi/boom');
@@ -12,10 +13,8 @@ const { handleIncomingMessage } = require('./helpers/Infinity');
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// ─── TRACK BOT-SENT MESSAGES & MODULE TIMERS ─────────────────────
+// ─── TRACK BOT-SENT MESSAGES ──────────────────────────────────
 const botSentMessageIds = new Set();
-let reconnectTimeout = null;
-let alwaysOnlineInterval = null;
 
 // ─── GLOBAL SESSIONS & CACHES ──────────────────────────────────
 global.messageStore = global.messageStore || {};
@@ -25,8 +24,6 @@ global.azaSessions = global.azaSessions || {};
 global.songSessions = global.songSessions || {};
 global.apkSessions = global.apkSessions || {};
 global.shazamSessions = global.shazamSessions || {};
-global.reminderSessions = global.reminderSessions || {};
-global.cancelSessions = global.cancelSessions || {};
 global.noteSessions = global.noteSessions || {};
 
 // Game Sessions
@@ -58,14 +55,12 @@ function formatUptime(seconds) {
     return parts.join(' ');
 }
 
-// ─── SAFE JID NORMALIZER ──────────────────────────────────────────
+// ─── JID NORMALIZER ──────────────────────────────────────────────
 function normalizeToJid(input) {
     if (!input) return '';
     const clean = input.replace(/:[\d]+@/, '@');
     if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@g.us')) return clean;
     if (clean.endsWith('@lid')) return clean;
-    if (clean.endsWith('@broadcast')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
@@ -128,15 +123,10 @@ async function startBot() {
         browser: Browsers.ubuntu('Chrome')
     });
 
-    // ─── OVERRIDE SEND MESSAGE (SAFE PROTOCOL FILTERING) ─────────────
+    // ─── OVERRIDE SEND MESSAGE ──────────────────────────────────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
-        const isSelf = jid === config.botJid || jid === config.botLid || jid === sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
-        const isEdit = content && (content.edit || content.patch);
-        const isReaction = content && content.react;
-
-        // Skip presence updates to yourself or for background edits/reactions
-        if (config.presence && !jid.endsWith('@broadcast') && !isSelf && !isEdit && !isReaction) {
+        if (config.presence && !jid.endsWith('@broadcast')) {
             const autotypingActive = config.presence.autotyping?.all ||
                 config.presence.autotyping?.chats?.includes(jid);
             const autorecordingActive = config.presence.autorecording?.all ||
@@ -208,49 +198,35 @@ async function startBot() {
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
             console.error('❌ Disconnected. Reason code:', reason);
             console.error('❌ Error details:', lastDisconnect?.error?.message || 'No message');
-
-            if (alwaysOnlineInterval) {
-                clearInterval(alwaysOnlineInterval);
-                alwaysOnlineInterval = null;
-            }
-
             if (reason === DisconnectReason.loggedOut) {
                 console.log('❌ Session logged out. Exiting...');
                 process.exit(1);
             } else {
-                if (reconnectTimeout) {
-                    clearTimeout(reconnectTimeout);
-                }
-                const retryDelay = reason === 409 ? 15000 : 5000;
-                console.log(`🔄 Connection lost. Reconnecting in ${retryDelay / 1000} seconds...`);
-                reconnectTimeout = setTimeout(() => {
-                    startBot();
-                }, retryDelay);
+                console.log('🔄 Connection lost. Reconnecting in 5 seconds...');
+                setTimeout(() => startBot(), 5000);
             }
         }
 
         // ─── Handle Connection Open ─────────────────────────────
         if (connection === 'open') {
             console.log('\n✅ Connection established successfully!');
-            
-            if (reconnectTimeout) {
-                clearTimeout(reconnectTimeout);
-                reconnectTimeout = null;
-            }
-
             try {
                 // ─── Set Bot's Own IDs ────────────────────────────────
                 if (sock.user && sock.user.id) {
+                    // Use sock.user.id directly – no findUserId() needed
                     const rawJid = sock.user.id.split(':')[0] || sock.user.id;
                     config.botJid = normalizeToJid(rawJid);
                     console.log('📌 Bot JID:', config.botJid);
 
+                    // If it's a LID, store it too
                     if (config.botJid.endsWith('@lid')) {
                         config.botLid = config.botJid;
                     }
                 }
 
                 // ─── Set Primary Owner LID (Hardcoded) ──────────────────
+                // Use the owner LID from your logs, or fallback to resolving if needed.
+                // Since you have the LID, we'll hardcode it directly.
                 const ownerLid = "139780398567572@lid";
                 config.ownerLid = ownerLid;
                 if (!config.ownerLids.includes(ownerLid)) {
@@ -258,6 +234,7 @@ async function startBot() {
                 }
                 console.log(`👑 [SYSTEM] Primary Owner LID set: ${ownerLid}`);
 
+                // ─── Set Developer LIDs (Hardcoded) ─────────────────────
                 config.devLids = [...DEV_LIDS];
                 console.log(`👑 [SYSTEM] Developer LIDs set:`, config.devLids);
 
@@ -300,7 +277,7 @@ async function startBot() {
                         (botJid.endsWith('@s.whatsapp.net') || botJid.endsWith('@lid')) &&
                         !botJid.includes('@s.whatsapp.net@s.whatsapp.net')) {
                         console.log(`📨 Sending status report to: ${botJid}`);
-                        await originalSendMessage(botJid, { text: statusCard }); // Send direct to bypass check
+                        await sock.sendMessage(botJid, { text: statusCard });
                         console.log(`✅ [SYSTEM] Connection status report dispatched.`);
                     } else {
                         console.warn("[WARNING] Invalid bot JID, skipping status report:", botJid);
@@ -310,11 +287,8 @@ async function startBot() {
                     console.error(err.stack);
                 }
 
-                // ─── Always-Online Presence (Safely Managed) ────────
-                if (alwaysOnlineInterval) {
-                    clearInterval(alwaysOnlineInterval);
-                }
-                alwaysOnlineInterval = setInterval(async () => {
+                // ─── Always-Online Presence ────────────────────────
+                setInterval(async () => {
                     if (config.presence && config.presence.alwaysonline?.all) {
                         try { await sock.sendPresenceUpdate('available'); } catch (e) { /* ignore */ }
                     }
