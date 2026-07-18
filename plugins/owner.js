@@ -15,35 +15,6 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const remindersPath = path.join(__dirname, '../storage/reminders.json');
-
-// ─── GLOBAL SESSIONS ──────────────────────────────────────────────
-if (!global.reminders) global.reminders = [];
-if (!global.reminderSessions) global.reminderSessions = {};
-if (!global.cancelSessions) global.cancelSessions = {};
-
-// ─── HELPER: READ REMINDERS ──────────────────────────────────────
-function readReminders() {
-    try {
-        if (fs.existsSync(remindersPath)) {
-            return JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
-        }
-    } catch (e) {
-        console.error("Failed to read reminders database:", e.message);
-    }
-    return [];
-}
-
-function saveReminders(reminders) {
-    try {
-        const dir = path.dirname(remindersPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8');
-    } catch (e) {
-        console.error("Failed to save reminders database:", e.message);
-    }
-}
-
 // ─── HELPER: PARSE DURATION ──────────────────────────────────────
 function parseDuration(str) {
     const match = str.match(/^(\d+)([smh])$/i);
@@ -119,44 +90,6 @@ function parseTarget(msg, args) {
         }
     }
     return target;
-}
-
-// ─── REMINDER INTERVAL ──────────────────────────────────────────
-if (!global.reminderInterval) {
-    global.reminderInterval = setInterval(async () => {
-        if (!global.activeSock) return;
-
-        const reminders = readReminders();
-        if (reminders.length === 0) return;
-
-        const now = Date.now();
-        const due = reminders.filter(r => r.triggerTime <= now);
-        const remaining = reminders.filter(r => r.triggerTime > now);
-
-        if (due.length > 0) {
-            for (const r of due) {
-                try {
-                    const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', {
-                        timeZone: 'Africa/Lagos',
-                        hour12: true
-                    });
-                    const alertText =
-                        `🔔 *LIMITLESS REMINDER ALERT!* 🔔\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `📌 *Title:* *${r.title}*\n` +
-                        `📝 *Note:* _"${r.text}"_\n\n` +
-                        `🕒 *Set At:* \`${formattedTime} WAT\`\n` +
-                        `⏳ *Timer Duration:* \`${r.durationStr}\`\n\n` +
-                        `_“My six eyes never forget a scheduled task.”_ 🤞`;
-
-                    await global.activeSock.sendMessage(r.jid, { text: alertText });
-                } catch (err) {
-                    console.error("Failed to broadcast due reminder:", err.message);
-                }
-            }
-            saveReminders(remaining);
-        }
-    }, 10000);
 }
 
 // ─── SIMPLE EXEC WITH TIMEOUT (for .update) ─────────────────────
@@ -864,139 +797,9 @@ module.exports = [
         }
     },
 
-    // ─── REMINDER ─────────────────────────────────────────────────
+    // ─── GAMES REGISTER (owner-only active-session diagnostics) ─────
     {
-        name: 'reminder',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            if (!args) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ Please provide a timer and the reminder text.\nExample: \`${config.prefix}reminder 10m study Jujutsu history\``
-                }, { quoted: msg });
-            }
-
-            global.activeSock = sock;
-
-            const parts = args.trim().split(' ');
-            const durationString = parts[0] || '';
-            const textContent = parts.slice(1).join(' ').trim();
-
-            const durationMs = parseDuration(durationString);
-            if (!durationMs) {
-                return await sock.sendMessage(jid, { text: "❌ Invalid duration parameter. Use formats like `10s`, `5m`, `2h`." }, { quoted: msg });
-            }
-
-            if (!textContent) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide a text description for your reminder." }, { quoted: msg });
-            }
-
-            try {
-                const prompt = await sock.sendMessage(jid, {
-                    text: `⏳ *Reminder Scheduled!*\n\n• *Duration:* \`${durationString}\`\n• *Note:* _"${textContent}"_\n\n⚠️ *Action Required:* Please reply directly to *this message* with a short *Title* to complete the setup.`
-                }, { quoted: msg });
-
-                global.reminderSessions[prompt.key.id] = {
-                    jid: jid,
-                    durationMs: durationMs,
-                    durationStr: durationString,
-                    text: textContent,
-                    timeSet: Date.now()
-                };
-            } catch (err) {
-                console.error("Reminder setup error:", err.message);
-            }
-        }
-    },
-
-    // ─── REMIND ──────────────────────────────────────────────────
-    {
-        name: 'remind',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-
-            global.activeSock = sock;
-            const reminders = readReminders();
-
-            if (args && args.toLowerCase().trim().startsWith('abort')) {
-                const idx = parseInt(args.toLowerCase().replace('abort', '').trim());
-                if (isNaN(idx) || idx < 1 || idx > reminders.length) {
-                    return await sock.sendMessage(jid, {
-                        text: `❌ Invalid selection index. Please enter a number between 1 and ${reminders.length}.`
-                    }, { quoted: msg });
-                }
-                const removed = reminders[idx - 1];
-                reminders.splice(idx - 1, 1);
-                saveReminders(reminders);
-                return await sock.sendMessage(jid, {
-                    text: `✅ *Reminder Successfully Cancelled!*\n\n• *Title:* *${removed.title}*\n• *Remaining:* Aborted.`
-                }, { quoted: msg });
-            }
-
-            if (args && args.toLowerCase().trim() === 'cancel') {
-                if (reminders.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No active reminders available to cancel." }, { quoted: msg });
-                }
-
-                let cancelMenu = `❌ *CANCEL REMINDER PANEL* ❌\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-                reminders.forEach((r, idx) => {
-                    const remainingMs = Math.max(0, r.triggerTime - Date.now());
-                    const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
-                    cancelMenu += `${idx + 1}. *${r.title}* (${remainingStr} left)\n`;
-                });
-                cancelMenu += `\n💡 *Action Required:* Reply to this message with the *number* of the reminder you want to abort.`;
-
-                const cancelPrompt = await sock.sendMessage(jid, { text: cancelMenu }, { quoted: msg });
-                global.cancelSessions[cancelPrompt.key.id] = true;
-                return;
-            }
-
-            if (reminders.length === 0) {
-                return await sock.sendMessage(jid, { text: "📋 *No active reminders scheduled.*" }, { quoted: msg });
-            }
-
-            let dashboard = `📋 *ACTIVE REMINDERS SCHEDULED* 📋\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `Total Reminders Active: \`${reminders.length}\`\n\n`;
-
-            reminders.forEach((r, idx) => {
-                const remainingMs = Math.max(0, r.triggerTime - Date.now());
-                const remainingStr = formatUptime(Math.floor(remainingMs / 1000));
-                const formattedTime = new Date(r.timeSet).toLocaleTimeString('en-US', {
-                    timeZone: 'Africa/Lagos',
-                    hour12: true
-                });
-
-                dashboard += `${idx + 1}. *${r.title}*\n`;
-                dashboard += `   • *Note:* _"${r.text}"_\n`;
-                dashboard += `   • *Set At:* \`${formattedTime} WAT\`\n`;
-                dashboard += `   • *Remaining:* \`${remainingStr}\` (set for ${r.durationStr})\n\n`;
-            });
-
-            const buttonMessage = {
-                text: dashboard,
-                buttons: [
-                    { buttonId: `${config.prefix}remind cancel`, buttonText: { displayText: 'Cancel Reminder ❌' }, type: 1 }
-                ],
-                headerType: 1
-            };
-
-            try {
-                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (err) {
-                const fallbackText = `${dashboard}\n💡 _Use \`${config.prefix}remind cancel\` to show the cancellation dashboard._`;
-                await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
-            }
-        }
-    },
-
-    // ─── GAMES ───────────────────────────────────────────────────
-    {
-        name: 'games',
+        name: 'gamesregister',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
