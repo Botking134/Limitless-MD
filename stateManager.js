@@ -71,8 +71,6 @@ function loadState() {
     config.sudos = config.sudos || [];
     config.banned = config.banned || [];
     config.warns = config.warns || {};
-    config.conversationLogs = config.conversationLogs || {};
-    config.gclogActive = config.gclogActive || {};
     config.aza = config.aza || { set: false };
 
     if (config.ownerNumber && !config.ownerJid) {
@@ -86,7 +84,7 @@ function loadState() {
             const stateKeys = [
                 'secondaryOwners', 'sudos', 'banned',
                 'ownerLid', 'ownerLids', 'devLids', 'sudoLids',
-                'warns', 'conversationLogs', 'aza', 'gclogActive'
+                'warns', 'aza'
             ];
 
             for (const key of stateKeys) {
@@ -120,9 +118,7 @@ function loadState() {
                 devLids: [...DEV_LIDS],
                 sudoLids: [],
                 warns: {},
-                conversationLogs: {},
-                aza: { set: false },
-                gclogActive: {}
+                aza: { set: false }
             }, null, 2));
             console.log('📝 [STATE] Created default state.json');
         }
@@ -147,9 +143,7 @@ function saveState() {
             devLids: [...DEV_LIDS], // Always overwrite with hardcoded LIDs
             sudoLids: config.sudoLids || [],
             warns: config.warns || {},
-            conversationLogs: config.conversationLogs || {},
-            aza: config.aza || { set: false },
-            gclogActive: config.gclogActive || {}
+            aza: config.aza || { set: false }
         };
 
         fs.writeFileSync(STATE_PATH, JSON.stringify(stateData, null, 2), 'utf-8');
