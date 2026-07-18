@@ -6,20 +6,25 @@ const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { handleViewOnce } = require('./log');
 
 // Sub-module imports
-const { getRawMessage, cleanJid, extractBodyAndTrim, readUserStats, saveUserStats } = require('./Message');
+const { getRawMessage, cleanJid, extractBodyAndTrim } = require('./Message');
 const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation, handleNoteSession } = require('./SessionManager');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
-const { readGcLogs, saveGcLogs, triggerSummary } = require('./Summary');
 
-// Extract current active prefix safely supporting arrays
-const activePrefix = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+// Extract current active prefix safely supporting arrays.
+// IMPORTANT: this must be read fresh every time, not cached as a const —
+// .setprefix changes config.prefix at runtime via reload(), and a cached
+// value here would desync from the live prefix used by commands.js's
+// register(), breaking every command that takes arguments until restart.
+function getActivePrefix() {
+    return Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+}
 
 const ownerCommands = [
     'diagnose', 'update', 'mode', 'setsudo', 'delsudo',
     'restart', 'shutdown', 'ban', 'unban',
     'afk', 'setvar', 'settings',
-    'antipm', 'reminder', 'remind', 'games_closeall', 'owner'
+    'antipm', 'games_closeall', 'gamesregister', 'owner'
 ];
 
 const primaryOnlyCommands = ['addowner', 'delowner'];
@@ -27,6 +32,7 @@ const devOnlyCommands = ['upgrade'];
 
 // ─── BULLETPROOF COMMAND EXECUTION HELPER (Fixed prefix alignment) ───
 async function executeBotCommand(cmdName, sock, msg, args, opts) {
+    const activePrefix = getActivePrefix();
     let commandFunction;
     const cleanCmd = cmdName.startsWith(activePrefix) ? cmdName : `${activePrefix}${cmdName}`;
     const baseName = cmdName.startsWith(activePrefix) ? cmdName.slice(activePrefix.length) : cmdName;
@@ -51,6 +57,7 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
 // ─── MAIN MESSAGE DISPATCHER / ROUTER ───────────────────────────
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     try {
+        const activePrefix = getActivePrefix();
         if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
         const msg = chatUpdate.messages[0];
         if (!msg || !msg.message) return;
@@ -158,49 +165,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (redirectedGame) {
             command = redirectedGame.command;
             args = redirectedGame.args;
-        }
-
-        // ─── USER LEVEL-UP & STATS TRACKER ──────────────────────
-        if (isGroup && senderJid && !msg.key.fromMe) {
-            const userStats = readUserStats();
-            userStats[jid] = userStats[jid] || {};
-            userStats[jid][senderJid] = userStats[jid][senderJid] || { msgCount: 0, level: 11 };
-
-            const isCommand = trimmedMessageBody.startsWith(activePrefix);
-            if (!isCommand && trimmedMessageBody.length > 0) {
-                userStats[jid][senderJid].msgCount += 1;
-                const newCount = userStats[jid][senderJid].msgCount;
-
-                const milestones = {
-                    15: { index: 10, name: "Human", icon: "🏃", text: "🏃 *TIER UNLOCKED: HUMAN ASCENSION*\n\nPeak physical form achieved! @Username has crossed 15 messages!\n\n• Current Tier: Tier 10: Human\n• Status: Standard human capabilities up to peak athlete level. Durability is strictly human level." },
-                    45: { index: 9, name: "Superhuman", icon: "⚡", text: "⚡ *TIER UNLOCKED: WALL BREACHED*\n\nConcrete walls shattered! @Username has crossed 45 messages!\n\n• Current Tier: Tier 9: Superhuman\n• Status: Street-level fighter. Can smash steel, concrete, or small rooms with minor effort." },
-                    90: { index: 8, name: "Urban", icon: "🏢", text: "🏢 *TIER UNLOCKED: URBAN CALAMITY*\n\nStructures are collapsing! @Username has crossed 90 messages!\n\n• Current Tier: Tier 8: Urban\n• Status: Destructive force ranging from single buildings to city blocks." },
-                    150: { index: 7, name: "Nuclear / Regional", icon: "☄️", text: "☄️ *TIER UNLOCKED: REGIONAL CONSTRAINTS SHATTERED*\n\nTowns and vaporized mountains lie behind them! @Username has scaled to 150 messages!\n\n• Current Tier: Tier 7: Nuclear / Regional\n• Status: Capable of leveling towns, major cities, or vaporizing massive mountain ranges." },
-                    250: { index: 6, name: "Global", icon: "🗺️", text: "🗺️ *TIER UNLOCKED: GLOBAL DOMINANCE*\n\nTectonic shockwaves detected! @Username has crossed 250 messages and attained global force!\n\n• Current Tier: Tier 6: Global\n• Status: Tectonic force capable of destroying island nations or continents." },
-                    400: { index: 5, name: "Planetary", icon: "🪐", text: "🪐 *TIER UNLOCKED: CELESTIAL COLLAPSE*\n\nMoons and planets shatter in their wake! @Username has crossed 400 messages!\n\n• Current Tier: Tier 5: Planetary\n• Status: Celestial power capable of shattering moons and gas giants." },
-                    600: { index: 4, name: "Stellar", icon: "☀️", text: "☀️ *TIER UNLOCKED: STELLAR OBLITERATION*\n\nWatch the skies! @Username has crossed 600 messages and can obliterate entire solar systems with a single sentence!\n\n• Current Tier: Tier 4: Stellar\n• Status: Cosmic power able to completely obliterate stars and solar systems." },
-                    800: { index: 3, name: "Cosmic", icon: "🌌", text: "🌌 *TIER UNLOCKED: GALACTIC EXTINATION*\n\nReality is collapsing! @Username has reached 800 messages!\n\n• Current Tier: Tier 3: Cosmic\n• Status: Reality-spanning scale. Can collapse galaxies and physical matter." },
-                    900: { index: 2, name: "Multiversal", icon: "🔮", text: "🔮 *TIER UNLOCKED: TIMELINE ANOMALY*\n\nBranching realities are warping! @Username has reached 900 messages!\n\n• Current Tier: Tier 2: Multiversal\n• Status: Manipulates multiple timelines and distinct universes simultaneously." },
-                    1000: { index: 1, name: "Extradimensional (Outerversal)", icon: "👁️", text: "👁️ *TIER UNLOCKED: DIMENSIONAL FRAMEWORK ERASED*\n\nThe narrative grid has dissolved! @Username has achieved Outerversal ascension at 1,000 messages!\n\n• Current Tier: Tier 1: Extradimensional (Outerversal)\n• Status: Transcends space, time, and dimensional conceptual frameworks. They exist beyond standard human physics." },
-                    1500: { index: 0, name: "Boundless", icon: "👑", text: "👑 *THE FINAL CEILING: BOUNDLESS ASCENSION*\n\nABSOLUTE DIVINITY ACHIEVED! @Username has conquered the maximum peak of 1,500 messages!\n\n• Current Tier: Tier 0: Boundless\n• Status: True omnipotence. Omnipresent, omniscient, and conceptually unreachable. The supreme deity of this chat." }
-                };
-
-                if (milestones[newCount]) {
-                    const milestone = milestones[newCount];
-                    userStats[jid][senderJid].level = milestone.index;
-
-                    const levelupAlertState = config.gcalerts?.levelup?.[jid] || 'off';
-                    if (levelupAlertState === 'on') {
-                        const targetNum = senderJid.split('@')[0];
-                        const cleanMsgText = milestone.text.replace(/@Username/g, `@${targetNum}`);
-                        
-                        sock.sendMessage(jid, { text: cleanMsgText, mentions: [senderJid] }).catch(err => {
-                            console.error("[LEVELUP BROADCAST FAILED]", err.message);
-                        });
-                    }
-                }
-                saveUserStats(userStats);
-            }
         }
 
         // ─── LID-SAFE SILENCE CHECK ──────────────────────────────
@@ -335,35 +299,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
-        }
-
-        // ─── CHAT LOG RECORDING INTERCEPTOR (.gclog - Fixed JID Sync) ────
-        if (isGroup && config.gclogActive?.[cleanChatJid]) {
-            const gcLogs = readGcLogs();
-            if (!gcLogs[cleanChatJid]) gcLogs[cleanChatJid] = [];
-
-            if (trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix)) {
-                const senderName = msg.pushName || senderNumber || 'Unknown';
-                gcLogs[cleanChatJid].push({
-                    sender: senderName,
-                    text: trimmedMessageBody,
-                    time: Date.now()
-                });
-
-                if (gcLogs[cleanChatJid].length > 1000) {
-                    gcLogs[cleanChatJid].shift();
-                }
-
-                saveGcLogs(gcLogs);
-            }
-
-            if (!global.gclogIntervals) global.gclogIntervals = {};
-            if (!global.gclogIntervals[cleanChatJid]) {
-                console.log(`🔄 [GCLOG] Re‑creating 3‑hour interval for ${cleanChatJid}`);
-                global.gclogIntervals[cleanChatJid] = setInterval(async () => {
-                    await triggerSummary(sock, cleanChatJid);
-                }, 3 * 60 * 60 * 1000);
-            }
         }
 
         // ─── STATUS BROADCAST ────────────────────────────────────
