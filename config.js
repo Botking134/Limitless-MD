@@ -153,12 +153,6 @@ module.exports = {
     /** Warning counts per user (key: `${jid}_${number}`). */
     warns: {},
 
-    /** Conversation logs for GCLOG feature. */
-    conversationLogs: {},
-
-    /** Active GCLOG status per group JID. */
-    gclogActive: {},
-
     /** Bank account details (set via .aza). */
     aza: { set: false },
 
