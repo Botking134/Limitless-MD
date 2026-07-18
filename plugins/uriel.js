@@ -747,14 +747,14 @@ You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${
             commandSuccess = await executeCommand(tag, sock, msg, userContext);
         }
 
-        // STEP 2: Send conversational reply as Voice Note (or text fallback) second
+        // STEP 2: Send conversational reply as Voice Note (Option B: audio/mp4 container) second
         if (cleanReply) {
             const voiceBuffer = await synthesizeUrielVoice(cleanReply);
             if (voiceBuffer) {
                 await sock.sendPresenceUpdate('recording', jid);
                 await sock.sendMessage(jid, { 
                     audio: voiceBuffer, 
-                    mimetype: 'audio/mpeg', 
+                    mimetype: 'audio/mp4', // Sends as a WhatsApp-compatible container to bypass decoder crashes
                     ptt: true 
                 }, { quoted: msg });
             } else {
