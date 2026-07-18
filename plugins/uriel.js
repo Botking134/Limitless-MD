@@ -281,6 +281,21 @@ function decorateQuotedMessage(msg, botJid = '') {
     }
 }
 
+// ─── VOICE SYNTHESIZER Helper (Irish English Female Dialect) ────────
+async function synthesizeUrielVoice(text) {
+    try {
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-ie&client=tw-ob&q=${encodeURIComponent(text)}`;
+        const response = await fetch(url);
+        if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            return Buffer.from(arrayBuffer);
+        }
+    } catch (e) {
+        console.error('[URIEL TTS] Failed to synthesize voice payload:', e.message);
+    }
+    return null;
+}
+
 // ─── HYBRID INTENT INTERCEPTOR (Direct Action Router) ──────────────
 function runSmartInterceptor(query) {
     const lower = query.toLowerCase().trim();
@@ -700,7 +715,7 @@ You: "Checking your ping speed now. [CMD: ${prefix}ping]"
 
 User: "Can you turn this into a sticker?"
 AI Assessment: "Turn into a sticker" matches the description of the sticker command.
-You: "Alright! Here's your sticker, let me know if you need anything else! [CMD: ${prefix}sticker]"
+You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${prefix}sticker]"
 `;
 
             manageMemoryUsage(jid);
@@ -732,9 +747,19 @@ You: "Alright! Here's your sticker, let me know if you need anything else! [CMD:
             commandSuccess = await executeCommand(tag, sock, msg, userContext);
         }
 
-        // STEP 2: Send conversational reply second (Third-step confirmation removed)
+        // STEP 2: Send conversational reply as Voice Note (or text fallback) second
         if (cleanReply) {
-            await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
+            const voiceBuffer = await synthesizeUrielVoice(cleanReply);
+            if (voiceBuffer) {
+                await sock.sendPresenceUpdate('recording', jid);
+                await sock.sendMessage(jid, { 
+                    audio: voiceBuffer, 
+                    mimetype: 'audio/mpeg', 
+                    ptt: true 
+                }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
+            }
         }
 
         memory[jid].push({ role: 'user', content: query });
