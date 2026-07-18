@@ -1,43 +1,6 @@
 // helpers/Message.js
 
-const fs = require('fs');
-const path = require('path');
 const { normalizeToJid } = require('../stateManager');
-
-const userStatsPath = path.join(__dirname, '../storage/userStats.json');
-
-// ─── USER STATS PERSISTENCE CACHE (Optimized In-Memory Cache) ───
-let cachedUserStats = null;
-let isUserStatsDirty = false;
-
-function readUserStats() {
-    if (cachedUserStats) return cachedUserStats;
-    try {
-        if (fs.existsSync(userStatsPath)) {
-            cachedUserStats = JSON.parse(fs.readFileSync(userStatsPath, 'utf-8'));
-            return cachedUserStats;
-        }
-    } catch (e) { /* ignore */ }
-    cachedUserStats = {};
-    return cachedUserStats;
-}
-
-function saveUserStats(stats) {
-    cachedUserStats = stats;
-    isUserStatsDirty = true;
-}
-
-// Writes the cached stats to disk every 10 seconds if modified
-setInterval(() => {
-    if (isUserStatsDirty && cachedUserStats) {
-        try {
-            const dir = path.dirname(userStatsPath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(userStatsPath, JSON.stringify(cachedUserStats, null, 2), 'utf-8');
-            isUserStatsDirty = false;
-        } catch (e) { /* ignore */ }
-    }
-}, 10000);
 
 // ─── MESSAGE NORMALIZERS ──────────────────────────────────────────
 
@@ -99,8 +62,5 @@ function extractBodyAndTrim(msg) {
 module.exports = {
     getRawMessage,
     cleanJid,
-    extractBodyAndTrim,
-    readUserStats,
-    saveUserStats,
-    userStatsPath
+    extractBodyAndTrim
 };
