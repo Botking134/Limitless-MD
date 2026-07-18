@@ -7,7 +7,6 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios'); // Added for API and sticker downloads
 
-const remindersPath = path.join(__dirname, '../storage/reminders.json');
 const notesPath = path.join(__dirname, '../storage/notes.json');
 
 // ─── SAFE GLOBAL REGISTRY INITIALIZERS ─────────────────────────
@@ -16,35 +15,13 @@ global.tgsSessions = global.tgsSessions || {};
 global.lyricsSessions = global.lyricsSessions || {};
 global.xvidSessions = global.xvidSessions || {};
 global.noteSessions = global.noteSessions || {};
-global.reminderSessions = global.reminderSessions || {};
 global.azaSessions = global.azaSessions || {};
-global.cancelSessions = global.cancelSessions || {};
 global.forwardSessions = global.forwardSessions || {};
 
 // Helper to fetch files as buffers safely
 async function fetchBuffer(url) {
     const response = await axios.get(url, { responseType: 'arraybuffer' });
     return Buffer.from(response.data);
-}
-
-// ─── DECOUPLED REMINDERS STORAGE HANDLERS ───────────────────────
-
-function readReminders() {
-    try {
-        if (fs.existsSync(remindersPath)) {
-            const data = JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
-            if (Array.isArray(data)) return data; 
-        }
-    } catch (e) { /* ignore */ }
-    return [];
-}
-
-function saveReminders(reminders) {
-    try {
-        const dir = path.dirname(remindersPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(remindersPath, JSON.stringify(reminders, null, 2), 'utf-8');
-    } catch (e) { /* ignore */ }
 }
 
 // ─── DECOUPLED STICKY NOTES STORAGE HANDLERS ─────────────────────
@@ -206,67 +183,6 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
             console.error('[AZA INTERCEPTOR]', err);
             await sock.sendMessage(jid, { text: '❌ An error occurred while processing your Aza session.' });
             delete global.azaSessions[quotedMsgId];
-            return true;
-        }
-    }
-
-    // ─── REMINDER SESSION ──────────────────────────────────────
-    if (global.reminderSessions && global.reminderSessions[quotedMsgId]) {
-        try {
-            const session = global.reminderSessions[quotedMsgId];
-            if (!session || !session.durationMs || !session.text) {
-                await sock.sendMessage(jid, { text: "❌ Reminder session data is invalid. Please start again." });
-                delete global.reminderSessions[quotedMsgId];
-                return true;
-            }
-            const title = messageText;
-            if (!title) {
-                await sock.sendMessage(jid, { text: "❌ Reminder title cannot be empty." });
-                return true;
-            }
-            const reminders = readReminders();
-            reminders.push({
-                jid: session.jid,
-                title: title,
-                text: session.text,
-                triggerTime: Date.now() + session.durationMs,
-                timeSet: session.timeSet,
-                durationStr: session.durationStr
-            });
-            saveReminders(reminders);
-            await sock.sendMessage(jid, { text: `✅ *Reminder Set!*\n\n📌 *Title:* ${title}\n⏳ *Duration:* ${session.durationStr}\n\nI'll remind you then.` });
-            delete global.reminderSessions[quotedMsgId];
-            return true;
-        } catch (err) {
-            console.error('[REMINDER INTERCEPTOR]', err);
-            await sock.sendMessage(jid, { text: '❌ Failed to save reminder due to an internal error.' });
-            delete global.reminderSessions[quotedMsgId];
-            return true;
-        }
-    }
-
-    // ─── CANCEL SESSION ──────────────────────────────────────
-    if (global.cancelSessions && global.cancelSessions[quotedMsgId]) {
-        try {
-            const num = parseInt(messageText);
-            if (isNaN(num)) {
-                await sock.sendMessage(jid, { text: "❌ Please enter a valid number from the list." });
-                return true;
-            }
-            const reminders = readReminders();
-            if (num < 1 || num > reminders.length) {
-                await sock.sendMessage(jid, { text: `❌ Invalid index. Please choose between 1 and ${reminders.length}.` });
-                return true;
-            }
-            const removed = reminders.splice(num - 1, 1);
-            saveReminders(reminders);
-            await sock.sendMessage(jid, { text: `✅ *Reminder Cancelled:* "${removed[0].title}"` });
-            delete global.cancelSessions[quotedMsgId];
-            return true;
-        } catch (err) {
-            console.error('[CANCEL INTERCEPTOR]', err);
-            await sock.sendMessage(jid, { text: '❌ Failed to cancel reminder.' });
-            delete global.cancelSessions[quotedMsgId];
             return true;
         }
     }
@@ -449,8 +365,6 @@ function getRawMessage(message) {
 }
 
 module.exports = {
-    readReminders,
-    saveReminders,
     registerSession,
     handleInteractiveSessions,
     handleDownloaderSessions,
