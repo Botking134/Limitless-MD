@@ -45,19 +45,13 @@ function loadVars() {
         fs.mkdirSync(storageDir, { recursive: true });
     }
 
-    // Get config.js modification time
-    const configPath = path.join(__dirname, 'config.js');
-    const configStat = fs.existsSync(configPath) ? fs.statSync(configPath) : null;
-    const configMtime = configStat ? configStat.mtimeMs : 0;
-
     let vars = {};
     let varsExist = false;
 
     // Try to load vars.json
     if (fs.existsSync(VARS_PATH)) {
         try {
-            const data = JSON.parse(fs.readFileSync(VARS_PATH, 'utf8'));
-            vars = data;
+            vars = JSON.parse(fs.readFileSync(VARS_PATH, 'utf8'));
             varsExist = true;
             console.log('✅ [VARS] Loaded persistent variables');
         } catch (err) {
@@ -65,46 +59,30 @@ function loadVars() {
         }
     }
 
-    // Get vars.json modification time
-    const varsStat = fs.existsSync(VARS_PATH) ? fs.statSync(VARS_PATH) : null;
-    const varsMtime = varsStat ? varsStat.mtimeMs : 0;
+    // ─── GAP-FILL ONLY, NEVER OVERWRITE ─────────────────────────
+    // vars.json is the single source of truth for DYNAMIC_KEYS once it
+    // exists. We only pull a value from config.js when vars.json doesn't
+    // already have that key (e.g. a new setting introduced by an update).
+    // We deliberately do NOT compare file mtimes here: a `git pull`/`.update`
+    // rewrites config.js to disk and bumps its mtime regardless of whether
+    // its actual values changed, which used to cause every runtime setting
+    // (like a custom .setprefix) to silently reset on the next restart.
+    let changed = false;
+    for (const key of DYNAMIC_KEYS) {
+        if (!(key in vars) && config[key] !== undefined) {
+            vars[key] = config[key];
+            changed = true;
+        }
+    }
 
-    // ─── BIDIRECTIONAL SYNC LOGIC ──────────────────────────────
-
-    // If vars.json doesn't exist, create it from config
     if (!varsExist) {
         console.log('📝 [VARS] Creating vars.json from config.js...');
-        const initialVars = {};
-        for (const key of DYNAMIC_KEYS) {
-            if (config[key] !== undefined) {
-                initialVars[key] = config[key];
-            }
-        }
-        fs.writeFileSync(VARS_PATH, JSON.stringify(initialVars, null, 2));
-        return initialVars;
     }
 
-    // If vars.json exists and config.js is newer, update vars.json from config.js
-    if (configMtime > varsMtime) {
-        console.log('🔄 [VARS] config.js is newer → updating vars.json from config.js...');
-        const updatedVars = {};
-        for (const key of DYNAMIC_KEYS) {
-            if (config[key] !== undefined) {
-                updatedVars[key] = config[key];
-            }
-        }
-        // Merge with existing vars.json for keys that exist there but not in config
-        for (const key of Object.keys(vars)) {
-            if (!(key in updatedVars)) {
-                updatedVars[key] = vars[key];
-            }
-        }
-        fs.writeFileSync(VARS_PATH, JSON.stringify(updatedVars, null, 2));
-        return updatedVars;
+    if (!varsExist || changed) {
+        fs.writeFileSync(VARS_PATH, JSON.stringify(vars, null, 2));
     }
 
-    // If vars.json is newer, it will override config in syncVarsToConfig
-    console.log('🔄 [VARS] vars.json is newer → will override config.js values');
     return vars;
 }
 
