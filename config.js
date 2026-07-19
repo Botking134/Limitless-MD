@@ -28,7 +28,7 @@ module.exports = {
     // ================================================================
 
     /** Command prefix. If empty string or null → bot becomes prefixless. */
-    prefix: "⚡",
+    prefix: "/",
 
     /** Custom prefixless ViewOnce decryption trigger (e.g., 'kamui' or '🔮'). */
     vvs: "wow",
