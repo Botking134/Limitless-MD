@@ -152,25 +152,8 @@ async function ensureGitSetup(jid, sock, msg) {
 
 module.exports = [
 
-    // ─── SETPREFIX ───────────────────────────────────────────────
-    {
-        name: 'setprefix',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner) return;
-            const newPrefix = args ? args.trim() : '';
-            if (!newPrefix) return await sock.sendMessage(jid, { text: '❌ Provide a new prefix.' });
-            
-            const success = setVar('prefix', newPrefix);
-            if (success) {
-                await sock.sendMessage(jid, { text: `✅ Prefix set to: \`${newPrefix}\`` });
-                try { require('../commands').reload(); } catch (e) {}
-            } else {
-                await sock.sendMessage(jid, { text: '❌ Failed to save prefix to vars.' });
-            }
-        }
-    },
+   
+        
 
     // ─── DIAGNOSE ────────────────────────────────────────────────
     {
