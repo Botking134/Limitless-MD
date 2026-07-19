@@ -15,7 +15,6 @@ global.tgsSessions = global.tgsSessions || {};
 global.lyricsSessions = global.lyricsSessions || {};
 global.xvidSessions = global.xvidSessions || {};
 global.noteSessions = global.noteSessions || {};
-global.azaSessions = global.azaSessions || {};
 global.forwardSessions = global.forwardSessions || {};
 
 // Helper to fetch files as buffers safely
@@ -122,70 +121,6 @@ async function handleInteractiveSessions(sock, msg, text, quotedMsgId, jid) {
     // Defensive mapping to safeguard against undefined/type trim errors on media payloads
     const messageText = (text || '').trim();
 
-    // ─── AZA SESSION ───────────────────────────────────────────
-    if (global.azaSessions && global.azaSessions[quotedMsgId]) {
-        try {
-            const session = global.azaSessions[quotedMsgId];
-            if (session.step === 1) {
-                const account = messageText;
-                if (!account || account.length < 5) {
-                    await sock.sendMessage(jid, { text: "❌ Account number must be at least 5 digits. Please try again." });
-                    return true;
-                }
-                session.account = account;
-                session.step = 2;
-                try {
-                    const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 2:* Please reply with the *Bank Name*." });
-                    global.azaSessions[prompt.key.id] = session;
-                    delete global.azaSessions[quotedMsgId];
-                } catch (sendErr) {
-                    console.error("Failed to send Aza Step 2 prompt:", sendErr);
-                }
-                return true;
-            }
-            if (session.step === 2) {
-                const bank = messageText;
-                if (!bank) {
-                    await sock.sendMessage(jid, { text: "❌ Bank name cannot be empty. Please try again." });
-                    return true;
-                }
-                session.bank = bank;
-                session.step = 3;
-                try {
-                    const prompt = await sock.sendMessage(jid, { text: "🏦 *Step 3:* Please reply with the *Account Name*." });
-                    global.azaSessions[prompt.key.id] = session;
-                    delete global.azaSessions[quotedMsgId];
-                } catch (sendErr) {
-                    console.error("Failed to send Aza Step 3 prompt:", sendErr);
-                }
-                return true;
-            }
-            if (session.step === 3) {
-                const name = messageText;
-                if (!name) {
-                    await sock.sendMessage(jid, { text: "❌ Account name cannot be empty. Please try again." });
-                    return true;
-                }
-                config.aza = { set: true, account: session.account, bank: session.bank, name: name };
-                
-                // LAZY-LOADING FIX: Prevent circular dependency loop crash
-                require('../stateManager').saveState();
-
-                await sock.sendMessage(jid, {
-                    text: `✅ *Bank details saved successfully!*\n\n🏦 *Bank:* ${session.bank}\n💳 *Account:* ${session.account}\n👤 *Name:* ${name}`
-                });
-                delete global.azaSessions[quotedMsgId];
-                return true;
-            }
-            delete global.azaSessions[quotedMsgId];
-            return true;
-        } catch (err) {
-            console.error('[AZA INTERCEPTOR]', err);
-            await sock.sendMessage(jid, { text: '❌ An error occurred while processing your Aza session.' });
-            delete global.azaSessions[quotedMsgId];
-            return true;
-        }
-    }
 
     // ─── FORWARD SESSION (Fixed native copyNForward payload delivery) ──
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
