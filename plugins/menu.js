@@ -411,9 +411,9 @@ _Uptime: ${uptime}_
 _Version: 1.0.0_
 ════════════════════════
 _Throughout Heaven And Earth_
-┌────────────────────────────────────┐
-│ _I alone am the Honoured one_ │
-└────────────────────────────────────┘
+┌───────────────────────────┐
+│ *I alone am the Honoured one* 
+└───────────────────────────┘
 
 _Swipe through the cards below to explore command categories._ 🔮`;
 
@@ -595,15 +595,18 @@ module.exports = [
         }
     },
 
-    // 5. Interactive Button Interceptor (Prefixless)
+    // 5. Interactive Button Interceptor (Prefixless & Self-Healing Fallback)
     {
         name: 'menu_button_handler',
         isPrefixless: true,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const raw = getRawMessage(msg.message);
+            const incomingText = raw?.conversation || raw?.extendedTextMessage?.text || '';
 
             let buttonId = '';
+
+            // 1. Attempt to extract the standard native flow button ID
             if (raw?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
                 try {
                     const parsed = JSON.parse(raw.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
@@ -615,15 +618,40 @@ module.exports = [
                 buttonId = raw.templateButtonReplyMessage.selectedId;
             }
 
+            // 2. BULLETPROOF FALLBACK: Parse the quoted card context if raw parameters are omitted by the client
+            if (!buttonId && incomingText.toLowerCase().includes('explore commands')) {
+                const quotedMsg = raw?.extendedTextMessage?.contextInfo?.quotedMessage;
+                if (quotedMsg) {
+                    const rawQuoted = getRawMessage(quotedMsg);
+                    const quotedText = (
+                        rawQuoted?.conversation || 
+                        rawQuoted?.extendedTextMessage?.text || 
+                        rawQuoted?.imageMessage?.caption || 
+                        rawQuoted?.interactiveMessage?.body?.text ||
+                        rawQuoted?.buttonsMessage?.contentText ||
+                        ''
+                    ).toUpperCase();
+
+                    if (quotedText.includes('AI & CHATBOT')) buttonId = 'menu_ai';
+                    else if (quotedText.includes('INTERACTIVE GAMES') || quotedText.includes('GAMES')) buttonId = 'menu_games';
+                    else if (quotedText.includes('GROUP MANAGEMENT') || quotedText.includes('GROUP')) buttonId = 'menu_group';
+                    else if (quotedText.includes('TOOLS')) buttonId = 'menu_tools';
+                    else if (quotedText.includes('DOWNLOADER')) buttonId = 'menu_download';
+                    else if (quotedText.includes('FUN & ROLEPLAY') || quotedText.includes('FUN')) buttonId = 'menu_fun';
+                    else if (quotedText.includes('OWNER & DEV') || quotedText.includes('OWNER')) buttonId = 'menu_owner';
+                    else if (quotedText.includes('UTILITIES')) buttonId = 'menu_utilities';
+                }
+            }
+
             if (!buttonId || !buttonId.startsWith('menu_')) return;
 
             let responseText = "";
 
             if (buttonId === 'menu_ai') {
                 responseText = 
-`┌────────────┐
-│ 🧠  AI & CHATBOT  
-└────────────┘
+`┌──────────────┐
+│ 🧠 AI & CHATBOT  
+└──────────────┘
 
 _❖ ─ [ ENGINES ] ─ ❖_
 
@@ -644,9 +672,9 @@ _Tap another category card to explore more features._`;
             
             else if (buttonId === 'menu_games') {
                 responseText = 
-`┌──────┐
-│ 🎮  GAMES  
-└──────┘
+`┌────────┐
+│ 🎮 GAMES  
+└────────┘
 
 _❖ ─ [ LOBBY & PUZZLES ] ─ ❖_
 
@@ -671,9 +699,9 @@ _Tap another category card to explore more features._`;
             
             else if (buttonId === 'menu_group') {
                 responseText = 
-`┌──────┐
-│ 🔥  GROUP  
-└──────┘
+`┌─────────┐
+│ 🔥 GROUP  
+└─────────┘
 
 _❖ ─ [ MANAGEMENT ] ─ ❖_
 
@@ -725,9 +753,9 @@ _Tap another category card to explore more features._`;
             
             else if (buttonId === 'menu_tools') {
                 responseText = 
-`┌──────┐
-│ ⚙️  TOOLS  
-└──────┘
+`┌────────┐
+│ ⚙️ TOOLS  
+└────────┘
 
 _❖ ─ [ PRESENCE & REGISTRY ] ─ ❖_
 
@@ -769,9 +797,9 @@ _Tap another category card to explore more features._`;
             
             else if (buttonId === 'menu_download') {
                 responseText = 
-`┌─────────┐
+`┌───────────┐
 │ 📥  DOWNLOAD  
-└─────────┘
+└───────────┘
 
 _❖ ─ [ MEDIA SERVICES ] ─ ❖_
 
@@ -810,9 +838,9 @@ _Tap another category card to explore more features._`;
             
             else if (buttonId === 'menu_fun') {
                 responseText = 
-`┌────────┐
-│ 🎭  FUN & RP  
-└────────┐
+`┌──────────┐
+│ 🎭 FUN & RP  
+└──────────┘
 
 _❖ ─ [ MONOLOGUES & ACTIONS ] ─ ❖_
 
@@ -853,7 +881,7 @@ _Tap another category card to explore more features._`;
             else if (buttonId === 'menu_owner') {
                 responseText = 
 `┌─────────────┐
-│ 👑  OWNER & DEV  
+│ 👑 OWNER & DEV  
 └─────────────┘
 
 _❖ ─ [ PARAMETERS & PANELS ] ─ ❖_
@@ -884,9 +912,9 @@ _Tap another category card to explore more features._`;
             
             else if (buttonId === 'menu_utilities') {
                 responseText = 
-`┌──────────┐
-│ 🛠️  UTILITIES  
-└──────────┘
+`┌───────────┐
+│ 🛠️ UTILITIES  
+└───────────┘
 
 _❖ ─ [ CONVERTERS & METRICS ] ─ ❖_
 
