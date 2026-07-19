@@ -368,10 +368,10 @@ _𝐔𝐩𝐭𝐢𝐦𝐞: ${uptime}_
 _𝐕𝐞𝐫𝐬𝐢𝐨𝐧: 1.0.0_
 ════════════════════
 
-┌───────────────────────────┐
+┌─────────────────────┐
 │ _Throughout Heaven And Earth_ 
 │ _I alone am the Honoured one_
-└───────────────────────────┘
+└─────────────────────┘
 ${readMore}
 ${menuText}`;
 
@@ -392,18 +392,18 @@ async function renderCarouselMenu(sock, msg) {
     const uptime = formatUptime(process.uptime());
 
     const headerText =
-`┌──────────────────┐
-│   *Limitless-MD*   │
-└──────────────────┘
+`┌─────────────┐
+│ *Limitless-MD*
+└─────────────┘
 _Owner: ${config.ownerName}_
 _User: ${msg.pushName || 'User'}_
 _Uptime: ${uptime}_
 _Version: 1.0.0_
 ════════════════════════
 _Throughout Heaven And Earth_
-┌───────────────────────────┐
+┌───────────────────────┐
 │ *I alone am the Honoured one* 
-└───────────────────────────┘
+└───────────────────────┘
 
 _Swipe through the cards below to explore command categories._ 🔮`;
 
