@@ -363,39 +363,7 @@ _┃ ⊱ qty_
 _┃ ⊱ currency
 `;
 
-// ─── RENDER TEXT MENU ───────────────────────────────────────────────
-async function renderMenu(sock, msg) {
-    const jid = msg.key.remoteJid;
-    const uptime = formatUptime(process.uptime());
-    const readMore = String.fromCharCode(8206).repeat(4001);
-    const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
 
-    const menuTextCompiled =
-`┌──────────────────┐
-│   *Limitless-MD*   │
-└──────────────────┘
-_Owner: ${config.ownerName}_
-_User: ${msg.pushName || 'User'}_
-_Uptime: ${uptime}_
-_Version: 1.0.0_
-════════════════════════
-_Throughout Heaven And Earth _
-┌────────────────────────────────────┐
-│ _I alone am the Honoured one_ │
-└────────────────────────────────────┘
-${readMore}
-${menuText}`;
-
-    try {
-        await sock.sendMessage(jid, {
-            image: { url: randomImage },
-            caption: menuTextCompiled
-        }, { quoted: msg });
-    } catch (error) {
-        console.error("Menu Image Render Error:", error);
-        await sock.sendMessage(jid, { text: menuTextCompiled }, { quoted: msg });
-    }
-}
 
 // ─── RENDER CAROUSEL MENU ──────────────────────────────────────────
 async function renderCarouselMenu(sock, msg) {
