@@ -1,6 +1,6 @@
 # ─── Secrets & Credentials ──────────────────────────────────────
                      # ← Ignored – contains API keys & owner details
-.env
+.config
 .env.*
 *.env
 *.key
@@ -38,6 +38,9 @@ storage/*.log
 storage/*.pid
 storage/.cache/
 storage/*.cache
+config.js
+config
+./config
 
 # ─── Logs ─────────────────────────────────────────────────────────
 logs/
