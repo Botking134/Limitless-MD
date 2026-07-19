@@ -610,7 +610,10 @@ module.exports = [
 
             // 2. BULLETPROOF FALLBACK: Parse the quoted card context if raw parameters are omitted by the client
             if (!buttonId && incomingText.toLowerCase().includes('explore commands')) {
-                const quotedMsg = raw?.extendedTextMessage?.contextInfo?.quotedMessage;
+                const quotedMsgId = raw?.extendedTextMessage?.contextInfo?.stanzaId;
+                const targetQuotedMsg = (quotedMsgId && global.messageStore) ? global.messageStore[quotedMsgId] : null;
+                const quotedMsg = targetQuotedMsg?.message || raw?.extendedTextMessage?.contextInfo?.quotedMessage;
+                
                 if (quotedMsg) {
                     const rawQuoted = getRawMessage(quotedMsg);
                     const quotedText = (
