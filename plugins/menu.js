@@ -130,18 +130,18 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
 
 // ─── MASTER TEXT MENU ────────────────────────────────────────────────
 const menuText =
-`┌────────────────┐
-│   *Limitless-MD* │
-└────────────────┘
+`┌────────────┐
+│*Limitless-MD* 
+└────────────┘
 _Owner: ${config.ownerName}_
 _User: User_
 _Version: 1.0.0_
-════════════════════════
+═════════════════════
 
-┌────────────────────────────┐
- _Throughout Heaven And Earth _
- _I alone am the Honoured one_ 
-└────────────────────────────┘
+┌────────────────────────┐
+_Throughout Heaven And Earth_
+_I alone am the Honoured one_ 
+└────────────────────────┘
 
 _❖ ── [ AI & CHATBOT ] ── ❖_
 _┃ ⊱ ai_
