@@ -617,154 +617,313 @@ module.exports = [
 
             if (!buttonId || !buttonId.startsWith('menu_')) return;
 
-            // Define Sub-Menus matching button actions
             let responseText = "";
 
             if (buttonId === 'menu_ai') {
                 responseText = 
-`🧠 *AI & CHATBOT COMMANDS*
+`┌────────────┐
+│ 🧠  AI & CHATBOT  
+└────────────┘
 
-_┃ ⊱ .ai_ (Prompt standard AI assistant)
-_┃ ⊱ .groq_ (Groq AI model utility)
-_┃ ⊱ .gojo_ [rise/sleep] (Toggle Six Eyes Agent)
-_┃ ⊱ .debug_ [code] (Code/Error architect analysis)
-_┃ ⊱ .summon_ [char] [query] (Summon character roleplay)
-_┃ ⊱ .read_ (Analyze replied image with Groq Vision)
-_┃ ⊱ .imagine_ [prompt] (AI visual image generator)
-_┃ ⊱ .lizzy_ [on/off] (Toggle Lizzy chatbot)
-_┃ ⊱ .chatbot_ [on/off] (Toggle Jarvis chatbot)
-_┃ ⊱ .say_ [text] (Synthesize text to audio speech)`;
+_❖ ─ [ ENGINES ] ─ ❖_
+
+_┃ ⊱ .ai_
+_┃ ⊱ .groq_
+_┃ ⊱ .gojo_
+_┃ ⊱ .debug_
+_┃ ⊱ .summon_
+_┃ ⊱ .read_
+_┃ ⊱ .imagine_
+_┃ ⊱ .lizzy_
+_┃ ⊱ .chatbot_
+_┃ ⊱ .say_
+
+════════════════════════
+_Tap another category card to explore more features._`;
             } 
             
             else if (buttonId === 'menu_games') {
                 responseText = 
-`🎮 *INTERACTIVE GAMES DIRECTORY*
+`┌──────┐
+│ 🎮  GAMES  
+└──────┘
 
-_┃ ⊱ .games_ (Open Unified Game Lobby)
-_┃ ⊱ .ttt_ (Challenge a player to Tic-Tac-Toe)
-_┃ ⊱ .rps_ (Rock Paper Scissors duel)
-_┃ ⊱ .guess_ (Guess the target number)
-_┃ ⊱ .vault8_ (Step-by-step nuclear text adventure)
-_┃ ⊱ .trivia_ (Fast-paced trivia matches)
-_┃ ⊱ .quiz_ (Interactive quiz modes)
-_┃ ⊱ .charade_ / .sharade (Group guess games)
-_┃ ⊱ .anagram_ (Unscramble word configurations)
-_┃ ⊱ .wcg_ (Word Chain Game chains)
-_┃ ⊱ .millionaire_ (Who wants to be a millionaire ladder)
-_┃ ⊱ .torf_ (True or False fast-checks)
-_┃ ⊱ .pvp_ (Action turn-based combat)
-_┃ ⊱ .escape_ (Escape room text adventure)`;
+_❖ ─ [ LOBBY & PUZZLES ] ─ ❖_
+
+_┃ ⊱ .games_
+_┃ ⊱ .ttt_
+_┃ ⊱ .rps_
+_┃ ⊱ .guess_
+_┃ ⊱ .vault8_
+_┃ ⊱ .trivia_
+_┃ ⊱ .quiz_
+_┃ ⊱ .charade_
+_┃ ⊱ .anagram_
+_┃ ⊱ .wcg_
+_┃ ⊱ .millionaire_
+_┃ ⊱ .torf_
+_┃ ⊱ .pvp_
+_┃ ⊱ .escape_
+
+════════════════════════
+_Tap another category card to explore more features._`;
             } 
             
             else if (buttonId === 'menu_group') {
                 responseText = 
-`🔥 *GROUP CONFIGURATION & MANAGEMENT*
+`┌──────┐
+│ 🔥  GROUP  
+└──────┘
 
-_┃ ⊱ .mute / .close_ (Restrict group messages to admins)
-_┃ ⊱ .unmute / .open_ (Allow everyone to send messages)
-_┃ ⊱ .lock_ / .unlock_ (Lock/unlock group settings modification)
-_┃ ⊱ .kick_ [reply/mention] (Remove participant)
-_┃ ⊱ .promote_ [reply/mention] (Make user admin)
-_┃ ⊱ .demote_ [reply/mention] (Demote admin to member)
-_┃ ⊱ .tagall_ (Mention every member in the group)
-_┃ ⊱ .tag_ (Inline mention tools)
-_┃ ⊱ .link / .gclink_ (Get current group invitation link)
-_┃ ⊱ .invite_ (Send automatic group invites)
-_┃ ⊱ .antilink_ [on/off] (Auto-kick users posting links)
-_┃ ⊱ .antitag_ [on/off] (Limit mass tag permissions)
-_┃ ⊱ .antibot_ [on/off] (Detect and remove user bots)
-_┃ ⊱ .warn_ [reply/mention] (Issue system warnings)
-_┃ ⊱ .welcome_ [text] / .goodbye [text] (Toggle joint/leave notices)
-_┃ ⊱ .poll_ [title | opt1 | opt2] (Generate native group polls)`;
+_❖ ─ [ MANAGEMENT ] ─ ❖_
+
+_┃ ⊱ .mute_
+_┃ ⊱ .unmute_
+_┃ ⊱ .open_
+_┃ ⊱ .close_
+_┃ ⊱ .lock_
+_┃ ⊱ .unlock_
+_┃ ⊱ .kick_
+_┃ ⊱ .promote_
+_┃ ⊱ .demote_
+_┃ ⊱ .tagall_
+_┃ ⊱ .tag_
+_┃ ⊱ .link_
+_┃ ⊱ .invite_
+_┃ ⊱ .gclink_
+_┃ ⊱ .antilink_
+_┃ ⊱ .admins_
+_┃ ⊱ .antitag_
+_┃ ⊱ .antibot_
+_┃ ⊱ .warn_
+_┃ ⊱ .togcstatus_
+_┃ ⊱ .getgpp_
+_┃ ⊱ .setgpp_
+_┃ ⊱ .welcome_
+_┃ ⊱ .goodbye_
+_┃ ⊱ .delwelcome_
+_┃ ⊱ .delgoodbye_
+_┃ ⊱ .poll_
+_┃ ⊱ .antigm_
+_┃ ⊱ .gclog_
+_┃ ⊱ .creategc_
+_┃ ⊱ .kickall_
+_┃ ⊱ .stopkickall_
+_┃ ⊱ .tkick_
+_┃ ⊱ .gcjid_
+_┃ ⊱ .antispam_
+_┃ ⊱ .silence_
+_┃ ⊱ .gcalerts_
+_┃ ⊱ .antigcstatus_
+_┃ ⊱ .spamtag_
+_┃ ⊱ .antipromote_
+_┃ ⊱ .antidemote_
+
+════════════════════════
+_Tap another category card to explore more features._`;
             } 
             
             else if (buttonId === 'menu_tools') {
                 responseText = 
-`⚙️ *ADVANCED TOOLS & METRIC PARAMS*
+`┌──────┐
+│ ⚙️  TOOLS  
+└──────┘
 
-_┃ ⊱ .track_ (Track delivery metrics)
-_┃ ⊱ .getpp_ [mention] (Fetch full resolution profile picture)
-_┃ ⊱ .setname_ [name] (Modify current WhatsApp display name)
-_┃ ⊱ .save_ (Save context content)
-_┃ ⊱ .tostatus_ (Route media files directly to status updates)
-_┃ ⊱ .presence_ [status] (Composing, Recording, Online settings)
-_┃ ⊱ .autotyping_ [on/off] (Fake typing status)
-_┃ ⊱ .autorecording_ [on/off] (Fake voice recording status)
-_┃ ⊱ .alwaysonline_ [on/off] (Maintain online status)
-_┃ ⊱ .autoread_ [on/off] (Auto blue-tick incoming messages)
-_┃ ⊱ .antidelete_ [on/off] (Log deleted messages in real-time)
-_┃ ⊱ .antiviewonce_ [on/off] (Decrypt and output View-Once media)
-_┃ ⊱ .antibug_ [on/off] (Filter large crash character strings)`;
+_❖ ─ [ PRESENCE & REGISTRY ] ─ ❖_
+
+_┃ ⊱ .track_
+_┃ ⊱ .getpp_
+_┃ ⊱ .setname_
+_┃ ⊱ .save_
+_┃ ⊱ .tostatus_
+_┃ ⊱ .fw_
+_┃ ⊱ .presence_
+_┃ ⊱ .autotyping_
+_┃ ⊱ .autorecording_
+_┃ ⊱ .alwaysonline_
+_┃ ⊱ .autoread_
+_┃ ⊱ .antidelete_
+_┃ ⊱ .antiviewonce_
+_┃ ⊱ .antibug_
+_┃ ⊱ .clear_
+_┃ ⊱ .archive_
+_┃ ⊱ .unarchive_
+_┃ ⊱ .autoviewstatus_
+_┃ ⊱ .statusemoji_
+_┃ ⊱ .autoreactstatus_
+_┃ ⊱ .block_
+_┃ ⊱ .unblock_
+_┃ ⊱ .aza_
+_┃ ⊱ .time_
+_┃ ⊱ .weather_
+_┃ ⊱ .device_
+_┃ ⊱ .ss_
+_┃ ⊱ .calc_
+_┃ ⊱ .trt_
+_┃ ⊱ .translate_
+_┃ ⊱ .spam_
+
+════════════════════════
+_Tap another category card to explore more features._`;
             } 
             
             else if (buttonId === 'menu_download') {
                 responseText = 
-`📥 *HIGH-SPEED MULTI-PLATFORM DOWNLOADERS*
+`┌─────────┐
+│ 📥  DOWNLOAD  
+└─────────┘
 
-_┃ ⊱ .play_ [query] (Fetch audio from YouTube)
-_┃ ⊱ .ytmp3_ [url] (Convert and download YouTube Audio)
-_┃ ⊱ .ytmp4_ [url] (Convert and download YouTube Video)
-_┃ ⊱ .song_ [title] (Fetch high-quality audio files)
-_┃ ⊱ .video_ [title] (Fetch high-quality video files)
-_┃ ⊱ .fb_ [url] (Download Facebook videos)
-_┃ ⊱ .tt_ [url] (Download TikTok media without watermarks)
-_┃ ⊱ .mediafire_ [url] (Export direct mediafire file links)
-_┃ ⊱ .apk_ [name] (Download Android app installer packages)
-_┃ ⊱ .shazam_ (Analyze audio to identify tracks)
-_┃ ⊱ .lyrics_ [song] (Fetch synchronized track text)
-_┃ ⊱ .gdrive_ [url] (Fetch file resources directly from Google Drive)
-_┃ ⊱ .pinterest_ [query] (Download pinterest image collections)`;
+_❖ ─ [ MEDIA SERVICES ] ─ ❖_
+
+_┃ ⊱ .play_
+_┃ ⊱ .ytmp3_
+_┃ ⊱ .ytmp4_
+_┃ ⊱ .yt_
+_┃ ⊱ .tt2_
+_┃ ⊱ .img_
+_┃ ⊱ .song_
+_┃ ⊱ .video_
+_┃ ⊱ .fb_
+_┃ ⊱ .tt_
+_┃ ⊱ .mediafire_
+_┃ ⊱ .apk_
+_┃ ⊱ .apksearch_
+_┃ ⊱ .shazam_
+_┃ ⊱ .lyrics_
+_┃ ⊱ .gdrive_
+_┃ ⊱ .gitclone_
+_┃ ⊱ .pinterest_
+_┃ ⊱ .subtitle_
+_┃ ⊱ .ytmp3doc_
+_┃ ⊱ .playdoc_
+_┃ ⊱ .spotify_
+_┃ ⊱ .spotify2_
+_┃ ⊱ .web_
+_┃ ⊱ .x2_
+_┃ ⊱ .pdf_
+_┃ ⊱ .tgs_
+_┃ ⊱ .ig_
+
+════════════════════════
+_Tap another category card to explore more features._`;
             } 
             
             else if (buttonId === 'menu_fun') {
                 responseText = 
-`🎭 *FUN & ROLEPLAY UTILITIES*
+`┌────────┐
+│ 🎭  FUN & RP  
+└────────┐
 
-_┃ ⊱ .bankai_ (Execute Bankai animation monologues)
-_┃ ⊱ .dom-exp_ (Unfold domain expansion templates)
-_┃ ⊱ .wyr_ (Play 'Would You Rather' cards)
-_┃ ⊱ .joke_ (Get funny randomized jokes)
-_┃ ⊱ .roast_ / .insult (Apply conversational roasts)
-_┃ ⊱ .ship_ / .wed (Calculate relationship ship meters)
-_┃ ⊱ .propose_ / .askout (Trigger interactive roleplay actions)
-_┃ ⊱ .hollow-purple_ (Launch Satoru Gojo's ultimate monologue)
-_┃ ⊱ .hack_ (Run fake terminal device infiltration displays)
-_┃ ⊱ .slap_ / .kill_ / .kiss_ / .hug_ / .punch_ (Express action GIFs)`;
+_❖ ─ [ MONOLOGUES & ACTIONS ] ─ ❖_
+
+_┃ ⊱ .bankai_
+_┃ ⊱ .dom-exp_
+_┃ ⊱ .wyr_
+_┃ ⊱ .joke_
+_┃ ⊱ .insult_
+_┃ ⊱ .roast_
+_┃ ⊱ .ship_
+_┃ ⊱ .wed_
+_┃ ⊱ .propose_
+_┃ ⊱ .askout_
+_┃ ⊱ .hollow-purple_
+_┃ ⊱ .hack_
+_┃ ⊱ .arrest_
+_┃ ⊱ .liedetector_
+_┃ ⊱ .rizz_
+_┃ ⊱ .speech_
+_┃ ⊱ .slap_
+_┃ ⊱ .kill_
+_┃ ⊱ .kiss_
+_┃ ⊱ .hug_
+_┃ ⊱ .kik_
+_┃ ⊱ .punch_
+_┃ ⊱ .hifive_
+_┃ ⊱ .bite_
+_┃ ⊱ .poke_
+_┃ ⊱ .dap_
+_┃ ⊱ .dance_
+_┃ ⊱ .aura_
+_┃ ⊱ .lol_
+
+════════════════════════
+_Tap another category card to explore more features._`;
             } 
             
             else if (buttonId === 'menu_owner') {
                 responseText = 
-`👑 *OWNER & DEV UTILITY CONTROLS*
+`┌─────────────┐
+│ 👑  OWNER & DEV  
+└─────────────┘
 
-_┃ ⊱ .diagnose_ (Execute deep system component checks)
-_┃ ⊱ .update_ (Pull latest changes from GitHub repositories)
-_┃ ⊱ .mode_ [public/private] (Adjust global bot response access)
-_┃ ⊱ .setsudo_ [mention] / .delsudo (Assign/revoke system sudo access)
-_┃ ⊱ .addowner_ [mention] / .delowner (Assign/revoke system owner access)
-_┃ ⊱ .restart_ (Safely reload node system processes)
-_┃ ⊱ .shutdown_ (Kill current active daemon processes)
-_┃ ⊱ .ban_ / .unban (Block/unblock JIDs from command system)
-_┃ ⊱ .setvar_ [key=val] (Hot-reload system environment variables)
-_┃ ⊱ .settings_ (Manage overall modular bot behavior panels)`;
+_❖ ─ [ PARAMETERS & PANELS ] ─ ❖_
+
+_┃ ⊱ .diagnose_
+_┃ ⊱ .update_
+_┃ ⊱ .mode_
+_┃ ⊱ .setsudo_
+_┃ ⊱ .delsudo_
+_┃ ⊱ .addowner_
+_┃ ⊱ .delowner_
+_┃ ⊱ .restart_
+_┃ ⊱ .shutdown_
+_┃ ⊱ .ban_
+_┃ ⊱ .unban_
+_┃ ⊱ .afk_
+_┃ ⊱ .setvar_
+_┃ ⊱ .settings_
+_┃ ⊱ .antipm_
+_┃ ⊱ .reminder_
+_┃ ⊱ .remind_
+_┃ ⊱ .games_closeall_
+_┃ ⊱ .owner_
+
+════════════════════════
+_Tap another category card to explore more features._`;
             } 
             
             else if (buttonId === 'menu_utilities') {
                 responseText = 
-`🛠️ *CONVERTERS & UTILITY COMMANDS*
+`┌──────────┐
+│ 🛠️  UTILITIES  
+└──────────┘
 
-_┃ ⊱ .ping_ / .ping2_ (Test latency response speed in real-time)
-_┃ ⊱ .alive_ (View current bot execution structures)
-_┃ ⊱ .delete_ (Instantly delete targeted bot replies)
-_┃ ⊱ .tdelete_ [duration] (Delete replies with custom delays)
-_┃ ⊱ .sticker_ / .crop_ (Convert images/videos into WhatsApp stickers)
-_┃ ⊱ .take_ (Steal/modify custom sticker pack attributes)
-_┃ ⊱ .tovv_ (Convert images/videos into View-Once messages)
-_┃ ⊱ .tourl_ (Generate permanent web host URLs from local files)
-_┃ ⊱ .kamui_ (Instantly capture and decrypt View-Once media payloads)
-_┃ ⊱ .addnote_ / .getnote_ / .delnote (Local secure notes manager)
-_┃ ⊱ .toimg_ / .tomp3_ / .tomp4_ (Convert media formats in-chat)
-_┃ ⊱ .ocr_ (Extract readable text strings from images in-chat)
-_┃ ⊱ .qr_ / .readqr_ (Generate and read active QR codes)`;
+_❖ ─ [ CONVERTERS & METRICS ] ─ ❖_
+
+_┃ ⊱ .ping_
+_┃ ⊱ .ping2_
+_┃ ⊱ .alive_
+_┃ ⊱ .delete_
+_┃ ⊱ .tdelete_
+_┃ ⊱ .autoreact_
+_┃ ⊱ .speed_
+_┃ ⊱ .vv_
+_┃ ⊱ .sticker_
+_┃ ⊱ .crop_
+_┃ ⊱ .take_
+_┃ ⊱ .setcmd_
+_┃ ⊱ .delcmd_
+_┃ ⊱ .tovv_
+_┃ ⊱ .tourl_
+_┃ ⊱ .kamui_
+_┃ ⊱ .emix_
+_┃ ⊱ .smeme_
+_┃ ⊱ .addnote_
+_┃ ⊱ .delnote_
+_┃ ⊱ .getnotes_
+_┃ ⊱ .getnote_
+_┃ ⊱ .toimg_
+_┃ ⊱ .tomp3_
+_┃ ⊱ .tomp4_
+_┃ ⊱ .binary_
+_┃ ⊱ .ocr_
+_┃ ⊱ .qr_
+_┃ ⊱ .readqr_
+_┃ ⊱ .qty_
+_┃ ⊱ .currency_
+
+════════════════════════
+_Tap another category card to explore more features._`;
             }
 
             if (responseText) {
