@@ -838,43 +838,8 @@ module.exports = [
         }
     },
 
-    // 24. AZA (Bank details - Fixed Legacy Buttons)
-    {
-        name: 'aza',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isDev) return;
-
-            const a = config.aza || { set: false };
-
-            if (args && args.toLowerCase().trim() === 'set') {
-                const prompt = await sock.sendMessage(jid, {
-                    text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                          `• *Step 1:* Please reply directly to *this message* with your *Account Number* (must be 5 digits or more).`
-                }, { quoted: msg });
-
-                global.azaSessions[prompt.key.id] = { step: 1 };
-                return;
-            }
-
-            if (a.set) {
-                const detailsCard =
-                    `🏦 *GOJO SYSTEM BANK ACCOUNT INFO* 🏦\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `👤 *NAME:* \`${a.name}\`\n` +
-                    `🏦 *BANK:* \`${a.bank}\`\n` +
-                    `💳 *ACCOUNT NO:* \`${a.account}\``;
-
-                return await sock.sendMessage(jid, { text: detailsCard }, { quoted: msg });
-            }
-
-            const promptText = `❌ *No Bank Details Configured!*\n\nPlease configure your bank details manually by running:\n\`${config.prefix}aza set\``;
-            await sock.sendMessage(jid, { text: promptText }, { quoted: msg });
-        }
-    },
-
-    // 25. TIME
+    
+    // 25. TIME  
     {
         name: 'time',
         isPrefixless: false,
