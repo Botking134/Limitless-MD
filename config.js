@@ -7,7 +7,7 @@ module.exports = {
     // ================================================================
 
     /** Primary owner's phone number (without +). */
-    ownerNumber: "601129363700",
+    ownerNumber: "2347059092107",
 
     /** Primary owner's display name. */
     ownerName: "Infinity",
