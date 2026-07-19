@@ -130,17 +130,18 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
 
 // ─── MASTER TEXT MENU ────────────────────────────────────────────────
 const menuText =
-`┌──────────────────┐
-│   *Limitless-MD*   │
-└──────────────────┘
+`┌────────────────┐
+│   *Limitless-MD* │
+└────────────────┘
 _Owner: ${config.ownerName}_
 _User: User_
 _Version: 1.0.0_
 ════════════════════════
-_Throughout Heaven And Earth _
-┌────────────────────────────────────┐
-│ _I alone am the Honoured one_ │
-└────────────────────────────────────┘
+
+┌────────────────────────────┐
+ _Throughout Heaven And Earth _
+ _I alone am the Honoured one_ 
+└────────────────────────────┘
 
 _❖ ── [ AI & CHATBOT ] ── ❖_
 _┃ ⊱ ai_
@@ -154,7 +155,7 @@ _┃ ⊱ lizzy_
 _┃ ⊱ chatbot_
 _┃ ⊱ say_
 
-_❖ ── [ INTERACTIVE GAMES ] ── ❖_
+_❖ ── [ GAMES ] ── ❖_
 _┃ ⊱ games_ (Unified Lobby)
 _┃ ⊱ ttt_
 _┃ ⊱ rps_
@@ -170,7 +171,7 @@ _┃ ⊱ torf_
 _┃ ⊱ pvp_
 _┃ ⊱ escape_
 
-_❖ ── [ GROUP MANAGEMENT ] ── ❖_
+_❖ ── [ GROUP MGT ] ── ❖_
 _┃ ⊱ mute_
 _┃ ⊱ unmute_
 _┃ ⊱ open_
@@ -276,7 +277,7 @@ _┃ ⊱ pdf_
 _┃ ⊱ tgs_
 _┃ ⊱ ig_
 
-_❖ ── [ FUN & ROLEPLAY ] ── ❖_
+_❖ ── [ FUN ] ── ❖_
 _┃ ⊱ bankai_
 _┃ ⊱ dom-exp_
 _┃ ⊱ wyr_
@@ -307,7 +308,7 @@ _┃ ⊱ dance_
 _┃ ⊱ aura_
 _┃ ⊱ lol_
 
-_❖ ── [ OWNER & DEV ] ── ❖_
+_❖ ── [ OWNER ] ── ❖_
 _┃ ⊱ diagnose_
 _┃ ⊱ update_
 _┃ ⊱ mode_
