@@ -1,4 +1,4 @@
-// ─── SYSTEM CONFIG & IMPORTS ──────────────────────────────────────
+// plugins/menu.js
 const config = require('../config');
 const path = require('path');
 const fs = require('fs');
@@ -129,21 +129,9 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
 }
 
 // ─── MASTER TEXT MENU ────────────────────────────────────────────────
+// Cleaned up to begin directly with the commands list
 const menuText =
-`┌────────────┐
-│*Limitless-MD* 
-└────────────┘
-_Owner: ${config.ownerName}_
-_User: User_
-_Version: 1.0.0_
-═════════════════════
-
-┌────────────────────────┐
-_Throughout Heaven And Earth_
-_I alone am the Honoured one_ 
-└────────────────────────┘
-
-_❖ ── [ AI & CHATBOT ] ── ❖_
+`_❖ ── [ AI & CHATBOT ] ── ❖_
 _┃ ⊱ ai_
 _┃ ⊱ groq_
 _┃ ⊱ gojo_ (rise/sleep)
@@ -360,10 +348,43 @@ _┃ ⊱ ocr_
 _┃ ⊱ qr_
 _┃ ⊱ readqr_
 _┃ ⊱ qty_
-_┃ ⊱ currency
+_┃ ⊱ currency_
 `;
 
+// ─── RENDER TEXT MENU ───────────────────────────────────────────────
+async function renderMenu(sock, msg) {
+    const jid = msg.key.remoteJid;
+    const uptime = formatUptime(process.uptime());
+    const readMore = String.fromCharCode(8206).repeat(4001);
+    const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
 
+    const menuTextCompiled =
+`┌───────────┐
+│ 𝐋𝐢𝐦𝐢𝐭𝐥𝐞𝐬𝐬-𝐌𝐃 │
+└───────────┘
+_𝐎𝐰𝐧𝐞𝐫: ${config.ownerName}_
+_𝐔𝐬𝐞𝐫: ${msg.pushName || 'User'}_
+_𝐔𝐩𝐭𝐢𝐦𝐞: ${uptime}_
+_𝐕𝐞𝐫𝐬𝐢𝐨𝐧: 1.0.0_
+════════════════════
+
+┌───────────────────────────┐
+│ _Throughout Heaven And Earth_ 
+│ _I alone am the Honoured one_
+└───────────────────────────┘
+${readMore}
+${menuText}`;
+
+    try {
+        await sock.sendMessage(jid, {
+            image: { url: randomImage },
+            caption: menuTextCompiled
+        }, { quoted: msg });
+    } catch (error) {
+        console.error("Menu Image Render Error:", error);
+        await sock.sendMessage(jid, { text: menuTextCompiled }, { quoted: msg });
+    }
+}
 
 // ─── RENDER CAROUSEL MENU ──────────────────────────────────────────
 async function renderCarouselMenu(sock, msg) {
