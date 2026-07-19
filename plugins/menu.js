@@ -360,7 +360,7 @@ async function renderMenu(sock, msg) {
 
     const menuTextCompiled =
 `┌───────────┐
-│ 𝐋𝐢𝐦𝐢𝐭𝐥𝐞𝐬𝐬-𝐌𝐃 │
+│ 𝐋𝐢𝐦𝐢𝐭𝐥𝐞𝐬𝐬-𝐌𝐃   │
 └───────────┘
 _𝐎𝐰𝐧𝐞𝐫: ${config.ownerName}_
 _𝐔𝐬𝐞𝐫: ${msg.pushName || 'User'}_
