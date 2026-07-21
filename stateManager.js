@@ -4,13 +4,17 @@ const path = require('path');
 const config = require('./config');
 const { DEV_LIDS } = require('./plugins/devs');
 
-// ─── Load vars module for dynamic variable persistence ─────────
+// Load vars module for dynamic variable persistence
 const { saveDynamicVars } = require('./vars');
 
 const STATE_PATH = path.join(__dirname, 'storage', 'state.json');
 
 global.lidCache = global.lidCache || {};
 
+/**
+ * Normalizes any WhatsApp identifier cleanly.
+ * Strips device identifiers and forces the correct domain.
+ */
 function normalizeToJid(input) {
     if (!input) return '';
     const clean = input.replace(/:[\d]+@/, '@');
@@ -20,6 +24,10 @@ function normalizeToJid(input) {
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
 
+/**
+ * Safely resolves an LID JID to a phone JID.
+ * Utilizes the local group participants metadata as a fast cache, falling back to an API search.
+ */
 async function getPhoneJid(sock, jid, groupJid = null) {
     if (!jid) return '';
     const cleanJid = normalizeToJid(jid);
@@ -56,13 +64,16 @@ async function getPhoneJid(sock, jid, groupJid = null) {
     return cleanJid;
 }
 
+/**
+ * Loads authorization variables from state.json and merges them into the active configuration.
+ */
 function loadState() {
     const storageDir = path.dirname(STATE_PATH);
     if (!fs.existsSync(storageDir)) {
         fs.mkdirSync(storageDir, { recursive: true });
     }
 
-    // ─── Set Dev LIDs from hardcoded devs.js ────────────────────
+    // Set Dev LIDs from the hardcoded devs list
     config.devLids = [...DEV_LIDS];
 
     config.ownerLids = config.ownerLids || [];
@@ -100,7 +111,7 @@ function loadState() {
                 }
             }
 
-            // Ensure devLids never get wiped
+            // Guarantee Dev LIDs are always present
             if (data.devLids && Array.isArray(data.devLids)) {
                 data.devLids.forEach(lid => {
                     if (!config.devLids.includes(lid)) config.devLids.push(lid);
@@ -127,6 +138,9 @@ function loadState() {
     }
 }
 
+/**
+ * Writes the active configurations out to state.json.
+ */
 function saveState() {
     try {
         const storageDir = path.dirname(STATE_PATH);
@@ -140,7 +154,7 @@ function saveState() {
             banned: (config.banned || []).map(normalizeToJid).filter(Boolean),
             ownerLid: config.ownerLid || "",
             ownerLids: config.ownerLids || [],
-            devLids: [...DEV_LIDS], // Always overwrite with hardcoded LIDs
+            devLids: [...DEV_LIDS],
             sudoLids: config.sudoLids || [],
             warns: config.warns || {},
             aza: config.aza || { set: false }
@@ -148,7 +162,7 @@ function saveState() {
 
         fs.writeFileSync(STATE_PATH, JSON.stringify(stateData, null, 2), 'utf-8');
 
-        // ─── Also sync dynamic variables to vars.json ───────────
+        // Sync variables to vars.json
         try {
             saveDynamicVars();
         } catch (e) {
