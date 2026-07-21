@@ -1,13 +1,13 @@
-
 // pair.js
 const readline = require('readline');
 const { Boom } = require('@hapi/boom');
 const path = require('path');
+const fs = require('fs');
 const config = require('./config');
 const { DEV_LIDS } = require('./plugins/devs');
-const commands = require('./commands');
 const { handleDeletion } = require('./helpers/log');
 const { handleIncomingMessage } = require('./helpers/Infinity');
+const { normalizeToJid } = require('./stateManager');
 
 // ─── READLINE FOR AUTH ──────────────────────────────────────────
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -41,29 +41,10 @@ global.vault8Sessions = global.vault8Sessions || {};
 global.aiMemory = global.aiMemory || {};
 global.botMessageAgents = global.botMessageAgents || {};
 
-// ─── HELPER: FORMAT UPTIME ──────────────────────────────────────
-function formatUptime(seconds) {
-    const d = Math.floor(seconds / (3600 * 24));
-    const h = Math.floor((seconds % (3600 * 24)) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    const parts = [];
-    if (d > 0) parts.push(`${d}d`);
-    if (h > 0) parts.push(`${h}h`);
-    if (m > 0) parts.push(`${m}m`);
-    parts.push(`${s}s`);
-    return parts.join(' ');
-}
-
-// ─── JID NORMALIZER ──────────────────────────────────────────────
-function normalizeToJid(input) {
-    if (!input) return '';
-    const clean = input.replace(/:[\d]+@/, '@');
-    if (clean.endsWith('@s.whatsapp.net')) return clean;
-    if (clean.endsWith('@lid')) return clean;
-    const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
-    return raw ? `${raw}@s.whatsapp.net` : '';
-}
+// Reconnection State Lock variables to prevent multiple concurrent instances
+global.isReconnecting = global.isReconnecting || false;
+global.reconnectAttempts = global.reconnectAttempts || 0;
+global.reconnectTimeout = global.reconnectTimeout || null;
 
 // ─── MAIN BOT STARTER ──────────────────────────────────────────
 
@@ -123,7 +104,7 @@ async function startBot() {
         browser: Browsers.ubuntu('Chrome')
     });
 
-    // ─── OVERRIDE SEND MESSAGE ──────────────────────────────────
+    // ─── OVERRIDE SEND MESSAGE WITH HUMANIZED DELAYS ────────────────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
         if (config.presence && !jid.endsWith('@broadcast')) {
@@ -141,10 +122,16 @@ async function startBot() {
                     await delay(1200);
                     await sock.sendPresenceUpdate('paused', jid);
                 }
-            } catch (presErr) { /* ignore */ }
+            } catch (presErr) { /* ignore dead socket */ }
         }
 
-        const sent = await originalSendMessage(jid, content, options);
+        let sent;
+        try {
+            sent = await originalSendMessage(jid, content, options);
+        } catch (sendErr) {
+            console.error("❌ [SOCKET] sendMessage failed on closed socket:", sendErr.message);
+            throw sendErr;
+        }
 
         if (sent && sent.key && sent.key.id) {
             botSentMessageIds.add(sent.key.id);
@@ -193,40 +180,29 @@ async function startBot() {
             }
         }
 
-        // ─── Handle Disconnection ──────────────────────────────
-        if (connection === 'close') {
-            const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
-            console.error('❌ Disconnected. Reason code:', reason);
-            console.error('❌ Error details:', lastDisconnect?.error?.message || 'No message');
-            if (reason === DisconnectReason.loggedOut) {
-                console.log('❌ Session logged out. Exiting...');
-                process.exit(1);
-            } else {
-                console.log('🔄 Connection lost. Reconnecting in 5 seconds...');
-                setTimeout(() => startBot(), 5000);
-            }
-        }
-
         // ─── Handle Connection Open ─────────────────────────────
         if (connection === 'open') {
             console.log('\n✅ Connection established successfully!');
+            global.reconnectAttempts = 0;
+            global.isReconnecting = false;
+            if (global.reconnectTimeout) {
+                clearTimeout(global.reconnectTimeout);
+                global.reconnectTimeout = null;
+            }
+
             try {
-                // ─── Set Bot's Own IDs ────────────────────────────────
+                // Set Bot's Own IDs
                 if (sock.user && sock.user.id) {
-                    // Use sock.user.id directly – no findUserId() needed
                     const rawJid = sock.user.id.split(':')[0] || sock.user.id;
                     config.botJid = normalizeToJid(rawJid);
                     console.log('📌 Bot JID:', config.botJid);
 
-                    // If it's a LID, store it too
                     if (config.botJid.endsWith('@lid')) {
                         config.botLid = config.botJid;
                     }
                 }
 
-                // ─── Set Primary Owner LID (Hardcoded) ──────────────────
-                // Use the owner LID from your logs, or fallback to resolving if needed.
-                // Since you have the LID, we'll hardcode it directly.
+                // Set Primary Owner LID (Hardcoded)
                 const ownerLid = "139780398567572@lid";
                 config.ownerLid = ownerLid;
                 if (!config.ownerLids.includes(ownerLid)) {
@@ -234,16 +210,28 @@ async function startBot() {
                 }
                 console.log(`👑 [SYSTEM] Primary Owner LID set: ${ownerLid}`);
 
-                // ─── Set Developer LIDs (Hardcoded) ─────────────────────
+                // Set Developer LIDs (Hardcoded)
                 config.devLids = [...DEV_LIDS];
                 console.log(`👑 [SYSTEM] Developer LIDs set:`, config.devLids);
 
-                // ─── Send Status Report to Bot DM ──────────────────
+                // Send Status Report as direct Image Caption Card to Bot DM
                 try {
-                    const prefixVal = config.prefix || "⚡";
-                    const timeStr = new Date().toLocaleTimeString('en-US', {
+                    const prefixVal = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+                    const now = new Date();
+
+                    const timeStr = now.toLocaleTimeString('en-US', {
                         timeZone: 'Africa/Lagos',
+                        hour: '2-digit',
+                        minute: '2-digit',
                         hour12: true
+                    });
+
+                    const dateStr = now.toLocaleDateString('en-US', {
+                        timeZone: 'Africa/Lagos',
+                        weekday: 'short',
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric'
                     });
 
                     let pingMs = 35;
@@ -254,43 +242,38 @@ async function startBot() {
                         await fetch("https://1.1.1.1", { method: 'HEAD', signal: controller.signal });
                         clearTimeout(timeout);
                         pingMs = Date.now() - startPing;
-                    } catch (e) { /* ignore */ }
+                    } catch (e) { /* ignore ping failure */ }
 
                     const statusCard =
-                        `\`\`\`` +
-                        `⚡ ═══ [ CONNECTED ] ═══ ⚡\n\n` +
-                        ` ▶ SYSTEM :: LIMITLESS-MD\n` +
-                        ` ▶ PREFIX :: ${prefixVal}\n` +
-                        ` ▶ SPEED :: ${pingMs}ms\n` +
-                        ` ▶ TIME :: ${timeStr} WAT\n\n` +
-                        `─── [ STATUS REPORT ] ───\n` +
-                        ` ⟫ 🔴 RED :: CHARGED\n` +
-                        ` ⟫ 🔵 BLUE :: CHARGED\n` +
-                        ` ⟫ 🟣 PURPLE:: READY TO FIRE\n\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                        ` "I'm the strongest."\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━` +
-                        `\`\`\``;
+                        `═══════════\n` +
+                        ` ♰CONNECTED ♰\n` +
+                        `═══════════\n` +
+                        `- Prefix : ${prefixVal}\n` +
+                        `- Speed  : ${pingMs}ms\n` +
+                        `- Time   : ${timeStr} WAT\n` +
+                        `- Date   : ${dateStr}`;
 
                     const botJid = config.botJid || sock.user.id;
                     if (botJid && 
                         (botJid.endsWith('@s.whatsapp.net') || botJid.endsWith('@lid')) &&
                         !botJid.includes('@s.whatsapp.net@s.whatsapp.net')) {
-                        console.log(`📨 Sending status report to: ${botJid}`);
-                        await sock.sendMessage(botJid, { text: statusCard });
-                        console.log(`✅ [SYSTEM] Connection status report dispatched.`);
+                        console.log(`📨 Sending image status report to: ${botJid}`);
+                        await sock.sendMessage(botJid, { 
+                            image: { url: "https://i.imgur.com/OzdP4Lx.png" },
+                            caption: statusCard 
+                        });
+                        console.log(`✅ [SYSTEM] Connection status report image dispatched.`);
                     } else {
                         console.warn("[WARNING] Invalid bot JID, skipping status report:", botJid);
                     }
                 } catch (err) {
                     console.error("[WARNING] Failed to send connection report:", err.message);
-                    console.error(err.stack);
                 }
 
-                // ─── Always-Online Presence ────────────────────────
+                // Always-Online Presence
                 setInterval(async () => {
                     if (config.presence && config.presence.alwaysonline?.all) {
-                        try { await sock.sendPresenceUpdate('available'); } catch (e) { /* ignore */ }
+                        try { await sock.sendPresenceUpdate('available'); } catch (e) { /* ignore dead socket */ }
                     }
                 }, 15000);
 
@@ -298,8 +281,72 @@ async function startBot() {
 
             } catch (openError) {
                 console.error('❌ [FATAL] Unhandled error during connection.open:', openError);
-                console.error(openError.stack);
             }
+        }
+
+        // ─── Handle Disconnection & Smart Routing ──────────────
+        if (connection === 'close') {
+            if (global.reconnectTimeout) {
+                clearTimeout(global.reconnectTimeout);
+            }
+
+            const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            console.error('❌ Disconnected. Reason code:', reason);
+            console.error('❌ Error details:', lastDisconnect?.error?.message || 'No message');
+
+            // 1. FATAL CODE: 401 (Logged Out)
+            if (reason === DisconnectReason.loggedOut) {
+                console.log('❌ [SESSION] Logged out by WhatsApp. Cleaning credentials folder to prevent loops...');
+                try {
+                    fs.rmSync(authFolder, { recursive: true, force: true });
+                } catch (e) {
+                    console.error('⚠️ Failed to delete auth folder:', e.message);
+                }
+                process.exit(1);
+            }
+
+            // 2. FATAL CODE: 403 (Forbidden / Corrupted Keys / IP-JID Temporary Ban)
+            if (reason === DisconnectReason.forbidden) {
+                console.log('❌ [SECURITY] Credentials forbidden/rejected by WhatsApp. Terminating loop to protect account...');
+                try {
+                    fs.rmSync(authFolder, { recursive: true, force: true });
+                    console.log('✅ Credentials deleted. Please scan QR / request pairing code on next restart.');
+                } catch (e) {
+                    console.error('⚠️ Failed to delete auth folder:', e.message);
+                }
+                process.exit(1);
+            }
+
+            // 3. SEVERE CODE: 440 (Connection Replaced by another active session)
+            if (reason === DisconnectReason.connectionReplaced) {
+                console.log('❌ [SOCKET] Connection replaced by another stream. Terminating process to prevent flapping conflicts.');
+                process.exit(1);
+            }
+
+            // 4. MAX CONSECUTIVE FAILURE CHECK
+            if (global.reconnectAttempts >= 5) {
+                console.error('❌ [SYSTEM] Connection failed consecutively 5 times. Exiting process to prevent console flood.');
+                process.exit(1);
+            }
+
+            // 5. TRANSIENT NETWORK DROPS (Exponential Backoff Connection Router)
+            if (global.isReconnecting) {
+                console.log('⚠️ Reconnection attempt already scheduled. Ignoring duplicate close trigger.');
+                return;
+            }
+
+            global.isReconnecting = true;
+            const baseDelay = 5000; // 5 seconds base
+            const maxDelay = 60000;  // 60 seconds max-cap
+            const delayTime = Math.min(baseDelay * Math.pow(2, global.reconnectAttempts), maxDelay);
+            
+            global.reconnectAttempts++;
+            console.log(`🔄 Connection lost. Reconnecting in ${delayTime / 1000} seconds (Attempt: ${global.reconnectAttempts}/5)...`);
+
+            global.reconnectTimeout = setTimeout(() => {
+                global.isReconnecting = false;
+                startBot();
+            }, delayTime);
         }
     });
 
@@ -349,7 +396,7 @@ async function startBot() {
                     }
                 }
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) { /* ignore dead socket */ }
     });
 
     // ─── MESSAGES UPDATE (Anti-Delete) ───────────────────────────
@@ -366,7 +413,7 @@ async function startBot() {
                     }
                 }
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) { /* ignore dead socket */ }
     });
 
     // ─── MESSAGES UPSERT (Incoming Messages) ─────────────────────
