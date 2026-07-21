@@ -263,7 +263,7 @@ function decorateQuotedMessage(msg, botJid = '') {
     if (contextInfo && contextInfo.quotedMessage) {
         const quotedRaw = getRawMessage(contextInfo.quotedMessage);
         
-        // FIX: If context participant is omitted (standard for own/bot messages), defaults safely to botJid
+        // FIX: If context participant is omitted, defaults safely to botJid
         const senderJid = contextInfo.participant || botJid;
 
         msg.quoted = {
@@ -300,7 +300,7 @@ async function synthesizeUrielVoice(text) {
 function runSmartInterceptor(query) {
     const lower = query.toLowerCase().trim();
 
-    // 1. Target Deletions (Matches: "delete this", "delete", "remove", etc.)
+    // 1. Target Deletions
     if (lower.startsWith('delete') || lower.startsWith('del') || lower === 'remove this' || lower === 'remove') {
         return {
             cleanReply: "Deleting the message.",
@@ -324,7 +324,7 @@ function runSmartInterceptor(query) {
         };
     }
 
-    // 4. Summons and Broadcasts (tagall, tag)
+    // 4. Summons and Broadcasts
     if (lower.includes('tag everyone') || lower.includes('tag all') || lower.includes('tagall') || lower === 'tag the group') {
         return {
             cleanReply: "Okay! Summoning everyone in the group now.",
@@ -348,10 +348,10 @@ function runSmartInterceptor(query) {
         };
     }
 
-    return null; // Passes through to LLM reasoning if no direct triggers match
+    return null;
 }
 
-// ─── COMMAND LIST BUILDER (Optimized via Strategy 1, 2, & 3) ───────
+// ─── COMMAND LIST BUILDER ──────────────────────────────────────────
 function buildCommandList(userContext) {
     const registry = getRegistry();
     const { isOwner, isDev, isSudo } = userContext;
@@ -441,7 +441,7 @@ async function queryGroq(messages) {
     }
 }
 
-// ─── COMMAND TAG PARSER (Fixed spacing & prefix removal) ─────────
+// ─── COMMAND TAG PARSER ───────────────────────────────────────────
 function extractCommandTag(text) {
     const match = text.match(/\[CMD:\s*([^\]]+)\]/i);
     if (!match) return null;
@@ -550,6 +550,11 @@ module.exports = {
     category: 'ai',
     permission: 'public',
     execute: async (sock, msg, args, userContext) => {
+        // Strictly restrict Uriel to Devs, Owners, and Sudo users only
+        const { isOwner, isSudo, isDev } = userContext || {};
+        const isAuthorized = isOwner || isSudo || isDev;
+        if (!isAuthorized) return;
+
         const jid = msg.key.remoteJid;
         const sender = msg.key.participant || jid;
         const prefix = getPrefix();
@@ -561,8 +566,8 @@ module.exports = {
         }
         cooldowns.set(sender, now);
 
-        // ─── STEP 0.1: GLOBAL COMMAND ACTIVE/TOGGLE CHECKS ───
-        if (textMessageBody.startsWith(`${prefix}uriel`)) {
+        // ─── STEP 0.1: GLOBAL COMMAND ACTIVE/TOGGLE CHECKS (Case-Insensitive Fix) ───
+        if (textMessageBody.toLowerCase().startsWith(`${prefix}uriel`)) {
             const { isOwner, isSudo, isDev } = userContext;
             const canToggle = isOwner || isSudo || isDev;
             
@@ -617,7 +622,7 @@ module.exports = {
 
             if (isSessionReply) {
                 console.log(`[URIEL] Bypassing AI processing: Reply is targeting an active downloader/interactive session (${quotedMsgId}).`);
-                return; // Silence exit so SessionManager can process the selection
+                return; 
             }
         }
 
@@ -645,7 +650,7 @@ module.exports = {
 
         if (isGameReply || isActiveGame) {
             console.log(`[URIEL] Bypassing AI processing: Reply is targeting an active game session or game redirect.`);
-            return; // Silence exit so GameInterceptors can process the reply
+            return; 
         }
 
         // Decorates nested quoted message context immediately before the addressing checks execute
@@ -665,7 +670,7 @@ module.exports = {
         let tag = null;
         let cleanReply = "";
 
-        // ─── HYBRID USER ROUTER (Bypasses API on explicit commands) ───
+        // ─── HYBRID USER ROUTER ───
         const intercepted = runSmartInterceptor(query);
 
         if (intercepted) {
@@ -698,7 +703,7 @@ COMMAND FORMAT RULES (STRICT):
 - Place the tag on its own line at the very end of your reply.
 - If no command matches the request, reply normally as a conversational assistant without a tag.
 - Do NOT invent commands that are not in the list.
-- Vary your reply length naturally depending on the user's request. Keep your tone highly casual and natural. For example, instead of saying "Generating your sticker now", say something warm and casual like: "Alright! Here's your sticker, I'll be here if you need anything else!" or "Sure thing! Checking that speed for you now...". Never write long paragraphs without a good reason.
+- Vary your reply length naturally depending on the user's request. Keep your tone highly casual and natural. Never write long paragraphs without a good reason.
 
 ${cmdList}
 
@@ -727,7 +732,6 @@ You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${
                 { role: 'user', content: query }
             ];
 
-            // Show recording state immediately when thinking/synthesizing starts (never composing/typing)
             await sock.sendPresenceUpdate('recording', jid);
             const response = await queryGroq(messages);
 
@@ -748,16 +752,15 @@ You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${
             commandSuccess = await executeCommand(tag, sock, msg, userContext);
         }
 
-        // STEP 2: Send conversational reply as standard playable audio (Way 1)
+        // STEP 2: Send conversational reply as standard playable audio
         if (cleanReply) {
             const voiceBuffer = await synthesizeUrielVoice(cleanReply);
             if (voiceBuffer) {
-                // Ensure presence continues as recording until message delivery finishes
                 await sock.sendPresenceUpdate('recording', jid);
                 await sock.sendMessage(jid, { 
                     audio: voiceBuffer, 
-                    mimetype: 'audio/mpeg', // Raw MP3 stream matching standard audio formatting
-                    ptt: false // Sends as standard playback block to ensure high decoder compatibility
+                    mimetype: 'audio/mpeg', 
+                    ptt: false 
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
