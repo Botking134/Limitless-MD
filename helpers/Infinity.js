@@ -11,11 +11,10 @@ const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivati
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 
-// Extract current active prefix safely supporting arrays.
-// IMPORTANT: this must be read fresh every time, not cached as a const —
-// .setprefix changes config.prefix at runtime via reload(), and a cached
-// value here would desync from the live prefix used by commands.js's
-// register(), breaking every command that takes arguments until restart.
+/**
+ * Extract current active prefix safely supporting arrays.
+ * Read fresh every time to support live updates via commands.js and reload().
+ */
 function getActivePrefix() {
     return Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
 }
@@ -30,7 +29,7 @@ const ownerCommands = [
 const primaryOnlyCommands = ['addowner', 'delowner'];
 const devOnlyCommands = ['upgrade'];
 
-// ─── BULLETPROOF COMMAND EXECUTION HELPER (Fixed prefix alignment) ───
+// ─── BULLETPROOF COMMAND EXECUTION HELPER ───
 async function executeBotCommand(cmdName, sock, msg, args, opts) {
     const activePrefix = getActivePrefix();
     let commandFunction;
@@ -48,7 +47,11 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
     }
 
     if (typeof commandFunction === 'function') {
-        await commandFunction(sock, msg, args, opts);
+        try {
+            await commandFunction(sock, msg, args, opts);
+        } catch (e) {
+            console.error(`❌ [COMMAND] Failed to execute ${cmdName}:`, e.message);
+        }
         return true;
     }
     return false;
@@ -75,7 +78,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         let command;
         let args;
 
-        // ─── HOOKS (Fully optimized top-level placements) ──────────────────────
+        // ─── HOOKS ─────────────────────────────────────────────────────────────
         const isNoteHandled = await handleNoteSession(sock, msg);
         if (isNoteHandled) return;
 
@@ -153,6 +156,19 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const isAuthorized = isOwner || isSudo;
 
+        // Dynamic Group Admin lookup to safely prevent rate limiting loops
+        let isAdmin = false;
+        if (isGroup) {
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                const participants = groupMetadata.participants || [];
+                const senderObj = participants.find(p => cleanJid(p.id) === cleanJid(senderJid));
+                isAdmin = !!(senderObj && (senderObj.admin === 'admin' || senderObj.admin === 'superadmin'));
+            } catch (e) {
+                isAdmin = false;
+            }
+        }
+
         const isBanned = (Array.isArray(config.banned) && config.banned.includes(senderJid)) ||
                          (senderPhoneJid && Array.isArray(config.banned) && config.banned.includes(senderPhoneJid));
         if (isBanned) return;
@@ -160,7 +176,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
-        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR (Fixed target parameters) ───
+        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR ───
         const redirectedGame = handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody);
         if (redirectedGame) {
             command = redirectedGame.command;
@@ -210,7 +226,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }) || mentionsBotInText;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
-        const isUrielCalled = /\buriel\b/i.test(lowerMessage); // Replaced Delta with Uriel detection
+        const isUrielCalled = /\buriel\b/i.test(lowerMessage);
 
         let identifiedAgent = null;
 
@@ -225,7 +241,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 identifiedAgent = 'friday';
             }
             
-            // Gojo and Uriel name checks remain the prefixless exceptions
             if (!identifiedAgent && isGojoCalled) {
                 identifiedAgent = 'gojo';
             } else if (!identifiedAgent && isUrielCalled) {
@@ -317,31 +332,31 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── GROUP SECURITY INTERCEPTORS ─────────────────────────
         if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
-            const secured = await handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid, mentionedJids, isAuthorized, isDev);
+            const secured = await handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid, mentionedJids, isAuthorized, isDev, isAdmin);
             if (secured) return;
         }
 
-        // ─── GROUP STATUS PROTECTION ─────────────────────────────
+        // ─── GROUP STATUS PROTECTION (Fixed parameters) ──────────
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
         if (isGroup && isGroupStatus && !msg.key.fromMe && !isAuthorized && !isDev) {
-            await handleGroupStatusProtection(cleanChatJid, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev);
+            await handleGroupStatusProtection(sock, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev, isAdmin);
         }
 
-        // ─── ANTIBUG RATE-LIMIT (Fixed non-silent block warnings) ──
+        // ─── ANTIBUG RATE-LIMIT (Fixed arguments alignment) ──────
         if (config.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
-            const blocked = await handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid);
+            const blocked = await handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, isAuthorized, isDev, isAdmin);
             if (blocked) return;
         }
 
-        // ─── ANTISPAM RATE-LIMIT (Fixed Legacy Buttons) ──────────
+        // ─── ANTISPAM RATE-LIMIT (Fixed arguments alignment) ─────
         if (isGroup && !isAuthorized && !msg.key.fromMe && !isDev) {
-            const spammed = await handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid);
+            const spammed = await handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, isAuthorized, isDev, isAdmin);
             if (spammed) return;
         }
 
-        // ─── COMMAND EXTRACTION (Fixed space-after-prefix slicing) ───
+        // ─── COMMAND EXTRACTION ───
         if (!command) {
-            // ─── INTERACTIVE BUTTON INTERCEPTOR (Native Flow, Templates, and Classic Buttons) ───
+            // ─── INTERACTIVE BUTTON INTERCEPTOR ───
             const rawUnwrapped = getRawMessage(msg.message);
             let buttonId = '';
 
@@ -356,7 +371,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 buttonId = rawUnwrapped.templateButtonReplyMessage.selectedId;
             }
 
-            // Bulletproof Fallback: Client omitted standard response parameters
             if (!buttonId && trimmedMessageBody.toLowerCase().includes('explore commands')) {
                 const targetQuotedMsg = (quotedMsgId && global.messageStore) ? global.messageStore[quotedMsgId] : null;
                 if (targetQuotedMsg) {
@@ -389,7 +403,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!command) {
             if (trimmedMessageBody.startsWith(activePrefix)) {
-                // Slices off prefix and trims outer whitespace first
                 const withoutPrefix = trimmedMessageBody.slice(activePrefix.length).trim();
                 const spaceIndex = withoutPrefix.indexOf(' ');
                 if (spaceIndex === -1) {
@@ -409,7 +422,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── AGENT CONTEXT ─────────────────────────────────────────
         if (command === 'gojo') global.activeAgentContext = 'gojo';
-        else if (command === 'uriel') global.activeAgentContext = 'uriel'; // Swapped delta with uriel
+        else if (command === 'uriel') global.activeAgentContext = 'uriel';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
         else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
         else if (command === 'friday_chat') global.activeAgentContext = 'friday';
@@ -430,7 +443,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             return;
         }
 
-        // FIXED LIST: Added 'uriel' to interactive whitelist to bypass private mode checks cleanly
         const interactiveResponses = [
             'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
@@ -455,7 +467,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── COMMAND EXECUTION ─────────────────────────────────────
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
         let reactEmoji = "❄";
