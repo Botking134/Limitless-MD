@@ -142,6 +142,69 @@ async function handleNoteSession(sock, msg) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
+
+// ─── AZA (Bank details setup) ────────────────────────────────
+    {
+        name: 'aza',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            
+            // Restrict bank details actions to authorized owners and developers
+            const isAuthorized = isOwner || isDev;
+            if (!isAuthorized) return;
+
+            const bankDetails = config.aza || { set: false };
+
+            // Initiate Setup Wizard (.aza set)
+            if (args && args.toLowerCase().trim() === 'set') {
+                try {
+                    const prompt = await sock.sendMessage(jid, {
+                        text: `🏦 *BANK DETAILS CONFIGURATION WIZARD* 🏦\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `• *Step 1:* Please reply directly to *this message* with your *Account Number* (must be 5 digits or more).`
+                    }, { quoted: msg });
+
+                    // Register active session for SessionManager to intercept replies
+                    global.azaSessions = global.azaSessions || {};
+                    global.azaSessions[prompt.key.id] = { step: 1 };
+                    
+                    // Auto-delete session after 5 minutes to prevent RAM memory leaks
+                    setTimeout(() => {
+                        if (global.azaSessions && global.azaSessions[prompt.key.id]) {
+                            delete global.azaSessions[prompt.key.id];
+                        }
+                    }, 5 * 60 * 1000);
+
+                } catch (e) {
+                    console.error('❌ Failed to initiate Aza setup wizard:', e.message);
+                }
+                return;
+            }
+
+            // Display details card if already set
+            if (bankDetails.set) {
+                const detailsCard =
+                    `🏦 *BANK ACCOUNT INFO* 🏦\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `👤 *NAME:* \`${bankDetails.name}\`\n` +
+                    `🏦 *BANK:* \`${bankDetails.bank}\`\n` +
+                    `💳 *ACCOUNT NO:* \`${bankDetails.account}\``;
+
+                try {
+                    await sock.sendMessage(jid, { text: detailsCard }, { quoted: msg });
+                } catch (e) { /* ignore dead socket */ }
+                return;
+            }
+
+            // Fallback if not configured yet
+            const promptText = `❌ *No Bank Details Configured!*\n\nPlease configure your bank details manually by running:\n\`${config.prefix}aza set\``;
+            try {
+                await sock.sendMessage(jid, { text: promptText }, { quoted: msg });
+            } catch (e) { /* ignore dead socket */ }
+        }
+    }, 
+
+
     // 1. PING (Animated with deletion crash guards)
     {
         name: 'ping',
