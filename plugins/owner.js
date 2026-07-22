@@ -152,13 +152,8 @@ async function ensureGitSetup(jid, sock, msg) {
 
 module.exports = [
 
-   
-        
-
-    // ─── DIAGNOSE ────────────────────────────────────────────────
-    {
-
-// ─── REMINDME (Setup timed reminder) ─────────────────────────
+  
+ // ─── REMINDME (Setup timed reminder) ─────────────────────────
     {
         name: 'remindme',
         isPrefixless: false,
@@ -280,6 +275,11 @@ module.exports = [
             }
         }
     },
+        
+
+    // ─── DIAGNOSE ────────────────────────────────────────────────
+    {
+
 
         name: 'diagnose',
         isPrefixless: false,
