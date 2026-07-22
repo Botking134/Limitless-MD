@@ -11,6 +11,9 @@ const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivati
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 
+// Link the SummaryManager helper
+const { recordMessage } = require('./SummaryManager');
+
 /**
  * Extract current active prefix safely supporting arrays.
  * Read fresh every time to support live updates via commands.js and reload().
@@ -74,6 +77,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         // ─── EXTRACT BODY ───
         const { rawMsg, body, trimmedMessageBody, lowerMessage } = extractBodyAndTrim(msg);
+
+        // ─── LINK SUMMARY LOGS ───
+        // Records conversation text into memory if group logging is active (bypasses bot commands and self messages)
+        if (isGroup && trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix) && !msg.key.fromMe) {
+            recordMessage(jid, msg.pushName || senderNumber, trimmedMessageBody);
+        }
 
         let command;
         let args;
@@ -336,19 +345,19 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (secured) return;
         }
 
-        // ─── GROUP STATUS PROTECTION (Fixed parameters) ──────────
+        // ─── GROUP STATUS PROTECTION ─────────────────────────────
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
         if (isGroup && isGroupStatus && !msg.key.fromMe && !isAuthorized && !isDev) {
             await handleGroupStatusProtection(sock, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev, isAdmin);
         }
 
-        // ─── ANTIBUG RATE-LIMIT (Fixed arguments alignment) ──────
+        // ─── ANTIBUG RATE-LIMIT ──────────────────────────────────
         if (config.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
             const blocked = await handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, isAuthorized, isDev, isAdmin);
             if (blocked) return;
         }
 
-        // ─── ANTISPAM RATE-LIMIT (Fixed arguments alignment) ─────
+        // ─── ANTISPAM RATE-LIMIT ─────────────────────────────────
         if (isGroup && !isAuthorized && !msg.key.fromMe && !isDev) {
             const spammed = await handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, isAuthorized, isDev, isAdmin);
             if (spammed) return;
