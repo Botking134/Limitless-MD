@@ -6,10 +6,10 @@ const axios = require('axios');
 
 const settingsPath = path.join(__dirname, '../storage/gclog_settings.json');
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000; // 3-hour interval window
 
 global.groupLogs = global.groupLogs || {};
-global.gclogLastTriggers = global.gclogLastTriggers || {};
-global.autoLogInterval = global.autoLogInterval || null;
+global.activeAizenSummaryIntervals = global.activeAizenSummaryIntervals || {};
 
 // ─── SETTINGS FILE PERSISTENCE ────────────────────────────────────
 
@@ -41,14 +41,18 @@ function recordMessage(jid, sender, text) {
     const settings = readSettings();
     if (settings[jid] !== 'on') return;
 
+    const now = Date.now();
     global.groupLogs[jid] = global.groupLogs[jid] || [];
     global.groupLogs[jid].push({
         sender: sender || 'User',
         text: text.trim(),
-        time: Date.now()
+        time: now
     });
 
-    // Cap the logs at 100 messages per group
+    // 3-hour sliding-window pruning
+    global.groupLogs[jid] = global.groupLogs[jid].filter(l => now - l.time <= THREE_HOURS_MS);
+
+    // If still over 100 messages, enforce maximum length cap
     if (global.groupLogs[jid].length > 100) {
         global.groupLogs[jid].shift();
     }
@@ -73,7 +77,7 @@ async function queryGroq(messages) {
             model: "llama-3.1-8b-instant",
             messages,
             temperature: 0.6,
-            max_tokens: 1000  // Optimized token size for concise summaries
+            max_tokens: 1500
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -89,7 +93,9 @@ async function queryGroq(messages) {
 }
 
 async function generateAizenSummary(logs) {
-    const formattedLogs = logs.map(l => `[${l.sender}]: ${l.text}`).join('\n');
+    const now = Date.now();
+    const activeLogs = logs.filter(l => now - l.time <= THREE_HOURS_MS);
+    const formattedLogs = activeLogs.map(l => `[${l.sender}]: ${l.text}`).join('\n');
 
     const systemPrompt = 
         `You are Sōsuke Aizen, the former Captain of Division 5 and master of the Mirror Flower Water Moon (Kyōka Suigetsu).\n` +
@@ -103,11 +109,11 @@ async function generateAizenSummary(logs) {
         `FORMAT & CONTENT RULES (CRITICAL):\n` +
         `- Start with an elegant, condescending Aizen opening remark.\n` +
         `- Output EXACTLY 10 bullet points. Each point MUST start with a simple bullet ("• ").\n` +
-        `- EACH bullet point MUST be 3 elegant, and sharp sentences (or maximum 5 sentences). Write direct, punchy, and concise insights that cut straight to the core of their discussions. Do NOT write long paragraphs.\n` +
+        `- EACH bullet point MUST be a detailed, rich, medium-length paragraph (exactly 2 to 3 sentences long). Explain who said what, the context of their debate, and add your own cold, philosophical insight. Do NOT write simple, short, or one-sentence lines.\n` +
         `- Do NOT use numbers, words like "First" or "Second", or rigid lists.\n` +
         `- End with a cold, manipulative Aizen closing remark.\n\n` +
         `TITLE:\n` +
-        `🪄 *GROUP LOG ANALYSIS* 🪄\n` +
+        `🔮 *SŌSUKE AIZEN'S LOG ANALYSIS* 🔮\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     const messages = [
@@ -118,45 +124,75 @@ async function generateAizenSummary(logs) {
     return await queryGroq(messages);
 }
 
-// ─── AUTOMATIC 3-HOUR LOGGING INTERVAL LOOP ────────────────────────
+// ─── AUTOMATED TIMED SUMMARY SCHEDULER ────────────────────────────
 
-if (!global.autoLogInterval) {
-    global.autoLogInterval = setInterval(async () => {
+function scheduleAutoSummary(jid) {
+    // Prevent overlapping intervals for the same group JID
+    if (global.activeAizenSummaryIntervals[jid]) {
+        clearInterval(global.activeAizenSummaryIntervals[jid]);
+    }
+
+    global.activeAizenSummaryIntervals[jid] = setInterval(async () => {
+        const activeSock = global.activeSock;
+        if (!activeSock) return; // Exit silently if bot is offline/reconnecting
+
         const settings = readSettings();
+        if (settings[jid] !== 'on') {
+            clearInterval(global.activeAizenSummaryIntervals[jid]);
+            delete global.activeAizenSummaryIntervals[jid];
+            return;
+        }
+
+        const logs = global.groupLogs[jid] || [];
+        // Filter expired messages from memory log window first
         const now = Date.now();
+        const activeLogs = logs.filter(l => now - l.time <= THREE_HOURS_MS);
+        global.groupLogs[jid] = activeLogs;
 
-        for (const [jid, state] of Object.entries(settings)) {
-            // Check if both logging and the 3-hour auto-timer are enabled
-            if (jid.endsWith('@g.us') && state === 'on' && settings[jid + '_autotimer'] === 'on') {
-                const lastTrigger = global.gclogLastTriggers[jid] || 0;
-                const threeHours = 3 * 60 * 60 * 1000;
-
-                if (now - lastTrigger >= threeHours) {
-                    global.gclogLastTriggers[jid] = now;
-
-                    const activeSock = global.activeSock;
-                    if (activeSock) {
-                        const logs = global.groupLogs[jid] || [];
-                        if (logs.length >= 5) {
-                            try {
-                                console.log(`⏳ [GCLOG TIMER] Executing scheduled 3-hour Aizen summary for: ${jid}`);
-                                const summaryResult = await generateAizenSummary(logs);
-                                await activeSock.sendMessage(jid, { text: summaryResult.trim() });
-                            } catch (e) {
-                                console.error(`⚠️ [GCLOG TIMER] Auto summary dispatch failed for ${jid}:`, e.message);
-                            }
-                        }
-                    }
-                }
+        if (activeLogs.length >= 5) {
+            try {
+                await activeSock.sendMessage(jid, { text: "🔮 *Kyōka Suigetsu: Automated 3-Hour Chronicle Expansion* 🔮" });
+                const summaryResult = await generateAizenSummary(activeLogs);
+                await activeSock.sendMessage(jid, { text: summaryResult.trim() });
+            } catch (err) {
+                console.error(`❌ [GCLOG AUTO] Failed to post automated summary to ${jid}:`, err.message);
             }
         }
-    }, 5 * 60 * 1000); // Polling checker runs safely every 5 minutes
+    }, THREE_HOURS_MS);
 }
+
+function unscheduleAutoSummary(jid) {
+    if (global.activeAizenSummaryIntervals[jid]) {
+        clearInterval(global.activeAizenSummaryIntervals[jid]);
+        delete global.activeAizenSummaryIntervals[jid];
+    }
+}
+
+// Self-loading boot scheduler (runs automatically when module is loaded)
+(function initPersistentAutoSummaries() {
+    try {
+        const settings = readSettings();
+        let activeCount = 0;
+        for (const [jid, state] of Object.entries(settings)) {
+            if (state === 'on') {
+                scheduleAutoSummary(jid);
+                activeCount++;
+            }
+        }
+        if (activeCount > 0) {
+            console.log(`🔮 [GCLOG] Rescheduled active auto-summary loops for ${activeCount} groups.`);
+        }
+    } catch (e) {
+        console.error("⚠️ [GCLOG] Failed to load auto-summary scheduler:", e.message);
+    }
+})();
 
 module.exports = {
     readSettings,
     saveSettings,
     recordMessage,
     clearGroupLogs,
-    generateAizenSummary
+    generateAizenSummary,
+    scheduleAutoSummary,
+    unscheduleAutoSummary
 };
