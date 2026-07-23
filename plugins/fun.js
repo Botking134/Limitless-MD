@@ -364,69 +364,7 @@ const famousSpeeches = [
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. BANKAI
-    {
-        name: 'bankai',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            if (!args) {
-                const randomBankai = bankaiData[Math.floor(Math.random() * bankaiData.length)];
-                const text = `🗡️ *BANKAI MANIFESTATION* 🗡️\n` +
-                             `👤 *Owner:* ${randomBankai.name}\n` +
-                             `🎖️ *Position:* ${randomBankai.position}\n` +
-                             `🔥 *Bankai:* ${randomBankai.bankaiName}\n` +
-                             `🔮 *Abilities:* ${randomBankai.abilities}`;
-                return await sock.sendMessage(jid, { text }, { quoted: msg });
-            }
-
-            const cleanQuery = args.toLowerCase().trim();
-            const matched = bankaiData.find(b => b.aliases.includes(cleanQuery) || b.name.toLowerCase().includes(cleanQuery));
-            if (matched) {
-                const text = `🗡️ *BANKAI INDEX* 🗡️\n` +
-                             `👤 *Owner:* ${matched.name}\n` +
-                             `🎖️ *Position:* ${matched.position}\n` +
-                             `🔥 *Bankai:* ${matched.bankaiName}\n` +
-                             `🔮 *Abilities:* ${matched.abilities}`;
-                return await sock.sendMessage(jid, { text }, { quoted: msg });
-            }
-
-            if (nonBankaiCharacters[cleanQuery]) {
-                return await sock.sendMessage(jid, { text: `❌ ${nonBankaiCharacters[cleanQuery]}` }, { quoted: msg });
-            }
-
-            if (nonBleachAnime.includes(cleanQuery)) {
-                return await sock.sendMessage(jid, { text: `❌ "${args}" is not from the Bleach anime.` }, { quoted: msg });
-            }
-
-            try {
-                await sock.sendMessage(jid, { text: "Searching Soul Society archives... 🪽" }, { quoted: msg });
-                const systemPrompt =
-                    "You are an expert on the Bleach anime universe.\n" +
-                    "Analyze the user's query.\n\n" +
-                    "1. If NOT from Bleach, reply ONLY: 'NOT_FROM_BLEACH'.\n" +
-                    "2. If from Bleach but has NO Bankai, reply ONLY with a clear, direct, and concise explanation why they do not possess a Bankai.\n" +
-                    "3. If they possess a Bankai, respond ONLY in this layout:\n\n" +
-                    "🗡️ *BANKAI INDEX* 🗡️\n" +
-                    "👤 *Owner:* [Name]\n" +
-                    "🎖️ *Position:* [Position/Identity]\n" +
-                    "🔥 *Bankai:* [Bankai Name]\n" +
-                    "🔮 *Abilities:* [Write a detailed, medium-length explanation of 2 to 3 sentences detailing the bankai's combat properties, visual appearance, and active abilities]";
-
-                const responseText = await queryGroq([
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: args }
-                ]);
-                const cleanResponse = responseText.trim();
-
-                if (cleanResponse.includes("NOT_FROM_BLEACH")) {
-                    await sock.sendMessage(jid, { text: `❌ "${args}" is not from the Bleach anime.` }, { quoted: msg });
-                } else {
-                    await sock.sendMessage(jid, { text: cleanResponse }, { quoted: msg });
-                }
-            } catch (err) { /* ignore */ }
-        }
-    },
+    
 
     // 2. DOMAIN EXPANSION
     {
