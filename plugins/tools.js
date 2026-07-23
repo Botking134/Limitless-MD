@@ -211,33 +211,7 @@ module.exports = [
         }
     },
 
-    // 3. GETPP (User Profile Picture - Fixed fallbacks & LID)
-    {
-        name: 'getpp',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            let targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
-
-            if (targetJid.endsWith('@lid')) {
-                const resolved = await getPhoneJid(sock, targetJid, jid);
-                if (resolved) targetJid = resolved;
-            }
-
-            try {
-                let profileUrl;
-                try {
-                    profileUrl = await sock.profilePictureUrl(targetJid, 'image');
-                } catch (err) {
-                    // Fallback to low-resolution preview
-                    profileUrl = await sock.profilePictureUrl(targetJid, 'preview');
-                }
-                await sock.sendMessage(jid, { image: { url: profileUrl }, mentions: [targetJid] }, { quoted: msg });
-            } catch (e) {
-                await sock.sendMessage(jid, { text: "❌ No public profile picture found." }, { quoted: msg });
-            }
-        }
-    },
+    
 
     // 4. SETNAME (Bot display name)
     {
@@ -360,99 +334,7 @@ module.exports = [
     },
 
     
-// 7. FW (Forwarding - Fixed Smart Parsing & Delivery)
-    {
-        name: 'fw',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isDev }) => {
-            const jid = msg.key.remoteJid;
-            if (!isOwner && !isDev) return;
 
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo ||
-                                rawMsg?.extendedTextMessage?.contextInfo ||
-                                rawMsg?.imageMessage?.contextInfo ||
-                                rawMsg?.videoMessage?.contextInfo ||
-                                rawMsg?.stickerMessage?.contextInfo ||
-                                rawMsg?.audioMessage?.contextInfo ||
-                                rawMsg?.documentMessage?.contextInfo;
-
-            // ─── Mode 1: Direct forward with args (Smart parsing) ──────────
-            if (args && !contextInfo?.stanzaId) {
-                const parts = args.trim().split(' ');
-                let targetJid = '';
-                let textToSend = '';
-
-                const isJidCheck = (p) => p.endsWith('@s.whatsapp.net') || p.endsWith('@g.us') || /^\d{7,15}$/.test(p);
-
-                if (isJidCheck(parts[0])) {
-                    targetJid = parts[0].includes('@') ? parts[0] : parts[0] + '@s.whatsapp.net';
-                    textToSend = parts.slice(1).join(' ').trim();
-                } else if (isJidCheck(parts[parts.length - 1])) {
-                    targetJid = parts[parts.length - 1].includes('@') ? parts[parts.length - 1] : parts[parts.length - 1] + '@s.whatsapp.net';
-                    textToSend = parts.slice(0, parts.length - 1).join(' ').trim();
-                }
-
-                if (!targetJid || !textToSend) {
-                    return await sock.sendMessage(jid, { text: "❌ Format: .fw <targetNumber> <text> or reply to a message and use .fw <targetNumber>" }, { quoted: msg });
-                }
-
-                try {
-                    await sock.sendMessage(targetJid, { text: textToSend });
-                    await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(jid, { text: `❌ Failed: ${e.message}` }, { quoted: msg });
-                }
-                return;
-            }
-
-            // ─── Mode 2: Reply to a message with .fw <targetNumber> (Fixed XML-not-well-formed validation) ──────
-            if (contextInfo && contextInfo.stanzaId && args) {
-                const cleanTarget = args.trim();
-                const targetJid = cleanTarget.endsWith('@g.us') ? cleanTarget : (cleanTarget.replace(/[^0-9]/g, '') + '@s.whatsapp.net');
-                if (targetJid.length < 8) return await sock.sendMessage(jid, { text: "❌ Invalid target JID." }, { quoted: msg });
-
-                try {
-                    const quotedMsg = contextInfo.quotedMessage;
-                    if (!quotedMsg) return await sock.sendMessage(jid, { text: "❌ No quoted message found." }, { quoted: msg });
-
-                    const { proto } = await import('@itsliaaa/baileys');
-                    const fullMessage = proto.WebMessageInfo.create({
-                        key: {
-                            remoteJid: jid,
-                            id: contextInfo.stanzaId,
-                            // Participant is strictly forbidden on DM remoteJids
-                            participant: jid.endsWith('@g.us') ? contextInfo.participant : undefined
-                        },
-                        message: quotedMsg
-                    });
-
-                    await sock.copyNForward(targetJid, fullMessage, true);
-                    await sock.sendMessage(jid, { text: `✅ Message forwarded to ${targetJid}` }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(jid, { text: `❌ Forward failed: ${e.message}` }, { quoted: msg });
-                }
-                return;
-            }
-
-            // ─── Mode 3: Interactive prompt (no args, reply to a message) ──
-            if (contextInfo && contextInfo.stanzaId && !args) {
-                const prompt = await sock.sendMessage(jid, {
-                    text: "📤 *FORWARD WIZARD* 📤\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
-                          "Please reply directly to *this message* with the target phone number (e.g., 2348123456789) or group JID."
-                }, { quoted: msg });
-
-                global.forwardSessions[prompt.key.id] = {
-                    msgToForward: contextInfo.quotedMessage,
-                    originalMsgKey: contextInfo.stanzaId,
-                    originalParticipant: contextInfo.participant
-                };
-                return;
-            }
-
-            await sock.sendMessage(jid, { text: "❌ Usage:\n• `.fw <targetNumber> <text>`\n• Reply to a message with `.fw <targetNumber>`\n• Reply to a message and use `.fw` (interactive)" }, { quoted: msg });
-        }
-    },
 
     // 8. PRESENCE (Dashboard)
     {
