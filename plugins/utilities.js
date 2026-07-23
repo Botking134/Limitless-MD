@@ -864,66 +864,7 @@ module.exports = [
         }
     },
 
-    // 14. SCRIPT (Modernized - Removed legacy buttons)
-    {
-        name: 'script',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-
-            const images = [
-                "https://files.catbox.moe/gnp8q2.jpeg",
-                "https://files.catbox.moe/rmaqfn.jpeg"
-            ];
-            const randomImage = images[Math.floor(Math.random() * images.length)];
-
-            const messageText =
-`🤖 *Limitless-MD - AI Bot* 🤖
-
-I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My Creator *Infinity*
-
-{BOT INFORMATION}
-- *Creator* : Infinity
-- *Version* : 1.0.0
-- *Type* : Multi-Device (Baileys)
-- *Mode* : Public / Private
-- *Runtime* : ${formatUptime(process.uptime())}
-- *Commands* : 100+ Features
-
-© Limitless-MD 2026\n\n` +
-`👉 To clone the source repository directly, use command:\n\`${config.prefix}gitclone Botking134/Limitless-MD\``;
-
-            try {
-                await sock.sendMessage(jid, {
-                    image: { url: randomImage },
-                    caption: messageText
-                }, { quoted: msg });
-            } catch (err) {
-                await sock.sendMessage(jid, { text: messageText }, { quoted: msg });
-            }
-        }
-    },
-
-    // 15. SC (Script alias)
-    {
-        name: 'sc',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const cmd = module.exports.find(c => c.name === 'script');
-            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
-        }
-    },
-
-    // 16. REPO (Script alias)
-    {
-        name: 'repo',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const cmd = module.exports.find(c => c.name === 'script');
-            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
-        }
-    },
-
+    
     // 17. UPTIME
     {
         name: 'uptime',
