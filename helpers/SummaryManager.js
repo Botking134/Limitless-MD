@@ -8,6 +8,8 @@ const settingsPath = path.join(__dirname, '../storage/gclog_settings.json');
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 global.groupLogs = global.groupLogs || {};
+global.gclogLastTriggers = global.gclogLastTriggers || {};
+global.autoLogInterval = global.autoLogInterval || null;
 
 // ─── SETTINGS FILE PERSISTENCE ────────────────────────────────────
 
@@ -46,6 +48,7 @@ function recordMessage(jid, sender, text) {
         time: Date.now()
     });
 
+    // Cap the logs at 100 messages per group
     if (global.groupLogs[jid].length > 100) {
         global.groupLogs[jid].shift();
     }
@@ -70,7 +73,7 @@ async function queryGroq(messages) {
             model: "llama-3.1-8b-instant",
             messages,
             temperature: 0.6,
-            max_tokens: 1500
+            max_tokens: 1000  // Optimized token size for concise summaries
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -100,11 +103,11 @@ async function generateAizenSummary(logs) {
         `FORMAT & CONTENT RULES (CRITICAL):\n` +
         `- Start with an elegant, condescending Aizen opening remark.\n` +
         `- Output EXACTLY 10 bullet points. Each point MUST start with a simple bullet ("• ").\n` +
-        `- EACH bullet point MUST be a detailed, rich, medium-length paragraph (exactly 2 to 3 sentences long). Explain who said what, the context of their debate, and add your own cold, philosophical insight. Do NOT write simple, short, or one-sentence lines.\n` +
+        `- EACH bullet point MUST be 3 elegant, and sharp sentences (or maximum 5 sentences). Write direct, punchy, and concise insights that cut straight to the core of their discussions. Do NOT write long paragraphs.\n` +
         `- Do NOT use numbers, words like "First" or "Second", or rigid lists.\n` +
         `- End with a cold, manipulative Aizen closing remark.\n\n` +
         `TITLE:\n` +
-        `🔮 *SŌSUKE AIZEN'S LOG ANALYSIS* 🔮\n` +
+        `🪄 *GROUP LOG ANALYSIS* 🪄\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     const messages = [
@@ -113,6 +116,41 @@ async function generateAizenSummary(logs) {
     ];
 
     return await queryGroq(messages);
+}
+
+// ─── AUTOMATIC 3-HOUR LOGGING INTERVAL LOOP ────────────────────────
+
+if (!global.autoLogInterval) {
+    global.autoLogInterval = setInterval(async () => {
+        const settings = readSettings();
+        const now = Date.now();
+
+        for (const [jid, state] of Object.entries(settings)) {
+            // Check if both logging and the 3-hour auto-timer are enabled
+            if (jid.endsWith('@g.us') && state === 'on' && settings[jid + '_autotimer'] === 'on') {
+                const lastTrigger = global.gclogLastTriggers[jid] || 0;
+                const threeHours = 3 * 60 * 60 * 1000;
+
+                if (now - lastTrigger >= threeHours) {
+                    global.gclogLastTriggers[jid] = now;
+
+                    const activeSock = global.activeSock;
+                    if (activeSock) {
+                        const logs = global.groupLogs[jid] || [];
+                        if (logs.length >= 5) {
+                            try {
+                                console.log(`⏳ [GCLOG TIMER] Executing scheduled 3-hour Aizen summary for: ${jid}`);
+                                const summaryResult = await generateAizenSummary(logs);
+                                await activeSock.sendMessage(jid, { text: summaryResult.trim() });
+                            } catch (e) {
+                                console.error(`⚠️ [GCLOG TIMER] Auto summary dispatch failed for ${jid}:`, e.message);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }, 5 * 60 * 1000); // Polling checker runs safely every 5 minutes
 }
 
 module.exports = {
