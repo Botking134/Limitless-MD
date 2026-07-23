@@ -4,7 +4,9 @@ const {
     readSettings, 
     saveSettings, 
     clearGroupLogs, 
-    generateAizenSummary 
+    generateAizenSummary,
+    scheduleAutoSummary,
+    unscheduleAutoSummary
 } = require('../helpers/SummaryManager');
 
 module.exports = {
@@ -20,7 +22,7 @@ module.exports = {
         const subCommand = args ? args.toLowerCase().trim() : '';
         const settings = readSettings();
 
-        // ─── CASE A: DISPLAY STATUS (.gclog) ───
+        // ─── CASE A: DISPLAY STATUS & BUTTONS (.gclog) ───
         if (!subCommand) {
             const currentStatus = settings[jid] === 'on' ? 'Active 🟢' : 'Inactive 💤';
             const totalLogs = global.groupLogs[jid] ? global.groupLogs[jid].length : 0;
@@ -31,26 +33,47 @@ module.exports = {
                 `• *Group:* \`${jid.split('@')[0]}\`\n` +
                 `• *Logging:* \`${currentStatus}\`\n` +
                 `• *Stored logs:* \`${totalLogs} / 100\` messages\n\n` +
-                `👉 Use \`${config.prefix}gclog on\` to enable logging.\n` +
-                `👉 Use \`${config.prefix}gclog off\` to disable logging.\n` +
-                `👉 Use \`${config.prefix}gclog clear\` to purge logs.\n` +
-                `👉 Use \`${config.prefix}gclog check\` to view the summary.`;
+                `Configure or view your logging parameters using the buttons below:`;
 
-            return await sock.sendMessage(jid, { text: statusText }, { quoted: msg });
+            const buttonMessage = {
+                text: statusText,
+                footer: "🔮 Sōsuke Aizen Cursed Log Assistant",
+                buttons: [
+                    { buttonId: `${config.prefix}gclog on`, buttonText: { displayText: "Enable 🟢" }, type: 1 },
+                    { buttonId: `${config.prefix}gclog off`, buttonText: { displayText: "Disable 💤" }, type: 1 },
+                    { buttonId: `${config.prefix}gclog clear`, buttonText: { displayText: "Clear Logs 🗑️" }, type: 1 },
+                    { buttonId: `${config.prefix}gclog check`, buttonText: { displayText: "Aizen Summary 🔮" }, type: 1 }
+                ],
+                headerType: 1
+            };
+
+            return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
         }
 
-        // ─── CASE B: ENABLE LOGGING (.gclog on) ───
+        // ─── CASE B: ENABLE LOGGING & INITIATE SCHEDULER (.gclog on) ───
         if (subCommand === 'on') {
             settings[jid] = 'on';
             saveSettings(settings);
-            return await sock.sendMessage(jid, { text: "🟢 *𝘓𝘰𝘨𝘨𝘪𝘯𝘨 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘧𝘰𝘳 𝘵𝘩𝘪𝘴 𝘨𝘳𝘰𝘶𝘱. 𝘙𝘦𝘤𝘦𝘯𝘵 𝘮𝘦𝘴𝘴𝘢𝘨𝘦𝘴 𝘸𝘪𝘭𝘭 𝘣𝘦 𝘳𝘦𝘤𝘰𝘳𝘥𝘦𝘥.*" }, { quoted: msg });
+            
+            // Instantly start the 3-hour automated posting timer loop
+            scheduleAutoSummary(jid);
+            
+            return await sock.sendMessage(jid, { 
+                text: "🟢 *𝘓𝘰𝘨𝘨𝘪𝘯𝘨 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘧𝘰𝘳 𝘵𝘩𝘪𝘴 𝘨𝘳𝘰𝘶𝘱. 𝘈𝘶𝘵𝘰𝘮𝘢𝘵𝘦𝘥 3-𝘩𝘰𝘶𝘳 𝘴𝘶𝘮𝘮𝘢𝘳𝘪𝘦𝘴 𝘢𝘳𝘦 𝘯𝘰𝘸 𝘴𝘤𝘩𝘦𝘥𝘶𝘭𝘦𝘥.*" 
+            }, { quoted: msg });
         }
 
-        // ─── CASE C: DISABLE LOGGING (.gclog off) ───
+        // ─── CASE C: DISABLE LOGGING & PURGE SCHEDULER (.gclog off) ───
         if (subCommand === 'off') {
             settings[jid] = 'off';
             saveSettings(settings);
-            return await sock.sendMessage(jid, { text: "💤 *𝘓𝘰𝘨𝘨𝘪𝘯𝘨 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘥𝘦𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘧𝘰𝘳 𝘵𝘩𝘪𝘴 𝘨𝘳𝘰𝘶𝘱.*" }, { quoted: msg });
+            
+            // Instantly clear and delete the active interval timer
+            unscheduleAutoSummary(jid);
+            
+            return await sock.sendMessage(jid, { 
+                text: "💤 *𝘓𝘰𝘨𝘨𝘪𝘯𝘨 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘥𝘦𝘢𝘤𝘵𝘪𝘷𝘢𝘵𝘦𝘥 𝘧𝘰𝘳 𝘵𝘩𝘪𝘴 𝘨𝘳𝘰𝘶𝘱. 𝘈𝘶𝘵𝘰𝘮𝘢𝘵𝘦𝘥 3-𝘩𝘰𝘶𝘳 𝘴𝘶𝘮𝘮𝘢𝘳𝘪𝘦𝘴 𝘤𝘢𝘯𝘤𝘦𝘭𝘭𝘦𝘥.*" 
+            }, { quoted: msg });
         }
 
         // ─── CASE D: CLEAR LOGS (.gclog clear) ───
