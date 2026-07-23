@@ -736,7 +736,8 @@ module.exports = [
         }
     },
 
-    // 19. AUTOVIEWSTATUS (autovs)
+     
+// 19. AUTOVIEWSTATUS (autovs)
     {
         name: 'autoviewstatus',
         isPrefixless: false,
@@ -746,9 +747,11 @@ module.exports = [
 
             const target = args ? args.toLowerCase().trim() : '';
             if (target === 'on') {
+                setVar('autoviewstatus', 'on');
                 config.autoviewstatus = 'on';
                 await sock.sendMessage(jid, { text: "🟢 *Auto-View Status (autovs) activated!*" }, { quoted: msg });
             } else if (target === 'off') {
+                setVar('autoviewstatus', 'off');
                 config.autoviewstatus = 'off';
                 await sock.sendMessage(jid, { text: "💤 *Auto-View Status (autovs) deactivated.*" }, { quoted: msg });
             }
@@ -766,6 +769,7 @@ module.exports = [
             if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide an emoji (e.g. .statusemoji 💖)" }, { quoted: msg });
 
             const emoji = args.trim();
+            setVar('statusemoji', emoji);
             config.statusemoji = emoji;
             saveState();
             await sock.sendMessage(jid, { text: `✅ *Status reaction emoji updated to:* ${emoji}` }, { quoted: msg });
@@ -782,9 +786,11 @@ module.exports = [
 
             const target = args ? args.toLowerCase().trim() : '';
             if (target === 'on') {
+                setVar('autoreactstatus', 'on');
                 config.autoreactstatus = 'on';
                 await sock.sendMessage(jid, { text: "🟢 *Auto-React Status (autors) activated!* (Bot reacts with set emoji)" }, { quoted: msg });
             } else if (target === 'off') {
+                setVar('autoreactstatus', 'off');
                 config.autoreactstatus = 'off';
                 await sock.sendMessage(jid, { text: "💤 *Auto-React Status (autors) deactivated.*" }, { quoted: msg });
             }
@@ -962,7 +968,8 @@ module.exports = [
         }
     },
 
-    // 28. SS (Screenshot - Fixed to download rendering buffer first)
+
+    // 28. SS (Screenshot - Upgraded to High-Res Microlink Engine)
     {
         name: 'ss',
         isPrefixless: false,
@@ -986,19 +993,37 @@ module.exports = [
             }
 
             if (!targetUrl) return;
-            if (!/^https?:\/\//i.test(targetUrl)) targetUrl = 'https://' + targetUrl;
+            
+            // Format URL safely
+            if (!/^https?:\/\//i.test(targetUrl)) {
+                targetUrl = 'https://' + targetUrl;
+            }
+
+            // Inform the user the render is starting
+            await sock.sendMessage(jid, { text: "Generating website screenshot... 📸" }, { quoted: msg });
 
             try {
-                await sock.sendMessage(jid, { text: "Generating website screenshot... 📸" }, { quoted: msg });
-                const screenshotUrl = `https://image.thum.io/get/width/1280/crop/800/${targetUrl}`;
+                // Microlink API fetches raw screenshot directly using embed=screenshot.url
+                const screenshotUrl = `https://api.microlink.io/?url=${encodeURIComponent(targetUrl)}&screenshot=true&embed=screenshot.url`;
                 
-                // Fetch the rendering buffer first to force full page render
-                const response = await axios.get(screenshotUrl, { responseType: 'arraybuffer' });
+                const response = await axios.get(screenshotUrl, { 
+                    responseType: 'arraybuffer',
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    },
+                    timeout: 20000 // 20 seconds timeout to allow complex pages to finish loading
+                });
+                
                 const buffer = Buffer.from(response.data);
 
-                await sock.sendMessage(jid, { image: buffer, caption: `📸 *Screenshot of:* \`${targetUrl}\`` }, { quoted: msg });
+                await sock.sendMessage(jid, { 
+                    image: buffer, 
+                    caption: `📸 *Screenshot of:* \`${targetUrl}\`` 
+                }, { quoted: msg });
+
             } catch (err) { 
-                await sock.sendMessage(jid, { text: "❌ Failed to capture screenshot." }, { quoted: msg });
+                console.error("[SS] Failed to capture screenshot:", err.message);
+                await sock.sendMessage(jid, { text: "❌ Failed to capture screenshot. The server may be unreachable or offline." }, { quoted: msg });
             }
         }
     },
