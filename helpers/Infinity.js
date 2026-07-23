@@ -69,6 +69,32 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (!msg || !msg.message) return;
 
         const jid = msg.key.remoteJid;
+
+        // ─── STATUS BROADCAST (Instant Entry Point) ───
+        // Bypasses all parsing, permissions, database queries, and AI analysis to react and view instantly [1.1]
+        if (jid === 'status@broadcast') {
+            if (config.autoviewstatus === 'on') {
+                try {
+                    await sock.readMessages([msg.key]);
+                    console.log(`👁️ [STATUS] Marked status as read from: ${msg.key.participant || 'unknown'}`);
+                } catch (e) {
+                    console.error("❌ [STATUS] Failed to mark status as read:", e.message);
+                }
+            }
+            if (config.autoreactstatus === 'on') {
+                try {
+                    const emoji = config.statusemoji || '❄';
+                    // React directly to the sender of the status using their message key [1.1]
+                    const statusSender = msg.key.participant || msg.key.remoteJid;
+                    await sock.sendMessage(statusSender, { react: { text: emoji, key: msg.key } });
+                    console.log(`💖 [STATUS] Reacted to status with ${emoji} for: ${statusSender}`);
+                } catch (e) {
+                    console.error("❌ [STATUS] Failed to react to status:", e.message);
+                }
+            }
+            return; // Exit instantly [1.1]
+        }
+
         const rawSender = msg.key.participant || msg.key.remoteJid || '';
         const senderJid = normalizeToJid(rawSender);
         const senderNumber = senderJid.split('@')[0];
@@ -79,9 +105,39 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const { rawMsg, body, trimmedMessageBody, lowerMessage } = extractBodyAndTrim(msg);
 
         // ─── LINK SUMMARY LOGS ───
-        // Records conversation text into memory if group logging is active (bypasses bot commands and self messages)
+        // Records conversation text into memory if group logging is active (bypasses bot commands and self messages) [1.1]
         if (isGroup && trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix) && !msg.key.fromMe) {
             recordMessage(jid, msg.pushName || senderNumber, trimmedMessageBody);
+        }
+
+        // ─── RECORD CONVERSATION STATS (For active, inactive, msgs) ───
+        if (isGroup && !msg.key.fromMe) {
+            const todayStr = new Date().toDateString();
+            
+            // Initialize namespaces safely
+            config.totalMessages = config.totalMessages || {};
+            config.dailyActivity = config.dailyActivity || {};
+
+            const activityKey = `${jid}_${senderJid}`;
+
+            // 1. Increment All-Time Count [1.1]
+            config.totalMessages[activityKey] = (config.totalMessages[activityKey] || 0) + 1;
+
+            // 2. Increment Daily Count [1.1]
+            if (!config.dailyActivity[activityKey] || config.dailyActivity[activityKey].date !== todayStr) {
+                config.dailyActivity[activityKey] = { date: todayStr, count: 1 };
+            } else {
+                config.dailyActivity[activityKey].count += 1;
+            }
+
+            // 3. Debounced State Saving (Prevents Pterodactyl Disk Lag) [1.1]
+            global.saveStateTimeout = global.saveStateTimeout || null;
+            if (!global.saveStateTimeout) {
+                global.saveStateTimeout = setTimeout(() => {
+                    saveState();
+                    global.saveStateTimeout = null;
+                }, 30000); // Persist to state.json at most once every 30 seconds [1.1]
+            }
         }
 
         let command;
@@ -111,10 +167,14 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const quizMultiKey = jid;
         let activeQuizKey = '';
 
-        if (global.triviaSessions && global.triviaSessions[quizSingleKey] && global.triviaSessions[quizSingleKey].status === 'awaiting_category') {
-            activeQuizKey = quizSingleKey;
-        } else if (global.triviaSessions && global.triviaSessions[quizMultiKey] && global.triviaSessions[quizMultiKey].status === 'awaiting_category') {
-            activeQuizKey = quizMultiKey;
+        if (global.triviaSessions && global.triviaSessions[quizSingleKey] && global.triviaSessions[quizSingleKey].status === 'playing') {
+            // Intentionally ignore status checks during active gameplay
+        } else {
+            if (global.triviaSessions && global.triviaSessions[quizSingleKey] && global.triviaSessions[quizSingleKey].status === 'awaiting_category') {
+                activeQuizKey = quizSingleKey;
+            } else if (global.triviaSessions && global.triviaSessions[quizMultiKey] && global.triviaSessions[quizMultiKey].status === 'awaiting_category') {
+                activeQuizKey = quizMultiKey;
+            }
         }
 
         if (quotedMsgId && activeQuizKey && global.triviaSessions && global.triviaSessions[activeQuizKey]) {
@@ -165,7 +225,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const isAuthorized = isOwner || isSudo;
 
-        // Dynamic Group Admin lookup to safely prevent rate limiting loops
+        // Dynamic Group Admin lookup to safely prevent rate limiting loops [1.1]
         let isAdmin = false;
         if (isGroup) {
             try {
@@ -323,20 +383,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
-        }
-
-        // ─── STATUS BROADCAST ────────────────────────────────────
-        if (jid === 'status@broadcast') {
-            if (config.autoviewstatus === 'on') {
-                try { await sock.readMessages([msg.key]); } catch (e) { /* ignore */ }
-            }
-            if (config.autoreactstatus === 'on') {
-                try {
-                    const emoji = config.statusemoji || '❄';
-                    await sock.sendMessage('status@broadcast', { react: { text: emoji, key: msg.key } });
-                } catch (e) { /* ignore */ }
-            }
-            return;
         }
 
         // ─── GROUP SECURITY INTERCEPTORS ─────────────────────────
