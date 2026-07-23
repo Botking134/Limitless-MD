@@ -259,7 +259,7 @@ async function startBot() {
                         !botJid.includes('@s.whatsapp.net@s.whatsapp.net')) {
                         console.log(`📨 Sending image status report to: ${botJid}`);
                         await sock.sendMessage(botJid, { 
-                            image: { url: "https://i.imgur.com/OzdP4Lx.png" },
+                            image: { url: "https://qu.ax/I6tKC" },
                             caption: statusCard 
                         });
                         console.log(`✅ [SYSTEM] Connection status report image dispatched.`);
@@ -416,8 +416,22 @@ async function startBot() {
         } catch (e) { /* ignore dead socket */ }
     });
 
-    // ─── MESSAGES UPSERT (Incoming Messages) ─────────────────────
+    // ─── MESSAGES UPSERT (Incoming Messages with messageStore active caching) ──
     sock.ev.on('messages.upsert', async (chatUpdate) => {
+        // Active memory-cache population for administrative deletion tools like delspam [1.1]
+        if (chatUpdate.messages && chatUpdate.messages[0]) {
+            const m = chatUpdate.messages[0];
+            if (m.key && m.key.id && m.message) {
+                global.messageStore[m.key.id] = m;
+
+                // Restrict messageStore size to 2000 entries to prevent RAM memory exhaustion [1.1]
+                const storeKeys = Object.keys(global.messageStore);
+                if (storeKeys.length > 2000) {
+                    delete global.messageStore[storeKeys[0]];
+                }
+            }
+        }
+
         await handleIncomingMessage(sock, chatUpdate, botSentMessageIds);
     });
 }
