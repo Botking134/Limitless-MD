@@ -173,6 +173,33 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
 
 // ─── COMMAND DEFINITIONS ─────────────────────────────────────────
 const advancedGroupCommands = [
+
+
+
+// 7. LEVELUP (Alert Toggle)
+    {
+        name: 'levelup',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!jid.endsWith('@g.us')) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'levelup');
+            if (!isAuthorized) return;
+
+            const action = args ? args.toLowerCase().trim() : '';
+            if (action !== 'on' && action !== 'off') {
+                return await sock.sendMessage(jid, { text: `❌ Use: \`${config.prefix}levelup <on/off>\`` }, { quoted: msg });
+            }
+
+            config.gcalerts = config.gcalerts || {};
+            config.gcalerts.levelup = config.gcalerts.levelup || {};
+            config.gcalerts.levelup[jid] = action;
+
+            saveState();
+            await sock.sendMessage(jid, { text: `✅ Level Up milestone broadcast alerts have been turned *${action.toUpperCase()}*` }, { quoted: msg });
+        }
+    },
     
     // 9. RANKS
     {
