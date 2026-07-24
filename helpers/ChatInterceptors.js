@@ -1,6 +1,6 @@
 // helpers/ChatInterceptors.js
 const config = require('../config');
-const { saveState } = require('../stateManager');
+const { saveState, getPhoneJid, normalizeToJid } = require('../stateManager'); // Imported getPhoneJid [1.1]
 
 // Fallback logic for cleanJid import to safeguard stability
 let cleanJid;
@@ -19,19 +19,6 @@ global.spamTracker = global.spamTracker || {};
 global.spamDeletedCount = global.spamDeletedCount || {};
 
 // ─── HELPERS ──────────────────────────────────────────────────────
-
-/**
- * Safely unwrap nested WhatsApp message structures
- */
-function getRawMessage(message) {
-    if (!message) return null;
-    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
-    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
-    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
-    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
-    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
-    return message;
-}
 
 /**
  * Formats the custom warning template using slanted mathematical characters
@@ -101,12 +88,21 @@ function isUserSilenced(silencedUsers, jid, senderJid) {
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
     if (!policy || policy === 'off') return;
 
+    // Translate sender JID if it is an LID before sending alerts to prevent protocol bans [1.1]
+    let resolvedSender = normalizeToJid(senderJid);
+    if (resolvedSender.endsWith('@lid')) {
+        const resolved = await getPhoneJid(sock, resolvedSender, jid);
+        if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+            resolvedSender = resolved;
+        }
+    }
+
     if (policy === 'delete') {
         try {
             await sock.sendMessage(jid, { delete: msg.key });
             
             const deleteMsgText = `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`;
-            await sock.sendMessage(jid, { text: deleteMsgText, mentions: [senderJid] });
+            await sock.sendMessage(jid, { text: deleteMsgText, mentions: [resolvedSender] }); // Safely mentions phone JIDs [1.1]
         } catch (e) { /* ignore */ }
     } else if (policy === 'warn') {
         try {
@@ -118,26 +114,26 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
             const threshold = config.warnThreshold || 5;
 
             if (count >= threshold) {
-                await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+                await sock.groupParticipantsUpdate(jid, [resolvedSender], "remove");
                 
                 // Domain Expansion Kick Message
                 const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${senderNumber}. Warnings exceeded (${count}/${threshold}) for violating ${violationReason} rules.`;
-                await sock.sendMessage(jid, { text: kickText, mentions: [senderJid] });
+                await sock.sendMessage(jid, { text: kickText, mentions: [resolvedSender] });
                 config.warns[warnKey] = 0;
             } else {
                 // Customized dynamic Warning response
                 const warningText = getThematicWarning(violationReason, senderNumber, count, threshold);
-                await sock.sendMessage(jid, { text: warningText, mentions: [senderJid] });
+                await sock.sendMessage(jid, { text: warningText, mentions: [resolvedSender] });
             }
             saveState();
         } catch (e) { /* ignore */ }
     } else if (policy === 'kick') {
         try {
             await sock.sendMessage(jid, { delete: msg.key });
-            await sock.groupParticipantsUpdate(jid, [senderJid], "remove");
+            await sock.groupParticipantsUpdate(jid, [resolvedSender], "remove");
             
             const directKickText = `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`;
-            await sock.sendMessage(jid, { text: directKickText, mentions: [senderJid] });
+            await sock.sendMessage(jid, { text: directKickText, mentions: [resolvedSender] });
         } catch (e) { /* ignore */ }
     }
 }
@@ -154,10 +150,10 @@ async function handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid
     const isSenderBotItself = (botJid && cleanJid(senderJid) === botJid) || (botLid && cleanJid(senderJid) === botLid);
     if (isSenderBotItself) return false;
 
-    // 1. Antilink Domain Scanner (Refined to avoid false-positives on file extensions)
+    // 1. Antilink Domain Scanner
     const antilinkPolicy = config.antilink?.[jid] || 'off';
     const hasLink = /(https?:\/\/[^\s]+)/i.test(body) || 
-                    /(www\.[a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,6})+(?:\/[^\s]*)?)/i.test(body) ||
+                    /(www\.[a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,6})+(?:/[^\s]*)?)/i.test(body) ||
                     /chat\.whatsapp\.com\/[a-zA-Z0-9]+/i.test(body) ||
                     /wa\.me\/[0-9]+/i.test(body);
 
@@ -181,10 +177,10 @@ async function handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid
     const antitagPolicy = config.antitag?.[jid] || 'off';
     const totalMentions = mentionedJids.length;
     
-    // Ghost Tag Detection: Metadata mentions exist, but no visible '@' symbols are inside the message text
+    // Ghost Tag Detection
     const hasGhostTags = totalMentions > 0 && !body.includes('@');
     
-    // Bot LID Mention Detection: Checks if the user is targeting the bot's LID directly
+    // Bot LID Mention Detection
     const mentionsBotLid = botLid && mentionedJids.some(j => cleanJid(j) === botLid);
 
     const isTaggingEveryone = /@(everyone|here|all)/i.test(body) || 
@@ -199,9 +195,14 @@ async function handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid
 
     // 4. Anti-Group-Mention (Antigm with status mention support)
     const antigmPolicy = config.antigm?.[jid] || 'off';
+
+    // Detect if the message is structurally a Group Status Mention
+    const isStatusMention = !!(msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2");
+
     const isGroupMention = mentionedJids.some(j => j.endsWith('@g.us')) || 
                            /@g\.us/i.test(body) || 
-                           /This group was mentioned/i.test(body);
+                           /This group was mentioned/i.test(body) ||
+                           isStatusMention;
 
     if (isGroupMention && antigmPolicy !== 'off') {
         await applySecurityPolicy(sock, msg, antigmPolicy, senderJid, senderNumber, jid, "Anti-Group-Mention");
@@ -229,6 +230,15 @@ async function handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, i
     const isImmune = isAuthorized || isDev || isAdmin;
     if (isImmune) return false;
 
+    // Translate sender JID if it is an LID before sending alerts to prevent protocol bans [1.1]
+    let resolvedSender = normalizeToJid(senderJid);
+    if (resolvedSender.endsWith('@lid')) {
+        const resolved = await getPhoneJid(sock, resolvedSender, jid);
+        if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+            resolvedSender = resolved;
+        }
+    }
+
     const now = Date.now();
     global.spamTracker = global.spamTracker || {};
     if (!global.spamTracker[senderJid]) global.spamTracker[senderJid] = [];
@@ -239,7 +249,7 @@ async function handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, i
         try {
             await sock.sendMessage(jid, {
                 text: `🚨 *ANTIBUG BAN HAMMER* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumber} has been blocked for spamming/flooding the system. (Spam threshold exceeded).`,
-                mentions: [senderJid]
+                mentions: [resolvedSender]
             }, { quoted: msg });
             
             await sock.updateBlockStatus(senderJid, 'block');
@@ -255,6 +265,15 @@ async function handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, i
 async function handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, isAuthorized, isDev, isAdmin) {
     const isImmune = isAuthorized || isDev || isAdmin;
     if (isImmune) return false;
+
+    // Translate sender JID if it is an LID before sending alerts to prevent protocol bans [1.1]
+    let resolvedSender = normalizeToJid(senderJid);
+    if (resolvedSender.endsWith('@lid')) {
+        const resolved = await getPhoneJid(sock, resolvedSender, jid);
+        if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+            resolvedSender = resolved;
+        }
+    }
 
     const antispamConfig = config.antispam?.[jid];
     if (antispamConfig && antispamConfig.status === 'on') {
@@ -276,7 +295,7 @@ async function handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, 
                 if (global.spamDeletedCount[spamDeleteKey] >= 10) {
                     global.spamDeletedCount[spamDeleteKey] = 0;
                     const alertText = `🚨 *SPAM ATTACK DETECTED* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumber} rate-limit violated! Admins, use \`${config.prefix}kick @${senderNumber}\` to remove them.`;
-                    await sock.sendMessage(jid, { text: alertText, mentions: [senderJid] });
+                    await sock.sendMessage(jid, { text: alertText, mentions: [resolvedSender] });
                 }
             } catch (e) { /* ignore */ }
             return true;
