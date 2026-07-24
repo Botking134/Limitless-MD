@@ -381,6 +381,78 @@ const advancedGroupCommands = [
         }
     },
 
+// 17. JOIN (Group Invite Link and JID Parser with Quoted Message Support) [1.1]
+    {
+        name: 'join',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const isAuthorized = isDev || isOwner;
+            if (!isAuthorized) return;
+
+            // 1. Resolve Target Text (Direct Arguments vs Quoted Message Text) [1.1]
+            let targetText = args ? args.trim() : '';
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo ||
+                                rawMsg?.extendedTextMessage?.contextInfo ||
+                                rawMsg?.imageMessage?.contextInfo ||
+                                rawMsg?.videoMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
+            if (!targetText && quoted) {
+                const rawContent = getRawMessage(quoted);
+                targetText = rawContent?.conversation || 
+                             rawContent?.extendedTextMessage?.text || 
+                             rawContent?.imageMessage?.caption || 
+                             rawContent?.videoMessage?.caption || 
+                             '';
+                targetText = targetText.trim();
+            }
+
+            if (!targetText) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a valid WhatsApp group invite link / JID, or reply directly to a message containing the link." }, { quoted: msg });
+            }
+
+            const isGroupJid = targetText.endsWith('@g.us') || /^\d{10,25}@g\.us$/.test(targetText);
+
+            // ─── CASE A: TARGET IS A GROUP JID ─── [1.1]
+            if (isGroupJid) {
+                try {
+                    // Check if the bot is already in the group by attempting to fetch metadata [1.1]
+                    const metadata = await sock.groupMetadata(targetText);
+                    const subject = metadata.subject || 'Unknown Group';
+                    return await sock.sendMessage(jid, { text: `✅ The bot is already a member of this group!\n\n• *Name:* \`${subject}\`\n• *JID:* \`${targetText}\`` }, { quoted: msg });
+                } catch (err) {
+                    // WhatsApp protocol does not allow joining a random JID without an invite link or admin add [1.1]
+                    return await sock.sendMessage(jid, { 
+                        text: `❌ Cannot join group JID directly.\n\n_Note: To join a group you are not currently in, please provide a valid group invite link instead._` 
+                    }, { quoted: msg });
+                }
+            }
+
+            // ─── CASE B: TARGET IS AN INVITE LINK ─── [1.1]
+            const match = targetText.match(/chat.whatsapp.com\/([a-zA-Z0-9]{15,25})/);
+            if (!match) {
+                return await sock.sendMessage(jid, { text: "❌ Invalid invite link or JID format. Ensure it is a standard invite link or group JID." }, { quoted: msg });
+            }
+
+            try {
+                const code = match[1];
+                const joinedJid = await sock.groupAcceptInvite(code);
+                
+                // Fetch group subject safely to verify name [1.1]
+                let groupName = 'Group';
+                try {
+                    const metadata = await sock.groupMetadata(joinedJid);
+                    groupName = metadata.subject || 'Group';
+                } catch (e) { /* ignore */ }
+
+                await sock.sendMessage(jid, { text: `✅ Joined group successfully!\n\n• *Name:* \`${groupName}\`\n• *JID:* \`${joinedJid}\`` }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(jid, { text: `❌ Failed to join group: ${e.message}` }, { quoted: msg });
+            }
+        }
+    },
     
 
     // 18. EXIT
