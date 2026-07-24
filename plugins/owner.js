@@ -275,6 +275,83 @@ module.exports = [
             }
         }
     },
+
+// 1. SETPP (Bot or Group Profile Picture - Aligned & Unified)
+    {
+        name: 'setpp',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            const cleanArgs = args ? args.toLowerCase().trim() : '';
+
+            // 1. Resolve Target (Group vs Bot) [1.1]
+            const targetGroup = isGroup && (cleanArgs === 'gc' || cleanArgs === 'group');
+            
+            // 2. Perform target-specific permission checks
+            if (targetGroup) {
+                // Group Admins, Owners, Sudoers, and Developers can update group icons
+                const isAuthorized = isOwner || isSudo || isDev || isAdmin;
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only group administrators or bot owners are authorized to change the group profile picture." }, { quoted: msg });
+                }
+            } else {
+                // Only Bot Owners and Developers can update the bot's global avatar
+                const isAuthorized = isOwner || isDev;
+                if (!isAuthorized) {
+                    return await sock.sendMessage(jid, { text: "❌ Only bot owners or developers are authorized to change the bot's profile picture." }, { quoted: msg });
+                }
+            }
+
+            // 3. Extract the quoted image message
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo ||
+                                rawMsg?.extendedTextMessage?.contextInfo ||
+                                rawMsg?.imageMessage?.contextInfo ||
+                                rawMsg?.videoMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
+            if (!quoted) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ Please reply directly to an image.\n\n*Usage:*\n• Reply to an image with \`${config.prefix}setpp\` (updates bot's picture)\n• Reply to an image with \`${config.prefix}setpp gc\` (updates group's picture)` 
+                }, { quoted: msg });
+            }
+
+            const rawContent = getRawMessage(quoted);
+            const imageMessage = rawContent?.imageMessage;
+            if (!imageMessage) {
+                return await sock.sendMessage(jid, { text: "❌ The replied message is not a valid static image." }, { quoted: msg });
+            }
+
+            // Send initial status alert
+            const statusText = targetGroup ? "Updating group profile picture... ⚙️" : "Updating bot profile picture... ⚙️";
+            const statusMsg = await sock.sendMessage(jid, { text: statusText }, { quoted: msg });
+
+            try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const stream = await downloadContentFromMessage(imageMessage, 'image');
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+
+                // Determine destination JID node [1.1]
+                const targetJid = targetGroup ? jid : normalizeToJid(sock.user.id);
+                
+                await sock.updateProfilePicture(targetJid, buffer);
+                
+                const successText = targetGroup 
+                    ? "✅ Group profile picture has been successfully updated!" 
+                    : "✅ Bot profile picture has been successfully updated!";
+                
+                await sock.sendMessage(jid, { text: successText, edit: statusMsg.key });
+            } catch (error) {
+                console.error("❌ [SETPP] Failed:", error.message);
+                await sock.sendMessage(jid, { text: `❌ Profile picture update failed: ${error.message}`, edit: statusMsg.key });
+            }
+        }
+    },
+
         
 
     // ─── DIAGNOSE ────────────────────────────────────────────────
