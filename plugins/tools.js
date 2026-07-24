@@ -1442,6 +1442,153 @@ module.exports = [
     },
 
 
+// ─── FW (Message Forwarding with smart parsing, LID resolution, and Group Name Search) ───
+    {
+        name: 'fw',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo ||
+                                rawMsg?.extendedTextMessage?.contextInfo ||
+                                rawMsg?.imageMessage?.contextInfo ||
+                                rawMsg?.videoMessage?.contextInfo ||
+                                rawMsg?.stickerMessage?.contextInfo ||
+                                rawMsg?.audioMessage?.contextInfo ||
+                                rawMsg?.documentMessage?.contextInfo;
+
+            // Helper to dynamically resolve target JIDs by Phone, LID, Group JID, or Group Name [1.1]
+            const resolveTargetJid = async (input) => {
+                const clean = input.trim();
+                if (clean.endsWith('@g.us') || clean.endsWith('@s.whatsapp.net') || clean.endsWith('@lid')) {
+                    return clean;
+                }
+                if (/^\d{7,15}$/.test(clean)) {
+                    return `${clean}@s.whatsapp.net`;
+                }
+
+                // If input is text, search group display names dynamically [1.1]
+                try {
+                    const groups = await sock.groupFetchAllParticipating();
+                    const query = clean.toLowerCase();
+                    for (const groupJid of Object.keys(groups)) {
+                        if (groups[groupJid].subject.toLowerCase().includes(query)) {
+                            return groupJid;
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+                return null;
+            };
+
+            // ─── Mode 1: Direct forward with args (Smart parsing) ──────────
+            if (args && !contextInfo?.stanzaId) {
+                const parts = args.trim().split(' ');
+                
+                // Attempt to resolve target from either the first word or the last word
+                let targetJid = await resolveTargetJid(parts[0]);
+                let textToSend = '';
+
+                if (targetJid) {
+                    textToSend = parts.slice(1).join(' ').trim();
+                } else {
+                    targetJid = await resolveTargetJid(parts[parts.length - 1]);
+                    if (targetJid) {
+                        textToSend = parts.slice(0, parts.length - 1).join(' ').trim();
+                    }
+                }
+
+                if (!targetJid || !textToSend) {
+                    return await sock.sendMessage(jid, { text: `❌ *Format:* \`${config.prefix}fw <target/groupName> <text>\` or reply to a message with \`${config.prefix}fw <target/groupName>\`` }, { quoted: msg });
+                }
+
+                // Translate target JID if it is LID before executing sendMessage [1.1]
+                if (targetJid.endsWith('@lid')) {
+                    const resolved = await getPhoneJid(sock, targetJid, jid);
+                    if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+                        targetJid = resolved;
+                    }
+                }
+
+                try {
+                    await sock.sendMessage(targetJid, { text: textToSend });
+                    await sock.sendMessage(jid, { text: `✅ Message forwarded cleanly to ${targetJid}` }, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: `❌ Forwarding failed: ${e.message}` }, { quoted: msg });
+                }
+                return;
+            }
+
+            // ─── Mode 2: Reply to a message with target JID/Number/Group Name ──────
+            if (contextInfo && contextInfo.stanzaId && args) {
+                const cleanTarget = args.trim();
+                let targetJid = await resolveTargetJid(cleanTarget);
+
+                if (!targetJid) {
+                    return await sock.sendMessage(jid, { text: `❌ Could not resolve target "${cleanTarget}". Use a valid JID, number, or participating group name.` }, { quoted: msg });
+                }
+
+                // Translate target JID if it is LID [1.1]
+                if (targetJid.endsWith('@lid')) {
+                    const resolved = await getPhoneJid(sock, targetJid, jid);
+                    if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+                        targetJid = resolved;
+                    }
+                }
+
+                try {
+                    const quotedMsg = contextInfo.quotedMessage;
+                    if (!quotedMsg) return await sock.sendMessage(jid, { text: "❌ No quoted message found." }, { quoted: msg });
+
+                    const { proto } = await import('@itsliaaa/baileys');
+                    const fullMessage = proto.WebMessageInfo.create({
+                        key: {
+                            remoteJid: jid,
+                            id: contextInfo.stanzaId,
+                            participant: jid.endsWith('@g.us') ? contextInfo.participant : undefined
+                        },
+                        message: quotedMsg
+                    });
+
+                    await sock.copyNForward(targetJid, fullMessage, true);
+                    await sock.sendMessage(jid, { text: `✅ Message forwarded cleanly to ${targetJid}` }, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(jid, { text: `❌ Forward failed: ${e.message}` }, { quoted: msg });
+                }
+                return;
+            }
+
+            // ─── Mode 3: Interactive Forward Wizard ───
+            if (contextInfo && contextInfo.stanzaId && !args) {
+                try {
+                    const prompt = await sock.sendMessage(jid, {
+                        text: "📤 *FORWARD WIZARD* 📤\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
+                              "Please reply directly to *this message* with the target phone number, group JID, or participating group name."
+                    }, { quoted: msg });
+
+                    global.forwardSessions = global.forwardSessions || {};
+                    global.forwardSessions[prompt.key.id] = {
+                        msgToForward: contextInfo.quotedMessage,
+                        originalMsgKey: contextInfo.stanzaId,
+                        originalParticipant: contextInfo.participant
+                    };
+
+                    // Auto-delete session after 5 minutes to prevent RAM leak
+                    setTimeout(() => {
+                        if (global.forwardSessions && global.forwardSessions[prompt.key.id]) {
+                            delete global.forwardSessions[prompt.key.id];
+                        }
+                    }, 5 * 60 * 1000);
+                } catch (e) { /* ignore */ }
+                return;
+            }
+
+            await sock.sendMessage(jid, { text: `❌ *Usage:*\n• \`${config.prefix}fw <target/groupName> <text>\`\n• Reply to a message with \`${config.prefix}fw <target/groupName>\`\n• Reply to a message and use \`${config.prefix}fw\` (interactive)` }, { quoted: msg });
+        }
+    },
+
+
     // 35. DELCMD
     {
         name: 'delcmd',
@@ -1502,5 +1649,8 @@ module.exports.forEach(cmd => {
     if (cmd.name === 'trt') {
         aliases.push({ ...cmd, name: 'translate' });
     }
+if (cmd.name === 'fw') {
+        aliases.push({ ...cmd, name: 'forward' });
+   }
 });
 module.exports.push(...aliases);
