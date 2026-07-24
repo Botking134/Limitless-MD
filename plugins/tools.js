@@ -211,7 +211,293 @@ module.exports = [
         }
     },
 
-    
+    // 3. GETPP (User or Group Profile Picture - Fixed fallbacks & LID)
+    {
+        name: 'getpp',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            const cleanArgs = args ? args.toLowerCase().trim() : '';
+            
+            let targetJid = '';
+
+            // Support fetching the group's own profile picture (.getpp gc / .getpp group) [1.1]
+            if (isGroup && (cleanArgs === 'gc' || cleanArgs === 'group')) {
+                targetJid = jid;
+            } else {
+                // Otherwise, resolve the target user cleanly
+                targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
+            }
+
+            if (!targetJid) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a target user, reply to a message, or use `.getpp gc` to get the group's picture." }, { quoted: msg });
+            }
+
+            // Safe JID translation: Always query standard phone node domains for profile pictures [1.1]
+            if (targetJid.endsWith('@lid')) {
+                const resolved = await getPhoneJid(sock, targetJid, jid);
+                if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+                    targetJid = resolved;
+                }
+            }
+
+            try {
+                let profileUrl;
+                try {
+                    // Attempt to fetch high-resolution image first
+                    profileUrl = await sock.profilePictureUrl(targetJid, 'image');
+                } catch (err) {
+                    // Fallback to low-resolution preview thumbnail
+                    profileUrl = await sock.profilePictureUrl(targetJid, 'preview');
+                }
+
+                if (!profileUrl) throw new Error("No URL returned");
+
+                const targetLabel = targetJid === jid ? "group" : `@${targetJid.split('@')[0]}`;
+                await sock.sendMessage(jid, { 
+                    image: { url: profileUrl }, 
+                    caption: `📷 *Profile picture extracted for:* ${targetLabel}`,
+                    mentions: [targetJid] 
+                }, { quoted: msg });
+
+            } catch (e) {
+                const isTargetGroup = targetJid.endsWith('@g.us');
+                if (isTargetGroup) {
+                    await sock.sendMessage(jid, { text: "❌ This group has no active profile picture set." }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { 
+                        text: "❌ No public profile picture found.\n\n_Note: This user may have restricted their profile picture visibility in their WhatsApp Privacy Settings._" 
+                    }, { quoted: msg });
+                }
+            }
+        }
+    },
+
+// 14. SCRIPT (Upgraded with Interactive Media Buttons) [1.1]
+    {
+        name: 'script',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            const images = [
+                "https://files.catbox.moe/gnp8q2.jpeg",
+                "https://files.catbox.moe/rmaqfn.jpeg"
+            ];
+            const randomImage = images[Math.floor(Math.random() * images.length)];
+
+            const messageText =
+`🤖 *Limitless-MD - AI Bot* 🤖
+
+I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My Creator *Infinity*
+
+{BOT INFORMATION}
+- *Creator* : Infinity
+- *Version* : 1.0.0
+- *Type* : Multi-Device (Baileys)
+- *Mode* : Public / Private
+- *Runtime* : ${formatUptime(process.uptime())}
+- *Commands* : 100+ Features
+
+© Limitless-MD 2026`;
+
+            // Configured as a native Baileys image-button message layout [1.1]
+            const buttonMessage = {
+                image: { url: randomImage },
+                caption: messageText,
+                footer: "⚡ Limitless System Info",
+                buttons: [
+                    { buttonId: `${config.prefix}repo`, buttonText: { displayText: "Git Repository 📁" }, type: 1 },
+                    { buttonId: `${config.prefix}gitclone Botking134/Limitless-MD`, buttonText: { displayText: "Download ZIP 🗜️" }, type: 1 }
+                ],
+                headerType: 4 // Header type 4 represents an image header in Baileys [1.1]
+            };
+
+            try {
+                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+            } catch (err) {
+                // Safe plain-text fallback with copy-command instruction if button compilation fails [1.1]
+                const fallbackText = 
+                    `${messageText}\n\n` +
+                    `👉 To clone the source repository directly, use command:\n\`${config.prefix}gitclone Botking134/Limitless-MD\``;
+                await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
+            }
+        }
+    },
+
+    // 15. SC (Script alias)
+    {
+        name: 'sc',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const cmd = module.exports.find(c => c.name === 'script');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+    // 16. REPO (Script alias)
+    {
+        name: 'repo',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const cmd = module.exports.find(c => c.name === 'script');
+            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+        }
+    },
+
+// 29. GCINFO (Group Intelligence Extractor) [1.1]
+    {
+        name: 'gcinfo',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+
+            // 1. Resolve Target Input (Arguments vs Quoted Reply) [1.1]
+            let targetText = args ? args.trim() : '';
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo ||
+                                rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
+            if (!targetText && quoted) {
+                const rawContent = getRawMessage(quoted);
+                targetText = rawContent?.conversation || 
+                             rawContent?.extendedTextMessage?.text || 
+                             '';
+                targetText = targetText.trim();
+            }
+
+            const linkMatch = targetText.match(/chat.whatsapp.com\/([a-zA-Z0-9]{15,25})/);
+            const isGroupJid = targetText.endsWith('@g.us') || /^\d{10,25}@g\.us$/.test(targetText);
+            const isCurrentGroup = !targetText && isGroup;
+
+            if (!linkMatch && !isGroupJid && !isCurrentGroup) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ *Format Error!*\n\n` +
+                          `• Provide a group JID: \`${config.prefix}gcinfo <group_jid>\`\n` +
+                          `• Provide an invite link: \`${config.prefix}gcinfo <invite_link>\`\n` +
+                          `• Reply directly to a message containing a link\n` +
+                          `• Run alone inside the target group chat.`
+                }, { quoted: msg });
+            }
+
+            await sock.sendMessage(jid, { text: "Extracting group intelligence... 👁️" }, { quoted: msg });
+
+            let subject = 'Unknown Group';
+            let groupJid = '';
+            let membersCount = 0;
+            let adminsCount = 'Hidden';
+            let owner = 'Unknown';
+            let creationDate = 'Unknown';
+            let desc = 'No description set.';
+            let inviteLink = 'Hidden / Bot not admin';
+            let profileUrl = null;
+
+            try {
+                // ─── CASE A: READ FROM INVITE LINK (WITHOUT JOINING) ─── [1.1]
+                if (linkMatch) {
+                    const code = linkMatch[1];
+                    const info = await sock.groupGetInviteInfo(code);
+
+                    subject = info.subject || 'Unknown Group';
+                    groupJid = info.id || '';
+                    membersCount = info.size || 0;
+                    desc = info.desc || 'No description set.';
+                    inviteLink = `https://chat.whatsapp.com/${code}`;
+                    
+                    if (info.creator) {
+                        owner = normalizeToJid(info.creator);
+                    }
+                    if (info.creation) {
+                        creationDate = new Date(info.creation * 1000).toLocaleString('en-US', { timeZone: 'Africa/Lagos' });
+                    }
+                } 
+                // ─── CASE B: READ DIRECTLY FROM ACTIVE GROUP JID ─── [1.1]
+                else {
+                    const targetJid = isCurrentGroup ? jid : targetText;
+                    const metadata = await sock.groupMetadata(targetJid);
+
+                    subject = metadata.subject || 'Unknown Group';
+                    groupJid = targetJid;
+                    membersCount = metadata.participants?.length || 0;
+                    desc = metadata.desc?.toString() || 'No description set.';
+
+                    const admins = metadata.participants?.filter(p => p.admin === 'admin' || p.admin === 'superadmin') || [];
+                    adminsCount = admins.length;
+
+                    const rawOwner = metadata.owner || metadata.id.split('-')[0] + '@s.whatsapp.net';
+                    owner = normalizeToJid(rawOwner);
+
+                    if (metadata.creation) {
+                        creationDate = new Date(metadata.creation * 1000).toLocaleString('en-US', { timeZone: 'Africa/Lagos' });
+                    }
+
+                    // Attempt to fetch invite code if the bot is admin
+                    try {
+                        const code = await sock.groupInviteCode(targetJid);
+                        inviteLink = `https://chat.whatsapp.com/${code}`;
+                    } catch (e) {
+                        inviteLink = "Hidden (Bot is not Admin)";
+                    }
+                }
+
+                // Translate Owner JID if it is an LID to prevent display error
+                if (owner.endsWith('@lid')) {
+                    const resolved = await getPhoneJid(sock, owner, isGroup ? jid : null);
+                    if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+                        owner = resolved;
+                    }
+                }
+
+                // Fetch group profile picture safely [1.1]
+                if (groupJid) {
+                    try {
+                        profileUrl = await sock.profilePictureUrl(groupJid, 'image');
+                    } catch (pfpErr) {
+                        try {
+                            profileUrl = await sock.profilePictureUrl(groupJid, 'preview');
+                        } catch (e) {
+                            profileUrl = null;
+                        }
+                    }
+                }
+
+                const reportCard = 
+                    `🔮 *LIMITLESS GROUP INTELLIGENCE* 🔮\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `• *Subject:* \`${subject}\`\n` +
+                    `• *JID:* \`${groupJid}\`\n` +
+                    `• *Members:* \`${membersCount}\` participants\n` +
+                    `• *Admins:* \`${adminsCount}\` administrators\n` +
+                    `• *Creator/Owner:* @${owner.split('@')[0]}\n` +
+                    `• *Created:* \`${creationDate}\`\n` +
+                    `• *Invite Link:* ${inviteLink}\n\n` +
+                    `📝 *Description:*\n\`\`\`${desc}\`\`\``;
+
+                const mentions = [owner];
+
+                // Deliver with image if avatar was resolved [1.1]
+                if (profileUrl) {
+                    await sock.sendMessage(jid, { 
+                        image: { url: profileUrl }, 
+                        caption: reportCard, 
+                        mentions 
+                    }, { quoted: msg });
+                } else {
+                    await sock.sendMessage(jid, { 
+                        text: reportCard, 
+                        mentions 
+                    }, { quoted: msg });
+                }
+
+            } catch (err) {
+                console.error("❌ [GCINFO] Failed:", err.message);
+                await sock.sendMessage(jid, { text: `❌ Failed to extract group intelligence: ${err.message}` }, { quoted: msg });
+            }
+        }
+    }, 
 
     // 4. SETNAME (Bot display name)
     {
