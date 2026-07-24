@@ -4,10 +4,10 @@ const { Boom } = require('@hapi/boom');
 const path = require('path');
 const fs = require('fs');
 const config = require('./config');
-const { DEV_LIDS } = require('./plugins/devs');
+const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('./plugins/devs');
 const { handleDeletion } = require('./helpers/log');
 const { handleIncomingMessage } = require('./helpers/Infinity');
-const { normalizeToJid } = require('./stateManager');
+const { normalizeToJid, getPhoneJid } = require('./stateManager');
 
 // ─── READLINE FOR AUTH ──────────────────────────────────────────
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -350,53 +350,239 @@ async function startBot() {
         }
     });
 
-    // ─── GROUP PARTICIPANTS UPDATE ──────────────────────────────
+    // ─── GROUP PARTICIPANTS UPDATE (Active Security Enforcements & Rollbacks) ───
     sock.ev.on('group-participants.update', async (anu) => {
         try {
             const jid = anu.id;
             const participants = anu.participants;
             const action = anu.action;
 
-            if (!config.gcalerts) {
-                config.gcalerts = { promote: {}, demote: {}, welcome: {}, goodbye: {} };
+            // Direct persistent storage lookup for group alerts and locks [1.1]
+            const alertsPath = path.join(__dirname, 'storage', 'gcalerts.json');
+            let data = { welcome: {}, goodbye: {}, promote: {}, demote: {}, customWelcome: {}, customGoodbye: {}, antijoin: {}, antipromote: {}, antidemote: {}, overkill: {} };
+            try {
+                if (fs.existsSync(alertsPath)) {
+                    data = JSON.parse(fs.readFileSync(alertsPath, 'utf-8'));
+                }
+            } catch (e) { /* ignore */ }
+
+            // Resolve the group's subject name safely
+            let groupName = 'Group';
+            try {
+                const metadata = await sock.groupMetadata(jid);
+                groupName = metadata.subject || 'Group';
+            } catch (e) { /* ignore */ }
+
+            // Cache Bot Identity parameters
+            const botJid = normalizeToJid(sock.user.id);
+            const botLid = sock.user.lid ? normalizeToJid(sock.user.lid) : '';
+
+            // Resolve Actor (Author) JID and safely translate LID-to-Phone JID to prevent security false-positives [1.1]
+            let actorJid = normalizeToJid(anu.author || '');
+            if (actorJid.endsWith('@lid')) {
+                const resolvedActor = await getPhoneJid(sock, actorJid, jid);
+                if (resolvedActor && resolvedActor.endsWith('@s.whatsapp.net')) {
+                    actorJid = resolvedActor;
+                }
             }
 
-            for (const num of participants) {
-                const number = num.split('@')[0];
+            // Verify if the executing actor has system administrator bypass rights
+            const isActorBot = actorJid === botJid || (botLid && actorJid === botLid);
+            const isActorDev = DEV_LIDS.includes(actorJid) || DEV_JIDS.includes(actorJid) || DEV_PHONE_JIDS.includes(actorJid);
+            const isActorOwner = actorJid === config.ownerJid || (config.ownerLid && actorJid === config.ownerLid) || (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(actorJid));
+            const isActorSudo = (Array.isArray(config.sudos) && config.sudos.includes(actorJid)) || (Array.isArray(config.sudoLids) && config.sudoLids.includes(actorJid));
+            
+            const isActorAuthorized = isActorBot || isActorDev || isActorOwner || isActorSudo;
 
+            // ─── HELPER: OVERKILL NUCLEAR LOCKDOWN ROUTINE ─── [1.1]
+            const triggerEmergencyOverkill = async (executorJid) => {
+                try {
+                    const metadata = await sock.groupMetadata(jid);
+                    const targetsToDemote = [];
+
+                    for (const p of metadata.participants) {
+                        const pJid = normalizeToJid(p.id);
+                        if (p.admin === 'admin' || p.admin === 'superadmin') {
+                            const isExempt = pJid === botJid || pJid === botLid ||
+                                             DEV_LIDS.includes(pJid) || DEV_JIDS.includes(pJid) || DEV_PHONE_JIDS.includes(pJid) ||
+                                             pJid === config.ownerJid || pJid === config.ownerLid ||
+                                             (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(pJid)) ||
+                                             (Array.isArray(config.sudos) && config.sudos.includes(pJid));
+
+                            if (!isExempt) {
+                                targetsToDemote.push(pJid);
+                            }
+                        }
+                    }
+
+                    // 1. Demote all vulnerable administrators [1.1]
+                    if (targetsToDemote.length > 0) {
+                        await sock.groupParticipantsUpdate(jid, targetsToDemote, "demote");
+                    }
+
+                    // 2. Closed-channel lockouts [1.1]
+                    await sock.groupSettingUpdate(jid, 'announcement');
+                    await sock.groupSettingUpdate(jid, 'locked');
+
+                    const alertText =
+                        `🚨 *OVERKILL EMERGENCY CONTAINMENT ACTIVATED* 🚨\n` +
+                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        `⚠️ *Threat Neutralized:* \`${targetsToDemote.length}\` non-exempt admins demoted [1.1].\n` +
+                        `🔒 *Status:* Group closed to Admins-Only and settings locked [1.1].\n` +
+                        `👤 *Violator:* @${executorJid.split('@')[0]}\n\n` +
+                        `_System operations will resume once verified by Satoru Gojo's creator._`;
+
+                    await sock.sendMessage(jid, { text: alertText, mentions: [executorJid] });
+                } catch (err) {
+                    console.error("❌ [OVERKILL] Automated lockdown failed:", err.message);
+                }
+            };
+
+            for (const num of participants) {
+                // Resolve target user LID to Phone JID safely before compiling stanzas
+                let targetJid = normalizeToJid(num);
+                if (targetJid.endsWith('@lid')) {
+                    const resolvedTarget = await getPhoneJid(sock, targetJid, jid);
+                    if (resolvedTarget && resolvedTarget.endsWith('@s.whatsapp.net')) {
+                        targetJid = resolvedTarget;
+                    }
+                }
+                const number = targetJid.split('@')[0];
+
+                // ─── ACTION 1: MEMBER ADDED / JOINED ───
                 if (action === 'add') {
-                    if (config.gcalerts.welcome?.[jid] === 'on' || (config.welcome?.[jid]?.active)) {
-                        const customMsg = config.welcome?.[jid]?.msg || `Welcome @${number}! 🌸`;
-                        await sock.sendMessage(jid, {
-                            text: customMsg.replace(/@user/g, `@${number}`),
-                            mentions: [num]
-                        });
+                    // Check Anti-Join Lockdown Policy first [1.1]
+                    const antijoinPolicy = data.antijoin?.[jid] || 'off';
+                    const joinedSelfViaLink = !anu.author || normalizeToJid(anu.author) === targetJid;
+
+                    let isActorAdmin = false;
+                    try {
+                        const metadata = await sock.groupMetadata(jid);
+                        const actorObj = metadata.participants.find(p => normalizeToJid(p.id) === actorJid);
+                        isActorAdmin = !!(actorObj && (actorObj.admin === 'admin' || actorObj.admin === 'superadmin'));
+                    } catch (e) { /* ignore */ }
+
+                    // Kick if Anti-Join is active and they joined via link, or were added by a non-admin [1.1]
+                    if (antijoinPolicy === 'on' && !isActorAuthorized && (joinedSelfViaLink || !isActorAdmin)) {
+                        try {
+                            await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
+                            await sock.sendMessage(jid, { 
+                                text: `🔒 *Anti-Join Protection active!* Expelled @${number} (unauthorized join detected).`,
+                                mentions: [targetJid]
+                            });
+                        } catch (e) { /* ignore */ }
+                        continue; // Skip the welcome alert completely [1.1]
                     }
-                } else if (action === 'remove') {
-                    if (config.gcalerts.goodbye?.[jid] === 'on' || (config.goodbye?.[jid]?.active)) {
-                        const customMsg = config.goodbye?.[jid]?.msg || `Goodbye @${number}! 🥀`;
+
+                    // Dispatch standard Welcome alert
+                    const welStatus = data.welcome?.[jid] || 'off';
+                    if (welStatus === 'on') {
+                        const customMsg = data.customWelcome?.[jid] || `Welcome @user to @group! 🌸`;
+                        const formattedMsg = customMsg
+                            .replace(/@user/g, `@${number}`)
+                            .replace(/@group/g, groupName);
+
                         await sock.sendMessage(jid, {
-                            text: customMsg.replace(/@user/g, `@${number}`),
-                            mentions: [num]
+                            text: formattedMsg,
+                            mentions: [targetJid]
                         });
+                        console.log(`[ALERTS] Dispatched welcome alert for @${number} in group: ${groupName}`);
                     }
-                } else if (action === 'promote') {
-                    if (config.gcalerts.promote?.[jid] === 'on') {
+                } 
+                // ─── ACTION 2: MEMBER REMOVED ───
+                else if (action === 'remove') {
+                    const gbStatus = data.goodbye?.[jid] || 'off';
+                    if (gbStatus === 'on') {
+                        const customMsg = data.customGoodbye?.[jid] || `Goodbye @user! 🥀`;
+                        const formattedMsg = customMsg
+                            .replace(/@user/g, `@${number}`)
+                            .replace(/@group/g, groupName);
+
                         await sock.sendMessage(jid, {
-                            text: `👑 *PROMOTION ALERT!* \n\n🎉 @${number} promoted to Admin!`,
-                            mentions: [num]
+                            text: formattedMsg,
+                            mentions: [targetJid]
                         });
+                        console.log(`[ALERTS] Dispatched goodbye alert for @${number} in group: ${groupName}`);
                     }
-                } else if (action === 'demote') {
-                    if (config.gcalerts.demote?.[jid] === 'on') {
+                } 
+                // ─── ACTION 3: MEMBER PROMOTED TO ADMIN ───
+                else if (action === 'promote') {
+                    const antipromotePolicy = data.antipromote?.[jid] || 'off';
+                    
+                    // Trigger Anti-Promote Rollback if executor is unauthorized [1.1]
+                    if (antipromotePolicy !== 'off' && !isActorAuthorized && !isActorBot) {
+                        try {
+                            await sock.groupParticipantsUpdate(jid, [targetJid], "demote"); // Rollback the promotion instantly [1.1]
+                            try {
+                                await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); // Demote the unauthorized promoter [1.1]
+                            } catch (e) { /* ignore */ }
+
+                            await sock.sendMessage(jid, {
+                                text: `🛡️ *Anti-Promote Triggered!* Rolled back unauthorized promotion of @${number} and demoted the executor @${actorJid.split('@')[0]} [1.1].`,
+                                mentions: [targetJid, actorJid]
+                            });
+
+                            // Execute Overkill nuclear lockdown if enabled [1.1]
+                            if (data.overkill?.[jid] === 'on' || antipromotePolicy === 'overkill') {
+                                await triggerEmergencyOverkill(actorJid);
+                            }
+                        } catch (err) {
+                            console.error("❌ [SECURITY] Anti-Promote enforcement failed:", err.message);
+                        }
+                        continue; // Skip the promote notification
+                    }
+
+                    // Dispatch standard Promotion alert
+                    const promStatus = data.promote?.[jid] || 'off';
+                    if (promStatus === 'on') {
                         await sock.sendMessage(jid, {
-                            text: `🛡️ *DEMOTION ALERT!* \n\n👋 @${number} demoted back to Member.`,
-                            mentions: [num]
+                            text: `👑 *PROMOTION ALERT!* \n\n🎉 @${number} promoted to Admin in *${groupName}*!`,
+                            mentions: [targetJid]
                         });
+                        console.log(`[ALERTS] Dispatched promotion alert for @${number} in group: ${groupName}`);
+                    }
+                } 
+                // ─── ACTION 4: ADMIN DEMOTED TO MEMBER ───
+                else if (action === 'demote') {
+                    const antidemotePolicy = data.antidemote?.[jid] || 'off';
+
+                    // Trigger Anti-Demote Rollback if executor is unauthorized [1.1]
+                    if (antidemotePolicy !== 'off' && !isActorAuthorized && !isActorBot) {
+                        try {
+                            await sock.groupParticipantsUpdate(jid, [targetJid], "promote"); // Restore the administrator status instantly [1.1]
+                            try {
+                                await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); // Demote the unauthorized demoter [1.1]
+                            } catch (e) { /* ignore */ }
+
+                            await sock.sendMessage(jid, {
+                                text: `🛡️ *Anti-Demote Triggered!* Restored admin status of @${number} and demoted the executor @${actorJid.split('@')[0]} [1.1].`,
+                                mentions: [targetJid, actorJid]
+                            });
+
+                            // Execute Overkill nuclear lockdown if enabled [1.1]
+                            if (data.overkill?.[jid] === 'on' || antidemotePolicy === 'overkill') {
+                                await triggerEmergencyOverkill(actorJid);
+                            }
+                        } catch (err) {
+                            console.error("❌ [SECURITY] Anti-Demote enforcement failed:", err.message);
+                        }
+                        continue; // Skip the demote notification
+                    }
+
+                    // Dispatch standard Demotion alert
+                    const demStatus = data.demote?.[jid] || 'off';
+                    if (demStatus === 'on') {
+                        await sock.sendMessage(jid, {
+                            text: `🛡️ *DEMOTION ALERT!* \n\n👋 @${number} demoted back to Member in *${groupName}*.`,
+                            mentions: [targetJid]
+                        });
+                        console.log(`[ALERTS] Dispatched demotion alert for @${number} in group: ${groupName}`);
                     }
                 }
             }
-        } catch (e) { /* ignore dead socket */ }
+        } catch (e) {
+            console.error("❌ [ALERTS] Failed to process group update event:", e.message);
+        }
     });
 
     // ─── MESSAGES UPDATE (Anti-Delete) ───────────────────────────
