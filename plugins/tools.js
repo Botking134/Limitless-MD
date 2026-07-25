@@ -274,20 +274,21 @@ module.exports = [
         }
     },
 
-// 14. SCRIPT (Upgraded with Interactive Media Buttons) [1.1]
-    {
-        name: 'script',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
 
-            const images = [
-                "https://files.catbox.moe/gnp8q2.jpeg",
-                "https://files.catbox.moe/rmaqfn.jpeg"
-            ];
-            const randomImage = images[Math.floor(Math.random() * images.length)];
+// 14. SCRIPT / REPO / SC
+{
+    name: 'script',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const jid = msg.key.remoteJid;
 
-            const messageText =
+        const images = [
+            "https://files.catbox.moe/gnp8q2.jpeg",
+            "https://files.catbox.moe/rmaqfn.jpeg"
+        ];
+        const randomImage = images[Math.floor(Math.random() * images.length)];
+
+        const messageText =
 `🤖 *Limitless-MD - AI Bot* 🤖
 
 I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My Creator *Infinity*
@@ -297,54 +298,50 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
 - *Version* : 1.0.0
 - *Type* : Multi-Device (Baileys)
 - *Mode* : Public / Private
-- *Runtime* : ${formatUptime(process.uptime())}
 - *Commands* : 100+ Features
 
 © Limitless-MD 2026`;
 
-            // Configured as a native Baileys image-button message layout [1.1]
-            const buttonMessage = {
-                image: { url: randomImage },
-                caption: messageText,
-                footer: "⚡ Limitless System Info",
-                buttons: [
-                    { buttonId: `${config.prefix}repo`, buttonText: { displayText: "Git Repository 📁" }, type: 1 },
-                    { buttonId: `${config.prefix}gitclone Botking134/Limitless-MD`, buttonText: { displayText: "Download ZIP 🗜️" }, type: 1 }
-                ],
-                headerType: 4 // Header type 4 represents an image header in Baileys [1.1]
-            };
+        const buttonMessage = {
+            image: { url: randomImage },
+            caption: messageText,
+            footer: "⚡ Limitless System Info",
+            buttons: [
+                { buttonId: `${config.prefix}gitclone Botking134/Limitless-MD`, buttonText: { displayText: "Download ZIP 🗜️" }, type: 1 }
+            ],
+            headerType: 4
+        };
 
-            try {
-                await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-            } catch (err) {
-                // Safe plain-text fallback with copy-command instruction if button compilation fails [1.1]
-                const fallbackText = 
-                    `${messageText}\n\n` +
-                    `👉 To clone the source repository directly, use command:\n\`${config.prefix}gitclone Botking134/Limitless-MD\``;
-                await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
-            }
+        try {
+            await sock.sendMessage(jid, buttonMessage, { quoted: msg });
+        } catch (err) {
+            const fallbackText = 
+                `${messageText}\n\n` +
+                `👉 To clone the source repository directly, use command:\n\`${config.prefix}gitclone Botking134/Limitless-MD\``;
+            await sock.sendMessage(jid, { text: fallbackText }, { quoted: msg });
         }
-    },
+    }
+},
 
-    // 15. SC (Script alias)
-    {
-        name: 'sc',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const cmd = module.exports.find(c => c.name === 'script');
-            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
-        }
-    },
+// 15. SC
+{
+    name: 'sc',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const cmd = module.exports.find(c => c.name === 'script');
+        if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+    }
+},
 
-    // 16. REPO (Script alias)
-    {
-        name: 'repo',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const cmd = module.exports.find(c => c.name === 'script');
-            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
-        }
-    },
+// 16. REPO
+{
+    name: 'repo',
+    isPrefixless: false,
+    execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        const cmd = module.exports.find(c => c.name === 'script');
+        if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+    }
+}, 
 
 // 29. GCINFO (Group Intelligence Extractor) [1.1]
     {
