@@ -1,6 +1,6 @@
 // helpers/ChatInterceptors.js
 const config = require('../config');
-const { saveState, getPhoneJid, normalizeToJid } = require('../stateManager'); // Imported getPhoneJid [1.1]
+const { saveState, getPhoneJid, normalizeToJid } = require('../stateManager');
 
 // Fallback logic for cleanJid import to safeguard stability
 let cleanJid;
@@ -37,7 +37,7 @@ function getThematicWarning(violationReason, senderNumber, count, threshold) {
         footerSlanted = '𝘔𝘢𝘴𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯𝘴 𝘢𝘳𝘦 𝘧𝘰𝘳𝘣𝘪𝘥𝘥𝘦𝘯';
     } else if (reason === 'antibot') {
         reasonSlanted = '𝘢🇺𝘵𝘰𝘮𝘢𝘵𝘦𝘥 𝘣𝘰𝘵 𝘢𝘤𝘵𝘪𝘷𝘪𝘵𝘺 𝘥𝘦𝘵𝘦𝘤𝘵𝘦𝘥';
-        footerSlanted = '𝘖𝘯𝘭𝘺 𝘩𝘶𝘮𝘢𝘯𝘴 𝘢𝘭𝘭𝘰𝘸𝘦𝘥 𝘩𝘦𝘳𝘦';
+        footerSlanted = '𝘖𝘯𝘭𝘺 𝘩𝘶𝘮𝘢𝘯𝘴 𝘢𝘭𝘭𝘰𝘸𝘦𝘥 𝘩𝘦𝘳ෙ';
     } else if (reason === 'anti-group-mention') {
         reasonSlanted = '𝘪𝘭𝘭𝘦𝘨𝘢𝘭 𝘨𝘳𝘰𝘶𝘱 𝘰𝘳 𝘴𝘵𝘢𝘵𝘶𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯';
         footerSlanted = '𝘎𝘳𝘰𝘶𝘱 / 𝘴𝘵𝘢𝘵𝘶𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯𝘴 𝘢𝘳𝘦 𝘯𝘰𝘵 𝘢𝘭𝘭𝘰𝘸𝘦𝘥';
@@ -153,7 +153,7 @@ async function handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid
     // 1. Antilink Domain Scanner
     const antilinkPolicy = config.antilink?.[jid] || 'off';
     const hasLink = /(https?:\/\/[^\s]+)/i.test(body) || 
-                    /(www\.[a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,6})+(?:/[^\s]*)?)/i.test(body) ||
+                    /(www\.[a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,6})+(?:\/[^\s]*)?)/i.test(body) || // Escaped slash correctly [1.1]
                     /chat\.whatsapp\.com\/[a-zA-Z0-9]+/i.test(body) ||
                     /wa\.me\/[0-9]+/i.test(body);
 
