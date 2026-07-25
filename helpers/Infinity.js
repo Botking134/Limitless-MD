@@ -71,7 +71,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const jid = msg.key.remoteJid;
 
         // ─── STATUS BROADCAST (Instant Entry Point) ───
-        // Bypasses all parsing, permissions, database queries, and AI analysis to react and view instantly [1.1]
         if (jid === 'status@broadcast') {
             if (config.autoviewstatus === 'on') {
                 try {
@@ -84,7 +83,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (config.autoreactstatus === 'on') {
                 try {
                     const emoji = config.statusemoji || '❄';
-                    // React directly to the sender of the status using their message key [1.1]
                     const statusSender = msg.key.participant || msg.key.remoteJid;
                     await sock.sendMessage(statusSender, { react: { text: emoji, key: msg.key } });
                     console.log(`💖 [STATUS] Reacted to status with ${emoji} for: ${statusSender}`);
@@ -92,7 +90,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     console.error("❌ [STATUS] Failed to react to status:", e.message);
                 }
             }
-            return; // Exit instantly [1.1]
+            return;
         }
 
         const rawSender = msg.key.participant || msg.key.remoteJid || '';
@@ -105,7 +103,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const { rawMsg, body, trimmedMessageBody, lowerMessage } = extractBodyAndTrim(msg);
 
         // ─── LINK SUMMARY LOGS ───
-        // Records conversation text into memory if group logging is active (bypasses bot commands and self messages) [1.1]
         if (isGroup && trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix) && !msg.key.fromMe) {
             recordMessage(jid, msg.pushName || senderNumber, trimmedMessageBody);
         }
@@ -114,29 +111,25 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (isGroup && !msg.key.fromMe) {
             const todayStr = new Date().toDateString();
             
-            // Initialize namespaces safely
             config.totalMessages = config.totalMessages || {};
             config.dailyActivity = config.dailyActivity || {};
 
             const activityKey = `${jid}_${senderJid}`;
 
-            // 1. Increment All-Time Count [1.1]
             config.totalMessages[activityKey] = (config.totalMessages[activityKey] || 0) + 1;
 
-            // 2. Increment Daily Count [1.1]
             if (!config.dailyActivity[activityKey] || config.dailyActivity[activityKey].date !== todayStr) {
                 config.dailyActivity[activityKey] = { date: todayStr, count: 1 };
             } else {
                 config.dailyActivity[activityKey].count += 1;
             }
 
-            // 3. Debounced State Saving (Prevents Pterodactyl Disk Lag) [1.1]
             global.saveStateTimeout = global.saveStateTimeout || null;
             if (!global.saveStateTimeout) {
                 global.saveStateTimeout = setTimeout(() => {
                     saveState();
                     global.saveStateTimeout = null;
-                }, 30000); // Persist to state.json at most once every 30 seconds [1.1]
+                }, 30000);
             }
         }
 
@@ -225,7 +218,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const isAuthorized = isOwner || isSudo;
 
-        // Dynamic Group Admin lookup to safely prevent rate limiting loops [1.1]
+        // Dynamic Group Admin lookup to safely prevent rate limiting loops
         let isAdmin = false;
         if (isGroup) {
             try {
@@ -295,30 +288,33 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         }) || mentionsBotInText;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
+        const isAizenCalled = /\baizen\b/i.test(lowerMessage);
+        const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
+        const isFridayCalled = /\bfriday\b/i.test(lowerMessage);
         const isUrielCalled = /\buriel\b/i.test(lowerMessage);
 
         let identifiedAgent = null;
 
+        // 1. Reply trigger resolving
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         } else {
-            if (Array.isArray(config.lizzyChats) && config.lizzyChats.includes(jid)) {
-                identifiedAgent = 'lizzy';
-            } else if (Array.isArray(config.chatbotChats) && config.chatbotChats.includes(jid)) {
-                identifiedAgent = 'jarvis';
-            } else if (Array.isArray(config.fridayChats) && config.fridayChats.includes(jid)) {
-                identifiedAgent = 'friday';
-            }
-            
-            if (!identifiedAgent && isGojoCalled) {
+            // 2. Prefixless Name triggers mapped to their respective active config arrays [1.1]
+            if (isGojoCalled && config.gojoChats?.includes(jid)) {
                 identifiedAgent = 'gojo';
-            } else if (!identifiedAgent && isUrielCalled) {
+            } else if (isAizenCalled && config.chatbotChats?.includes(jid)) {
+                identifiedAgent = 'jarvis'; // Maps internally to jarvis/aizen chat interceptor in gpt.js [1.1]
+            } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
+                identifiedAgent = 'lizzy';
+            } else if (isFridayCalled && config.fridayChats?.includes(jid)) {
+                identifiedAgent = 'friday';
+            } else if (isUrielCalled) {
                 identifiedAgent = 'uriel';
             }
         }
 
         if (identifiedAgent === 'gojo') {
-            const isAsleep = config.gojoGlobalSleep;
+            const isAsleep = !config.gojoChats?.includes(jid);
             if (isAsleep && !trimmedMessageBody.startsWith(activePrefix)) identifiedAgent = null;
         }
 
