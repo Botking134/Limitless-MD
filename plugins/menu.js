@@ -5,10 +5,6 @@ const fs = require('fs');
 const axios = require('axios');
 const { saveState, normalizeToJid } = require('../stateManager');
 
-// ─── NOTES PATH ──────────────────────────────────────────────────
-const notesPath = path.join(__dirname, '../storage/notes.json');
-
-// ─── HELPERS ──────────────────────────────────────────────────────
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function formatUptime(seconds) {
@@ -29,22 +25,6 @@ function getRawMessage(message) {
     return message;
 }
 
-function readNotes() {
-    try {
-        if (fs.existsSync(notesPath)) return JSON.parse(fs.readFileSync(notesPath, 'utf-8'));
-    } catch (e) { /* ignore */ }
-    return {};
-}
-
-function saveNotes(notes) {
-    try {
-        const dir = path.dirname(notesPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(notesPath, JSON.stringify(notes, null, 2), 'utf-8');
-    } catch (e) { /* ignore */ }
-}
-
-// Combined audio pool for .menu
 const menuAudios = [
     "https://files.catbox.moe/pj7qrm.mp3",
     "https://files.catbox.moe/4adjoq.mp3",
@@ -55,7 +35,6 @@ const menuAudios = [
     "https://files.catbox.moe/5nku92.mp3"
 ];
 
-// Carousel card cover images
 const menuImages = [
     "https://i.ibb.co/0ps1KT1H/6e475f07c727d798133f2621907cb1aa.jpg",
     "https://i.ibb.co/qLkzRkxq/60e09c407416e9a16153a3a81b476961.jpg",
@@ -74,7 +53,6 @@ async function fetchImageBuffer(url) {
         const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 5000 });
         return Buffer.from(response.data);
     } catch (e) {
-        console.error(`[MENU] Failed to fetch image: ${url}`, e.message);
         return null;
     }
 }
@@ -92,66 +70,51 @@ async function createCard(sock, title, description, imageUrl, commandId, buttonT
                 buttons: [
                     {
                         name: "quick_reply",
-                        buttonParamsJson: JSON.stringify({
-                            display_text: buttonText,
-                            id: commandId
-                        })
+                        buttonParamsJson: JSON.stringify({ display_text: buttonText, id: commandId })
                     }
                 ]
             }
         };
     }
 
-    const media = await prepareWAMessageMedia(
-        { image: buffer },
-        { upload: sock.waUploadToServer }
-    );
+    const media = await prepareWAMessageMedia({ image: buffer }, { upload: sock.waUploadToServer });
 
     return {
-        header: {
-            imageMessage: media.imageMessage,
-            hasMediaAttachment: true
-        },
+        header: { imageMessage: media.imageMessage, hasMediaAttachment: true },
         body: { text: title },
         footer: { text: description },
         nativeFlowMessage: {
             buttons: [
                 {
                     name: "quick_reply",
-                    buttonParamsJson: JSON.stringify({
-                        display_text: buttonText,
-                        id: commandId
-                    })
+                    buttonParamsJson: JSON.stringify({ display_text: buttonText, id: commandId })
                 }
             ]
         }
     };
 }
 
-// ─── MASTER TEXT MENU ────────────────────────────────────────────────
-// Cleaned up to begin directly with the commands list
 const menuText =
 `_❖ ── [ AI & CHATBOT ] ── ❖_
 _┃ ⊱ ai_
 _┃ ⊱ groq_
-_┃ ⊱ gojo_ (rise/sleep)
+_┃ ⊱ gojo_
 _┃ ⊱ debug_
 _┃ ⊱ summon_
 _┃ ⊱ read_
 _┃ ⊱ imagine_
 _┃ ⊱ lizzy_
-_┃ ⊱ chatbot_
+_┃ ⊱ aizen_
 _┃ ⊱ say_
 
 _❖ ── [ GAMES ] ── ❖_
-_┃ ⊱ games_ (Unified Lobby)
+_┃ ⊱ games_
 _┃ ⊱ ttt_
 _┃ ⊱ rps_
 _┃ ⊱ guess_
 _┃ ⊱ vault8_
-_┃ ⊱ trivia_
 _┃ ⊱ quiz_
-_┃ ⊱ charade_ / .sharade
+_┃ ⊱ charade_
 _┃ ⊱ anagram_
 _┃ ⊱ wcg_
 _┃ ⊱ millionaire_
@@ -162,45 +125,28 @@ _┃ ⊱ escape_
 _❖ ── [ GROUP MGT ] ── ❖_
 _┃ ⊱ mute_
 _┃ ⊱ unmute_
-_┃ ⊱ open_
-_┃ ⊱ close_
-_┃ ⊱ lock_
-_┃ ⊱ unlock_
 _┃ ⊱ kick_
 _┃ ⊱ promote_
 _┃ ⊱ demote_
 _┃ ⊱ tagall_
 _┃ ⊱ tag_
 _┃ ⊱ link_
-_┃ ⊱ invite_
-_┃ ⊱ gclink_
 _┃ ⊱ antilink_
 _┃ ⊱ admins_
 _┃ ⊱ antitag_
 _┃ ⊱ antibot_
 _┃ ⊱ warn_
-_┃ ⊱ togcstatus_
-_┃ ⊱ getgpp_
-_┃ ⊱ setgpp_
 _┃ ⊱ welcome_
 _┃ ⊱ goodbye_
-_┃ ⊱ delwelcome_
-_┃ ⊱ delgoodbye_
 _┃ ⊱ poll_
 _┃ ⊱ antigm_
 _┃ ⊱ gclog_
-_┃ ⊱ creategc_
-_┃ ⊱ kickall_
-_┃ ⊱ stopkickall_
-_┃ ⊱ tkick_
-_┃ ⊱ gcjid_
 _┃ ⊱ antispam_
 _┃ ⊱ silence_
 _┃ ⊱ gcalerts_
-_┃ ⊱ antigcstatus_
-_┃ ⊱ spamtag_
 _┃ ⊱ antipromote_
 _┃ ⊱ antidemote_
+_┃ ⊱ overkill_
 
 _❖ ── [ TOOLS ] ── ❖_
 _┃ ⊱ track_
@@ -218,11 +164,9 @@ _┃ ⊱ antidelete_
 _┃ ⊱ antiviewonce_
 _┃ ⊱ antibug_
 _┃ ⊱ clear_
-_┃ ⊱ archive_
-_┃ ⊱ unarchive_
-_┃ ⊱ autoviewstatus_ / .autovs
+_┃ ⊱ autoviewstatus_
 _┃ ⊱ statusemoji_
-_┃ ⊱ autoreactstatus_ / .autors
+_┃ ⊱ autoreactstatus_
 _┃ ⊱ block_
 _┃ ⊱ unblock_
 _┃ ⊱ aza_
@@ -232,36 +176,24 @@ _┃ ⊱ device_
 _┃ ⊱ ss_
 _┃ ⊱ calc_
 _┃ ⊱ trt_
-_┃ ⊱ translate_
 _┃ ⊱ spam_
 
 _❖ ── [ DOWNLOADER ] ── ❖_
 _┃ ⊱ play_
-_┃ ⊱ ytmp3_
-_┃ ⊱ ytmp4_
 _┃ ⊱ yt_
-_┃ ⊱ tt2_
 _┃ ⊱ img_
 _┃ ⊱ song_
-_┃ ⊱ video_
 _┃ ⊱ fb_
 _┃ ⊱ tt_
 _┃ ⊱ mediafire_
 _┃ ⊱ apk_
-_┃ ⊱ apksearch_
 _┃ ⊱ shazam_
 _┃ ⊱ lyrics_
 _┃ ⊱ gdrive_
 _┃ ⊱ gitclone_
 _┃ ⊱ pinterest_
-_┃ ⊱ subtitle_
-_┃ ⊱ ytmp3doc_
-_┃ ⊱ playdoc_
 _┃ ⊱ spotify_
-_┃ ⊱ spotify2_
 _┃ ⊱ web_
-_┃ ⊱ x2_
-_┃ ⊱ pdf_
 _┃ ⊱ tgs_
 _┃ ⊱ ig_
 
@@ -286,12 +218,6 @@ _┃ ⊱ slap_
 _┃ ⊱ kill_
 _┃ ⊱ kiss_
 _┃ ⊱ hug_
-_┃ ⊱ kik_
-_┃ ⊱ punch_
-_┃ ⊱ hifive_
-_┃ ⊱ bite_
-_┃ ⊱ poke_
-_┃ ⊱ dap_
 _┃ ⊱ dance_
 _┃ ⊱ aura_
 _┃ ⊱ lol_
@@ -313,33 +239,22 @@ _┃ ⊱ setvar_
 _┃ ⊱ settings_
 _┃ ⊱ antipm_
 _┃ ⊱ reminder_
-_┃ ⊱ remind_
-_┃ ⊱ games_closeall_
-_┃ ⊱ owner_
 
 _❖ ── [ UTILITIES ] ── ❖_
 _┃ ⊱ ping_
-_┃ ⊱ ping2_
 _┃ ⊱ alive_
 _┃ ⊱ delete_
 _┃ ⊱ tdelete_
 _┃ ⊱ autoreact_
 _┃ ⊱ speed_
-_┃ ⊱ vv_
 _┃ ⊱ sticker_
 _┃ ⊱ crop_
 _┃ ⊱ take_
-_┃ ⊱ setcmd_
-_┃ ⊱ delcmd_
-_┃ ⊱ tovv_
 _┃ ⊱ tourl_
 _┃ ⊱ kamui_
-_┃ ⊱ emix_
-_┃ ⊱ smeme_
 _┃ ⊱ addnote_
 _┃ ⊱ delnote_
 _┃ ⊱ getnotes_
-_┃ ⊱ getnote_
 _┃ ⊱ toimg_
 _┃ ⊱ tomp3_
 _┃ ⊱ tomp4_
@@ -351,7 +266,6 @@ _┃ ⊱ qty_
 _┃ ⊱ currency_
 `;
 
-// ─── RENDER TEXT MENU ───────────────────────────────────────────────
 async function renderMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -376,17 +290,12 @@ ${readMore}
 ${menuText}`;
 
     try {
-        await sock.sendMessage(jid, {
-            image: { url: randomImage },
-            caption: menuTextCompiled
-        }, { quoted: msg });
+        await sock.sendMessage(jid, { image: { url: randomImage }, caption: menuTextCompiled }, { quoted: msg });
     } catch (error) {
-        console.error("Menu Image Render Error:", error);
         await sock.sendMessage(jid, { text: menuTextCompiled }, { quoted: msg });
     }
 }
 
-// ─── RENDER CAROUSEL MENU ──────────────────────────────────────────
 async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -421,14 +330,10 @@ _Swipe through the cards below to explore command categories._ 🔮`;
 
         for (const frame of frames) {
             await delay(frame.delay);
-            try {
-                await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key });
-            } catch (editErr) { /* ignore */ }
+            try { await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key }); } catch (editErr) {}
         }
 
-        try {
-            await sock.sendMessage(jid, { delete: loadingMsg.key });
-        } catch (e) { /* ignore */ }
+        try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
 
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
@@ -446,46 +351,17 @@ _Swipe through the cards below to explore command categories._ 🔮`;
         const cards = [];
         for (let i = 0; i < categories.length; i++) {
             const cat = categories[i];
-            try {
-                const card = await createCard(
-                    sock,
-                    cat.name,
-                    cat.desc,
-                    shuffledImages[i % shuffledImages.length],
-                    cat.cmd,
-                    "Explore Commands 🔮"
-                );
-                cards.push(card);
-            } catch (err) {
-                console.error(`[MENU] Failed to create card for ${cat.name}:`, err.message);
-                cards.push({
-                    header: { hasMediaAttachment: false },
-                    body: { text: cat.name },
-                    footer: { text: cat.desc },
-                    nativeFlowMessage: {
-                        buttons: [
-                            {
-                                name: "quick_reply",
-                                buttonParamsJson: JSON.stringify({
-                                    display_text: "Explore Commands 🔮",
-                                    id: cat.cmd
-                                })
-                            }
-                        ]
-                    }
-                });
-            }
+            const card = await createCard(
+                sock, cat.name, cat.desc, shuffledImages[i % shuffledImages.length], cat.cmd, "Explore Commands 🔮"
+            );
+            cards.push(card);
         }
-
-        if (cards.length === 0) throw new Error("No cards could be created");
 
         const messageContent = {
             interactiveMessage: {
                 body: { text: headerText },
                 footer: { text: "Limitless System Menu 🪽" },
-                carouselMessage: {
-                    cards: cards
-                }
+                carouselMessage: { cards: cards }
             }
         };
 
@@ -493,81 +369,31 @@ _Swipe through the cards below to explore command categories._ 🔮`;
         await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
 
     } catch (error) {
-        console.error("Carousel Menu Render Error:", error);
         await renderMenu(sock, msg);
     }
-}
-
-// ─── NOTE SESSION HANDLER ───────────────────────────────────────────
-async function handleNoteSession(sock, msg) {
-    try {
-        const jid = msg.key.remoteJid;
-        const rawContent = getRawMessage(msg.message);
-        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
-        const quotedMsgId = rawContent?.contextInfo?.stanzaId;
-
-        if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
-            const session = global.noteSessions[quotedMsgId];
-            const noteName = text.trim();
-            if (!noteName) return false;
-
-            const notes = readNotes();
-            notes[jid] = notes[jid] || {};
-            notes[jid][noteName.toLowerCase()] = {
-                title: noteName,
-                content: session.content,
-                author: session.author,
-                time: Date.now()
-            };
-            saveNotes(notes);
-            delete global.noteSessions[quotedMsgId];
-            await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
-            return true;
-        }
-    } catch (e) {
-        console.error("Note session handler error:", e);
-    }
-    return false;
 }
 
 // ─── EXPORT COMMANDS ──────────────────────────────────────────────
 
 module.exports = [
-    // 1. .menu
     {
         name: 'menu',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
             await renderMenu(sock, msg);
-
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
-            await sock.sendMessage(jid, {
-                audio: { url: randomAudio },
-                mimetype: "audio/mpeg",
-                ptt: false
-            });
+            await sock.sendMessage(msg.key.remoteJid, { audio: { url: randomAudio }, mimetype: "audio/mpeg", ptt: false });
         }
     },
-
-    // 2. .list alias for .menu
     {
         name: 'list',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
             await renderMenu(sock, msg);
-
             const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
-            await sock.sendMessage(jid, {
-                audio: { url: randomAudio },
-                mimetype: "audio/mpeg",
-                ptt: false
-            });
+            await sock.sendMessage(msg.key.remoteJid, { audio: { url: randomAudio }, mimetype: "audio/mpeg", ptt: false });
         }
     },
-
-    // 3. .menu2 (Carousel Menu)
     {
         name: 'menu2',
         isPrefixless: false,
@@ -575,8 +401,6 @@ module.exports = [
             await renderCarouselMenu(sock, msg);
         }
     },
-
-    // 4. .list2 alias for .menu2
     {
         name: 'list2',
         isPrefixless: false,
@@ -585,383 +409,69 @@ module.exports = [
         }
     },
 
-    // 5. Interactive Button Interceptor (Prefixless & Self-Healing Fallback)
+    // ─── SUB-MENU BUTTON COMMANDS ──────────────────────────────────
     {
-        name: 'menu_button_handler',
+        name: 'menu_ai',
         isPrefixless: true,
-        execute: async (sock, msg, args) => {
-            const jid = msg.key.remoteJid;
-            const raw = getRawMessage(msg.message);
-            const incomingText = raw?.conversation || raw?.extendedTextMessage?.text || '';
-
-            let buttonId = '';
-
-            // 1. Attempt to extract the standard native flow button ID
-            if (raw?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
-                try {
-                    const parsed = JSON.parse(raw.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
-                    buttonId = parsed.id;
-                } catch (e) { /* ignore */ }
-            } else if (raw?.buttonsResponseMessage?.selectedButtonId) {
-                buttonId = raw.buttonsResponseMessage.selectedButtonId;
-            } else if (raw?.templateButtonReplyMessage?.selectedId) {
-                buttonId = raw.templateButtonReplyMessage.selectedId;
-            }
-
-            // 2. BULLETPROOF FALLBACK: Parse the quoted card context if raw parameters are omitted by the client
-            if (!buttonId && incomingText.toLowerCase().includes('explore commands')) {
-                const quotedMsgId = raw?.extendedTextMessage?.contextInfo?.stanzaId;
-                const targetQuotedMsg = (quotedMsgId && global.messageStore) ? global.messageStore[quotedMsgId] : null;
-                const quotedMsg = targetQuotedMsg?.message || raw?.extendedTextMessage?.contextInfo?.quotedMessage;
-                
-                if (quotedMsg) {
-                    const rawQuoted = getRawMessage(quotedMsg);
-                    const quotedText = (
-                        rawQuoted?.conversation || 
-                        rawQuoted?.extendedTextMessage?.text || 
-                        rawQuoted?.imageMessage?.caption || 
-                        rawQuoted?.interactiveMessage?.body?.text ||
-                        rawQuoted?.buttonsMessage?.contentText ||
-                        ''
-                    ).toUpperCase();
-
-                    if (quotedText.includes('AI & CHATBOT')) buttonId = 'menu_ai';
-                    else if (quotedText.includes('INTERACTIVE GAMES') || quotedText.includes('GAMES')) buttonId = 'menu_games';
-                    else if (quotedText.includes('GROUP MANAGEMENT') || quotedText.includes('GROUP')) buttonId = 'menu_group';
-                    else if (quotedText.includes('TOOLS')) buttonId = 'menu_tools';
-                    else if (quotedText.includes('DOWNLOADER')) buttonId = 'menu_download';
-                    else if (quotedText.includes('FUN & ROLEPLAY') || quotedText.includes('FUN')) buttonId = 'menu_fun';
-                    else if (quotedText.includes('OWNER & DEV') || quotedText.includes('OWNER')) buttonId = 'menu_owner';
-                    else if (quotedText.includes('UTILITIES')) buttonId = 'menu_utilities';
-                }
-            }
-
-            if (!buttonId || !buttonId.startsWith('menu_')) return;
-
-            let responseText = "";
-
-            if (buttonId === 'menu_ai') {
-                responseText = 
-`┌──────────────┐
-│ 🧠 AI & CHATBOT  
-└──────────────┘
-
-_❖ ─ [ ENGINES ] ─ ❖_
-
-_┃ ⊱ .ai_
-_┃ ⊱ .groq_
-_┃ ⊱ .gojo_
-_┃ ⊱ .debug_
-_┃ ⊱ .summon_
-_┃ ⊱ .read_
-_┃ ⊱ .imagine_
-_┃ ⊱ .lizzy_
-_┃ ⊱ .chatbot_
-_┃ ⊱ .say_
-
-════════════════════════
-_Tap another category card to explore more features._`;
-            } 
-            
-            else if (buttonId === 'menu_games') {
-                responseText = 
-`┌────────┐
-│ 🎮 GAMES  
-└────────┘
-
-_❖ ─ [ LOBBY & PUZZLES ] ─ ❖_
-
-_┃ ⊱ .games_
-_┃ ⊱ .ttt_
-_┃ ⊱ .rps_
-_┃ ⊱ .guess_
-_┃ ⊱ .vault8_
-_┃ ⊱ .trivia_
-_┃ ⊱ .quiz_
-_┃ ⊱ .charade_
-_┃ ⊱ .anagram_
-_┃ ⊱ .wcg_
-_┃ ⊱ .millionaire_
-_┃ ⊱ .torf_
-_┃ ⊱ .pvp_
-_┃ ⊱ .escape_
-
-════════════════════════
-_Tap another category card to explore more features._`;
-            } 
-            
-            else if (buttonId === 'menu_group') {
-                responseText = 
-`┌─────────┐
-│ 🔥 GROUP  
-└─────────┘
-
-_❖ ─ [ MANAGEMENT ] ─ ❖_
-
-_┃ ⊱ .mute_
-_┃ ⊱ .unmute_
-_┃ ⊱ .open_
-_┃ ⊱ .close_
-_┃ ⊱ .lock_
-_┃ ⊱ .unlock_
-_┃ ⊱ .kick_
-_┃ ⊱ .promote_
-_┃ ⊱ .demote_
-_┃ ⊱ .tagall_
-_┃ ⊱ .tag_
-_┃ ⊱ .link_
-_┃ ⊱ .invite_
-_┃ ⊱ .gclink_
-_┃ ⊱ .antilink_
-_┃ ⊱ .admins_
-_┃ ⊱ .antitag_
-_┃ ⊱ .antibot_
-_┃ ⊱ .warn_
-_┃ ⊱ .togcstatus_
-_┃ ⊱ .getgpp_
-_┃ ⊱ .setgpp_
-_┃ ⊱ .welcome_
-_┃ ⊱ .goodbye_
-_┃ ⊱ .delwelcome_
-_┃ ⊱ .delgoodbye_
-_┃ ⊱ .poll_
-_┃ ⊱ .antigm_
-_┃ ⊱ .gclog_
-_┃ ⊱ .creategc_
-_┃ ⊱ .kickall_
-_┃ ⊱ .stopkickall_
-_┃ ⊱ .tkick_
-_┃ ⊱ .gcjid_
-_┃ ⊱ .antispam_
-_┃ ⊱ .silence_
-_┃ ⊱ .gcalerts_
-_┃ ⊱ .antigcstatus_
-_┃ ⊱ .spamtag_
-_┃ ⊱ .antipromote_
-_┃ ⊱ .antidemote_
-
-════════════════════════
-_Tap another category card to explore more features._`;
-            } 
-            
-            else if (buttonId === 'menu_tools') {
-                responseText = 
-`┌────────┐
-│ ⚙️ TOOLS  
-└────────┘
-
-_❖ ─ [ PRESENCE & REGISTRY ] ─ ❖_
-
-_┃ ⊱ .track_
-_┃ ⊱ .getpp_
-_┃ ⊱ .setname_
-_┃ ⊱ .save_
-_┃ ⊱ .tostatus_
-_┃ ⊱ .fw_
-_┃ ⊱ .presence_
-_┃ ⊱ .autotyping_
-_┃ ⊱ .autorecording_
-_┃ ⊱ .alwaysonline_
-_┃ ⊱ .autoread_
-_┃ ⊱ .antidelete_
-_┃ ⊱ .antiviewonce_
-_┃ ⊱ .antibug_
-_┃ ⊱ .clear_
-_┃ ⊱ .archive_
-_┃ ⊱ .unarchive_
-_┃ ⊱ .autoviewstatus_
-_┃ ⊱ .statusemoji_
-_┃ ⊱ .autoreactstatus_
-_┃ ⊱ .block_
-_┃ ⊱ .unblock_
-_┃ ⊱ .aza_
-_┃ ⊱ .time_
-_┃ ⊱ .weather_
-_┃ ⊱ .device_
-_┃ ⊱ .ss_
-_┃ ⊱ .calc_
-_┃ ⊱ .trt_
-_┃ ⊱ .translate_
-_┃ ⊱ .spam_
-
-════════════════════════
-_Tap another category card to explore more features._`;
-            } 
-            
-            else if (buttonId === 'menu_download') {
-                responseText = 
-`┌───────────┐
-│ 📥  DOWNLOAD  
-└───────────┘
-
-_❖ ─ [ MEDIA SERVICES ] ─ ❖_
-
-_┃ ⊱ .play_
-_┃ ⊱ .ytmp3_
-_┃ ⊱ .ytmp4_
-_┃ ⊱ .yt_
-_┃ ⊱ .tt2_
-_┃ ⊱ .img_
-_┃ ⊱ .song_
-_┃ ⊱ .video_
-_┃ ⊱ .fb_
-_┃ ⊱ .tt_
-_┃ ⊱ .mediafire_
-_┃ ⊱ .apk_
-_┃ ⊱ .apksearch_
-_┃ ⊱ .shazam_
-_┃ ⊱ .lyrics_
-_┃ ⊱ .gdrive_
-_┃ ⊱ .gitclone_
-_┃ ⊱ .pinterest_
-_┃ ⊱ .subtitle_
-_┃ ⊱ .ytmp3doc_
-_┃ ⊱ .playdoc_
-_┃ ⊱ .spotify_
-_┃ ⊱ .spotify2_
-_┃ ⊱ .web_
-_┃ ⊱ .x2_
-_┃ ⊱ .pdf_
-_┃ ⊱ .tgs_
-_┃ ⊱ .ig_
-
-════════════════════════
-_Tap another category card to explore more features._`;
-            } 
-            
-            else if (buttonId === 'menu_fun') {
-                responseText = 
-`┌──────────┐
-│ 🎭 FUN & RP  
-└──────────┘
-
-_❖ ─ [ MONOLOGUES & ACTIONS ] ─ ❖_
-
-_┃ ⊱ .bankai_
-_┃ ⊱ .dom-exp_
-_┃ ⊱ .wyr_
-_┃ ⊱ .joke_
-_┃ ⊱ .insult_
-_┃ ⊱ .roast_
-_┃ ⊱ .ship_
-_┃ ⊱ .wed_
-_┃ ⊱ .propose_
-_┃ ⊱ .askout_
-_┃ ⊱ .hollow-purple_
-_┃ ⊱ .hack_
-_┃ ⊱ .arrest_
-_┃ ⊱ .liedetector_
-_┃ ⊱ .rizz_
-_┃ ⊱ .speech_
-_┃ ⊱ .slap_
-_┃ ⊱ .kill_
-_┃ ⊱ .kiss_
-_┃ ⊱ .hug_
-_┃ ⊱ .kik_
-_┃ ⊱ .punch_
-_┃ ⊱ .hifive_
-_┃ ⊱ .bite_
-_┃ ⊱ .poke_
-_┃ ⊱ .dap_
-_┃ ⊱ .dance_
-_┃ ⊱ .aura_
-_┃ ⊱ .lol_
-
-════════════════════════
-_Tap another category card to explore more features._`;
-            } 
-            
-            else if (buttonId === 'menu_owner') {
-                responseText = 
-`┌─────────────┐
-│ 👑 OWNER & DEV  
-└─────────────┘
-
-_❖ ─ [ PARAMETERS & PANELS ] ─ ❖_
-
-_┃ ⊱ .diagnose_
-_┃ ⊱ .update_
-_┃ ⊱ .mode_
-_┃ ⊱ .setsudo_
-_┃ ⊱ .delsudo_
-_┃ ⊱ .addowner_
-_┃ ⊱ .delowner_
-_┃ ⊱ .restart_
-_┃ ⊱ .shutdown_
-_┃ ⊱ .ban_
-_┃ ⊱ .unban_
-_┃ ⊱ .afk_
-_┃ ⊱ .setvar_
-_┃ ⊱ .settings_
-_┃ ⊱ .antipm_
-_┃ ⊱ .reminder_
-_┃ ⊱ .remind_
-_┃ ⊱ .games_closeall_
-_┃ ⊱ .owner_
-
-════════════════════════
-_Tap another category card to explore more features._`;
-            } 
-            
-            else if (buttonId === 'menu_utilities') {
-                responseText = 
-`┌───────────┐
-│ 🛠️ UTILITIES  
-└───────────┘
-
-_❖ ─ [ CONVERTERS & METRICS ] ─ ❖_
-
-_┃ ⊱ .ping_
-_┃ ⊱ .ping2_
-_┃ ⊱ .alive_
-_┃ ⊱ .delete_
-_┃ ⊱ .tdelete_
-_┃ ⊱ .autoreact_
-_┃ ⊱ .speed_
-_┃ ⊱ .vv_
-_┃ ⊱ .sticker_
-_┃ ⊱ .crop_
-_┃ ⊱ .take_
-_┃ ⊱ .setcmd_
-_┃ ⊱ .delcmd_
-_┃ ⊱ .tovv_
-_┃ ⊱ .tourl_
-_┃ ⊱ .kamui_
-_┃ ⊱ .emix_
-_┃ ⊱ .smeme_
-_┃ ⊱ .addnote_
-_┃ ⊱ .delnote_
-_┃ ⊱ .getnotes_
-_┃ ⊱ .getnote_
-_┃ ⊱ .toimg_
-_┃ ⊱ .tomp3_
-_┃ ⊱ .tomp4_
-_┃ ⊱ .binary_
-_┃ ⊱ .ocr_
-_┃ ⊱ .qr_
-_┃ ⊱ .readqr_
-_┃ ⊱ .qty_
-_┃ ⊱ .currency_
-
-════════════════════════
-_Tap another category card to explore more features._`;
-            }
-
-            if (responseText) {
-                await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
-            }
+        execute: async (sock, msg) => {
+            const text = `┌──────────────┐\n│ 🧠 AI & CHATBOT  \n└──────────────┘\n\n_┃ ⊱ .ai_\n_┃ ⊱ .groq_\n_┃ ⊱ .gojo_\n_┃ ⊱ .debug_\n_┃ ⊱ .summon_\n_┃ ⊱ .read_\n_┃ ⊱ .imagine_\n_┃ ⊱ .lizzy_\n_┃ ⊱ .aizen_\n_┃ ⊱ .say_`;
+            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+        }
+    },
+    {
+        name: 'menu_games',
+        isPrefixless: true,
+        execute: async (sock, msg) => {
+            const text = `┌────────┐\n│ 🎮 GAMES  \n└────────┘\n\n_┃ ⊱ .games_\n_┃ ⊱ .ttt_\n_┃ ⊱ .rps_\n_┃ ⊱ .guess_\n_┃ ⊱ .vault8_\n_┃ ⊱ .quiz_\n_┃ ⊱ .charade_\n_┃ ⊱ .anagram_\n_┃ ⊱ .wcg_\n_┃ ⊱ .millionaire_\n_┃ ⊱ .torf_\n_┃ ⊱ .pvp_\n_┃ ⊱ .escape_`;
+            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+        }
+    },
+    {
+        name: 'menu_group',
+        isPrefixless: true,
+        execute: async (sock, msg) => {
+            const text = `┌─────────┐\n│ 🔥 GROUP  \n└─────────┘\n\n_┃ ⊱ .mute_\n_┃ ⊱ .unmute_\n_┃ ⊱ .kick_\n_┃ ⊱ .promote_\n_┃ ⊱ .demote_\n_┃ ⊱ .tagall_\n_┃ ⊱ .tag_\n_┃ ⊱ .link_\n_┃ ⊱ .antilink_\n_┃ ⊱ .admins_\n_┃ ⊱ .antitag_\n_┃ ⊱ .antibot_\n_┃ ⊱ .warn_\n_┃ ⊱ .welcome_\n_┃ ⊱ .goodbye_\n_┃ ⊱ .poll_\n_┃ ⊱ .antigm_\n_┃ ⊱ .gclog_\n_┃ ⊱ .antispam_\n_┃ ⊱ .silence_\n_┃ ⊱ .gcalerts_\n_┃ ⊱ .antipromote_\n_┃ ⊱ .antidemote_\n_┃ ⊱ .overkill_`;
+            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+        }
+    },
+    {
+        name: 'menu_tools',
+        isPrefixless: true,
+        execute: async (sock, msg) => {
+            const text = `┌────────┐\n│ ⚙️ TOOLS  \n└────────┘\n\n_┃ ⊱ .track_\n_┃ ⊱ .getpp_\n_┃ ⊱ .setname_\n_┃ ⊱ .save_\n_┃ ⊱ .tostatus_\n_┃ ⊱ .fw_\n_┃ ⊱ .presence_\n_┃ ⊱ .autotyping_\n_┃ ⊱ .autorecording_\n_┃ ⊱ .alwaysonline_\n_┃ ⊱ .autoread_\n_┃ ⊱ .antidelete_\n_┃ ⊱ .antiviewonce_\n_┃ ⊱ .antibug_\n_┃ ⊱ .clear_\n_┃ ⊱ .autoviewstatus_\n_┃ ⊱ .statusemoji_\n_┃ ⊱ .autoreactstatus_\n_┃ ⊱ .block_\n_┃ ⊱ .unblock_\n_┃ ⊱ .aza_\n_┃ ⊱ .time_\n_┃ ⊱ .weather_\n_┃ ⊱ .device_\n_┃ ⊱ .ss_\n_┃ ⊱ .calc_\n_┃ ⊱ .trt_\n_┃ ⊱ .spam_`;
+            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+        }
+    },
+    {
+        name: 'menu_download',
+        isPrefixless: true,
+        execute: async (sock, msg) => {
+            const text = `┌───────────┐\n│ 📥  DOWNLOAD  \n└───────────┘\n\n_┃ ⊱ .play_\n_┃ ⊱ .yt_\n_┃ ⊱ .img_\n_┃ ⊱ .song_\n_┃ ⊱ .fb_\n_┃ ⊱ .tt_\n_┃ ⊱ .mediafire_\n_┃ ⊱ .apk_\n_┃ ⊱ .shazam_\n_┃ ⊱ .lyrics_\n_┃ ⊱ .gdrive_\n_┃ ⊱ .gitclone_\n_┃ ⊱ .pinterest_\n_┃ ⊱ .spotify_\n_┃ ⊱ .web_\n_┃ ⊱ .tgs_\n_┃ ⊱ .ig_`;
+            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+        }
+    },
+    {
+        name: 'menu_fun',
+        isPrefixless: true,
+        execute: async (sock, msg) => {
+            const text = `┌──────────┐\n│ 🎭 FUN & RP  \n└──────────┘\n\n_┃ ⊱ .bankai_\n_┃ ⊱ .dom-exp_\n_┃ ⊱ .wyr_\n_┃ ⊱ .joke_\n_┃ ⊱ .insult_\n_┃ ⊱ .roast_\n_┃ ⊱ .ship_\n_┃ ⊱ .wed_\n_┃ ⊱ .propose_\n_┃ ⊱ .askout_\n_┃ ⊱ .hollow-purple_\n_┃ ⊱ .hack_\n_┃ ⊱ .arrest_\n_┃ ⊱ .liedetector_\n_┃ ⊱ .rizz_\n_┃ ⊱ .speech_\n_┃ ⊱ .slap_\n_┃ ⊱ .kill_\n_┃ ⊱ .kiss_\n_┃ ⊱ .hug_\n_┃ ⊱ .dance_\n_┃ ⊱ .aura_\n_┃ ⊱ .lol_`;
+            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+        }
+    },
+    {
+        name: 'menu_owner',
+        isPrefixless: true,
+        execute: async (sock, msg) => {
+            const text = `┌─────────────┐\n│ 👑 OWNER & DEV  \n└─────────────┘\n\n_┃ ⊱ .diagnose_\n_┃ ⊱ .update_\n_┃ ⊱ .mode_\n_┃ ⊱ .setsudo_\n_┃ ⊱ .delsudo_\n_┃ ⊱ .addowner_\n_┃ ⊱ .delowner_\n_┃ ⊱ .restart_\n_┃ ⊱ .shutdown_\n_┃ ⊱ .ban_\n_┃ ⊱ .unban_\n_┃ ⊱ .afk_\n_┃ ⊱ .setvar_\n_┃ ⊱ .settings_\n_┃ ⊱ .antipm_\n_┃ ⊱ .reminder_`;
+            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+        }
+    },
+    {
+        name: 'menu_utilities',
+        isPrefixless: true,
+        execute: async (sock, msg) => {
+            const text = `┌───────────┐\n│ 🛠️ UTILITIES  \n└───────────┘\n\n_┃ ⊱ .ping_\n_┃ ⊱ .alive_\n_┃ ⊱ .delete_\n_┃ ⊱ .tdelete_\n_┃ ⊱ .autoreact_\n_┃ ⊱ .speed_\n_┃ ⊱ .sticker_\n_┃ ⊱ .crop_\n_┃ ⊱ .take_\n_┃ ⊱ .tourl_\n_┃ ⊱ .kamui_\n_┃ ⊱ .addnote_\n_┃ ⊱ .delnote_\n_┃ ⊱ .getnotes_\n_┃ ⊱ .toimg_\n_┃ ⊱ .tomp3_\n_┃ ⊱ .tomp4_\n_┃ ⊱ .binary_\n_┃ ⊱ .ocr_\n_┃ ⊱ .qr_\n_┃ ⊱ .readqr_\n_┃ ⊱ .qty_\n_┃ ⊱ .currency_`;
+            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
         }
     }
 ];
-
-// ─── ALIASES ──────────────────────────────────────────────────────
-const aliases = [];
-module.exports.forEach(cmd => {
-    if (cmd.name === 'menu') {
-        aliases.push({ ...cmd, name: 'list' });
-    }
-    if (cmd.name === 'menu2') {
-        aliases.push({ ...cmd, name: 'list2' });
-    }
-});
-module.exports.push(...aliases);
