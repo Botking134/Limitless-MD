@@ -36,6 +36,74 @@ function formatUptime(seconds) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 }
 
+// ─── REMINDER PERSISTENCE HELPERS ─────────────────────────────────
+const remindersPath = path.join(__dirname, '../storage/reminders.json');
+global.activeReminderTimers = global.activeReminderTimers || {};
+
+function readReminders() {
+    try {
+        if (fs.existsSync(remindersPath)) {
+            return JSON.parse(fs.readFileSync(remindersPath, 'utf-8'));
+        }
+    } catch (e) {
+        console.error("⚠️ [REMINDERS] Failed to parse reminders file.");
+    }
+    return {};
+}
+
+function saveReminders(data) {
+    try {
+        const dir = path.dirname(remindersPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(remindersPath, JSON.stringify(data, null, 2), 'utf-8');
+    } catch (e) { /* ignore */ }
+}
+
+function parseReminderDuration(str) {
+    if (!str) return null;
+    const match = str.match(/^(\d+)([smhd])$/i);
+    if (!match) return null;
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    if (unit === 's') return value * 1000;
+    if (unit === 'm') return value * 60 * 1000;
+    if (unit === 'h') return value * 60 * 60 * 1000;
+    if (unit === 'd') return value * 24 * 60 * 60 * 1000;
+    return null;
+}
+
+function formatDuration(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
+}
+
+async function triggerReminder(sock, jid, senderJid, reminderText, reminderId) {
+    try {
+        const senderNum = senderJid.split('@')[0];
+        const alertMsg =
+            `⏰ *REMINDER ALERT!* ⏰\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `👤 *User:* @${senderNum}\n` +
+            `📝 *Task:* \n"${reminderText}"`;
+
+        await sock.sendMessage(jid, { text: alertMsg, mentions: [senderJid] });
+    } catch (e) {
+        console.error("❌ [REMINDER] Failed to deliver alert:", e.message);
+    } finally {
+        const data = readReminders();
+        if (data[jid]) {
+            data[jid] = data[jid].filter(r => r.id !== reminderId);
+            if (data[jid].length === 0) delete data[jid];
+            saveReminders(data);
+        }
+        delete global.activeReminderTimers[reminderId];
+    }
+}
+
 // ─── HELPER: NORMALIZE JID ──────────────────────────────────────
 function normalizeToJid(input) {
     if (!input) return '';
@@ -153,14 +221,14 @@ async function ensureGitSetup(jid, sock, msg) {
 module.exports = [
 
   
- // ─── REMINDME (Setup timed reminder) ─────────────────────────
+ // ─── REMINDME COMMAND ─────────────────────────────────────────────
     {
         name: 'remindme',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const senderJid = msg.key.participant || msg.key.remoteJid || '';
-            const normalizedSender = senderJid.split('@')[0] + (senderJid.includes('@lid') ? '@lid' : '@s.whatsapp.net');
+            const normalizedSender = normalizeToJid(senderJid);
 
             if (!args) {
                 return await sock.sendMessage(jid, { 
@@ -168,7 +236,7 @@ module.exports = [
                 }, { quoted: msg });
             }
 
-            const parts = args.trim().split(' ');
+            const parts = args.trim().split(/\s+/);
             const rawDuration = parts[0];
             const durationMs = parseReminderDuration(rawDuration);
 
@@ -176,20 +244,18 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Invalid duration format. Use `30s`, `15m`, `2h`, or `1d`." }, { quoted: msg });
             }
 
-            // Exclude optional joiner words like "to"
             let reminderText = parts.slice(1).join(' ').trim();
             if (reminderText.toLowerCase().startsWith('to ')) {
                 reminderText = reminderText.slice(3).trim();
             }
 
             if (!reminderText) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide a task description to remind you about." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Please provide a task description." }, { quoted: msg });
             }
 
             const reminderId = `rem_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
             const triggerTime = Date.now() + durationMs;
 
-            // Save to persistent storage
             const data = readReminders();
             data[jid] = data[jid] || [];
             data[jid].push({
@@ -201,7 +267,6 @@ module.exports = [
             });
             saveReminders(data);
 
-            // Schedule live timer
             const timer = setTimeout(() => {
                 triggerReminder(sock, jid, normalizedSender, reminderText, reminderId);
             }, durationMs);
@@ -213,21 +278,20 @@ module.exports = [
         }
     },
 
-    // ─── REMINDER (Manage active reminders) ──────────────────────
+    // ─── REMINDER COMMAND ─────────────────────────────────────────────
     {
         name: 'reminder',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const subCommand = args ? args.toLowerCase().trim().split(' ')[0] : '';
+            const subCommand = args ? args.toLowerCase().trim().split(/\s+/)[0] : '';
 
-            // Case A: List reminders for the current group/chat
             if (!subCommand || subCommand === 'list') {
                 const data = readReminders();
                 const list = data[jid] || [];
 
                 if (list.length === 0) {
-                    return await sock.sendMessage(jid, { text: "⏰ *No active reminders configured in this chat.*" }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: "⏰ *No active reminders in this chat.*" }, { quoted: msg });
                 }
 
                 let response = `⏰ *ACTIVE REMINDERS IN THIS CHAT* ⏰\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
@@ -237,19 +301,18 @@ module.exports = [
                     const senderNum = rem.sender.split('@')[0];
                     response += `${idx + 1}. @${senderNum} • *In ${remainingStr}*:\n   \`"${rem.text}"\`\n   _ID:_ \`${rem.id}\`\n\n`;
                 });
-                response += `👉 To cancel a reminder, use:\n\`${config.prefix}reminder cancel <id>\``;
+                response += `👉 To cancel: \`${config.prefix}reminder cancel <id>\``;
 
                 const mentions = list.map(r => r.sender);
                 return await sock.sendMessage(jid, { text: response, mentions }, { quoted: msg });
             }
 
-            // Case B: Cancel a pending reminder
             if (subCommand === 'cancel' || subCommand === 'delete') {
                 const parts = args.trim().split(/\s+/);
                 const targetId = parts[1];
 
                 if (!targetId) {
-                    return await sock.sendMessage(jid, { text: `❌ Please provide the ID of the reminder to cancel.\nUsage: \`${config.prefix}reminder cancel <id>\`` }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: `❌ Provide the ID to cancel.\nUsage: \`${config.prefix}reminder cancel <id>\`` }, { quoted: msg });
                 }
 
                 const data = readReminders();
@@ -257,21 +320,19 @@ module.exports = [
                 const matched = list.find(r => r.id === targetId);
 
                 if (!matched) {
-                    return await sock.sendMessage(jid, { text: "❌ No active reminder found with that ID in this chat." }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: "❌ No active reminder found with that ID." }, { quoted: msg });
                 }
 
-                // Clear live timer
                 if (global.activeReminderTimers[targetId]) {
                     clearTimeout(global.activeReminderTimers[targetId]);
                     delete global.activeReminderTimers[targetId];
                 }
 
-                // Clean persistent file
                 data[jid] = list.filter(r => r.id !== targetId);
                 if (data[jid].length === 0) delete data[jid];
                 saveReminders(data);
 
-                await sock.sendMessage(jid, { text: `✅ Reminder \`${targetId}\` has been successfully cancelled.` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `✅ Reminder \`${targetId}\` has been cancelled.` }, { quoted: msg });
             }
         }
     },
