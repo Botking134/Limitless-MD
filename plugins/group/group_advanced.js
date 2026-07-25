@@ -175,28 +175,31 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
 const advancedGroupCommands = [
 
 
-
-// 7. LEVELUP (Alert Toggle)
+// 7. LEVELUP (Alert Toggle - Crash-Proofed & Persistent) [1.1]
     {
         name: 'levelup',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             if (!jid.endsWith('@g.us')) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'levelup');
-            if (!isAuthorized) return;
+            // Direct local permission check (bypasses missing verifyPermissions function) [1.1]
+            const isAuthorized = isOwner || isSudo || isDev || isAdmin;
+            if (!isAuthorized) {
+                return await sock.sendMessage(jid, { text: "❌ You are not authorized to configure group alert parameters." }, { quoted: msg });
+            }
 
             const action = args ? args.toLowerCase().trim() : '';
             if (action !== 'on' && action !== 'off') {
                 return await sock.sendMessage(jid, { text: `❌ Use: \`${config.prefix}levelup <on/off>\`` }, { quoted: msg });
             }
 
-            config.gcalerts = config.gcalerts || {};
-            config.gcalerts.levelup = config.gcalerts.levelup || {};
-            config.gcalerts.levelup[jid] = action;
+            // Write straight to persistent storage to survive server restarts [1.1]
+            const data = readAlertsData();
+            data.levelup = data.levelup || {};
+            data.levelup[jid] = action;
+            saveAlertsData(data);
 
-            saveState();
             await sock.sendMessage(jid, { text: `✅ Level Up milestone broadcast alerts have been turned *${action.toUpperCase()}*` }, { quoted: msg });
         }
     },
