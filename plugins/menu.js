@@ -277,36 +277,57 @@ _┃ ⊱ qty_
 _┃ ⊱ currency_
 `;
 
-async function renderMenu(sock, msg) {
-    const jid = msg.key.remoteJid;
-    const uptime = formatUptime(process.uptime());
-    const readMore = String.fromCharCode(8206).repeat(4001);
-    const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
-
-    const menuTextCompiled =
-`┌───────────┐
-│ 𝐋𝐢𝐦𝐢𝐭𝐥𝐞𝐬𝐬-𝐌𝐃   │
-└───────────┘
-_𝐎𝐰𝐧𝐞𝐫: ${config.ownerName}_
-_𝐔𝐬𝐞𝐫: ${msg.pushName || 'User'}_
-_𝐔𝐩𝐭𝐢𝐦𝐞: ${uptime}_
-_𝐕𝐞𝐫𝐬𝐢𝐨𝐧: 1.0.0_
-════════════════════
-
-┌────────────────┐
-│ _Throughout Heaven And Earth_ 
-│ _I alone am the Honoured one_
-└────────────────┘
-${readMore}
-${menuText}`;
+// ─── SAFE CAROUSEL CARD GENERATOR ──────────────────────────────
+async function createCard(sock, title, description, imageUrl, commandId, buttonText) {
+    let imageMessage = null;
 
     try {
-        await sock.sendMessage(jid, { image: { url: randomImage }, caption: menuTextCompiled }, { quoted: msg });
-    } catch (error) {
-        await sock.sendMessage(jid, { text: menuTextCompiled }, { quoted: msg });
+        const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
+        const buffer = await fetchImageBuffer(imageUrl);
+
+        if (buffer) {
+            const media = await prepareWAMessageMedia({ image: buffer }, { upload: sock.waUploadToServer });
+            imageMessage = media.imageMessage;
+        }
+    } catch (e) {
+        imageMessage = null; // Graceful fallback if image upload fails
     }
+
+    if (!imageMessage) {
+        return {
+            header: { hasMediaAttachment: false },
+            body: { text: title },
+            footer: { text: description },
+            nativeFlowMessage: {
+                buttons: [
+                    {
+                        name: "quick_reply",
+                        buttonParamsJson: JSON.stringify({ display_text: buttonText, id: commandId })
+                    }
+                ]
+            }
+        };
+    }
+
+    return {
+        header: {
+            imageMessage: imageMessage,
+            hasMediaAttachment: true
+        },
+        body: { text: title },
+        footer: { text: description },
+        nativeFlowMessage: {
+            buttons: [
+                {
+                    name: "quick_reply",
+                    buttonParamsJson: JSON.stringify({ display_text: buttonText, id: commandId })
+                }
+            ]
+        }
+    };
 }
 
+// ─── RENDER CAROUSEL MENU ──────────────────────────────────────────
 async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -328,15 +349,15 @@ _Version: 1.0.0_
 _Swipe through the cards below to explore command categories._ 🔮`;
 
     try {
-        const { generateWAMessageFromContent } = await import('@itsliaaa/baileys');
+        const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
 
         const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
 
         const frames = [
-            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 600 },
-            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 600 },
-            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 600 },
-            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌌", delay: 800 }
+            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 500 },
+            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 500 },
+            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 500 },
+            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌌", delay: 600 }
         ];
 
         for (const frame of frames) {
@@ -368,18 +389,24 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             cards.push(card);
         }
 
+        // WRAPPED IN VIEWONCE CONTAINER FOR GUARANTEED WHATSAPP APP RENDERING
         const messageContent = {
-            interactiveMessage: {
-                body: { text: headerText },
-                footer: { text: "Limitless System Menu 🪽" },
-                carouselMessage: { cards: cards }
+            viewOnceMessage: {
+                message: {
+                    interactiveMessage: {
+                        body: { text: headerText },
+                        footer: { text: "Limitless System Menu 🪽" },
+                        carouselMessage: { cards: cards }
+                    }
+                }
             }
         };
 
-        const msgProto = generateWAMessageFromContent(jid, messageContent, { userJid: sock.user.id });
+        const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(messageContent), { userJid: sock.user.id });
         await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
 
     } catch (error) {
+        console.error("❌ [CAROUSEL MENU ERROR]:", error.message);
         await renderMenu(sock, msg);
     }
 }
