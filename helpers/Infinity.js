@@ -20,6 +20,14 @@ try {
     handleFilterInterceptor = async () => false;
 }
 
+// Granular Permissions Manager (.allow / .disallow)
+let isCommandAllowed;
+try {
+    isCommandAllowed = require('./PermissionManager').isCommandAllowed;
+} catch (e) {
+    isCommandAllowed = () => false;
+}
+
 // ─── IN-MEMORY GROUP METADATA CACHE (60s TTL) ─────────────────────
 const groupMetadataCache = new Map();
 
@@ -407,7 +415,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 }
             }
 
-            // Split button ID at spaces if it contains arguments (e.g., .gitclone Botking134/Limitless-MD)
             if (rawButtonId) {
                 const cleanButton = rawButtonId.trim();
                 if (cleanButton.startsWith(activePrefix)) {
@@ -473,7 +480,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (ownerCommands.includes(cleanCommand) && isSudo && !isOwner && !isDev) return;
         if (devOnlyCommands.includes(cleanCommand) && !isDev) return;
 
-        // Expanded Whitelist for Interactive Game Replies & Button Responses
+        // Expanded Whitelist for Interactive Game Replies, Button Responses, and Granular Permissions
         const interactiveResponses = [
             'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
@@ -485,7 +492,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             'wcg_ans', 'torf_ans', 'millionaire_ans', 'quiz_cat', 'jail_ans'
         ];
 
-        if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) return;
+        // Granular Permission Check via storage/permissions.json
+        const isAllowedViaPerms = isCommandAllowed(senderJid, jid, cleanCommand);
+
+        if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command) && !isAllowedViaPerms) {
+            return;
+        }
 
         // ─── LOG COMMAND EXECUTION ───
         global.recentLogs = global.recentLogs || [];
