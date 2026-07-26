@@ -1,6 +1,7 @@
 // helpers/FilterManager.js
 const fs = require('fs');
 const path = require('path');
+const config = require('../config');
 
 const filtersPath = path.join(__dirname, '../storage/filters.json');
 const mediaDir = path.join(__dirname, '../storage/filters_media');
@@ -13,7 +14,7 @@ function readFilters() {
     } catch (e) {
         console.error("⚠️ [FILTERS] Failed to parse filters file.");
     }
-    return { group: {}, pm: {} };
+    return { globalGroup: {}, globalPM: {} };
 }
 
 function saveFilters(data) {
@@ -30,26 +31,36 @@ function ensureMediaDir() {
     } catch (e) { /* ignore */ }
 }
 
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // ─── FILTER MESSAGE INTERCEPTOR ──────────────────────────────────
 async function handleFilterInterceptor(sock, msg, textBody, jid) {
     if (!textBody || !jid) return false;
     if (msg.key.fromMe) return false;
 
+    // 1. PREFIX BYPASS: Ignore messages that start with the active prefix
+    const activePrefix = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+    if (textBody.startsWith(activePrefix)) {
+        return false;
+    }
+
     const isGroup = jid.endsWith('@g.us');
-    const scopeKey = isGroup ? 'group' : 'pm';
+    const scopeKey = isGroup ? 'globalGroup' : 'globalPM';
 
     const data = readFilters();
-    const chatFilters = data[scopeKey]?.[jid];
+    const chatFilters = data[scopeKey];
 
     if (!chatFilters || Object.keys(chatFilters).length === 0) return false;
 
-    const lowerText = textBody.toLowerCase();
-
     for (const [triggerKey, filter] of Object.entries(chatFilters)) {
-        const triggerLower = triggerKey.toLowerCase();
+        const escapedTrigger = escapeRegExp(triggerKey.toLowerCase());
         
-        // Match anywhere in the sentence (substring or word boundary)
-        if (lowerText.includes(triggerLower)) {
+        // 2. WORD BOUNDARY REGEX: Ensures exact word/phrase matching
+        const regex = new RegExp(`(?:^|\\s|\\b)${escapedTrigger}(?:$|\\s|\\b)`, 'i');
+
+        if (regex.test(textBody)) {
             try {
                 if (filter.type === 'text') {
                     await sock.sendMessage(jid, { text: filter.content }, { quoted: msg });
