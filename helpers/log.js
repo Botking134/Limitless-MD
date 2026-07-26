@@ -1,17 +1,7 @@
 // helpers/log.js
 const config = require('../config');
 const { normalizeToJid } = require('../stateManager');
-
-// ─── MESSAGE UNWRAPPER ──────────────────────────────────────────
-function getRawMessage(message) {
-    if (!message) return null;
-    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
-    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
-    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
-    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
-    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
-    return message;
-}
+const { getRawMessage } = require('./Message');
 
 // ─── HANDLE DELETED MESSAGES ──────────────────────────────────
 
@@ -21,7 +11,6 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
         if (mode === 'off') return;
 
         const isGroup = jid.endsWith('@g.us');
-
         if (mode === 'group' && !isGroup) return;
         if (mode === 'pm' && (isGroup || jid === 'status@broadcast')) return;
 
@@ -41,7 +30,7 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
             `✍️ *Author:* @${senderJid.split('@')[0]}\n` +
             `🗑️ *Deleted by:* @${revokerJidNorm.split('@')[0]}\n`;
 
-        const destJid = config.botJid || config.botLid || sock.user.id;
+        const destJid = config.botJid || config.botLid || sock.user?.id;
         if (!destJid) return;
 
         const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -96,17 +85,14 @@ async function handleDeletion(sock, originalMsg, jid, revokerJid) {
                 mentions: [senderJid, revokerJidNorm]
             });
             await sock.sendMessage(destJid, { sticker: buffer });
-        } else {
-            if (textContent) {
-                await sock.sendMessage(destJid, {
-                    text: `${logHeader}💬 *Type:* Text\n📝 *Content:*\n\n"${textContent}"`,
-                    mentions: [senderJid, revokerJidNorm]
-                });
-            }
+        } else if (textContent) {
+            await sock.sendMessage(destJid, {
+                text: `${logHeader}💬 *Type:* Text\n📝 *Content:*\n\n"${textContent}"`,
+                mentions: [senderJid, revokerJidNorm]
+            });
         }
     } catch (err) {
         console.error('❌ [ANTIDELETE] handleDeletion failed:', err.message);
-        console.error(err.stack);
     }
 }
 
@@ -120,7 +106,7 @@ async function handleViewOnce(sock, msg) {
         const jid = msg.key.remoteJid;
         const isGroup = jid.endsWith('@g.us');
 
-        // ─── 1. Check if the incoming message itself is a ViewOnce ───
+        // 1. Check if the incoming message itself is a ViewOnce
         const isViewOnce = msg.message?.viewOnceMessage ||
                            msg.message?.viewOnceMessageV2 ||
                            msg.message?.viewOnceMessageV2Extension;
@@ -137,7 +123,6 @@ async function handleViewOnce(sock, msg) {
                                   rawMsg?.audioMessage;
             if (!viewOnceMedia) return;
 
-            // Deduplication
             if (!global.processedViewOnces) global.processedViewOnces = new Set();
             const voKey = `${jid}_${msg.key.id}`;
             if (global.processedViewOnces.has(voKey)) return;
@@ -153,7 +138,7 @@ async function handleViewOnce(sock, msg) {
                 `📂 *Chat:* @${jid.split('@')[0]}\n` +
                 `✍️ *Sender:* @${senderJid.split('@')[0]}\n`;
 
-            const destJid = config.botJid || config.botLid || sock.user.id;
+            const destJid = config.botJid || config.botLid || sock.user?.id;
             if (!destJid) return;
 
             const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -193,14 +178,13 @@ async function handleViewOnce(sock, msg) {
                 });
             }
 
-            // React to confirm capture
             try {
                 await sock.sendMessage(jid, { react: { text: '👁️', key: msg.key } });
             } catch (e) { /* ignore */ }
             return;
         }
 
-        // ─── 2. Check if this is a reply to a ViewOnce (VVS feature) ───
+        // 2. Check if this is a reply to a ViewOnce (VVS feature)
         const contextInfo = rawMsg?.contextInfo ||
                             rawMsg?.extendedTextMessage?.contextInfo ||
                             rawMsg?.imageMessage?.contextInfo ||
@@ -210,7 +194,6 @@ async function handleViewOnce(sock, msg) {
         const quotedMsg = contextInfo.quotedMessage;
         if (!quotedMsg) return;
 
-        // Unwrap quoted message to see if it's view-once
         const rawQuoted = getRawMessage(quotedMsg);
         const quotedViewOnce = rawQuoted?.viewOnceMessageV2?.message ||
                                rawQuoted?.viewOnceMessage?.message ||
@@ -222,19 +205,13 @@ async function handleViewOnce(sock, msg) {
                                     quotedViewOnce.audioMessage;
         if (!viewOnceMediaQuoted) return;
 
-        // Get the reply text (the VVS trigger)
         const replyText = rawMsg.conversation || rawMsg.extendedTextMessage?.text || '';
         const vvsTrigger = config.vvs || 'wow';
 
-        // Compare case‑insensitive and trimmed
         if (replyText.trim().toLowerCase() !== vvsTrigger.toLowerCase()) return;
 
-        // ─── VVS matched – decrypt and send to owner's DM ──────────
         const ownerJid = config.ownerJid || config.ownerLid;
-        if (!ownerJid) {
-            console.warn('⚠️ VVS: Owner JID not set, cannot forward.');
-            return;
-        }
+        if (!ownerJid) return;
 
         const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
         const mediaType = quotedViewOnce.imageMessage ? 'image' :
@@ -246,26 +223,20 @@ async function handleViewOnce(sock, msg) {
 
         const caption = viewOnceMediaQuoted.caption || '🔮 *ViewOnce Decrypted*';
 
-        // Send to owner's DM
         await sock.sendMessage(ownerJid, {
             [mediaType]: buffer,
             mimetype: viewOnceMediaQuoted.mimetype || 'application/octet-stream',
             caption: caption
         });
 
-        // Optionally delete the VVS trigger message to keep it silent
         try {
             await sock.sendMessage(jid, { delete: msg.key });
         } catch (e) { /* ignore */ }
-
-        console.log(`🔮 VVS: Decrypted ViewOnce from ${msg.key.participant || msg.key.remoteJid} and sent to owner.`);
 
     } catch (err) {
         console.error('❌ [VIEWONCE] handleViewOnce failed:', err.message);
     }
 }
-
-// ─── EXPORTS ─────────────────────────────────────────────────────
 
 module.exports = {
     handleDeletion,
