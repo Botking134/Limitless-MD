@@ -6,12 +6,10 @@ const axios = require('axios');
 
 const settingsPath = path.join(__dirname, '../storage/gclog_settings.json');
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
-const THREE_HOURS_MS = 3 * 60 * 60 * 1000; // 3-hour interval window
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 
 global.groupLogs = global.groupLogs || {};
 global.activeAizenSummaryIntervals = global.activeAizenSummaryIntervals || {};
-
-// ─── SETTINGS FILE PERSISTENCE ────────────────────────────────────
 
 function readSettings() {
     try {
@@ -33,8 +31,6 @@ function saveSettings(settings) {
     } catch (e) { /* ignore */ }
 }
 
-// ─── LOGGING ENGINE ───────────────────────────────────────────────
-
 function recordMessage(jid, sender, text) {
     if (!jid || !jid.endsWith('@g.us') || !text) return;
 
@@ -49,10 +45,8 @@ function recordMessage(jid, sender, text) {
         time: now
     });
 
-    // 3-hour sliding-window pruning
     global.groupLogs[jid] = global.groupLogs[jid].filter(l => now - l.time <= THREE_HOURS_MS);
 
-    // If still over 100 messages, enforce maximum length cap
     if (global.groupLogs[jid].length > 100) {
         global.groupLogs[jid].shift();
     }
@@ -65,8 +59,6 @@ function clearGroupLogs(jid) {
     }
     return false;
 }
-
-// ─── GROQ COGNITIVE ENGINE ────────────────────────────────────────
 
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
@@ -109,11 +101,11 @@ async function generateAizenSummary(logs) {
         `FORMAT & CONTENT RULES (CRITICAL):\n` +
         `- Start with an elegant, condescending Aizen opening remark.\n` +
         `- Output EXACTLY 10 bullet points. Each point MUST start with a simple bullet ("• ").\n` +
-        `- EACH bullet point MUST be a detailed, rich, medium-length paragraph (exactly 2 to 3 sentences long). Explain who said what, the context of their debate, and add your own cold, philosophical insight. Do NOT write simple, short, or one-sentence lines.\n` +
+        `- EACH bullet point MUST not be short but detailed, rich, medium-length paragraph (exactly 2 to 3 sentences long). Explain who said what, the context of their debate, and add your own cold, philosophical insight. Do NOT write simple, short, or one-sentence lines.\n` +
         `- Do NOT use numbers, words like "First" or "Second", or rigid lists.\n` +
         `- End with a cold, manipulative Aizen closing remark.\n\n` +
         `TITLE:\n` +
-        `🔮 *SŌSUKE AIZEN'S LOG ANALYSIS* 🔮\n` +
+        `🔮 *LOG ANALYSIS* 🔮\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     const messages = [
@@ -124,17 +116,14 @@ async function generateAizenSummary(logs) {
     return await queryGroq(messages);
 }
 
-// ─── AUTOMATED TIMED SUMMARY SCHEDULER ────────────────────────────
-
 function scheduleAutoSummary(jid) {
-    // Prevent overlapping intervals for the same group JID
     if (global.activeAizenSummaryIntervals[jid]) {
         clearInterval(global.activeAizenSummaryIntervals[jid]);
     }
 
     global.activeAizenSummaryIntervals[jid] = setInterval(async () => {
         const activeSock = global.activeSock;
-        if (!activeSock) return; // Exit silently if bot is offline/reconnecting
+        if (!activeSock) return;
 
         const settings = readSettings();
         if (settings[jid] !== 'on') {
@@ -144,7 +133,6 @@ function scheduleAutoSummary(jid) {
         }
 
         const logs = global.groupLogs[jid] || [];
-        // Filter expired messages from memory log window first
         const now = Date.now();
         const activeLogs = logs.filter(l => now - l.time <= THREE_HOURS_MS);
         global.groupLogs[jid] = activeLogs;
@@ -168,7 +156,6 @@ function unscheduleAutoSummary(jid) {
     }
 }
 
-// Self-loading boot scheduler (runs automatically when module is loaded)
 (function initPersistentAutoSummaries() {
     try {
         const settings = readSettings();
