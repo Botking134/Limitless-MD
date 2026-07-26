@@ -809,7 +809,7 @@ module.exports = [
         }
     },
 
-    // ─── AFK ─────────────────────────────────────────────────────
+    // ─── AFK (Silent Background Counting) ─────────────────────────
     {
         name: 'afk',
         isPrefixless: false,
@@ -817,26 +817,35 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            if (!config.afk) config.afk = {};
+            config.afk = config.afk || {};
 
             const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-            const isAlreadyAfk = config.afk[senderJid];
+            const cleanSender = senderJid.split('@')[0].split(':')[0];
 
-            if (isAlreadyAfk) {
-                delete config.afk[senderJid];
-                await sock.sendMessage(jid, {
+            // Look up existing AFK entry by matching clean sender ID
+            let existingKey = Object.keys(config.afk).find(k => k.split('@')[0].split(':')[0] === cleanSender);
+
+            if (existingKey) {
+                delete config.afk[existingKey];
+                try { saveState(); } catch (e) {}
+                return await sock.sendMessage(jid, {
                     text: `👋 *Welcome Back!* AFK mode has been deactivated.`
                 }, { quoted: msg });
-            } else {
-                config.afk[senderJid] = {
-                    time: Date.now(),
-                    reason: args || "Infinite Void meditation"
-                };
-                await sock.sendMessage(jid, {
-                    text: `💤 *AFK Mode Activated.* Mentions of your name in group chats will be auto-replied by my infinity.`
-                }, { quoted: msg });
             }
-            saveState();
+
+            const reason = args && args.trim() ? args.trim() : "Away from keyboard";
+
+            // Save start time as a static timestamp (100% silent)
+            config.afk[senderJid] = {
+                time: Date.now(),
+                reason: reason
+            };
+
+            try { saveState(); } catch (e) {}
+
+            await sock.sendMessage(jid, {
+                text: `💤 *AFK Mode Activated.* \n\n• *Reason:* \`${reason}\`\n\n_I will notify members who tag or quote you._`
+            }, { quoted: msg });
         }
     },
 
