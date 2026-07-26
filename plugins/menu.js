@@ -277,57 +277,6 @@ _┃ ⊱ qty_
 _┃ ⊱ currency_
 `;
 
-// ─── SAFE CAROUSEL CARD GENERATOR ──────────────────────────────
-async function createCard(sock, title, description, imageUrl, commandId, buttonText) {
-    let imageMessage = null;
-
-    try {
-        const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
-        const buffer = await fetchImageBuffer(imageUrl);
-
-        if (buffer) {
-            const media = await prepareWAMessageMedia({ image: buffer }, { upload: sock.waUploadToServer });
-            imageMessage = media.imageMessage;
-        }
-    } catch (e) {
-        imageMessage = null; // Graceful fallback if image upload fails
-    }
-
-    if (!imageMessage) {
-        return {
-            header: { hasMediaAttachment: false },
-            body: { text: title },
-            footer: { text: description },
-            nativeFlowMessage: {
-                buttons: [
-                    {
-                        name: "quick_reply",
-                        buttonParamsJson: JSON.stringify({ display_text: buttonText, id: commandId })
-                    }
-                ]
-            }
-        };
-    }
-
-    return {
-        header: {
-            imageMessage: imageMessage,
-            hasMediaAttachment: true
-        },
-        body: { text: title },
-        footer: { text: description },
-        nativeFlowMessage: {
-            buttons: [
-                {
-                    name: "quick_reply",
-                    buttonParamsJson: JSON.stringify({ display_text: buttonText, id: commandId })
-                }
-            ]
-        }
-    };
-}
-
-// ─── RENDER CAROUSEL MENU ──────────────────────────────────────────
 async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -348,24 +297,24 @@ _Version: 1.0.0_
 
 _Swipe through the cards below to explore command categories._ 🔮`;
 
+    let loadingMsg = null;
+
     try {
         const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
 
-        const loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
+        loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
 
         const frames = [
-            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 500 },
-            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 500 },
-            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 500 },
-            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌌", delay: 600 }
+            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 400 },
+            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 400 },
+            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 400 },
+            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌌", delay: 500 }
         ];
 
         for (const frame of frames) {
             await delay(frame.delay);
             try { await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key }); } catch (editErr) {}
         }
-
-        try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
 
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
@@ -389,7 +338,10 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             cards.push(card);
         }
 
-        // WRAPPED IN VIEWONCE CONTAINER FOR GUARANTEED WHATSAPP APP RENDERING
+        // Sanitize bot user JID (strips device ID suffix :12@s.whatsapp.net)
+        const rawBotJid = sock.user?.id || sock.user?.jid || jid;
+        const cleanBotUserJid = rawBotJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+
         const messageContent = {
             viewOnceMessage: {
                 message: {
@@ -402,11 +354,19 @@ _Swipe through the cards below to explore command categories._ 🔮`;
             }
         };
 
-        const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(messageContent), { userJid: sock.user.id });
+        const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(messageContent), { userJid: cleanBotUserJid });
         await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+
+        // Clean up animation message ONLY after successful delivery
+        if (loadingMsg) {
+            try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
+        }
 
     } catch (error) {
         console.error("❌ [CAROUSEL MENU ERROR]:", error.message);
+        if (loadingMsg) {
+            try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
+        }
         await renderMenu(sock, msg);
     }
 }
