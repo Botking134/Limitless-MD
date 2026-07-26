@@ -257,6 +257,30 @@ async function handleXvidReply(sock, msg, session, userReply) {
     });
 }
 
+// ─── UNIVERSAL LINK EXTRACTOR HELPER ──────────────────────────────
+    function extractUrlFromMsg(msg, args) {
+        let text = args ? args.trim() : '';
+
+        if (!text) {
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            if (quoted) {
+                const rawContent = getRawMessage(quoted);
+                text = rawContent?.conversation || 
+                       rawContent?.extendedTextMessage?.text || 
+                       rawContent?.imageMessage?.caption || 
+                       rawContent?.videoMessage?.caption || 
+                       '';
+            }
+        }
+
+        if (!text) return null;
+
+        const match = text.match(/(https?:\/\/[^\s]+)/i);
+        return match ? match[1].trim() : text.trim();
+    }
+
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
@@ -290,46 +314,52 @@ module.exports = [
         }
     },
 
-    // 2. TikTok Downloader (.tt / .tiktok / .tt2)
+    
+
+    // 2. TikTok Downloader (.tt / .tiktok / .tt2 - Multi-Structure & Reply Support)
     {
         name: 'tt',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const url = args?.trim();
-            
-            if (!url) {
+            const url = extractUrlFromMsg(msg, args);
+
+            if (!url || !url.includes('tiktok.com')) {
                 return await sock.sendMessage(jid, { 
-                    text: "❌ Please provide a valid TikTok video URL.\n\n*Example:* `.tt https://vm.tiktok.com/xxxx/`" 
+                    text: "❌ Please provide or reply to a valid TikTok video link.\n\n*Examples:*\n• `.tt https://vm.tiktok.com/xxxx/`\n• Reply to a TikTok link with `.tt`" 
                 }, { quoted: msg });
             }
 
             const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching TikTok video..." }, { quoted: msg });
 
             try {
-                const endpoint = `https://apis.davidcyril.name.ng/download/tiktokv4?url=${encodeURIComponent(url)}`;
-                const data = await downloadMedia(endpoint);
+                // Primary: tiktokv4
+                let endpoint = `https://apis.davidcyril.name.ng/download/tiktokv4?url=${encodeURIComponent(url)}`;
+                let data = await downloadMedia(endpoint);
 
-                if (!data || (!data.success && data.status !== 200)) {
-                    throw new Error(data?.message || 'TikTok API returned an invalid response.');
+                let res = data?.results || data?.result || data;
+                let downloadUrl = res?.nowatermark || 
+                                  res?.noWatermark || 
+                                  res?.video || 
+                                  res?.play || 
+                                  res?.download_url || 
+                                  (Array.isArray(res?.downloads) ? res.downloads[0]?.url : null) ||
+                                  extractDownloadUrl(data);
+
+                // Fallback: Secondary TikTok Endpoint if primary returned no link
+                if (!downloadUrl) {
+                    endpoint = `https://apis.davidcyril.name.ng/download/tiktok?url=${encodeURIComponent(url)}`;
+                    data = await downloadMedia(endpoint);
+                    res = data?.results || data?.result || data;
+                    downloadUrl = res?.video || res?.nowatermark || extractDownloadUrl(data);
                 }
-
-                const res = data.results || data.result || data;
-                
-                // Smart video URL resolution from the tiktokv4 API results
-                const downloadUrl = res.nowatermark || 
-                                    res.noWatermark || 
-                                    res.video || 
-                                    res.play || 
-                                    res.download_url || 
-                                    extractDownloadUrl(data);
 
                 if (!downloadUrl) {
                     throw new Error('No valid video download link found.');
                 }
 
                 const buffer = await fetchBuffer(downloadUrl);
-                const captionText = res.title || res.caption || res.desc || 'TikTok Video 🎬';
+                const captionText = res?.title || res?.caption || res?.desc || 'TikTok Video 🎬';
 
                 await sock.sendMessage(jid, { video: buffer, caption: captionText }, { quoted: msg });
                 
