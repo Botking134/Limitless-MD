@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 const { saveState, normalizeToJid } = require('../stateManager');
+const { getRawMessage } = require('./Message');
 
 const notesPath = path.join(__dirname, '../storage/notes.json');
 
@@ -33,18 +34,6 @@ function saveNotes(notes) {
     } catch (e) { /* ignore */ }
 }
 
-// ─── HELPERS ──────────────────────────────────────────────────────
-
-function getRawMessage(message) {
-    if (!message) return null;
-    if (message.ephemeralMessage?.message) return getRawMessage(message.ephemeralMessage.message);
-    if (message.viewOnceMessage?.message) return getRawMessage(message.viewOnceMessage.message);
-    if (message.viewOnceMessageV2?.message) return getRawMessage(message.viewOnceMessageV2.message);
-    if (message.viewOnceMessageV2Extension?.message) return getRawMessage(message.viewOnceMessageV2Extension.message);
-    if (message.documentWithCaptionMessage?.message) return getRawMessage(message.documentWithCaptionMessage.message);
-    return message;
-}
-
 function formatDuration(ms) {
     const seconds = Math.floor(ms / 1000);
     const d = Math.floor(seconds / (3600 * 24));
@@ -59,7 +48,7 @@ function formatDuration(ms) {
 async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMsgId, cleanChatJid) {
     if (!quotedMsgId) return false;
 
-    // ─── 1. Bank Details Setup Wizard (aza) ───
+    // 1. Bank Details Setup Wizard
     if (global.azaSessions && global.azaSessions[quotedMsgId]) {
         const session = global.azaSessions[quotedMsgId];
         const jid = msg.key.remoteJid;
@@ -69,7 +58,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
             if (account.length < 5) {
                 try {
                     await sock.sendMessage(jid, { text: "❌ Invalid account number. Must be at least 5 digits. Try again by replying to the original prompt." }, { quoted: msg });
-                } catch (e) { /* ignore dead socket */ }
+                } catch (e) { /* ignore */ }
                 return true;
             }
             session.account = account;
@@ -82,7 +71,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
                 }, { quoted: msg });
 
                 global.azaSessions[nextPrompt.key.id] = session;
-            } catch (e) { /* ignore dead socket */ }
+            } catch (e) { /* ignore */ }
 
             delete global.azaSessions[quotedMsgId];
             return true;
@@ -102,7 +91,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
                 }, { quoted: msg });
 
                 global.azaSessions[nextPrompt.key.id] = session;
-            } catch (e) { /* ignore dead socket */ }
+            } catch (e) { /* ignore */ }
 
             delete global.azaSessions[quotedMsgId];
             return true;
@@ -131,12 +120,12 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
 
             try {
                 await sock.sendMessage(jid, { text: successCard }, { quoted: msg });
-            } catch (e) { /* ignore dead socket */ }
+            } catch (e) { /* ignore */ }
             return true;
         }
     }
 
-    // ─── 2. Forwarding Wizard (fw) ───
+    // 2. Forwarding Wizard
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
         const session = global.forwardSessions[quotedMsgId];
         const jid = msg.key.remoteJid;
@@ -147,7 +136,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
         if (targetJid.length < 8) {
             try {
                 await sock.sendMessage(jid, { text: "❌ Invalid target phone number or group JID. Forwarding aborted." }, { quoted: msg });
-            } catch (e) { /* ignore dead socket */ }
+            } catch (e) { /* ignore */ }
             delete global.forwardSessions[quotedMsgId];
             return true;
         }
@@ -168,7 +157,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
         } catch (e) {
             try {
                 await sock.sendMessage(jid, { text: `❌ Forwarding failed: ${e.message}` }, { quoted: msg });
-            } catch (err) { /* ignore dead socket */ }
+            } catch (err) { /* ignore */ }
         }
 
         delete global.forwardSessions[quotedMsgId];
@@ -216,7 +205,6 @@ async function handleAfkDeactivation(sock, msg) {
         const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
         const senderNumber = senderJid.split('@')[0];
 
-        // 1. Deactivate AFK if returning user posts a message
         if (config.afk && config.afk[senderJid]) {
             delete config.afk[senderJid];
             saveState();
@@ -225,10 +213,9 @@ async function handleAfkDeactivation(sock, msg) {
                     text: `👋 *Welcome Back @${senderNumber}!* AFK mode has been deactivated.`,
                     mentions: [senderJid]
                 }, { quoted: msg });
-            } catch (e) { /* ignore dead socket */ }
+            } catch (e) { /* ignore */ }
         }
 
-        // 2. Alert users if they mention or quote an AFK user
         const rawContent = getRawMessage(msg.message);
         const contextInfo = rawContent?.contextInfo ||
                             rawContent?.extendedTextMessage?.contextInfo ||
@@ -259,7 +246,7 @@ async function handleAfkDeactivation(sock, msg) {
                         text: alertText,
                         mentions: [targetJid]
                     }, { quoted: msg });
-                } catch (e) { /* ignore dead socket */ }
+                } catch (e) { /* ignore */ }
             }
         }
     } catch (e) {
@@ -293,7 +280,7 @@ async function handleNoteSession(sock, msg) {
             delete global.noteSessions[quotedMsgId];
             try {
                 await sock.sendMessage(jid, { text: `✅ Note successfully saved as *${noteName}*!` }, { quoted: msg });
-            } catch (e) { /* ignore dead socket */ }
+            } catch (e) { /* ignore */ }
             return true;
         }
     } catch (e) {
