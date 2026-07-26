@@ -7,6 +7,9 @@ const { getRawMessage } = require('./Message');
 
 const notesPath = path.join(__dirname, '../storage/notes.json');
 
+// In-memory AFK notice cooldown tracker (1 alert per chat per 60 seconds)
+global.afkNoticeCooldowns = global.afkNoticeCooldowns || {};
+
 // ─── NOTES LOCAL STORAGE HELPERS ─────────────────────────────────
 
 function readNotes() {
@@ -48,7 +51,7 @@ function formatDuration(ms) {
 async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMsgId, cleanChatJid) {
     if (!quotedMsgId) return false;
 
-    // 1. Bank Details Setup Wizard
+    // 1. Bank Details Setup Wizard (aza)
     if (global.azaSessions && global.azaSessions[quotedMsgId]) {
         const session = global.azaSessions[quotedMsgId];
         const jid = msg.key.remoteJid;
@@ -108,7 +111,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
                 name: name
             };
 
-            saveState();
+            try { saveState(); } catch (e) {}
             delete global.azaSessions[quotedMsgId];
 
             const successCard =
@@ -125,7 +128,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
         }
     }
 
-    // 2. Forwarding Wizard
+    // 2. Forwarding Wizard (fw)
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
         const session = global.forwardSessions[quotedMsgId];
         const jid = msg.key.remoteJid;
@@ -197,60 +200,79 @@ async function handleDownloaderSessions(sock, msg, trimmedMessageBody, quotedMsg
     return false;
 }
 
-// ─── AFK DEACTIVATION & MENTION ALERTS ───────────────────────────
+// ─── AFK DEACTIVATION & MENTION ALERTS (Silent Counting) ─────────
 
 async function handleAfkDeactivation(sock, msg) {
     try {
         const jid = msg.key.remoteJid;
-        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-        const senderNumber = senderJid.split('@')[0];
+        const rawSender = msg.key.participant || msg.key.remoteJid || '';
+        const senderJid = normalizeToJid(rawSender);
+        const cleanSender = senderJid.split('@')[0].split(':')[0];
 
-        if (config.afk && config.afk[senderJid]) {
-            delete config.afk[senderJid];
-            saveState();
+        config.afk = config.afk || {};
+
+        // 1. Silent Deactivation when the returning user types ANY message
+        const matchedAfkKey = Object.keys(config.afk).find(k => k.split('@')[0].split(':')[0] === cleanSender);
+
+        if (matchedAfkKey) {
+            const afkData = config.afk[matchedAfkKey];
+            const durationStr = formatDuration(Date.now() - afkData.time);
+            delete config.afk[matchedAfkKey];
+
+            try { saveState(); } catch (e) {}
+
             try {
                 await sock.sendMessage(jid, {
-                    text: `👋 *Welcome Back @${senderNumber}!* AFK mode has been deactivated.`,
+                    text: `👋 *Welcome Back @${cleanSender}!*\n\nYou were away for: \`${durationStr}\`. AFK mode deactivated.`,
                     mentions: [senderJid]
                 }, { quoted: msg });
             } catch (e) { /* ignore */ }
         }
 
+        // 2. Alert members ONLY if they tag or quote an AFK user (60s Cooldown)
         const rawContent = getRawMessage(msg.message);
         const contextInfo = rawContent?.contextInfo ||
                             rawContent?.extendedTextMessage?.contextInfo ||
                             rawContent?.imageMessage?.contextInfo ||
                             rawContent?.videoMessage?.contextInfo;
-        
-        const mentions = contextInfo?.mentionedJid || [];
+
+        const mentions = (contextInfo?.mentionedJid || []).map(normalizeToJid);
         if (contextInfo?.participant) {
-            mentions.push(contextInfo.participant);
+            mentions.push(normalizeToJid(contextInfo.participant));
         }
 
-        const uniqueMentions = [...new Set(mentions.map(normalizeToJid))];
+        const uniqueMentions = [...new Set(mentions)];
 
         for (const targetJid of uniqueMentions) {
-            if (config.afk && config.afk[targetJid] && targetJid !== senderJid) {
-                const data = config.afk[targetJid];
-                const durationStr = formatDuration(Date.now() - data.time);
-                const targetNumber = targetJid.split('@')[0];
+            const targetClean = targetJid.split('@')[0].split(':')[0];
+            const afkMatchKey = Object.keys(config.afk).find(k => k.split('@')[0].split(':')[0] === targetClean);
+
+            if (afkMatchKey && targetClean !== cleanSender) {
+                const now = Date.now();
+                const cooldownKey = `${jid}_${targetClean}`;
+
+                if (global.afkNoticeCooldowns[cooldownKey] && (now - global.afkNoticeCooldowns[cooldownKey] < 60000)) {
+                    continue; // Skip alert if within 60s cooldown in this chat
+                }
+
+                global.afkNoticeCooldowns[cooldownKey] = now;
+
+                const data = config.afk[afkMatchKey];
+                const durationStr = formatDuration(now - data.time);
 
                 const alertText =
                     `💤 *AFK NOTICE* 💤\n━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `👤 *User:* @${targetNumber}\n` +
+                    `👤 *User:* @${targetClean}\n` +
                     `⏳ *Away for:* \`${durationStr}\`\n` +
                     `📝 *Reason:* \`${data.reason}\``;
 
                 try {
-                    await sock.sendMessage(jid, {
-                        text: alertText,
-                        mentions: [targetJid]
-                    }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: alertText, mentions: [targetJid] }, { quoted: msg });
                 } catch (e) { /* ignore */ }
             }
         }
     } catch (e) {
-        console.error("AFK deactivation handler error:", e.message);
+        console.error("❌ [AFK HANDLER ERROR]:", e.message);
     }
 }
 
