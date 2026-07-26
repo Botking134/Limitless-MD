@@ -1268,73 +1268,108 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         }
     },
 
-    // 30. TRT (Translate - Transitioned to Groq)
+    
+// 30. TRT / TRANSLATE (API + AI Fail-Safe Engine)
     {
         name: 'trt',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            if (!args) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ *Invalid Translation Format!*\n\n` +
-                          `*Usage Options:*\n` +
-                          `• \`${config.prefix}trt <target_lang>\` (by replying to the target message)\n` +
-                          `• \`${config.prefix}trt <text> <target_lang>\` (direct inline translation)`
+            
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+
+            let textToTranslate = '';
+            let targetLang = 'en';
+
+            // 1. Quoted Message Mode
+            if (quoted) {
+                const rawContent = getRawMessage(quoted);
+                textToTranslate = rawContent?.conversation || 
+                                   rawContent?.extendedTextMessage?.text || 
+                                   rawContent?.imageMessage?.caption || 
+                                   rawContent?.videoMessage?.caption || '';
+                
+                if (args && args.trim()) {
+                    targetLang = args.trim().toLowerCase();
+                }
+            } 
+            // 2. Direct Inline Text Mode
+            else if (args && args.trim()) {
+                const parts = args.trim().split(/\s+/);
+                if (parts.length > 1) {
+                    targetLang = parts[parts.length - 1].toLowerCase();
+                    textToTranslate = parts.slice(0, parts.length - 1).join(' ').trim();
+                } else {
+                    textToTranslate = parts[0];
+                }
+            }
+
+            if (!textToTranslate) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ *Format:* Reply to a message with \`${config.prefix}trt <lang>\` or type \`${config.prefix}trt <text> <lang>\`\n\n*Examples:*\n• Reply to text with \`${config.prefix}trt fr\`\n• \`${config.prefix}trt How are you es\`` 
                 }, { quoted: msg });
             }
 
+            const statusMsg = await sock.sendMessage(jid, { text: "Translating... 🌐" }, { quoted: msg });
+
+            let translatedText = '';
+            let detectedLang = targetLang;
+
+            // Step 1: Query David Cyril Translation API
             try {
-                await sock.sendMessage(jid, { text: "Translating via Groq... 🌐" }, { quoted: msg });
-
-                const rawMsg = getRawMessage(msg.message);
-                const contextInfo = rawMsg?.contextInfo ||
-                                    rawMsg?.extendedTextMessage?.contextInfo ||
-                                    rawMsg?.imageMessage?.contextInfo ||
-                                    rawMsg?.videoMessage?.contextInfo ||
-                                    rawMsg?.stickerMessage?.contextInfo ||
-                                    rawMsg?.audioMessage?.contextInfo ||
-                                    rawMsg?.documentMessage?.contextInfo;
-                const quoted = contextInfo?.quotedMessage;
-
-                let targetLang = 'English';
-                let textToTranslate = '';
-
-                if (quoted) {
-                    targetLang = args.trim();
-                    const rawContent = getRawMessage(quoted);
-                    textToTranslate = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || rawContent?.videoMessage?.caption || '';
-                } else {
-                    const parts = args.trim().split(' ');
-                    targetLang = parts[parts.length - 1];
-                    textToTranslate = parts.slice(0, parts.length - 1).join(' ').trim();
+                const apiEndpoint = `https://apis.davidcyril.name.ng/tools/translate?text=${encodeURIComponent(textToTranslate)}&lang=${encodeURIComponent(targetLang)}`;
+                const response = await axios.get(apiEndpoint, { timeout: 10000 });
+                
+                if (response.data && (response.data.success || response.data.translated_text)) {
+                    translatedText = response.data.translated_text || response.data.result;
+                    detectedLang = response.data.language || targetLang;
                 }
-
-                if (!textToTranslate) {
-                    return await sock.sendMessage(jid, { text: "❌ Provide text to translate or reply directly to a message." }, { quoted: msg });
-                }
-
-                const prompt = `You are an expert translator. Translate the following text into: "${targetLang}". ` +
-                               `Preserve all original WhatsApp markdown formatting (such as *, _, ~, \`\`) exactly as they are. ` +
-                               `Provide only the translated text. Do not include any introduction, explanation, or conversational filler.`;
-
-                const translatedText = await queryGroq([
-                    { role: "system", content: "You are an expert translator." },
-                    { role: "user", content: `${prompt}\n\nText:\n${textToTranslate}` }
-                ], "llama-3.3-70b-versatile");
-
-                const translationCard =
-                    `🌐 *GROQ AI TRANSLATION* 🌐\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `📥 *Original:* _"${textToTranslate.trim()}"_\n` +
-                    `📤 *Translation:* *"${translatedText.trim()}"*\n\n` +
-                    `🌐 *Target Language:* \`${targetLang.toUpperCase()}\``;
-
-                await sock.sendMessage(jid, { text: translationCard }, { quoted: msg });
-
-            } catch (error) {
-                console.error("Translation Command Error:", error.message);
-                await sock.sendMessage(jid, { text: "❌ Translation processing failed." }, { quoted: msg });
+            } catch (apiErr) {
+                console.warn("⚠️ [TRANSLATE API FALLBACK]:", apiErr.message);
             }
+
+            // Step 2: Automatic Fallback to Groq AI if API is unreachable
+            if (!translatedText) {
+                try {
+                    const prompt = `Translate the following text into the language represented by code/name '${targetLang}'. ` +
+                                   `Preserve original markdown formatting (*, _, ~). Output ONLY the translated text without introductory commentary.`;
+
+                    translatedText = await queryGroq([
+                        { role: "system", content: "You are an expert translator." },
+                        { role: "user", content: `${prompt}\n\nText:\n"${textToTranslate}"` }
+                    ], "llama-3.1-8b-instant");
+                } catch (groqErr) {
+                    console.error("❌ [GROQ TRANSLATE FAILED]:", groqErr.message);
+                }
+            }
+
+            if (!translatedText) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ Translation failed. Service temporarily unavailable.", 
+                    edit: statusMsg.key 
+                });
+            }
+
+            const card =
+                `🌐 *TRANSLATION RESULT* 🌐\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `📥 *Input:* _"${textToTranslate}"_\n` +
+                `📤 *Output:* *"${translatedText.trim()}"*\n\n` +
+                `🌐 *Target Language:* \`${detectedLang.toUpperCase()}\``;
+
+            await sock.sendMessage(jid, { text: card, edit: statusMsg.key });
+        }
+    },
+
+    // Translate Alias
+    {
+        name: 'translate',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const cmd = module.exports.find(c => c.name === 'trt');
+            if (cmd) await cmd.execute(sock, msg, args);
         }
     },
 
