@@ -22,21 +22,26 @@ function getRawMessage(message) {
     return message;
 }
 
-// ─── CATBOX PRIMARY UPLOAD HELPER ─────────────────────────────────
+// ─── CATBOX PRIMARY UPLOAD HELPER (412 FIX & PROXY FALLBACK) ───
 async function uploadToCatbox(buffer, mimeType) {
     let ext = mimeType.split('/')[1] || 'bin';
     ext = ext.split(';')[0].trim();
     if (ext === 'jpeg') ext = 'jpg';
     const filename = `file_${Date.now()}.${ext}`;
 
-    // Host 1: Catbox.moe (PRIMARY)
+    // Host 1: Direct Catbox.moe with Browser Spoofing (Fixes 412 Error)
     try {
         const form = new FormData();
         form.append('reqtype', 'fileupload');
         form.append('fileToUpload', buffer, { filename, contentType: mimeType });
 
         const response = await axios.post('https://catbox.moe/user/api.php', form, {
-            headers: { ...form.getHeaders() },
+            headers: { 
+                ...form.getHeaders(),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Origin': 'https://catbox.moe',
+                'Referer': 'https://catbox.moe/'
+            },
             timeout: 30000
         });
 
@@ -44,10 +49,27 @@ async function uploadToCatbox(buffer, mimeType) {
             return response.data.trim();
         }
     } catch (err) {
-        console.error("⚠️ [CATBOX PRIMARY FAILED, TRYING QU.AX FALLBACK]:", err.message);
+        console.warn("⚠️ [DIRECT CATBOX 412/403, TRYING CATBOX PROXY]:", err.message);
     }
 
-    // Host 2: qu.ax (SECONDARY FALLBACK)
+    // Host 2: David Cyril Server-Side Catbox Proxy
+    try {
+        const form = new FormData();
+        form.append('file', buffer, { filename, contentType: mimeType });
+
+        const response = await axios.post('https://apis.davidcyril.name.ng/tourl', form, {
+            headers: { ...form.getHeaders() },
+            timeout: 30000
+        });
+
+        if (response.data?.success && response.data?.url && response.data.url.includes('catbox.moe')) {
+            return response.data.url.trim();
+        }
+    } catch (err) {
+        console.warn("⚠️ [CATBOX PROXY FAILED, TRYING QU.AX]:", err.message);
+    }
+
+    // Host 3: qu.ax Fallback
     try {
         const form = new FormData();
         form.append('files[]', buffer, { filename, contentType: mimeType });
