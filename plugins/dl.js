@@ -290,35 +290,71 @@ module.exports = [
         }
     },
 
-    // 2. TikTok
+    // 2. TikTok Downloader (.tt / .tiktok / .tt2)
     {
         name: 'tt',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a TikTok video URL." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching TikTok video..." }, { quoted: msg });
+            
+            if (!url) {
+                return await sock.sendMessage(jid, { 
+                    text: "❌ Please provide a valid TikTok video URL.\n\n*Example:* `.tt https://vm.tiktok.com/xxxx/`" 
+                }, { quoted: msg });
+            }
+
+            const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching TikTok video..." }, { quoted: msg });
+
             try {
-                const data = await downloadMedia('https://apis.prexzyvilla.site/download/tiktok', { url });
-                const downloadUrl = extractDownloadUrl(data);
-                if (!downloadUrl) throw new Error('No download link found');
+                const endpoint = `https://apis.davidcyril.name.ng/download/tiktokv4?url=${encodeURIComponent(url)}`;
+                const data = await downloadMedia(endpoint);
+
+                if (!data || (!data.success && data.status !== 200)) {
+                    throw new Error(data?.message || 'TikTok API returned an invalid response.');
+                }
+
+                const res = data.results || data.result || data;
+                
+                // Smart video URL resolution from the tiktokv4 API results
+                const downloadUrl = res.nowatermark || 
+                                    res.noWatermark || 
+                                    res.video || 
+                                    res.play || 
+                                    res.download_url || 
+                                    extractDownloadUrl(data);
+
+                if (!downloadUrl) {
+                    throw new Error('No valid video download link found.');
+                }
+
                 const buffer = await fetchBuffer(downloadUrl);
-                await sock.sendMessage(jid, { video: buffer, caption: extractTitle(data) });
+                const captionText = res.title || res.caption || res.desc || 'TikTok Video 🎬';
+
+                await sock.sendMessage(jid, { video: buffer, caption: captionText }, { quoted: msg });
+                
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
+
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                console.error("❌ [TIKTOK DOWNLOAD FAILED]:", err.message);
+                await sock.sendMessage(jid, { 
+                    text: `❌ TikTok download failed: ${err.message}`, 
+                    edit: statusMsg.key 
+                });
             }
         }
     },
+
+    // TikTok Aliases
     {
         name: 'tiktok',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args) => {
             const cmd = module.exports.find(c => c.name === 'tt');
-            if (cmd) await cmd.execute(sock, msg, args, { isOwner, isSudo, isDev });
+            if (cmd) await cmd.execute(sock, msg, args);
         }
     },
-
+    
     // 3. YouTube
     {
         name: 'yt',
