@@ -211,7 +211,7 @@ module.exports = [
         }
     },
 
-    // 3. GETPP (User or Group Profile Picture - Fixed fallbacks & LID)
+    // 3. GETPP (User or Group Profile Picture - Bulletproof LID & Group Resolver)
     {
         name: 'getpp',
         isPrefixless: false,
@@ -222,54 +222,100 @@ module.exports = [
             
             let targetJid = '';
 
-            // Support fetching the group's own profile picture (.getpp gc / .getpp group) [1.1]
+            // 1. Target Group Profile Picture (.getpp gc / .getpp group)
             if (isGroup && (cleanArgs === 'gc' || cleanArgs === 'group')) {
                 targetJid = jid;
             } else {
-                // Otherwise, resolve the target user cleanly
-                targetJid = parseTarget(msg, args) || msg.key.participant || msg.key.remoteJid || '';
+                // 2. Resolve target user from Reply, Mention, or Digits
+                const rawMsg = getRawMessage(msg.message);
+                const contextInfo = rawMsg?.contextInfo ||
+                                    rawMsg?.extendedTextMessage?.contextInfo ||
+                                    rawMsg?.imageMessage?.contextInfo ||
+                                    rawMsg?.videoMessage?.contextInfo ||
+                                    rawMsg?.stickerMessage?.contextInfo ||
+                                    rawMsg?.audioMessage?.contextInfo ||
+                                    rawMsg?.documentMessage?.contextInfo;
+
+                const mentions = contextInfo?.mentionedJid || [];
+
+                if (contextInfo?.participant) {
+                    targetJid = normalizeToJid(contextInfo.participant);
+                } else if (mentions.length > 0) {
+                    targetJid = normalizeToJid(mentions[0]);
+                } else if (args) {
+                    const cleanDigits = args.replace(/[^0-9]/g, '');
+                    if (cleanDigits.length >= 7) {
+                        targetJid = `${cleanDigits}@s.whatsapp.net`;
+                    }
+                }
+
+                // Default to command sender if no target specified
+                if (!targetJid) {
+                    targetJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+                }
             }
 
             if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide a target user, reply to a message, or use `.getpp gc` to get the group's picture." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention a user, or type a number." }, { quoted: msg });
             }
 
-            // Safe JID translation: Always query standard phone node domains for profile pictures [1.1]
-            if (targetJid.endsWith('@lid')) {
-                const resolved = await getPhoneJid(sock, targetJid, jid);
-                if (resolved && resolved.endsWith('@s.whatsapp.net')) {
-                    targetJid = resolved;
-                }
+            // 3. Guaranteed Group Participants LID-to-Phone Translator
+            if (isGroup && targetJid !== jid) {
+                try {
+                    const groupMetadata = await sock.groupMetadata(jid);
+                    const cleanTarget = targetJid.split('@')[0].split(':')[0];
+                    const participant = groupMetadata.participants.find(p => {
+                        const pId = p.id ? p.id.split('@')[0].split(':')[0] : '';
+                        const pLid = p.lid ? p.lid.split('@')[0].split(':')[0] : '';
+                        return pId === cleanTarget || pLid === cleanTarget;
+                    });
+
+                    if (participant && participant.id) {
+                        targetJid = normalizeToJid(participant.id);
+                    }
+                } catch (e) { /* ignore metadata fallback */ }
             }
+
+            // Secondary LID fallback if not in group
+            if (targetJid.endsWith('@lid')) {
+                try {
+                    const resolved = await getPhoneJid(sock, targetJid, jid);
+                    if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+                        targetJid = resolved;
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
+            const statusMsg = await sock.sendMessage(jid, { text: "Extracting profile picture... 📷" }, { quoted: msg });
 
             try {
                 let profileUrl;
                 try {
-                    // Attempt to fetch high-resolution image first
                     profileUrl = await sock.profilePictureUrl(targetJid, 'image');
                 } catch (err) {
-                    // Fallback to low-resolution preview thumbnail
                     profileUrl = await sock.profilePictureUrl(targetJid, 'preview');
                 }
 
                 if (!profileUrl) throw new Error("No URL returned");
 
-                const targetLabel = targetJid === jid ? "group" : `@${targetJid.split('@')[0]}`;
+                const targetNumber = targetJid.split('@')[0];
+                const captionText = targetJid === jid ? "📷 *Group profile picture extracted!*" : `📷 *Profile picture extracted for:* @${targetNumber}`;
+
                 await sock.sendMessage(jid, { 
                     image: { url: profileUrl }, 
-                    caption: `📷 *Profile picture extracted for:* ${targetLabel}`,
-                    mentions: [targetJid] 
+                    caption: captionText,
+                    mentions: targetJid !== jid ? [targetJid] : []
                 }, { quoted: msg });
+
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
 
             } catch (e) {
                 const isTargetGroup = targetJid.endsWith('@g.us');
-                if (isTargetGroup) {
-                    await sock.sendMessage(jid, { text: "❌ This group has no active profile picture set." }, { quoted: msg });
-                } else {
-                    await sock.sendMessage(jid, { 
-                        text: "❌ No public profile picture found.\n\n_Note: This user may have restricted their profile picture visibility in their WhatsApp Privacy Settings._" 
-                    }, { quoted: msg });
-                }
+                const errorText = isTargetGroup
+                    ? "❌ This group has no active profile picture set."
+                    : "❌ No public profile picture found.\n\n_Note: This user may have hidden their profile photo in WhatsApp Privacy Settings._";
+
+                await sock.sendMessage(jid, { text: errorText, edit: statusMsg.key });
             }
         }
     },
