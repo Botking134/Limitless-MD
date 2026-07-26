@@ -1053,7 +1053,7 @@ module.exports = [
 
     // ─── GAMES REGISTER (owner-only active-session diagnostics) ─────
     {
-        name: 'gamesregister',
+        name: 'games_reg',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner }) => {
             const jid = msg.key.remoteJid;
