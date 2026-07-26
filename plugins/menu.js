@@ -147,8 +147,11 @@ _┃ ⊱ gcalerts_
 _┃ ⊱ antipromote_
 _┃ ⊱ antidemote_
 _┃ ⊱ overkill_
+_┃ ⊱ antijoin_
+_┃ ⊱ gfilter_
 
 _❖ ── [ TOOLS ] ── ❖_
+_┃ ⊱ search_ (AI Command Finder)
 _┃ ⊱ track_
 _┃ ⊱ getpp_
 _┃ ⊱ setname_
@@ -177,6 +180,9 @@ _┃ ⊱ ss_
 _┃ ⊱ calc_
 _┃ ⊱ trt_
 _┃ ⊱ spam_
+_┃ ⊱ pfilter_
+_┃ ⊱ filters_
+_┃ ⊱ delfilter_
 
 _❖ ── [ DOWNLOADER ] ── ❖_
 _┃ ⊱ play_
@@ -223,6 +229,7 @@ _┃ ⊱ aura_
 _┃ ⊱ lol_
 
 _❖ ── [ OWNER ] ── ❖_
+_┃ ⊱ prefix_ (Prefix Reminder)
 _┃ ⊱ diagnose_
 _┃ ⊱ update_
 _┃ ⊱ mode_
@@ -250,6 +257,10 @@ _┃ ⊱ speed_
 _┃ ⊱ sticker_
 _┃ ⊱ crop_
 _┃ ⊱ take_
+_┃ ⊱ smeme_
+_┃ ⊱ packname_
+_┃ ⊱ fixpack_
+_┃ ⊱ unpack_
 _┃ ⊱ tourl_
 _┃ ⊱ kamui_
 _┃ ⊱ addnote_
@@ -409,6 +420,86 @@ module.exports = [
         }
     },
 
+    // ─── SEARCH COMMAND (Gemini 3.5 Flash Command Search Engine) ───
+    {
+        name: 'search',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const query = args ? args.trim() : '';
+
+            if (!query) {
+                return await sock.sendMessage(jid, { 
+                    text: `❌ *Format:* \`${config.prefix}search <what_you_want_to_do>\`\n\n*Examples:*\n• \`${config.prefix}search command for network speed\`\n• \`${config.prefix}search how to download songs\`\n• \`${config.prefix}search lock group chat\`` 
+                }, { quoted: msg });
+            }
+
+            if (!config.geminiApiKey) {
+                return await sock.sendMessage(jid, { text: "❌ Gemini API key is missing in your configuration." }, { quoted: msg });
+            }
+
+            const statusMsg = await sock.sendMessage(jid, { text: "Analyzing command archives via Gemini 3.5 Flash... 🔍" }, { quoted: msg });
+
+            try {
+                const { GoogleGenAI } = await import('@google/genai');
+                const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+
+                const prompt = 
+                    `You are an expert command search engine for the Limitless-MD WhatsApp Bot system.\n` +
+                    `Below is the complete master catalog of all commands and categories supported by the bot:\n\n${menuText}\n\n` +
+                    `User Query: "${query}"\n\n` +
+                    `Task:\n` +
+                    `1. Analyze the user's intent and calculate the most accurate matching command(s).\n` +
+                    `2. Output a clean, beautiful, and organized card in this exact structure (no conversational intro/outro filler):\n\n` +
+                    `🔍 *COMMAND SEARCH RESULT* 🔍\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `📌 *Primary Match:* \`.<command_name>\`\n` +
+                    `💡 *Function:* [Concise description of what it does]\n` +
+                    `👉 *Usage Example:* \`.<command_name> [args]\`\n\n` +
+                    `_(Include 1 or 2 alternative relevant commands if applicable)_`;
+
+                const response = await ai.models.generateContent({
+                    model: "gemini-3.5-flash",
+                    contents: prompt
+                });
+
+                const replyText = response.text || response.output || "❌ No matching command found in the system archives.";
+
+                await sock.sendMessage(jid, { text: replyText.trim(), edit: statusMsg.key });
+
+            } catch (err) {
+                console.error("❌ [SEARCH COMMAND FAILED]:", err.message);
+                await sock.sendMessage(jid, { text: `❌ Search failed: ${err.message}`, edit: statusMsg.key });
+            }
+        }
+    },
+
+    // ─── PREFIX COMMAND (Prefixless Prefix Reminder for Authorized Users) ───
+    {
+        name: 'prefix',
+        isPrefixless: true,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+
+            const isAuthorized = isOwner || isSudo || isDev;
+            if (!isAuthorized) return;
+
+            const rawMsg = getRawMessage(msg.message);
+            const text = (rawMsg?.conversation || rawMsg?.extendedTextMessage?.text || '').trim().toLowerCase();
+
+            if (!text.startsWith('prefix')) return;
+
+            const activePrefix = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+
+            const responseText =
+`{ ${activePrefix} }
+Stop being careless dude
+Here's your prefix though`;
+
+            await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+        }
+    },
+
     // ─── SUB-MENU BUTTON COMMANDS ──────────────────────────────────
     {
         name: 'menu_ai',
@@ -430,7 +521,7 @@ module.exports = [
         name: 'menu_group',
         isPrefixless: true,
         execute: async (sock, msg) => {
-            const text = `┌─────────┐\n│ 🔥 GROUP  \n└─────────┘\n\n_┃ ⊱ .mute_\n_┃ ⊱ .unmute_\n_┃ ⊱ .kick_\n_┃ ⊱ .promote_\n_┃ ⊱ .demote_\n_┃ ⊱ .tagall_\n_┃ ⊱ .tag_\n_┃ ⊱ .link_\n_┃ ⊱ .antilink_\n_┃ ⊱ .admins_\n_┃ ⊱ .antitag_\n_┃ ⊱ .antibot_\n_┃ ⊱ .warn_\n_┃ ⊱ .welcome_\n_┃ ⊱ .goodbye_\n_┃ ⊱ .poll_\n_┃ ⊱ .antigm_\n_┃ ⊱ .gclog_\n_┃ ⊱ .antispam_\n_┃ ⊱ .silence_\n_┃ ⊱ .gcalerts_\n_┃ ⊱ .antipromote_\n_┃ ⊱ .antidemote_\n_┃ ⊱ .overkill_`;
+            const text = `┌─────────┐\n│ 🔥 GROUP  \n└─────────┘\n\n_┃ ⊱ .mute_\n_┃ ⊱ .unmute_\n_┃ ⊱ .kick_\n_┃ ⊱ .promote_\n_┃ ⊱ .demote_\n_┃ ⊱ .tagall_\n_┃ ⊱ .tag_\n_┃ ⊱ .link_\n_┃ ⊱ .antilink_\n_┃ ⊱ .admins_\n_┃ ⊱ .antitag_\n_┃ ⊱ .antibot_\n_┃ ⊱ .warn_\n_┃ ⊱ .welcome_\n_┃ ⊱ .goodbye_\n_┃ ⊱ .poll_\n_┃ ⊱ .antigm_\n_┃ ⊱ .gclog_\n_┃ ⊱ .antispam_\n_┃ ⊱ .silence_\n_┃ ⊱ .gcalerts_\n_┃ ⊱ .antipromote_\n_┃ ⊱ .antidemote_\n_┃ ⊱ .overkill_\n_┃ ⊱ .antijoin_\n_┃ ⊱ .gfilter_`;
             await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
         }
     },
@@ -438,7 +529,7 @@ module.exports = [
         name: 'menu_tools',
         isPrefixless: true,
         execute: async (sock, msg) => {
-            const text = `┌────────┐\n│ ⚙️ TOOLS  \n└────────┘\n\n_┃ ⊱ .track_\n_┃ ⊱ .getpp_\n_┃ ⊱ .setname_\n_┃ ⊱ .save_\n_┃ ⊱ .tostatus_\n_┃ ⊱ .fw_\n_┃ ⊱ .presence_\n_┃ ⊱ .autotyping_\n_┃ ⊱ .autorecording_\n_┃ ⊱ .alwaysonline_\n_┃ ⊱ .autoread_\n_┃ ⊱ .antidelete_\n_┃ ⊱ .antiviewonce_\n_┃ ⊱ .antibug_\n_┃ ⊱ .clear_\n_┃ ⊱ .autoviewstatus_\n_┃ ⊱ .statusemoji_\n_┃ ⊱ .autoreactstatus_\n_┃ ⊱ .block_\n_┃ ⊱ .unblock_\n_┃ ⊱ .aza_\n_┃ ⊱ .time_\n_┃ ⊱ .weather_\n_┃ ⊱ .device_\n_┃ ⊱ .ss_\n_┃ ⊱ .calc_\n_┃ ⊱ .trt_\n_┃ ⊱ .spam_`;
+            const text = `┌────────┐\n│ ⚙️ TOOLS  \n└────────┘\n\n_┃ ⊱ .search_\n_┃ ⊱ .track_\n_┃ ⊱ .getpp_\n_┃ ⊱ .setname_\n_┃ ⊱ .save_\n_┃ ⊱ .tostatus_\n_┃ ⊱ .fw_\n_┃ ⊱ .presence_\n_┃ ⊱ .autotyping_\n_┃ ⊱ .autorecording_\n_┃ ⊱ .alwaysonline_\n_┃ ⊱ .autoread_\n_┃ ⊱ .antidelete_\n_┃ ⊱ .antiviewonce_\n_┃ ⊱ .antibug_\n_┃ ⊱ .clear_\n_┃ ⊱ .autoviewstatus_\n_┃ ⊱ .statusemoji_\n_┃ ⊱ .autoreactstatus_\n_┃ ⊱ .block_\n_┃ ⊱ .unblock_\n_┃ ⊱ .aza_\n_┃ ⊱ .time_\n_┃ ⊱ .weather_\n_┃ ⊱ .device_\n_┃ ⊱ .ss_\n_┃ ⊱ .calc_\n_┃ ⊱ .trt_\n_┃ ⊱ .spam_\n_┃ ⊱ .pfilter_\n_┃ ⊱ .filters_\n_┃ ⊱ .delfilter_`;
             await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
         }
     },
@@ -462,7 +553,7 @@ module.exports = [
         name: 'menu_owner',
         isPrefixless: true,
         execute: async (sock, msg) => {
-            const text = `┌─────────────┐\n│ 👑 OWNER & DEV  \n└─────────────┘\n\n_┃ ⊱ .diagnose_\n_┃ ⊱ .update_\n_┃ ⊱ .mode_\n_┃ ⊱ .setsudo_\n_┃ ⊱ .delsudo_\n_┃ ⊱ .addowner_\n_┃ ⊱ .delowner_\n_┃ ⊱ .restart_\n_┃ ⊱ .shutdown_\n_┃ ⊱ .ban_\n_┃ ⊱ .unban_\n_┃ ⊱ .afk_\n_┃ ⊱ .setvar_\n_┃ ⊱ .settings_\n_┃ ⊱ .antipm_\n_┃ ⊱ .reminder_`;
+            const text = `┌─────────────┐\n│ 👑 OWNER & DEV  \n└─────────────┘\n\n_┃ ⊱ .prefix_\n_┃ ⊱ .diagnose_\n_┃ ⊱ .update_\n_┃ ⊱ .mode_\n_┃ ⊱ .setsudo_\n_┃ ⊱ .delsudo_\n_┃ ⊱ .addowner_\n_┃ ⊱ .delowner_\n_┃ ⊱ .restart_\n_┃ ⊱ .shutdown_\n_┃ ⊱ .ban_\n_┃ ⊱ .unban_\n_┃ ⊱ .afk_\n_┃ ⊱ .setvar_\n_┃ ⊱ .settings_\n_┃ ⊱ .antipm_\n_┃ ⊱ .reminder_`;
             await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
         }
     },
@@ -470,7 +561,7 @@ module.exports = [
         name: 'menu_utilities',
         isPrefixless: true,
         execute: async (sock, msg) => {
-            const text = `┌───────────┐\n│ 🛠️ UTILITIES  \n└───────────┘\n\n_┃ ⊱ .ping_\n_┃ ⊱ .alive_\n_┃ ⊱ .delete_\n_┃ ⊱ .tdelete_\n_┃ ⊱ .autoreact_\n_┃ ⊱ .speed_\n_┃ ⊱ .sticker_\n_┃ ⊱ .crop_\n_┃ ⊱ .take_\n_┃ ⊱ .tourl_\n_┃ ⊱ .kamui_\n_┃ ⊱ .addnote_\n_┃ ⊱ .delnote_\n_┃ ⊱ .getnotes_\n_┃ ⊱ .toimg_\n_┃ ⊱ .tomp3_\n_┃ ⊱ .tomp4_\n_┃ ⊱ .binary_\n_┃ ⊱ .ocr_\n_┃ ⊱ .qr_\n_┃ ⊱ .readqr_\n_┃ ⊱ .qty_\n_┃ ⊱ .currency_`;
+            const text = `┌───────────┐\n│ 🛠️ UTILITIES  \n└───────────┘\n\n_┃ ⊱ .ping_\n_┃ ⊱ .alive_\n_┃ ⊱ .delete_\n_┃ ⊱ .tdelete_\n_┃ ⊱ .autoreact_\n_┃ ⊱ .speed_\n_┃ ⊱ .sticker_\n_┃ ⊱ .crop_\n_┃ ⊱ .take_\n_┃ ⊱ .smeme_\n_┃ ⊱ .packname_\n_┃ ⊱ .fixpack_\n_┃ ⊱ .unpack_\n_┃ ⊱ .tourl_\n_┃ ⊱ .kamui_\n_┃ ⊱ .addnote_\n_┃ ⊱ .delnote_\n_┃ ⊱ .getnotes_\n_┃ ⊱ .toimg_\n_┃ ⊱ .tomp3_\n_┃ ⊱ .tomp4_\n_┃ ⊱ .binary_\n_┃ ⊱ .ocr_\n_┃ ⊱ .qr_\n_┃ ⊱ .readqr_\n_┃ ⊱ .qty_\n_┃ ⊱ .currency_`;
             await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
         }
     }
