@@ -10,13 +10,35 @@ const { getRawMessage, cleanJid, extractBodyAndTrim } = require('./Message');
 const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation, handleNoteSession } = require('./SessionManager');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
-
-// Link the SummaryManager helper
 const { recordMessage } = require('./SummaryManager');
 
+// Custom Message Filter Manager
+let handleFilterInterceptor;
+try {
+    handleFilterInterceptor = require('./FilterManager').handleFilterInterceptor;
+} catch (e) {
+    handleFilterInterceptor = async () => false;
+}
+
+// ─── IN-MEMORY GROUP METADATA CACHE (60s TTL) ─────────────────────
+const groupMetadataCache = new Map();
+
+async function getCachedGroupMetadata(sock, jid) {
+    const cached = groupMetadataCache.get(jid);
+    if (cached && (Date.now() - cached.time < 60000)) {
+        return cached.data;
+    }
+    try {
+        const metadata = await sock.groupMetadata(jid);
+        groupMetadataCache.set(jid, { data: metadata, time: Date.now() });
+        return metadata;
+    } catch (e) {
+        return cached ? cached.data : null;
+    }
+}
+
 /**
- * Extract current active prefix safely supporting arrays.
- * Read fresh every time to support live updates via commands.js and reload().
+ * Extract current active prefix safely supporting arrays and strings.
  */
 function getActivePrefix() {
     return Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
@@ -97,17 +119,23 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const senderJid = normalizeToJid(rawSender);
         const senderNumber = senderJid.split('@')[0];
         const isGroup = jid.endsWith('@g.us');
-        const cleanChatJid = cleanJid(jid); // Cleaned group JID
+        const cleanChatJid = cleanJid(jid);
 
         // ─── EXTRACT BODY ───
         const { rawMsg, body, trimmedMessageBody, lowerMessage } = extractBodyAndTrim(msg);
+
+        // ─── CUSTOM MESSAGE FILTERS INTERCEPTOR ───
+        try {
+            const filterTriggered = await handleFilterInterceptor(sock, msg, trimmedMessageBody, jid);
+            if (filterTriggered) return;
+        } catch (e) { /* ignore */ }
 
         // ─── LINK SUMMARY LOGS ───
         if (isGroup && trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix) && !msg.key.fromMe) {
             recordMessage(jid, msg.pushName || senderNumber, trimmedMessageBody);
         }
 
-        // ─── RECORD CONVERSATION STATS (For active, inactive, msgs) ───
+        // ─── RECORD CONVERSATION STATS ───
         if (isGroup && !msg.key.fromMe) {
             const todayStr = new Date().toDateString();
             
@@ -127,7 +155,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             global.saveStateTimeout = global.saveStateTimeout || null;
             if (!global.saveStateTimeout) {
                 global.saveStateTimeout = setTimeout(() => {
-                    saveState();
+                    try { saveState(); } catch (e) {}
                     global.saveStateTimeout = null;
                 }, 30000);
             }
@@ -144,8 +172,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
         const quotedMsgId = contextInfo?.stanzaId;
-        
-        // Safety check for messageStore presence
         const quotedMsg = (quotedMsgId && global.messageStore) ? global.messageStore[quotedMsgId] : null;
 
         const handled = await handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMsgId, cleanChatJid);
@@ -155,8 +181,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (dlHandled) return;
 
         // ─── QUIZ CATEGORY SELECTION ────────────────────────────
-        const senderJidCat = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-        const quizSingleKey = jid + '_' + senderJidCat;
+        const quizSingleKey = jid + '_' + senderJid;
         const quizMultiKey = jid;
         let activeQuizKey = '';
 
@@ -184,17 +209,15 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS (Fixed LID/Phone dev array alignments) ─────
+        // ─── PERMISSIONS ─────
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : (config.botLid || ''));
 
         global.activeSock = sock;
 
         let isDev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderJid);
-        let isPrimaryOwner = senderJid === config.ownerJid ||
-                             (config.ownerLid && senderJid === config.ownerLid);
-        let isSecondaryOwner = Array.isArray(config.secondaryOwners) &&
-                               config.secondaryOwners.includes(senderJid);
+        let isPrimaryOwner = senderJid === config.ownerJid || (config.ownerLid && senderJid === config.ownerLid);
+        let isSecondaryOwner = Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(senderJid);
         let isOwner = isDev || isPrimaryOwner || isSecondaryOwner || msg.key.fromMe;
         let isSudo = (Array.isArray(config.sudos) && config.sudos.includes(senderJid)) ||
                      (Array.isArray(config.sudoLids) && config.sudoLids.includes(senderJid));
@@ -218,16 +241,14 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const isAuthorized = isOwner || isSudo;
 
-        // Dynamic Group Admin lookup to safely prevent rate limiting loops
+        // Cached Group Admin lookup
         let isAdmin = false;
         if (isGroup) {
-            try {
-                const groupMetadata = await sock.groupMetadata(jid);
+            const groupMetadata = await getCachedGroupMetadata(sock, jid);
+            if (groupMetadata) {
                 const participants = groupMetadata.participants || [];
                 const senderObj = participants.find(p => cleanJid(p.id) === cleanJid(senderJid));
                 isAdmin = !!(senderObj && (senderObj.admin === 'admin' || senderObj.admin === 'superadmin'));
-            } catch (e) {
-                isAdmin = false;
             }
         }
 
@@ -260,9 +281,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 }
 
                 if (shouldMute) {
-                    try {
-                        await sock.sendMessage(jid, { delete: msg.key });
-                    } catch (e) { /* ignore */ }
+                    try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
                     return;
                 }
             }
@@ -272,20 +291,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const cleanBotJid = cleanJid(botJid);
         const cleanBotLid = cleanJid(botLid);
 
-        const botNumber = cleanBotJid ? cleanBotJid.split('@')[0] : '';
-        const botLidNumber = cleanBotLid ? cleanBotLid.split('@')[0] : '';
-
         const isReplyingToBot = (quotedMsgId && botSentMessageIds && botSentMessageIds.has(quotedMsgId)) ||
                                (quotedMsg && quotedMsg.key && quotedMsg.key.fromMe) ||
                                (!isGroup && !msg.key.fromMe && quotedMsgId);
-
-        const mentionsBotInText = (botNumber && lowerMessage.includes(`@${botNumber}`)) || 
-                                  (botLidNumber && lowerMessage.includes(`@${botLidNumber}`));
-
-        const isMentioningBot = mentionedJids.some(j => {
-            const cj = cleanJid(j);
-            return cj === cleanBotJid || (cleanBotLid && cj === cleanBotLid);
-        }) || mentionsBotInText;
 
         const isGojoCalled = /\bgojo\b/i.test(lowerMessage);
         const isAizenCalled = /\baizen\b/i.test(lowerMessage);
@@ -295,15 +303,13 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         let identifiedAgent = null;
 
-        // 1. Reply trigger resolving
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         } else {
-            // 2. Prefixless Name triggers mapped to their respective active config arrays [1.1]
             if (isGojoCalled && config.gojoChats?.includes(jid)) {
                 identifiedAgent = 'gojo';
             } else if (isAizenCalled && config.chatbotChats?.includes(jid)) {
-                identifiedAgent = 'jarvis'; // Maps internally to jarvis/aizen chat interceptor in gpt.js [1.1]
+                identifiedAgent = 'aizen';
             } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
                 identifiedAgent = 'lizzy';
             } else if (isFridayCalled && config.fridayChats?.includes(jid)) {
@@ -318,67 +324,24 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (isAsleep && !trimmedMessageBody.startsWith(activePrefix)) identifiedAgent = null;
         }
 
+        // Correct command mappings for AI Agents
         if (identifiedAgent && !trimmedMessageBody.startsWith(activePrefix)) {
             if (identifiedAgent === 'gojo') {
-                command = 'gojo';
+                command = 'gojo_chat';
                 args = trimmedMessageBody;
-            } else if (identifiedAgent === 'uriel') {
-                command = 'uriel';
+            } else if (identifiedAgent === 'aizen' || identifiedAgent === 'jarvis') {
+                command = 'aizen_chat';
                 args = trimmedMessageBody;
             } else if (identifiedAgent === 'lizzy') {
                 command = 'lizzy_chat';
                 args = trimmedMessageBody;
-            } else if (identifiedAgent === 'jarvis') {
-                command = 'chatbot_chat';
-                args = trimmedMessageBody;
             } else if (identifiedAgent === 'friday') {
                 command = 'friday_chat';
                 args = trimmedMessageBody;
+            } else if (identifiedAgent === 'uriel') {
+                command = 'uriel';
+                args = trimmedMessageBody;
             }
-        }
-
-        // ─── DEV MENTION REACTION ────────────────────────────────
-        const devLidsSet = new Set(DEV_LIDS);
-        const devJidsSet = new Set(DEV_JIDS);
-        const devNums = new Set();
-
-        for (const dev of devLidsSet) devNums.add(dev.split('@')[0]);
-        for (const dev of devJidsSet) devNums.add(dev.split('@')[0]);
-
-        let isDevMentioned = false;
-
-        for (const mention of mentionedJids) {
-            const normalized = normalizeToJid(mention);
-            const num = normalized.split('@')[0];
-            if (devNums.has(num)) {
-                isDevMentioned = true;
-                break;
-            }
-        }
-
-        if (!isDevMentioned) {
-            const mentionMatches = trimmedMessageBody.match(/@([0-9]+)/g) || [];
-            for (const match of mentionMatches) {
-                const num = match.replace('@', '');
-                if (devNums.has(num)) {
-                    isDevMentioned = true;
-                    break;
-                }
-            }
-        }
-
-        if (isDevMentioned && !msg.key.fromMe) {
-            (async () => {
-                const reactionSequence = ["⚽", "🔥", "🪽", "❄", "🥷🏼"];
-                for (const emoji of reactionSequence) {
-                    try {
-                        await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
-                    } catch (reactErr) {
-                        break;
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-            })().catch(err => console.error("❌ [REACTION] Dev mention animation failed:", err.message));
         }
 
         // ─── GROUP SECURITY INTERCEPTORS ─────────────────────────
@@ -393,36 +356,34 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             await handleGroupStatusProtection(sock, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev, isAdmin);
         }
 
-        // ─── ANTIBUG RATE-LIMIT ──────────────────────────────────
+        // ─── RATE LIMIT INTERCEPTORS ──────────────────────────────
         if (config.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
             const blocked = await handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, isAuthorized, isDev, isAdmin);
             if (blocked) return;
         }
 
-        // ─── ANTISPAM RATE-LIMIT ─────────────────────────────────
         if (isGroup && !isAuthorized && !msg.key.fromMe && !isDev) {
             const spammed = await handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, isAuthorized, isDev, isAdmin);
             if (spammed) return;
         }
 
-        // ─── COMMAND EXTRACTION ───
+        // ─── COMMAND EXTRACTION & BUTTON PARSER WITH SPACES ───
         if (!command) {
-            // ─── INTERACTIVE BUTTON INTERCEPTOR ───
             const rawUnwrapped = getRawMessage(msg.message);
-            let buttonId = '';
+            let rawButtonId = '';
 
             if (rawUnwrapped?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
                 try {
                     const parsed = JSON.parse(rawUnwrapped.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
-                    buttonId = parsed.id;
+                    rawButtonId = parsed.id;
                 } catch (e) { /* ignore */ }
             } else if (rawUnwrapped?.buttonsResponseMessage?.selectedButtonId) {
-                buttonId = rawUnwrapped.buttonsResponseMessage.selectedButtonId;
+                rawButtonId = rawUnwrapped.buttonsResponseMessage.selectedButtonId;
             } else if (rawUnwrapped?.templateButtonReplyMessage?.selectedId) {
-                buttonId = rawUnwrapped.templateButtonReplyMessage.selectedId;
+                rawButtonId = rawUnwrapped.templateButtonReplyMessage.selectedId;
             }
 
-            if (!buttonId && trimmedMessageBody.toLowerCase().includes('explore commands')) {
+            if (!rawButtonId && trimmedMessageBody.toLowerCase().includes('explore commands')) {
                 const targetQuotedMsg = (quotedMsgId && global.messageStore) ? global.messageStore[quotedMsgId] : null;
                 if (targetQuotedMsg) {
                     const rawQuoted = getRawMessage(targetQuotedMsg.message);
@@ -435,20 +396,40 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                         ''
                     ).toUpperCase();
 
-                    if (quotedText.includes('AI & CHATBOT')) buttonId = 'menu_ai';
-                    else if (quotedText.includes('INTERACTIVE GAMES') || quotedText.includes('GAMES')) buttonId = 'menu_games';
-                    else if (quotedText.includes('GROUP MANAGEMENT') || quotedText.includes('GROUP')) buttonId = 'menu_group';
-                    else if (quotedText.includes('TOOLS')) buttonId = 'menu_tools';
-                    else if (quotedText.includes('DOWNLOADER')) buttonId = 'menu_download';
-                    else if (quotedText.includes('FUN & ROLEPLAY') || quotedText.includes('FUN')) buttonId = 'menu_fun';
-                    else if (quotedText.includes('OWNER & DEV') || quotedText.includes('OWNER')) buttonId = 'menu_owner';
-                    else if (quotedText.includes('UTILITIES')) buttonId = 'menu_utilities';
+                    if (quotedText.includes('AI & CHATBOT')) rawButtonId = 'menu_ai';
+                    else if (quotedText.includes('INTERACTIVE GAMES') || quotedText.includes('GAMES')) rawButtonId = 'menu_games';
+                    else if (quotedText.includes('GROUP MANAGEMENT') || quotedText.includes('GROUP')) rawButtonId = 'menu_group';
+                    else if (quotedText.includes('TOOLS')) rawButtonId = 'menu_tools';
+                    else if (quotedText.includes('DOWNLOADER')) rawButtonId = 'menu_download';
+                    else if (quotedText.includes('FUN & ROLEPLAY') || quotedText.includes('FUN')) rawButtonId = 'menu_fun';
+                    else if (quotedText.includes('OWNER & DEV') || quotedText.includes('OWNER')) rawButtonId = 'menu_owner';
+                    else if (quotedText.includes('UTILITIES')) rawButtonId = 'menu_utilities';
                 }
             }
 
-            if (buttonId) {
-                command = buttonId.trim().toLowerCase();
-                args = '';
+            // Split button ID at spaces if it contains arguments (e.g., .gitclone Botking134/Limitless-MD)
+            if (rawButtonId) {
+                const cleanButton = rawButtonId.trim();
+                if (cleanButton.startsWith(activePrefix)) {
+                    const withoutPrefix = cleanButton.slice(activePrefix.length).trim();
+                    const spaceIndex = withoutPrefix.indexOf(' ');
+                    if (spaceIndex === -1) {
+                        command = withoutPrefix.toLowerCase();
+                        args = '';
+                    } else {
+                        command = withoutPrefix.slice(0, spaceIndex).toLowerCase();
+                        args = withoutPrefix.slice(spaceIndex + 1).trim();
+                    }
+                } else {
+                    const spaceIndex = cleanButton.indexOf(' ');
+                    if (spaceIndex === -1) {
+                        command = cleanButton.toLowerCase();
+                        args = '';
+                    } else {
+                        command = cleanButton.slice(0, spaceIndex).toLowerCase();
+                        args = cleanButton.slice(spaceIndex + 1).trim();
+                    }
+                }
             }
         }
 
@@ -463,69 +444,62 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                     command = withoutPrefix.slice(0, spaceIndex).toLowerCase();
                     args = withoutPrefix.slice(spaceIndex + 1).trim();
                 }
-            } else if (commands[trimmedMessageBody.toLowerCase()]) {
-                command = trimmedMessageBody.toLowerCase();
-                args = '';
+            } else {
+                const targetLower = trimmedMessageBody.toLowerCase();
+                if (typeof commands === 'object' && !Array.isArray(commands) && commands[targetLower]) {
+                    command = targetLower;
+                    args = '';
+                } else if (Array.isArray(commands) && commands.some(c => c.name === targetLower)) {
+                    command = targetLower;
+                    args = '';
+                }
             }
         }
 
         if (!command) return;
 
-        // ─── AGENT CONTEXT ─────────────────────────────────────────
-        if (command === 'gojo') global.activeAgentContext = 'gojo';
+        // ─── AGENT CONTEXT ───
+        if (command === 'gojo_chat') global.activeAgentContext = 'gojo';
         else if (command === 'uriel') global.activeAgentContext = 'uriel';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
-        else if (command === 'chatbot_chat') global.activeAgentContext = 'jarvis';
+        else if (command === 'aizen_chat') global.activeAgentContext = 'aizen';
         else if (command === 'friday_chat') global.activeAgentContext = 'friday';
         else global.activeAgentContext = null;
 
         const isPublicMode = config.isPublic ?? false;
         const cleanCommand = command.startsWith(activePrefix) ? command.slice(activePrefix.length) : command;
 
-        // ─── PERMISSION CHECKS ─────────────────────────────────────
-        const isOwnerCmd = ownerCommands.includes(cleanCommand);
-        const isDevOnlyCmd = devOnlyCommands.includes(cleanCommand);
+        // ─── PERMISSION CHECKS ───
+        if (ownerCommands.includes(cleanCommand) && isSudo && !isOwner && !isDev) return;
+        if (devOnlyCommands.includes(cleanCommand) && !isDev) return;
 
-        if (isOwnerCmd && isSudo && !isOwner && !isDev) {
-            return;
-        }
-
-        if (isDevOnlyCmd && !isDev) {
-            return;
-        }
-
+        // Expanded Whitelist for Interactive Game Replies & Button Responses
         const interactiveResponses = [
             'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
             'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'pvp_defend',
             'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download',
-            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans', 'uriel'
+            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans', 'uriel',
+            'vault8', 'escape', 'guess', 'millionaire', 'ttt', 'rps', 'torf',
+            'charade', 'wcg', 'anagram', 'quiz_ans', 'charade_ans', 'anagram_ans',
+            'wcg_ans', 'torf_ans', 'millionaire_ans', 'quiz_cat', 'jail_ans'
         ];
 
-        if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) {
-            return;
-        }
+        if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command)) return;
 
-        // ─── LOG COMMAND EXECUTION ────────────────────────────────
-        if (command) {
-            global.recentLogs.push({
-                time: new Date().toISOString(),
-                level: 'CMD',
-                message: `${command} ${args || ''}`.trim()
-            });
-            if (global.recentLogs.length > 2000) {
-                global.recentLogs.shift();
-            }
-        }
+        // ─── LOG COMMAND EXECUTION ───
+        global.recentLogs = global.recentLogs || [];
+        global.recentLogs.push({
+            time: new Date().toISOString(),
+            level: 'CMD',
+            message: `${command} ${args || ''}`.trim()
+        });
+        if (global.recentLogs.length > 2000) global.recentLogs.shift();
 
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
-        let reactEmoji = "❄";
-        if (isDev) reactEmoji = "♾️";
-        else if (isOwner) reactEmoji = "🪯";
-        else if (isSudo) reactEmoji = "☸️";
-
         if (config.autoReact === 'cmd' && !msg.key.fromMe) {
+            let reactEmoji = isDev ? "♾️" : (isOwner ? "🪯" : (isSudo ? "☸️" : "❄"));
             try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
         }
 
@@ -533,6 +507,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
     } catch (err) {
         console.error('Error handling message stream:', err);
+        global.recentLogs = global.recentLogs || [];
         global.recentLogs.push({
             time: new Date().toISOString(),
             level: 'ERROR',
