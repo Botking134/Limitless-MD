@@ -7,7 +7,10 @@ const config = require('./config');
 const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('./plugins/devs');
 const { handleDeletion } = require('./helpers/log');
 const { handleIncomingMessage } = require('./helpers/Infinity');
-const { normalizeToJid, getPhoneJid } = require('./stateManager');
+const { normalizeToJid, getPhoneJid, loadState } = require('./stateManager');
+
+// ─── INITIALIZE STATE ON BOOT ──────────────────────────────────
+try { loadState(); } catch (e) { console.error("⚠️ State load error:", e.message); }
 
 // ─── READLINE FOR AUTH ──────────────────────────────────────────
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -41,10 +44,11 @@ global.vault8Sessions = global.vault8Sessions || {};
 global.aiMemory = global.aiMemory || {};
 global.botMessageAgents = global.botMessageAgents || {};
 
-// Reconnection State Lock variables to prevent multiple concurrent instances
+// Reconnection State Locks
 global.isReconnecting = global.isReconnecting || false;
 global.reconnectAttempts = global.reconnectAttempts || 0;
 global.reconnectTimeout = global.reconnectTimeout || null;
+global.alwaysOnlineInterval = global.alwaysOnlineInterval || null;
 
 // ─── MAIN BOT STARTER ──────────────────────────────────────────
 
@@ -191,7 +195,6 @@ async function startBot() {
             }
 
             try {
-                // Set Bot's Own IDs
                 if (sock.user && sock.user.id) {
                     const rawJid = sock.user.id.split(':')[0] || sock.user.id;
                     config.botJid = normalizeToJid(rawJid);
@@ -202,19 +205,16 @@ async function startBot() {
                     }
                 }
 
-                // Set Primary Owner LID (Hardcoded)
                 const ownerLid = "139780398567572@lid";
                 config.ownerLid = ownerLid;
+                config.ownerLids = config.ownerLids || [];
                 if (!config.ownerLids.includes(ownerLid)) {
                     config.ownerLids.push(ownerLid);
                 }
-                console.log(`👑 [SYSTEM] Primary Owner LID set: ${ownerLid}`);
 
-                // Set Developer LIDs (Hardcoded)
                 config.devLids = [...DEV_LIDS];
-                console.log(`👑 [SYSTEM] Developer LIDs set:`, config.devLids);
 
-                // Send Status Report as direct Image Caption Card to Bot DM
+                // Send Status Report Card
                 try {
                     const prefixVal = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
                     const now = new Date();
@@ -239,7 +239,9 @@ async function startBot() {
                         const startPing = Date.now();
                         const controller = new AbortController();
                         const timeout = setTimeout(() => controller.abort(), 3000);
-                        await fetch("https://1.1.1.1", { method: 'HEAD', signal: controller.signal });
+                        if (typeof fetch === 'function') {
+                            await fetch("https://1.1.1.1", { method: 'HEAD', signal: controller.signal });
+                        }
                         clearTimeout(timeout);
                         pingMs = Date.now() - startPing;
                     } catch (e) { /* ignore ping failure */ }
@@ -253,27 +255,24 @@ async function startBot() {
                         `- Time   : ${timeStr} WAT\n` +
                         `- Date   : ${dateStr}`;
 
-                    const botJid = config.botJid || sock.user.id;
-                    if (botJid && 
-                        (botJid.endsWith('@s.whatsapp.net') || botJid.endsWith('@lid')) &&
-                        !botJid.includes('@s.whatsapp.net@s.whatsapp.net')) {
+                    const botJid = config.botJid || sock.user?.id;
+                    if (botJid && (botJid.endsWith('@s.whatsapp.net') || botJid.endsWith('@lid'))) {
                         console.log(`📨 Sending image status report to: ${botJid}`);
                         await sock.sendMessage(botJid, { 
                             image: { url: "https://qu.ax/I6tKC" },
                             caption: statusCard 
                         });
                         console.log(`✅ [SYSTEM] Connection status report image dispatched.`);
-                    } else {
-                        console.warn("[WARNING] Invalid bot JID, skipping status report:", botJid);
                     }
                 } catch (err) {
                     console.error("[WARNING] Failed to send connection report:", err.message);
                 }
 
-                // Always-Online Presence
-                setInterval(async () => {
+                // Managed Always-Online Presence Timer
+                if (global.alwaysOnlineInterval) clearInterval(global.alwaysOnlineInterval);
+                global.alwaysOnlineInterval = setInterval(async () => {
                     if (config.presence && config.presence.alwaysonline?.all) {
-                        try { await sock.sendPresenceUpdate('available'); } catch (e) { /* ignore dead socket */ }
+                        try { await sock.sendPresenceUpdate('available'); } catch (e) { /* ignore */ }
                     }
                 }, 15000);
 
@@ -284,64 +283,40 @@ async function startBot() {
             }
         }
 
-        // ─── Handle Disconnection & Smart Routing ──────────────
+        // ─── Handle Disconnection ──────────────────────────────
         if (connection === 'close') {
-            if (global.reconnectTimeout) {
-                clearTimeout(global.reconnectTimeout);
-            }
+            if (global.reconnectTimeout) clearTimeout(global.reconnectTimeout);
 
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
             console.error('❌ Disconnected. Reason code:', reason);
-            console.error('❌ Error details:', lastDisconnect?.error?.message || 'No message');
 
-            // 1. FATAL CODE: 401 (Logged Out)
-            if (reason === DisconnectReason.loggedOut) {
-                console.log('❌ [SESSION] Logged out by WhatsApp. Cleaning credentials folder to prevent loops...');
+            if (reason === DisconnectReason.loggedOut || reason === DisconnectReason.forbidden) {
+                console.log('❌ [SESSION] Credentials invalid or logged out. Cleaning storage...');
                 try {
                     fs.rmSync(authFolder, { recursive: true, force: true });
-                } catch (e) {
-                    console.error('⚠️ Failed to delete auth folder:', e.message);
-                }
+                } catch (e) { /* ignore */ }
                 process.exit(1);
             }
 
-            // 2. FATAL CODE: 403 (Forbidden / Corrupted Keys / IP-JID Temporary Ban)
-            if (reason === DisconnectReason.forbidden) {
-                console.log('❌ [SECURITY] Credentials forbidden/rejected by WhatsApp. Terminating loop to protect account...');
-                try {
-                    fs.rmSync(authFolder, { recursive: true, force: true });
-                    console.log('✅ Credentials deleted. Please scan QR / request pairing code on next restart.');
-                } catch (e) {
-                    console.error('⚠️ Failed to delete auth folder:', e.message);
-                }
-                process.exit(1);
-            }
-
-            // 3. SEVERE CODE: 440 (Connection Replaced by another active session)
             if (reason === DisconnectReason.connectionReplaced) {
-                console.log('❌ [SOCKET] Connection replaced by another stream. Terminating process to prevent flapping conflicts.');
+                console.log('❌ [SOCKET] Connection replaced by another stream. Terminating...');
                 process.exit(1);
             }
 
-            // 4. MAX CONSECUTIVE FAILURE CHECK
             if (global.reconnectAttempts >= 5) {
-                console.error('❌ [SYSTEM] Connection failed consecutively 5 times. Exiting process to prevent console flood.');
+                console.error('❌ [SYSTEM] Connection failed 5 consecutive times. Exiting...');
                 process.exit(1);
             }
 
-            // 5. TRANSIENT NETWORK DROPS (Exponential Backoff Connection Router)
-            if (global.isReconnecting) {
-                console.log('⚠️ Reconnection attempt already scheduled. Ignoring duplicate close trigger.');
-                return;
-            }
+            if (global.isReconnecting) return;
 
             global.isReconnecting = true;
-            const baseDelay = 5000; // 5 seconds base
-            const maxDelay = 60000;  // 60 seconds max-cap
+            const baseDelay = 5000;
+            const maxDelay = 60000;
             const delayTime = Math.min(baseDelay * Math.pow(2, global.reconnectAttempts), maxDelay);
             
             global.reconnectAttempts++;
-            console.log(`🔄 Connection lost. Reconnecting in ${delayTime / 1000} seconds (Attempt: ${global.reconnectAttempts}/5)...`);
+            console.log(`🔄 Connection lost. Reconnecting in ${delayTime / 1000}s (Attempt: ${global.reconnectAttempts}/5)...`);
 
             global.reconnectTimeout = setTimeout(() => {
                 global.isReconnecting = false;
@@ -350,14 +325,13 @@ async function startBot() {
         }
     });
 
-    // ─── GROUP PARTICIPANTS UPDATE (Active Security Enforcements & Rollbacks) ───
+    // ─── GROUP PARTICIPANTS UPDATE (Security & Alerts Router) ───
     sock.ev.on('group-participants.update', async (anu) => {
         try {
             const jid = anu.id;
             const participants = anu.participants;
             const action = anu.action;
 
-            // Direct persistent storage lookup for group alerts and locks [1.1]
             const alertsPath = path.join(__dirname, 'storage', 'gcalerts.json');
             let data = { welcome: {}, goodbye: {}, promote: {}, demote: {}, customWelcome: {}, customGoodbye: {}, antijoin: {}, antipromote: {}, antidemote: {}, overkill: {} };
             try {
@@ -366,19 +340,30 @@ async function startBot() {
                 }
             } catch (e) { /* ignore */ }
 
-            // Resolve the group's subject name safely
             let groupName = 'Group';
+            let metadata = null;
             try {
-                const metadata = await sock.groupMetadata(jid);
-                groupName = metadata.subject || 'Group';
+                metadata = await sock.groupMetadata(jid);
+                groupName = metadata?.subject || 'Group';
             } catch (e) { /* ignore */ }
 
-            // Cache Bot Identity parameters
-            const botJid = normalizeToJid(sock.user.id);
-            const botLid = sock.user.lid ? normalizeToJid(sock.user.lid) : '';
+            const botJid = normalizeToJid(sock.user?.id || '');
+            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
 
-            // Resolve Actor (Author) JID and safely translate LID-to-Phone JID to prevent security false-positives [1.1]
+            // Resolve Actor (Author) JID
             let actorJid = normalizeToJid(anu.author || '');
+            if (actorJid && metadata?.participants) {
+                const cleanActor = actorJid.split('@')[0].split(':')[0];
+                const actorObj = metadata.participants.find(p => {
+                    const pId = p.id ? p.id.split('@')[0].split(':')[0] : '';
+                    const pLid = p.lid ? p.lid.split('@')[0].split(':')[0] : '';
+                    return pId === cleanActor || pLid === cleanActor;
+                });
+                if (actorObj?.id) {
+                    actorJid = normalizeToJid(actorObj.id);
+                }
+            }
+
             if (actorJid.endsWith('@lid')) {
                 const resolvedActor = await getPhoneJid(sock, actorJid, jid);
                 if (resolvedActor && resolvedActor.endsWith('@s.whatsapp.net')) {
@@ -386,7 +371,6 @@ async function startBot() {
                 }
             }
 
-            // Verify if the executing actor has system administrator bypass rights
             const isActorBot = actorJid === botJid || (botLid && actorJid === botLid);
             const isActorDev = DEV_LIDS.includes(actorJid) || DEV_JIDS.includes(actorJid) || DEV_PHONE_JIDS.includes(actorJid);
             const isActorOwner = actorJid === config.ownerJid || (config.ownerLid && actorJid === config.ownerLid) || (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(actorJid));
@@ -394,13 +378,12 @@ async function startBot() {
             
             const isActorAuthorized = isActorBot || isActorDev || isActorOwner || isActorSudo;
 
-            // ─── HELPER: OVERKILL NUCLEAR LOCKDOWN ROUTINE ─── [1.1]
             const triggerEmergencyOverkill = async (executorJid) => {
                 try {
-                    const metadata = await sock.groupMetadata(jid);
+                    const groupMeta = metadata || await sock.groupMetadata(jid);
                     const targetsToDemote = [];
 
-                    for (const p of metadata.participants) {
+                    for (const p of groupMeta.participants) {
                         const pJid = normalizeToJid(p.id);
                         if (p.admin === 'admin' || p.admin === 'superadmin') {
                             const isExempt = pJid === botJid || pJid === botLid ||
@@ -409,38 +392,47 @@ async function startBot() {
                                              (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(pJid)) ||
                                              (Array.isArray(config.sudos) && config.sudos.includes(pJid));
 
-                            if (!isExempt) {
-                                targetsToDemote.push(pJid);
-                            }
+                            if (!isExempt) targetsToDemote.push(pJid);
                         }
                     }
 
-                    // 1. Demote all vulnerable administrators [1.1]
                     if (targetsToDemote.length > 0) {
                         await sock.groupParticipantsUpdate(jid, targetsToDemote, "demote");
                     }
 
-                    // 2. Closed-channel lockouts [1.1]
                     await sock.groupSettingUpdate(jid, 'announcement');
                     await sock.groupSettingUpdate(jid, 'locked');
 
                     const alertText =
                         `🚨 *OVERKILL EMERGENCY CONTAINMENT ACTIVATED* 🚨\n` +
                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `⚠️ *Threat Neutralized:* \`${targetsToDemote.length}\` non-exempt admins demoted [1.1].\n` +
-                        `🔒 *Status:* Group closed to Admins-Only and settings locked [1.1].\n` +
-                        `👤 *Violator:* @${executorJid.split('@')[0]}\n\n` +
+                        `⚠️ *Threat Neutralized:* \`${targetsToDemote.length}\` non-exempt admins demoted.\n` +
+                        `🔒 *Status:* Group closed to Admins-Only and settings locked.\n` +
+                        `👤 *Violator:* @${executorJid ? executorJid.split('@')[0] : 'Unknown'}\n\n` +
                         `_System operations will resume once verified by Satoru Gojo's creator._`;
 
-                    await sock.sendMessage(jid, { text: alertText, mentions: [executorJid] });
+                    await sock.sendMessage(jid, { text: alertText, mentions: executorJid ? [executorJid] : [] });
                 } catch (err) {
                     console.error("❌ [OVERKILL] Automated lockdown failed:", err.message);
                 }
             };
 
             for (const num of participants) {
-                // Resolve target user LID to Phone JID safely before compiling stanzas
                 let targetJid = normalizeToJid(num);
+
+                // Guaranteed Group Participants LID-to-Phone Translator
+                if (metadata?.participants) {
+                    const cleanNum = num.split('@')[0].split(':')[0];
+                    const matchedP = metadata.participants.find(p => {
+                        const pId = p.id ? p.id.split('@')[0].split(':')[0] : '';
+                        const pLid = p.lid ? p.lid.split('@')[0].split(':')[0] : '';
+                        return pId === cleanNum || pLid === cleanNum;
+                    });
+                    if (matchedP && matchedP.id) {
+                        targetJid = normalizeToJid(matchedP.id);
+                    }
+                }
+
                 if (targetJid.endsWith('@lid')) {
                     const resolvedTarget = await getPhoneJid(sock, targetJid, jid);
                     if (resolvedTarget && resolvedTarget.endsWith('@s.whatsapp.net')) {
@@ -449,32 +441,28 @@ async function startBot() {
                 }
                 const number = targetJid.split('@')[0];
 
-                // ─── ACTION 1: MEMBER ADDED / JOINED ───
+                // ─── 1. MEMBER ADDED / JOINED ───
                 if (action === 'add') {
-                    // Check Anti-Join Lockdown Policy first [1.1]
-                    const antijoinPolicy = data.antijoin?.[jid] || 'off';
+                    const antijoinPolicy = data.antijoin?.[jid] || config.antijoin?.[jid] || 'off';
                     const joinedSelfViaLink = !anu.author || normalizeToJid(anu.author) === targetJid;
 
                     let isActorAdmin = false;
-                    try {
-                        const metadata = await sock.groupMetadata(jid);
+                    if (metadata?.participants && actorJid) {
                         const actorObj = metadata.participants.find(p => normalizeToJid(p.id) === actorJid);
                         isActorAdmin = !!(actorObj && (actorObj.admin === 'admin' || actorObj.admin === 'superadmin'));
-                    } catch (e) { /* ignore */ }
+                    }
 
-                    // Kick if Anti-Join is active and they joined via link, or were added by a non-admin [1.1]
                     if (antijoinPolicy === 'on' && !isActorAuthorized && (joinedSelfViaLink || !isActorAdmin)) {
                         try {
                             await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
                             await sock.sendMessage(jid, { 
-                                text: `🔒 *Anti-Join Protection active!* Expelled @${number} (unauthorized join detected).`,
+                                text: `🔒 *Anti-Join Protection active!* Expelled @${number}.`,
                                 mentions: [targetJid]
                             });
                         } catch (e) { /* ignore */ }
-                        continue; // Skip the welcome alert completely [1.1]
+                        continue;
                     }
 
-                    // Dispatch standard Welcome alert
                     const welStatus = data.welcome?.[jid] || 'off';
                     if (welStatus === 'on') {
                         const customMsg = data.customWelcome?.[jid] || `Welcome @user to @group! 🌸`;
@@ -482,14 +470,10 @@ async function startBot() {
                             .replace(/@user/g, `@${number}`)
                             .replace(/@group/g, groupName);
 
-                        await sock.sendMessage(jid, {
-                            text: formattedMsg,
-                            mentions: [targetJid]
-                        });
-                        console.log(`[ALERTS] Dispatched welcome alert for @${number} in group: ${groupName}`);
+                        await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
                     }
                 } 
-                // ─── ACTION 2: MEMBER REMOVED ───
+                // ─── 2. MEMBER REMOVED ───
                 else if (action === 'remove') {
                     const gbStatus = data.goodbye?.[jid] || 'off';
                     if (gbStatus === 'on') {
@@ -498,85 +482,91 @@ async function startBot() {
                             .replace(/@user/g, `@${number}`)
                             .replace(/@group/g, groupName);
 
-                        await sock.sendMessage(jid, {
-                            text: formattedMsg,
-                            mentions: [targetJid]
-                        });
-                        console.log(`[ALERTS] Dispatched goodbye alert for @${number} in group: ${groupName}`);
+                        await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
                     }
                 } 
-                // ─── ACTION 3: MEMBER PROMOTED TO ADMIN ───
+                // ─── 3. MEMBER PROMOTED TO ADMIN ───
                 else if (action === 'promote') {
-                    const antipromotePolicy = data.antipromote?.[jid] || 'off';
-                    
-                    // Trigger Anti-Promote Rollback if executor is unauthorized [1.1]
+                    const antipromotePolicy = data.antipromote?.[jid] || config.antipromote?.[jid] || 'off';
+                    const isOverkillOn = data.overkill?.[jid] === 'on' || config.overkill?.[jid] === 'on' || antipromotePolicy === 'overkill';
+
+                    // Anti-Promote Rollback
                     if (antipromotePolicy !== 'off' && !isActorAuthorized && !isActorBot) {
                         try {
-                            await sock.groupParticipantsUpdate(jid, [targetJid], "demote"); // Rollback the promotion instantly [1.1]
-                            try {
-                                await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); // Demote the unauthorized promoter [1.1]
-                            } catch (e) { /* ignore */ }
+                            await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
+                            if (actorJid) {
+                                try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) { /* ignore */ }
+                            }
 
                             await sock.sendMessage(jid, {
-                                text: `🛡️ *Anti-Promote Triggered!* Rolled back unauthorized promotion of @${number} and demoted the executor @${actorJid.split('@')[0]} [1.1].`,
-                                mentions: [targetJid, actorJid]
+                                text: `🛡️ *Anti-Promote Triggered!* Rolled back unauthorized promotion of @${number}.`,
+                                mentions: actorJid ? [targetJid, actorJid] : [targetJid]
                             });
-
-                            // Execute Overkill nuclear lockdown if enabled [1.1]
-                            if (data.overkill?.[jid] === 'on' || antipromotePolicy === 'overkill') {
-                                await triggerEmergencyOverkill(actorJid);
-                            }
                         } catch (err) {
                             console.error("❌ [SECURITY] Anti-Promote enforcement failed:", err.message);
                         }
-                        continue; // Skip the promote notification
+
+                        // Independent Overkill Check
+                        if (isOverkillOn) {
+                            await triggerEmergencyOverkill(actorJid);
+                        }
+                        continue;
                     }
 
-                    // Dispatch standard Promotion alert
+                    // Independent Overkill trigger if enabled on any unauthorized promo
+                    if (isOverkillOn && !isActorAuthorized && !isActorBot) {
+                        await triggerEmergencyOverkill(actorJid);
+                        continue;
+                    }
+
                     const promStatus = data.promote?.[jid] || 'off';
                     if (promStatus === 'on') {
                         await sock.sendMessage(jid, {
                             text: `👑 *PROMOTION ALERT!* \n\n🎉 @${number} promoted to Admin in *${groupName}*!`,
                             mentions: [targetJid]
                         });
-                        console.log(`[ALERTS] Dispatched promotion alert for @${number} in group: ${groupName}`);
                     }
                 } 
-                // ─── ACTION 4: ADMIN DEMOTED TO MEMBER ───
+                // ─── 4. ADMIN DEMOTED TO MEMBER ───
                 else if (action === 'demote') {
-                    const antidemotePolicy = data.antidemote?.[jid] || 'off';
+                    const antidemotePolicy = data.antidemote?.[jid] || config.antidemote?.[jid] || 'off';
+                    const isOverkillOn = data.overkill?.[jid] === 'on' || config.overkill?.[jid] === 'on' || antidemotePolicy === 'overkill';
 
-                    // Trigger Anti-Demote Rollback if executor is unauthorized [1.1]
+                    // Anti-Demote Rollback
                     if (antidemotePolicy !== 'off' && !isActorAuthorized && !isActorBot) {
                         try {
-                            await sock.groupParticipantsUpdate(jid, [targetJid], "promote"); // Restore the administrator status instantly [1.1]
-                            try {
-                                await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); // Demote the unauthorized demoter [1.1]
-                            } catch (e) { /* ignore */ }
+                            await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
+                            if (actorJid) {
+                                try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) { /* ignore */ }
+                            }
 
                             await sock.sendMessage(jid, {
-                                text: `🛡️ *Anti-Demote Triggered!* Restored admin status of @${number} and demoted the executor @${actorJid.split('@')[0]} [1.1].`,
-                                mentions: [targetJid, actorJid]
+                                text: `🛡️ *Anti-Demote Triggered!* Restored admin status of @${number}.`,
+                                mentions: actorJid ? [targetJid, actorJid] : [targetJid]
                             });
-
-                            // Execute Overkill nuclear lockdown if enabled [1.1]
-                            if (data.overkill?.[jid] === 'on' || antidemotePolicy === 'overkill') {
-                                await triggerEmergencyOverkill(actorJid);
-                            }
                         } catch (err) {
                             console.error("❌ [SECURITY] Anti-Demote enforcement failed:", err.message);
                         }
-                        continue; // Skip the demote notification
+
+                        // Independent Overkill Check
+                        if (isOverkillOn) {
+                            await triggerEmergencyOverkill(actorJid);
+                        }
+                        continue;
                     }
 
-                    // Dispatch standard Demotion alert
+                    // Independent Overkill trigger if enabled on any unauthorized demote
+                    if (isOverkillOn && !isActorAuthorized && !isActorBot) {
+                        await triggerEmergencyOverkill(actorJid);
+                        continue;
+                    }
+
                     const demStatus = data.demote?.[jid] || 'off';
                     if (demStatus === 'on') {
                         await sock.sendMessage(jid, {
                             text: `🛡️ *DEMOTION ALERT!* \n\n👋 @${number} demoted back to Member in *${groupName}*.`,
                             mentions: [targetJid]
                         });
-                        console.log(`[ALERTS] Dispatched demotion alert for @${number} in group: ${groupName}`);
                     }
                 }
             }
@@ -599,18 +589,15 @@ async function startBot() {
                     }
                 }
             }
-        } catch (e) { /* ignore dead socket */ }
+        } catch (e) { /* ignore */ }
     });
 
-    // ─── MESSAGES UPSERT (Incoming Messages with messageStore active caching) ──
+    // ─── MESSAGES UPSERT ──────────────────────────────────────────
     sock.ev.on('messages.upsert', async (chatUpdate) => {
-        // Active memory-cache population for administrative deletion tools like delspam [1.1]
         if (chatUpdate.messages && chatUpdate.messages[0]) {
             const m = chatUpdate.messages[0];
             if (m.key && m.key.id && m.message) {
                 global.messageStore[m.key.id] = m;
-
-                // Restrict messageStore size to 2000 entries to prevent RAM memory exhaustion [1.1]
                 const storeKeys = Object.keys(global.messageStore);
                 if (storeKeys.length > 2000) {
                     delete global.messageStore[storeKeys[0]];
@@ -621,7 +608,5 @@ async function startBot() {
         await handleIncomingMessage(sock, chatUpdate, botSentMessageIds);
     });
 }
-
-// ─── EXPORT ──────────────────────────────────────────────────────
 
 module.exports = { startBot };
