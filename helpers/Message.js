@@ -1,5 +1,4 @@
 // helpers/Message.js
-
 const { normalizeToJid } = require('../stateManager');
 
 // ─── MESSAGE NORMALIZERS ──────────────────────────────────────────
@@ -18,10 +17,9 @@ function getRawMessage(message) {
 function cleanJid(jid) {
     if (!jid) return '';
     const raw = normalizeToJid(jid);
-    return raw.split('@')[0].split(':')[0] + '@' + raw.split('@')[1];
+    return raw.split('@')[0].split(':')[0] + '@' + (raw.includes('@g.us') ? 'g.us' : (raw.includes('@lid') ? 'lid' : 's.whatsapp.net'));
 }
 
-// Centralized body parser supporting modern Carousel response JSONs and nested Group Statuses
 function extractBodyAndTrim(msg) {
     const rawMsg = getRawMessage(msg.message) || msg.message;
     let body = rawMsg?.conversation ||
@@ -41,7 +39,6 @@ function extractBodyAndTrim(msg) {
         } catch (e) { /* ignore */ }
     }
 
-    // Handles nested Group Status V2 text extraction
     if (!body && rawMsg?.groupStatusMessageV2?.message) {
         const statusInner = getRawMessage(rawMsg.groupStatusMessageV2.message);
         body = statusInner?.conversation || 
