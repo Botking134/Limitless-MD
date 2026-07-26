@@ -246,22 +246,74 @@ async function handleSticker(sock, msg, args, isCropped = false) {
     }
 }
 
+// ─── CATBOX UPLOAD HELPER ─────────────────────────────────────────
+async function uploadToCatbox(buffer, mimeType) {
+    let ext = mimeType.split('/')[1] || 'bin';
+    ext = ext.split(';')[0].trim();
+    if (ext === 'jpeg') ext = 'jpg';
+    const filename = `file_${Date.now()}.${ext}`;
+
+    try {
+        const form = new FormData();
+        form.append('reqtype', 'fileupload');
+        form.append('fileToUpload', buffer, { filename, contentType: mimeType });
+
+        const response = await axios.post('https://catbox.moe/user/api.php', form, {
+            headers: { ...form.getHeaders() },
+            timeout: 30000
+        });
+
+        if (response.data && typeof response.data === 'string' && response.data.trim().startsWith('http')) {
+            return response.data.trim();
+        }
+    } catch (err) {
+        console.error("❌ [CATBOX UPLOAD FAILED]:", err.message);
+    }
+
+    // Automatic fallback to qu.ax if Catbox is temporarily unreachable
+    try {
+        const form = new FormData();
+        form.append('files[]', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://qu.ax/upload.php', form, {
+            headers: { ...form.getHeaders() },
+            timeout: 30000
+        });
+        if (response.data?.success && response.data.files?.[0]?.url) {
+            return response.data.files[0].url.trim();
+        }
+    } catch (err) { /* ignore */ }
+
+    throw new Error("Catbox upload failed.");
+}
+
+
 module.exports = [
-    // 1. CONVERT MEDIA TO DIRECT LINKS (.url / .tourl)
+    
+// 1. CONVERT MEDIA TO DIRECT CATBOX URL (.url / .tourl)
     {
         name: 'tourl',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
             const rawContent = getRawMessage(quoted || msg.message);
             
-            let mediaMessage = rawContent?.imageMessage || rawContent?.videoMessage || rawContent?.stickerMessage || rawContent?.audioMessage || rawContent?.documentMessage;
-            let mediaType = rawContent?.imageMessage ? "image" : (rawContent?.videoMessage ? "video" : (rawContent?.stickerMessage ? "sticker" : (rawContent?.audioMessage ? "audio" : "document")));
+            let mediaMessage = rawContent?.imageMessage || 
+                               rawContent?.videoMessage || 
+                               rawContent?.stickerMessage || 
+                               rawContent?.audioMessage || 
+                               rawContent?.documentMessage;
+            
+            let mediaType = rawContent?.imageMessage ? "image" : 
+                           (rawContent?.videoMessage ? "video" : 
+                           (rawContent?.stickerMessage ? "sticker" : 
+                           (rawContent?.audioMessage ? "audio" : "document")));
 
-            if (!mediaMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image, video, audio, or sticker to generate a link." }, { quoted: msg });
-
-            const statusMsg = await sock.sendMessage(jid, { text: "Uploading media to cloud... 🌐" }, { quoted: msg });
+            if (!mediaMessage) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to an image, video, audio, sticker, or document." }, { quoted: msg });
+            }
 
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
@@ -270,14 +322,26 @@ module.exports = [
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const mimeType = mediaMessage.mimetype || "application/octet-stream";
-                const url = await uploadToCloud(buffer, mimeType);
+                const url = await uploadToCatbox(buffer, mimeType);
 
-                await sock.sendMessage(jid, { text: `📦 *Limitless Direct URL* 🌐\n\nDirect Link: ${url}`, edit: statusMsg.key });
+                // Sends strictly ONLY the raw Catbox URL
+                await sock.sendMessage(jid, { text: url }, { quoted: msg });
             } catch (error) {
-                await sock.sendMessage(jid, { text: `❌ Upload failed: ${error.message}`, edit: statusMsg.key });
+                await sock.sendMessage(jid, { text: `❌ Upload failed: ${error.message}` }, { quoted: msg });
             }
         }
     },
+
+    // 2. URL ALIAS
+    {
+        name: 'url',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const cmd = module.exports.find(c => c.name === 'tourl');
+            if (cmd) await cmd.execute(sock, msg, args);
+        }
+    },
+
 
     // 2. CONVERT VIDEO TO AUDIOS (.tomp3 / .toaudio - Local FFMPEG Engine)
     {
