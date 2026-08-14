@@ -14,7 +14,7 @@ function getRawMessage(message) {
     return message;
 }
 
-async function saveFilterFromMsg(sock, msg, trigger, isGroup) {
+async function saveFilterFromMsg(sock, msg, trigger, jid, isGroup) {
     const rawMsg = getRawMessage(msg.message);
     const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
     const quoted = contextInfo?.quotedMessage;
@@ -24,19 +24,20 @@ async function saveFilterFromMsg(sock, msg, trigger, isGroup) {
     }
 
     const rawContent = getRawMessage(quoted);
-    const scopeKey = isGroup ? 'globalGroup' : 'globalPM';
+    const scopeKey = isGroup ? 'group' : 'pm';
     ensureMediaDir();
 
     const data = readFilters();
     data[scopeKey] = data[scopeKey] || {};
+    data[scopeKey][jid] = data[scopeKey][jid] || {};
 
     const cleanTrigger = trigger.trim().toLowerCase();
-    const safeFilename = `filter_${scopeKey}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const safeFilename = `filter_${jid.split('@')[0]}_${Date.now()}`;
 
     // 1. Text Message
     const textContent = rawContent?.conversation || rawContent?.extendedTextMessage?.text;
     if (textContent && !rawContent?.imageMessage && !rawContent?.videoMessage && !rawContent?.audioMessage && !rawContent?.stickerMessage && !rawContent?.documentMessage) {
-        data[scopeKey][cleanTrigger] = {
+        data[scopeKey][jid][cleanTrigger] = {
             trigger: trigger.trim(),
             type: 'text',
             content: textContent,
@@ -76,7 +77,7 @@ async function saveFilterFromMsg(sock, msg, trigger, isGroup) {
     const filePath = path.join(mediaDir, `${safeFilename}.${ext}`);
     fs.writeFileSync(filePath, buffer);
 
-    data[scopeKey][cleanTrigger] = {
+    data[scopeKey][jid][cleanTrigger] = {
         trigger: trigger.trim(),
         type: mediaType,
         filePath: filePath,
@@ -92,19 +93,17 @@ async function saveFilterFromMsg(sock, msg, trigger, isGroup) {
 }
 
 module.exports = [
-    // 1. GFILTER (Global Groups)
+    // 1. GFILTER (Owner / Dev / Sudo Only)
     {
         name: 'gfilter',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            if (!jid.endsWith('@g.us')) {
-                return await sock.sendMessage(jid, { text: "❌ `.gfilter` can only be set inside Group Chats." }, { quoted: msg });
-            }
+            const isAuthorized = isOwner || isSudo || isDev;
+            if (!isAuthorized) return;
 
-            const isAuthorized = isOwner || isSudo || isDev || isAdmin;
-            if (!isAuthorized) {
-                return await sock.sendMessage(jid, { text: "❌ Only Group Admins or Bot Owners can configure group filters." }, { quoted: msg });
+            if (!jid.endsWith('@g.us')) {
+                return await sock.sendMessage(jid, { text: "❌ `.gfilter` can only be configured inside Group Chats." }, { quoted: msg });
             }
 
             if (!args || !args.trim()) {
@@ -112,58 +111,61 @@ module.exports = [
             }
 
             try {
-                await saveFilterFromMsg(sock, msg, args.trim(), true);
-                await sock.sendMessage(jid, { text: `✅ *Global Group Filter Saved!* \n\nWhenever anyone types \`"${args.trim()}"\` in *ANY group chat*, I will respond with this message.` }, { quoted: msg });
+                await saveFilterFromMsg(sock, msg, args.trim(), jid, true);
+                await sock.sendMessage(jid, { text: `✅ *Group Filter Saved!* \n\nWhenever anyone types \`"${args.trim()}"\` anywhere in a message, I will send this response.` }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed to save filter: ${err.message}` }, { quoted: msg });
             }
         }
     },
 
-    // 2. PFILTER (Global PMs)
+    // 2. PFILTER (Owner / Dev / Sudo Only)
     {
         name: 'pfilter',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            if (jid.endsWith('@g.us')) {
-                return await sock.sendMessage(jid, { text: "❌ `.pfilter` can only be set in Private Direct Messages." }, { quoted: msg });
-            }
+            const isAuthorized = isOwner || isSudo || isDev;
+            if (!isAuthorized) return;
 
-            if (!isOwner && !isDev) return;
+            if (jid.endsWith('@g.us')) {
+                return await sock.sendMessage(jid, { text: "❌ `.pfilter` can only be configured in Private Direct Messages." }, { quoted: msg });
+            }
 
             if (!args || !args.trim()) {
                 return await sock.sendMessage(jid, { text: `❌ *Format:* Reply to a message with \`${config.prefix}pfilter <trigger_phrase>\`` }, { quoted: msg });
             }
 
             try {
-                await saveFilterFromMsg(sock, msg, args.trim(), false);
-                await sock.sendMessage(jid, { text: `✅ *Global PM Filter Saved!* \n\nWhenever anyone types \`"${args.trim()}"\` in *ANY direct message*, I will respond with this message.` }, { quoted: msg });
+                await saveFilterFromMsg(sock, msg, args.trim(), jid, false);
+                await sock.sendMessage(jid, { text: `✅ *PM Filter Saved!* \n\nWhenever you type \`"${args.trim()}"\` in this DM, I will send this response.` }, { quoted: msg });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed to save PM filter: ${err.message}` }, { quoted: msg });
             }
         }
     },
 
-    // 3. FILTERS (List active filters)
+    // 3. FILTERS (Owner / Dev / Sudo Only)
     {
         name: 'filters',
         isPrefixless: false,
-        execute: async (sock, msg) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
+            const isAuthorized = isOwner || isSudo || isDev;
+            if (!isAuthorized) return;
+
             const isGroup = jid.endsWith('@g.us');
-            const scopeKey = isGroup ? 'globalGroup' : 'globalPM';
-            const scopeName = isGroup ? 'GROUP' : 'PM';
+            const scopeKey = isGroup ? 'group' : 'pm';
 
             const data = readFilters();
-            const chatFilters = data[scopeKey] || {};
+            const chatFilters = data[scopeKey]?.[jid] || {};
             const keys = Object.keys(chatFilters);
 
             if (keys.length === 0) {
-                return await sock.sendMessage(jid, { text: `📋 *No active global ${scopeName} filters configured.*` }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "📋 *No active custom filters configured in this chat.*" }, { quoted: msg });
             }
 
-            let response = `📋 *ACTIVE GLOBAL ${scopeName} FILTERS* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            let response = `📋 *ACTIVE FILTERS IN THIS CHAT* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
             keys.forEach((k, idx) => {
                 const item = chatFilters[k];
                 response += `${idx + 1}. *"${item.trigger}"* (${item.type.toUpperCase()})\n   _Saved by:_ ${item.author}\n\n`;
@@ -174,29 +176,29 @@ module.exports = [
         }
     },
 
-    // 4. DELFILTER (Delete filter)
+    // 4. DELFILTER (Owner / Dev / Sudo Only)
     {
         name: 'delfilter',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
+            const isAuthorized = isOwner || isSudo || isDev;
+            if (!isAuthorized) return;
 
-            if (isGroup && (!isOwner && !isSudo && !isDev && !isAdmin)) return;
-            if (!isGroup && (!isOwner && !isDev)) return;
+            const isGroup = jid.endsWith('@g.us');
 
             if (!args || !args.trim()) {
                 return await sock.sendMessage(jid, { text: `❌ *Usage:* \`${config.prefix}delfilter <trigger_phrase>\`` }, { quoted: msg });
             }
 
             const targetTrigger = args.trim().toLowerCase();
-            const scopeKey = isGroup ? 'globalGroup' : 'globalPM';
+            const scopeKey = isGroup ? 'group' : 'pm';
 
             const data = readFilters();
-            const chatFilters = data[scopeKey];
+            const chatFilters = data[scopeKey]?.[jid];
 
             if (!chatFilters || !chatFilters[targetTrigger]) {
-                return await sock.sendMessage(jid, { text: `❌ No active filter found matching \`"${args.trim()}"\`.` }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: `❌ No active filter found matching \`"${args.trim()}"\` in this chat.` }, { quoted: msg });
             }
 
             const filterObj = chatFilters[targetTrigger];
@@ -205,7 +207,10 @@ module.exports = [
                 try { fs.unlinkSync(filterObj.filePath); } catch (e) { /* ignore */ }
             }
 
-            delete data[scopeKey][targetTrigger];
+            delete data[scopeKey][jid][targetTrigger];
+            if (Object.keys(data[scopeKey][jid]).length === 0) {
+                delete data[scopeKey][jid];
+            }
             saveFilters(data);
 
             await sock.sendMessage(jid, { text: `✅ Filter \`"${filterObj.trigger}"\` deleted successfully.` }, { quoted: msg });
