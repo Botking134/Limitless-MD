@@ -16,8 +16,50 @@ try { loadState(); } catch (e) { console.error("⚠️ State load error:", e.mes
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// ─── TRACK BOT-SENT MESSAGES ──────────────────────────────────
+// ─── TRACKERS & DEDUPLICATION ──────────────────────────────────
 const botSentMessageIds = new Set();
+const processedEventsCache = new Map();
+
+function isDuplicateEvent(key) {
+    const now = Date.now();
+    if (processedEventsCache.has(key)) {
+        const timestamp = processedEventsCache.get(key);
+        if (now - timestamp < 300000) return true; // 5 minutes TTL
+    }
+    processedEventsCache.set(key, now);
+    if (processedEventsCache.size > 2000) {
+        const oldestKey = processedEventsCache.keys().next().value;
+        processedEventsCache.delete(oldestKey);
+    }
+    return false;
+}
+
+// ─── HELPER: NORMALIZE BOOLEAN & STRING SETTINGS ───────────────
+const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
+
+// ─── HARDCODED CATBOX / REMOTE MEDIA FETCHER ───────────────────
+async function fetchMediaBuffer(url) {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': '*/*'
+            },
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
+    } catch (e) {
+        console.error(`❌ [MEDIA FETCH] Failed downloading ${url}:`, e.message);
+        return null;
+    }
+}
 
 // ─── GLOBAL SESSIONS & CACHES ──────────────────────────────────
 global.messageStore = global.messageStore || {};
@@ -44,7 +86,7 @@ global.vault8Sessions = global.vault8Sessions || {};
 global.aiMemory = global.aiMemory || {};
 global.botMessageAgents = global.botMessageAgents || {};
 
-// Reconnection State Locks
+// Reconnection Locks
 global.isReconnecting = global.isReconnecting || false;
 global.reconnectAttempts = global.reconnectAttempts || 0;
 global.reconnectTimeout = global.reconnectTimeout || null;
@@ -56,7 +98,6 @@ async function startBot() {
     const {
         default: makeWASocket,
         useMultiFileAuthState,
-        delay,
         Browsers,
         DisconnectReason
     } = await import('@itsliaaa/baileys');
@@ -105,35 +146,44 @@ async function startBot() {
         auth: state,
         printQRInTerminal: false,
         logger: require('pino')({ level: 'silent' }),
-        browser: Browsers.ubuntu('Chrome')
+        browser: Browsers.ubuntu('Chrome'),
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: true
     });
 
-    // ─── OVERRIDE SEND MESSAGE WITH HUMANIZED DELAYS ────────────────
+    // ─── OPTIMIZED SENDMESSAGE (AUTO-BUFFER & ZERO DELAY) ──────────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
+        // Non-blocking typing/recording simulation
         if (config.presence && !jid.endsWith('@broadcast')) {
-            const autotypingActive = config.presence.autotyping?.all ||
-                config.presence.autotyping?.chats?.includes(jid);
-            const autorecordingActive = config.presence.autorecording?.all ||
-                config.presence.autorecording?.chats?.includes(jid);
-            try {
-                if (autorecordingActive) {
-                    await sock.sendPresenceUpdate('recording', jid);
-                    await delay(1500);
-                    await sock.sendPresenceUpdate('paused', jid);
-                } else if (autotypingActive) {
-                    await sock.sendPresenceUpdate('composing', jid);
-                    await delay(1200);
-                    await sock.sendPresenceUpdate('paused', jid);
+            const autotypingActive = config.presence.autotyping?.all || config.presence.autotyping?.chats?.includes(jid);
+            const autorecordingActive = config.presence.autorecording?.all || config.presence.autorecording?.chats?.includes(jid);
+            if (autorecordingActive) {
+                sock.sendPresenceUpdate('recording', jid).catch(() => {});
+            } else if (autotypingActive) {
+                sock.sendPresenceUpdate('composing', jid).catch(() => {});
+            }
+        }
+
+        // Auto-download Catbox/Quax URLs to Buffers
+        if (content && typeof content === 'object') {
+            const mediaKeys = ['image', 'video', 'audio', 'document', 'sticker'];
+            for (const key of mediaKeys) {
+                if (content[key] && typeof content[key] === 'object' && typeof content[key].url === 'string') {
+                    const url = content[key].url;
+                    if (/catbox\.moe|qu\.ax|ibb\.co|cloudinary|imgur/i.test(url) || url.startsWith('http')) {
+                        const buffer = await fetchMediaBuffer(url);
+                        if (buffer) content[key] = buffer;
+                    }
                 }
-            } catch (presErr) { /* ignore dead socket */ }
+            }
         }
 
         let sent;
         try {
             sent = await originalSendMessage(jid, content, options);
         } catch (sendErr) {
-            console.error("❌ [SOCKET] sendMessage failed on closed socket:", sendErr.message);
+            console.error("❌ [SOCKET] sendMessage failed:", sendErr.message);
             throw sendErr;
         }
 
@@ -162,7 +212,6 @@ async function startBot() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // ─── Handle QR Display ──────────────────────────────────
         if (qr && !pairingMode && !qrDisplayed) {
             qrDisplayed = true;
             console.log('\n📱 Scan this QR code with WhatsApp:\n');
@@ -170,21 +219,20 @@ async function startBot() {
             console.log('\n👉 Open WhatsApp > Linked Devices > Link a Device\n');
         }
 
-        // ─── Handle Pairing Code Request ──────────────────────
         if (targetNumber && !pairingCodeRequested && pairingMode) {
             pairingCodeRequested = true;
-            await delay(5000);
-            try {
-                const code = await sock.requestPairingCode(targetNumber, "INFINITY");
-                console.log(`\n🔑 Your Pairing Code: \x1b[32m\x1b[1m${code}\x1b[0m`);
-                console.log(`\n👉 Enter this code in WhatsApp > Linked Devices\n`);
-            } catch (error) {
-                console.error('❌ Failed to request pairing code:', error.message);
-                pairingCodeRequested = false;
-            }
+            setTimeout(async () => {
+                try {
+                    const code = await sock.requestPairingCode(targetNumber, "INFINITY");
+                    console.log(`\n🔑 Your Pairing Code: \x1b[32m\x1b[1m${code}\x1b[0m`);
+                    console.log(`\n👉 Enter this code in WhatsApp > Linked Devices\n`);
+                } catch (error) {
+                    console.error('❌ Failed to request pairing code:', error.message);
+                    pairingCodeRequested = false;
+                }
+            }, 3000);
         }
 
-        // ─── Handle Connection Open ─────────────────────────────
         if (connection === 'open') {
             console.log('\n✅ Connection established successfully!');
             global.reconnectAttempts = 0;
@@ -234,32 +282,20 @@ async function startBot() {
                         year: 'numeric'
                     });
 
-                    let pingMs = 35;
-                    try {
-                        const startPing = Date.now();
-                        const controller = new AbortController();
-                        const timeout = setTimeout(() => controller.abort(), 3000);
-                        if (typeof fetch === 'function') {
-                            await fetch("https://1.1.1.1", { method: 'HEAD', signal: controller.signal });
-                        }
-                        clearTimeout(timeout);
-                        pingMs = Date.now() - startPing;
-                    } catch (e) { /* ignore ping failure */ }
-
                     const statusCard =
                         `═══════════\n` +
                         ` ♰CONNECTED ♰\n` +
                         `═══════════\n` +
                         `- Prefix : ${prefixVal}\n` +
-                        `- Speed  : ${pingMs}ms\n` +
                         `- Time   : ${timeStr} WAT\n` +
                         `- Date   : ${dateStr}`;
 
                     const botJid = config.botJid || sock.user?.id;
                     if (botJid && (botJid.endsWith('@s.whatsapp.net') || botJid.endsWith('@lid'))) {
                         console.log(`📨 Sending image status report to: ${botJid}`);
+                        const imgBuffer = await fetchMediaBuffer("https://qu.ax/I6tKC");
                         await sock.sendMessage(botJid, { 
-                            image: { url: "https://qu.ax/I6tKC" },
+                            image: imgBuffer || { url: "https://qu.ax/I6tKC" },
                             caption: statusCard 
                         });
                         console.log(`✅ [SYSTEM] Connection status report image dispatched.`);
@@ -268,55 +304,51 @@ async function startBot() {
                     console.error("[WARNING] Failed to send connection report:", err.message);
                 }
 
-                // Managed Always-Online Presence Timer
+                // Heartbeat
                 if (global.alwaysOnlineInterval) clearInterval(global.alwaysOnlineInterval);
                 global.alwaysOnlineInterval = setInterval(async () => {
                     if (config.presence && config.presence.alwaysonline?.all) {
-                        try { await sock.sendPresenceUpdate('available'); } catch (e) { /* ignore */ }
+                        try { await sock.sendPresenceUpdate('available'); } catch (e) {}
                     }
-                }, 15000);
-
-                console.log('✅ [SYSTEM] All connection tasks completed successfully.');
+                }, 30000);
 
             } catch (openError) {
                 console.error('❌ [FATAL] Unhandled error during connection.open:', openError);
             }
         }
 
-        // ─── Handle Disconnection ──────────────────────────────
         if (connection === 'close') {
+            if (global.alwaysOnlineInterval) clearInterval(global.alwaysOnlineInterval);
             if (global.reconnectTimeout) clearTimeout(global.reconnectTimeout);
 
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
             console.error('❌ Disconnected. Reason code:', reason);
 
             if (reason === DisconnectReason.loggedOut || reason === DisconnectReason.forbidden) {
-                console.log('❌ [SESSION] Credentials invalid or logged out. Cleaning storage...');
-                try {
-                    fs.rmSync(authFolder, { recursive: true, force: true });
-                } catch (e) { /* ignore */ }
+                console.log('❌ [SESSION] Logged out. Cleaning session storage...');
+                try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch (e) {}
                 process.exit(1);
             }
 
             if (reason === DisconnectReason.connectionReplaced) {
-                console.log('❌ [SOCKET] Connection replaced by another stream. Terminating...');
+                console.log('❌ [SOCKET] Connection replaced. Terminating instance...');
                 process.exit(1);
             }
 
             if (global.reconnectAttempts >= 5) {
-                console.error('❌ [SYSTEM] Connection failed 5 consecutive times. Exiting...');
+                console.error('❌ [SYSTEM] Failed after 5 reconnect attempts. Exiting...');
                 process.exit(1);
             }
 
             if (global.isReconnecting) return;
 
             global.isReconnecting = true;
-            const baseDelay = 5000;
-            const maxDelay = 60000;
+            const baseDelay = 3000;
+            const maxDelay = 30000;
             const delayTime = Math.min(baseDelay * Math.pow(2, global.reconnectAttempts), maxDelay);
             
             global.reconnectAttempts++;
-            console.log(`🔄 Connection lost. Reconnecting in ${delayTime / 1000}s (Attempt: ${global.reconnectAttempts}/5)...`);
+            console.log(`🔄 Reconnecting in ${delayTime / 1000}s (Attempt ${global.reconnectAttempts}/5)...`);
 
             global.reconnectTimeout = setTimeout(() => {
                 global.isReconnecting = false;
@@ -325,12 +357,14 @@ async function startBot() {
         }
     });
 
-    // ─── GROUP PARTICIPANTS UPDATE (Security & Alerts Router) ───
+    // ─── GROUP PARTICIPANTS UPDATE (SECURITY & ALERTS ROUTER) ───
     sock.ev.on('group-participants.update', async (anu) => {
         try {
-            const jid = anu.id;
+            if (!anu || !anu.id || !anu.participants || !anu.participants.length) return;
+
+            const jid = normalizeToJid(anu.id);
             const participants = anu.participants;
-            const action = anu.action;
+            const action = anu.action; // 'add', 'remove', 'promote', 'demote'
 
             const alertsPath = path.join(__dirname, 'storage', 'gcalerts.json');
             let data = { welcome: {}, goodbye: {}, promote: {}, demote: {}, customWelcome: {}, customGoodbye: {}, antijoin: {}, antipromote: {}, antidemote: {}, overkill: {} };
@@ -338,44 +372,34 @@ async function startBot() {
                 if (fs.existsSync(alertsPath)) {
                     data = JSON.parse(fs.readFileSync(alertsPath, 'utf-8'));
                 }
-            } catch (e) { /* ignore */ }
+            } catch (e) {}
 
             let groupName = 'Group';
             let metadata = null;
             try {
                 metadata = await sock.groupMetadata(jid);
                 groupName = metadata?.subject || 'Group';
-            } catch (e) { /* ignore */ }
+            } catch (e) {}
 
-            const botJid = normalizeToJid(sock.user?.id || '');
+            const botJid = normalizeToJid(sock.user?.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
             const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
 
-            // Resolve Actor (Author) JID
-            let actorJid = normalizeToJid(anu.author || '');
-            if (actorJid && metadata?.participants) {
-                const cleanActor = actorJid.split('@')[0].split(':')[0];
-                const actorObj = metadata.participants.find(p => {
-                    const pId = p.id ? p.id.split('@')[0].split(':')[0] : '';
-                    const pLid = p.lid ? p.lid.split('@')[0].split(':')[0] : '';
-                    return pId === cleanActor || pLid === cleanActor;
-                });
-                if (actorObj?.id) {
-                    actorJid = normalizeToJid(actorObj.id);
+            // Resolve Actor JID
+            let rawActor = anu.author || '';
+            let actorJid = rawActor ? normalizeToJid(rawActor).split(':')[0].split('@')[0] + '@s.whatsapp.net' : '';
+
+            if (rawActor.includes('@lid') && metadata?.participants) {
+                const cleanLid = rawActor.split('@')[0].split(':')[0];
+                const matched = metadata.participants.find(p => p.lid && p.lid.includes(cleanLid));
+                if (matched && matched.id) {
+                    actorJid = matched.id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                 }
             }
 
-            if (actorJid.endsWith('@lid')) {
-                const resolvedActor = await getPhoneJid(sock, actorJid, jid);
-                if (resolvedActor && resolvedActor.endsWith('@s.whatsapp.net')) {
-                    actorJid = resolvedActor;
-                }
-            }
-
-            const isActorBot = actorJid === botJid || (botLid && actorJid === botLid);
-            const isActorDev = DEV_LIDS.includes(actorJid) || DEV_JIDS.includes(actorJid) || DEV_PHONE_JIDS.includes(actorJid);
-            const isActorOwner = actorJid === config.ownerJid || (config.ownerLid && actorJid === config.ownerLid) || (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(actorJid));
-            const isActorSudo = (Array.isArray(config.sudos) && config.sudos.includes(actorJid)) || (Array.isArray(config.sudoLids) && config.sudoLids.includes(actorJid));
-            
+            const isActorBot = actorJid === botJid || (botLid && rawActor.includes(botLid.split('@')[0]));
+            const isActorDev = DEV_LIDS.some(d => rawActor.includes(d.split('@')[0])) || DEV_JIDS.includes(actorJid) || DEV_PHONE_JIDS.includes(actorJid);
+            const isActorOwner = actorJid === config.ownerJid || (config.ownerLid && rawActor.includes(config.ownerLid.split('@')[0])) || (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(actorJid));
+            const isActorSudo = (Array.isArray(config.sudos) && config.sudos.includes(actorJid));
             const isActorAuthorized = isActorBot || isActorDev || isActorOwner || isActorSudo;
 
             const triggerEmergencyOverkill = async (executorJid) => {
@@ -384,15 +408,15 @@ async function startBot() {
                     const targetsToDemote = [];
 
                     for (const p of groupMeta.participants) {
-                        const pJid = normalizeToJid(p.id);
+                        const pJid = normalizeToJid(p.id).split(':')[0].split('@')[0] + '@s.whatsapp.net';
                         if (p.admin === 'admin' || p.admin === 'superadmin') {
-                            const isExempt = pJid === botJid || pJid === botLid ||
+                            const isExempt = pJid === botJid || (botLid && p.lid && p.lid.includes(botLid.split('@')[0])) ||
                                              DEV_LIDS.includes(pJid) || DEV_JIDS.includes(pJid) || DEV_PHONE_JIDS.includes(pJid) ||
-                                             pJid === config.ownerJid || pJid === config.ownerLid ||
+                                             pJid === config.ownerJid ||
                                              (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(pJid)) ||
                                              (Array.isArray(config.sudos) && config.sudos.includes(pJid));
 
-                            if (!isExempt) targetsToDemote.push(pJid);
+                            if (!isExempt) targetsToDemote.push(p.id);
                         }
                     }
 
@@ -408,66 +432,52 @@ async function startBot() {
                         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                         `⚠️ *Threat Neutralized:* \`${targetsToDemote.length}\` non-exempt admins demoted.\n` +
                         `🔒 *Status:* Group closed to Admins-Only and settings locked.\n` +
-                        `👤 *Violator:* @${executorJid ? executorJid.split('@')[0] : 'Unknown'}\n\n` +
-                        `_System operations will resume once verified by Satoru Gojo's creator._`;
+                        `👤 *Violator:* @${executorJid ? executorJid.split('@')[0] : 'Unknown'}`;
 
                     await sock.sendMessage(jid, { text: alertText, mentions: executorJid ? [executorJid] : [] });
                 } catch (err) {
-                    console.error("❌ [OVERKILL] Automated lockdown failed:", err.message);
+                    console.error("❌ [OVERKILL] Lockdown failed:", err.message);
                 }
             };
 
             for (const num of participants) {
-                let targetJid = normalizeToJid(num);
+                let rawTarget = String(num);
+                let targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
 
-                // Guaranteed Group Participants LID-to-Phone Translator
-                if (metadata?.participants) {
-                    const cleanNum = num.split('@')[0].split(':')[0];
-                    const matchedP = metadata.participants.find(p => {
-                        const pId = p.id ? p.id.split('@')[0].split(':')[0] : '';
-                        const pLid = p.lid ? p.lid.split('@')[0].split(':')[0] : '';
-                        return pId === cleanNum || pLid === cleanNum;
-                    });
+                if (rawTarget.includes('@lid') && metadata?.participants) {
+                    const cleanLid = rawTarget.split('@')[0].split(':')[0];
+                    const matchedP = metadata.participants.find(p => p.lid && p.lid.includes(cleanLid));
                     if (matchedP && matchedP.id) {
-                        targetJid = normalizeToJid(matchedP.id);
+                        targetJid = matchedP.id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                     }
                 }
 
-                if (targetJid.endsWith('@lid')) {
-                    const resolvedTarget = await getPhoneJid(sock, targetJid, jid);
-                    if (resolvedTarget && resolvedTarget.endsWith('@s.whatsapp.net')) {
-                        targetJid = resolvedTarget;
-                    }
-                }
-                const number = targetJid.split('@')[0];
+                const phoneNumber = targetJid.split('@')[0];
 
-                // ─── 1. MEMBER ADDED / JOINED ───
+                // Deduplicate reconnection / resync spam
+                const eventSignature = `${jid}_${targetJid}_${action}`;
+                if (isDuplicateEvent(eventSignature)) continue;
+
+                // ─── 1. MEMBER JOINED ───
                 if (action === 'add') {
-                    const antijoinPolicy = data.antijoin?.[jid] || config.antijoin?.[jid] || 'off';
-                    const joinedSelfViaLink = !anu.author || normalizeToJid(anu.author) === targetJid;
-
-                    let isActorAdmin = false;
-                    if (metadata?.participants && actorJid) {
-                        const actorObj = metadata.participants.find(p => normalizeToJid(p.id) === actorJid);
-                        isActorAdmin = !!(actorObj && (actorObj.admin === 'admin' || actorObj.admin === 'superadmin'));
-                    }
-
-                    if (antijoinPolicy === 'on' && !isActorAuthorized && (joinedSelfViaLink || !isActorAdmin)) {
+                    const isAntijoinOn = isEnabled(data.antijoin?.[jid]) || isEnabled(config.antijoin?.[jid]);
+                    
+                    if (isAntijoinOn && !isActorAuthorized) {
                         try {
                             await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
                             await sock.sendMessage(jid, { 
-                                text: `🔒 *Anti-Join Protection active!* Expelled @${number}.`,
+                                text: `🔒 *Anti-Join Protection active!* Expelled @${phoneNumber}.`,
                                 mentions: [targetJid]
                             });
-                        } catch (e) { /* ignore */ }
-                        continue;
+                            continue;
+                        } catch (e) {}
                     }
 
-                    const welStatus = data.welcome?.[jid] || 'off';
-                    if (welStatus === 'on') {
-                        const customMsg = data.customWelcome?.[jid] || `Welcome @user to @group! 🌸`;
+                    const isWelcomeOn = isEnabled(data.welcome?.[jid]) || isEnabled(config.welcome?.[jid]);
+                    if (isWelcomeOn) {
+                        const customMsg = data.customWelcome?.[jid] || `Welcome @user to *${groupName}*! 🌸`;
                         const formattedMsg = customMsg
-                            .replace(/@user/g, `@${number}`)
+                            .replace(/@user/g, `@${phoneNumber}`)
                             .replace(/@group/g, groupName);
 
                         await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
@@ -475,103 +485,85 @@ async function startBot() {
                 } 
                 // ─── 2. MEMBER REMOVED ───
                 else if (action === 'remove') {
-                    const gbStatus = data.goodbye?.[jid] || 'off';
-                    if (gbStatus === 'on') {
+                    const isGoodbyeOn = isEnabled(data.goodbye?.[jid]) || isEnabled(config.goodbye?.[jid]);
+                    if (isGoodbyeOn) {
                         const customMsg = data.customGoodbye?.[jid] || `Goodbye @user! 🥀`;
                         const formattedMsg = customMsg
-                            .replace(/@user/g, `@${number}`)
+                            .replace(/@user/g, `@${phoneNumber}`)
                             .replace(/@group/g, groupName);
 
                         await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
                     }
                 } 
-                // ─── 3. MEMBER PROMOTED TO ADMIN ───
+                // ─── 3. MEMBER PROMOTED ───
                 else if (action === 'promote') {
-                    const antipromotePolicy = data.antipromote?.[jid] || config.antipromote?.[jid] || 'off';
-                    const isOverkillOn = data.overkill?.[jid] === 'on' || config.overkill?.[jid] === 'on' || antipromotePolicy === 'overkill';
+                    const isAntipromoteOn = isEnabled(data.antipromote?.[jid]) || isEnabled(config.antipromote?.[jid]);
+                    const isOverkillOn = isEnabled(data.overkill?.[jid]) || isEnabled(config.overkill?.[jid]);
 
-                    // Anti-Promote Rollback
-                    if (antipromotePolicy !== 'off' && !isActorAuthorized && !isActorBot) {
+                    if (isAntipromoteOn && !isActorAuthorized && !isActorBot) {
                         try {
                             await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
-                            if (actorJid) {
-                                try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) { /* ignore */ }
+                            if (actorJid && actorJid !== botJid) {
+                                await sock.groupParticipantsUpdate(jid, [actorJid], "demote");
                             }
-
                             await sock.sendMessage(jid, {
-                                text: `🛡️ *Anti-Promote Triggered!* Rolled back unauthorized promotion of @${number}.`,
+                                text: `🛡️ *Anti-Promote Triggered!* Rolled back promotion of @${phoneNumber}.`,
                                 mentions: actorJid ? [targetJid, actorJid] : [targetJid]
                             });
-                        } catch (err) {
-                            console.error("❌ [SECURITY] Anti-Promote enforcement failed:", err.message);
-                        }
-
-                        // Independent Overkill Check
-                        if (isOverkillOn) {
-                            await triggerEmergencyOverkill(actorJid);
-                        }
+                        } catch (err) {}
+                        if (isOverkillOn) await triggerEmergencyOverkill(actorJid);
                         continue;
                     }
 
-                    // Independent Overkill trigger if enabled on any unauthorized promo
                     if (isOverkillOn && !isActorAuthorized && !isActorBot) {
                         await triggerEmergencyOverkill(actorJid);
                         continue;
                     }
 
-                    const promStatus = data.promote?.[jid] || 'off';
-                    if (promStatus === 'on') {
+                    const isPromoteOn = isEnabled(data.promote?.[jid]) || isEnabled(config.promote?.[jid]);
+                    if (isPromoteOn) {
                         await sock.sendMessage(jid, {
-                            text: `👑 *PROMOTION ALERT!* \n\n🎉 @${number} promoted to Admin in *${groupName}*!`,
+                            text: `👑 *PROMOTION ALERT!*\n\n🎉 @${phoneNumber} promoted to Admin in *${groupName}*!`,
                             mentions: [targetJid]
                         });
                     }
                 } 
-                // ─── 4. ADMIN DEMOTED TO MEMBER ───
+                // ─── 4. MEMBER DEMOTED ───
                 else if (action === 'demote') {
-                    const antidemotePolicy = data.antidemote?.[jid] || config.antidemote?.[jid] || 'off';
-                    const isOverkillOn = data.overkill?.[jid] === 'on' || config.overkill?.[jid] === 'on' || antidemotePolicy === 'overkill';
+                    const isAntidemoteOn = isEnabled(data.antidemote?.[jid]) || isEnabled(config.antidemote?.[jid]);
+                    const isOverkillOn = isEnabled(data.overkill?.[jid]) || isEnabled(config.overkill?.[jid]);
 
-                    // Anti-Demote Rollback
-                    if (antidemotePolicy !== 'off' && !isActorAuthorized && !isActorBot) {
+                    if (isAntidemoteOn && !isActorAuthorized && !isActorBot) {
                         try {
                             await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
-                            if (actorJid) {
-                                try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) { /* ignore */ }
+                            if (actorJid && actorJid !== botJid) {
+                                await sock.groupParticipantsUpdate(jid, [actorJid], "demote");
                             }
-
                             await sock.sendMessage(jid, {
-                                text: `🛡️ *Anti-Demote Triggered!* Restored admin status of @${number}.`,
+                                text: `🛡️ *Anti-Demote Triggered!* Restored Admin status for @${phoneNumber}.`,
                                 mentions: actorJid ? [targetJid, actorJid] : [targetJid]
                             });
-                        } catch (err) {
-                            console.error("❌ [SECURITY] Anti-Demote enforcement failed:", err.message);
-                        }
-
-                        // Independent Overkill Check
-                        if (isOverkillOn) {
-                            await triggerEmergencyOverkill(actorJid);
-                        }
+                        } catch (err) {}
+                        if (isOverkillOn) await triggerEmergencyOverkill(actorJid);
                         continue;
                     }
 
-                    // Independent Overkill trigger if enabled on any unauthorized demote
                     if (isOverkillOn && !isActorAuthorized && !isActorBot) {
                         await triggerEmergencyOverkill(actorJid);
                         continue;
                     }
 
-                    const demStatus = data.demote?.[jid] || 'off';
-                    if (demStatus === 'on') {
+                    const isDemoteOn = isEnabled(data.demote?.[jid]) || isEnabled(config.demote?.[jid]);
+                    if (isDemoteOn) {
                         await sock.sendMessage(jid, {
-                            text: `🛡️ *DEMOTION ALERT!* \n\n👋 @${number} demoted back to Member in *${groupName}*.`,
+                            text: `🛡️ *DEMOTION ALERT!*\n\n👋 @${phoneNumber} demoted to Member in *${groupName}*.`,
                             mentions: [targetJid]
                         });
                     }
                 }
             }
         } catch (e) {
-            console.error("❌ [ALERTS] Failed to process group update event:", e.message);
+            console.error("❌ [GROUP UPDATE ERROR]:", e.message);
         }
     });
 
@@ -589,7 +581,7 @@ async function startBot() {
                     }
                 }
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
     });
 
     // ─── MESSAGES UPSERT ──────────────────────────────────────────
