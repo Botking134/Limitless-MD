@@ -60,7 +60,7 @@ const ownerCommands = [
 ];
 
 const primaryOnlyCommands = ['addowner', 'delowner'];
-const devOnlyCommands = ['upgrade'];
+const devOnlyCommands = ['upgrade_core', 'system_upgrade'];
 
 // ─── BULLETPROOF COMMAND EXECUTION HELPER ───
 async function executeBotCommand(cmdName, sock, msg, args, opts) {
@@ -105,20 +105,14 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (config.autoviewstatus === 'on') {
                 try {
                     await sock.readMessages([msg.key]);
-                    console.log(`👁️ [STATUS] Marked status as read from: ${msg.key.participant || 'unknown'}`);
-                } catch (e) {
-                    console.error("❌ [STATUS] Failed to mark status as read:", e.message);
-                }
+                } catch (e) {}
             }
             if (config.autoreactstatus === 'on') {
                 try {
                     const emoji = config.statusemoji || '❄';
                     const statusSender = msg.key.participant || msg.key.remoteJid;
                     await sock.sendMessage(statusSender, { react: { text: emoji, key: msg.key } });
-                    console.log(`💖 [STATUS] Reacted to status with ${emoji} for: ${statusSender}`);
-                } catch (e) {
-                    console.error("❌ [STATUS] Failed to react to status:", e.message);
-                }
+                } catch (e) {}
             }
             return;
         }
@@ -136,7 +130,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         try {
             const filterTriggered = await handleFilterInterceptor(sock, msg, trimmedMessageBody, jid);
             if (filterTriggered) return;
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
 
         // ─── LINK SUMMARY LOGS ───
         if (isGroup && trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix) && !msg.key.fromMe) {
@@ -146,12 +140,10 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         // ─── RECORD CONVERSATION STATS ───
         if (isGroup && !msg.key.fromMe) {
             const todayStr = new Date().toDateString();
-            
             config.totalMessages = config.totalMessages || {};
             config.dailyActivity = config.dailyActivity || {};
 
             const activityKey = `${jid}_${senderJid}`;
-
             config.totalMessages[activityKey] = (config.totalMessages[activityKey] || 0) + 1;
 
             if (!config.dailyActivity[activityKey] || config.dailyActivity[activityKey].date !== todayStr) {
@@ -194,7 +186,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         let activeQuizKey = '';
 
         if (global.triviaSessions && global.triviaSessions[quizSingleKey] && global.triviaSessions[quizSingleKey].status === 'playing') {
-            // Intentionally ignore status checks during active gameplay
+            // Active gameplay
         } else {
             if (global.triviaSessions && global.triviaSessions[quizSingleKey] && global.triviaSessions[quizSingleKey].status === 'awaiting_category') {
                 activeQuizKey = quizSingleKey;
@@ -249,7 +241,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const isAuthorized = isOwner || isSudo;
 
-        // Cached Group Admin lookup
         let isAdmin = false;
         if (isGroup) {
             const groupMetadata = await getCachedGroupMetadata(sock, jid);
@@ -267,38 +258,33 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
-        // ─── UNIFIED TEXT-GAME REPLY REDIRECTOR ───
+        // ─── TEXT-GAME REPLY REDIRECTOR ───
         const redirectedGame = handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody);
         if (redirectedGame) {
             command = redirectedGame.command;
             args = redirectedGame.args;
         }
 
-        // ─── LID-SAFE SILENCE CHECK ──────────────────────────────
+        // ─── SILENCE CHECK ───────────────────────────────────────
         if (isGroup) {
             const silenceData = isUserSilenced(global.silencedUsers, jid, senderJid);
             if (silenceData && Date.now() < silenceData.endTime) {
                 let shouldMute = false;
-                if (silenceData.type === 'all' && !isDev) {
-                    shouldMute = true;
-                } else if (silenceData.type === 'sticker' && msg.message.stickerMessage && !isDev) {
-                    shouldMute = true;
-                } else if (silenceData.type === 'message' && !isDev) {
+                if (silenceData.type === 'all' && !isDev) shouldMute = true;
+                else if (silenceData.type === 'sticker' && msg.message.stickerMessage && !isDev) shouldMute = true;
+                else if (silenceData.type === 'message' && !isDev) {
                     const hasMedia = msg.message.imageMessage || msg.message.videoMessage || msg.message.audioMessage || msg.message.documentMessage;
                     if (trimmedMessageBody || hasMedia) shouldMute = true;
                 }
 
                 if (shouldMute) {
-                    try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
+                    try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) {}
                     return;
                 }
             }
         }
 
-        // ─── AGENT DECLARATIONS & RESOLVING ─────────────────────────
-        const cleanBotJid = cleanJid(botJid);
-        const cleanBotLid = cleanJid(botLid);
-
+        // ─── AI AGENT ROUTING ───────────────────────────────────
         const isReplyingToBot = (quotedMsgId && botSentMessageIds && botSentMessageIds.has(quotedMsgId)) ||
                                (quotedMsg && quotedMsg.key && quotedMsg.key.fromMe) ||
                                (!isGroup && !msg.key.fromMe && quotedMsgId);
@@ -314,57 +300,36 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (isReplyingToBot && quotedMsgId && global.botMessageAgents && global.botMessageAgents[quotedMsgId]) {
             identifiedAgent = global.botMessageAgents[quotedMsgId];
         } else {
-            if (isGojoCalled && config.gojoChats?.includes(jid)) {
-                identifiedAgent = 'gojo';
-            } else if (isAizenCalled && config.chatbotChats?.includes(jid)) {
-                identifiedAgent = 'aizen';
-            } else if (isLizzyCalled && config.lizzyChats?.includes(jid)) {
-                identifiedAgent = 'lizzy';
-            } else if (isFridayCalled && config.fridayChats?.includes(jid)) {
-                identifiedAgent = 'friday';
-            } else if (isUrielCalled) {
-                identifiedAgent = 'uriel';
-            }
+            if (isGojoCalled && config.gojoChats?.includes(jid)) identifiedAgent = 'gojo';
+            else if (isAizenCalled && config.chatbotChats?.includes(jid)) identifiedAgent = 'aizen';
+            else if (isLizzyCalled && config.lizzyChats?.includes(jid)) identifiedAgent = 'lizzy';
+            else if (isFridayCalled && config.fridayChats?.includes(jid)) identifiedAgent = 'friday';
+            else if (isUrielCalled) identifiedAgent = 'uriel';
         }
 
-        if (identifiedAgent === 'gojo') {
-            const isAsleep = !config.gojoChats?.includes(jid);
-            if (isAsleep && !trimmedMessageBody.startsWith(activePrefix)) identifiedAgent = null;
+        if (identifiedAgent === 'gojo' && !config.gojoChats?.includes(jid) && !trimmedMessageBody.startsWith(activePrefix)) {
+            identifiedAgent = null;
         }
 
-        // Correct command mappings for AI Agents
         if (identifiedAgent && !trimmedMessageBody.startsWith(activePrefix)) {
-            if (identifiedAgent === 'gojo') {
-                command = 'gojo_chat';
-                args = trimmedMessageBody;
-            } else if (identifiedAgent === 'aizen' || identifiedAgent === 'jarvis') {
-                command = 'aizen_chat';
-                args = trimmedMessageBody;
-            } else if (identifiedAgent === 'lizzy') {
-                command = 'lizzy_chat';
-                args = trimmedMessageBody;
-            } else if (identifiedAgent === 'friday') {
-                command = 'friday_chat';
-                args = trimmedMessageBody;
-            } else if (identifiedAgent === 'uriel') {
-                command = 'uriel';
-                args = trimmedMessageBody;
-            }
+            if (identifiedAgent === 'gojo') { command = 'gojo_chat'; args = trimmedMessageBody; }
+            else if (identifiedAgent === 'aizen' || identifiedAgent === 'jarvis') { command = 'aizen_chat'; args = trimmedMessageBody; }
+            else if (identifiedAgent === 'lizzy') { command = 'lizzy_chat'; args = trimmedMessageBody; }
+            else if (identifiedAgent === 'friday') { command = 'friday_chat'; args = trimmedMessageBody; }
+            else if (identifiedAgent === 'uriel') { command = 'uriel'; args = trimmedMessageBody; }
         }
 
-        // ─── GROUP SECURITY INTERCEPTORS ─────────────────────────
+        // ─── SECURITY INTERCEPTORS ──────────────────────────────
         if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
             const secured = await handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid, mentionedJids, isAuthorized, isDev, isAdmin);
             if (secured) return;
         }
 
-        // ─── GROUP STATUS PROTECTION ─────────────────────────────
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
         if (isGroup && isGroupStatus && !msg.key.fromMe && !isAuthorized && !isDev) {
             await handleGroupStatusProtection(sock, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev, isAdmin);
         }
 
-        // ─── RATE LIMIT INTERCEPTORS ──────────────────────────────
         if (config.antibug === 'on' && !isAuthorized && !msg.key.fromMe && !isDev) {
             const blocked = await handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, isAuthorized, isDev, isAdmin);
             if (blocked) return;
@@ -375,7 +340,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (spammed) return;
         }
 
-        // ─── COMMAND EXTRACTION & BUTTON PARSER WITH SPACES ───
+        // ─── COMMAND EXTRACTION ─────────────────────────────────
         if (!command) {
             const rawUnwrapped = getRawMessage(msg.message);
             let rawButtonId = '';
@@ -384,59 +349,19 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                 try {
                     const parsed = JSON.parse(rawUnwrapped.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
                     rawButtonId = parsed.id;
-                } catch (e) { /* ignore */ }
+                } catch (e) {}
             } else if (rawUnwrapped?.buttonsResponseMessage?.selectedButtonId) {
                 rawButtonId = rawUnwrapped.buttonsResponseMessage.selectedButtonId;
             } else if (rawUnwrapped?.templateButtonReplyMessage?.selectedId) {
                 rawButtonId = rawUnwrapped.templateButtonReplyMessage.selectedId;
             }
 
-            if (!rawButtonId && trimmedMessageBody.toLowerCase().includes('explore commands')) {
-                const targetQuotedMsg = (quotedMsgId && global.messageStore) ? global.messageStore[quotedMsgId] : null;
-                if (targetQuotedMsg) {
-                    const rawQuoted = getRawMessage(targetQuotedMsg.message);
-                    const quotedText = (
-                        rawQuoted?.conversation || 
-                        rawQuoted?.extendedTextMessage?.text || 
-                        rawQuoted?.imageMessage?.caption || 
-                        rawQuoted?.interactiveMessage?.body?.text || 
-                        rawQuoted?.buttonsMessage?.contentText ||
-                        ''
-                    ).toUpperCase();
-
-                    if (quotedText.includes('AI & CHATBOT')) rawButtonId = 'menu_ai';
-                    else if (quotedText.includes('INTERACTIVE GAMES') || quotedText.includes('GAMES')) rawButtonId = 'menu_games';
-                    else if (quotedText.includes('GROUP MANAGEMENT') || quotedText.includes('GROUP')) rawButtonId = 'menu_group';
-                    else if (quotedText.includes('TOOLS')) rawButtonId = 'menu_tools';
-                    else if (quotedText.includes('DOWNLOADER')) rawButtonId = 'menu_download';
-                    else if (quotedText.includes('FUN & ROLEPLAY') || quotedText.includes('FUN')) rawButtonId = 'menu_fun';
-                    else if (quotedText.includes('OWNER & DEV') || quotedText.includes('OWNER')) rawButtonId = 'menu_owner';
-                    else if (quotedText.includes('UTILITIES')) rawButtonId = 'menu_utilities';
-                }
-            }
-
             if (rawButtonId) {
                 const cleanButton = rawButtonId.trim();
-                if (cleanButton.startsWith(activePrefix)) {
-                    const withoutPrefix = cleanButton.slice(activePrefix.length).trim();
-                    const spaceIndex = withoutPrefix.indexOf(' ');
-                    if (spaceIndex === -1) {
-                        command = withoutPrefix.toLowerCase();
-                        args = '';
-                    } else {
-                        command = withoutPrefix.slice(0, spaceIndex).toLowerCase();
-                        args = withoutPrefix.slice(spaceIndex + 1).trim();
-                    }
-                } else {
-                    const spaceIndex = cleanButton.indexOf(' ');
-                    if (spaceIndex === -1) {
-                        command = cleanButton.toLowerCase();
-                        args = '';
-                    } else {
-                        command = cleanButton.slice(0, spaceIndex).toLowerCase();
-                        args = cleanButton.slice(spaceIndex + 1).trim();
-                    }
-                }
+                const targetText = cleanButton.startsWith(activePrefix) ? cleanButton.slice(activePrefix.length).trim() : cleanButton;
+                const spaceIndex = targetText.indexOf(' ');
+                command = spaceIndex === -1 ? targetText.toLowerCase() : targetText.slice(0, spaceIndex).toLowerCase();
+                args = spaceIndex === -1 ? '' : targetText.slice(spaceIndex + 1).trim();
             }
         }
 
@@ -444,13 +369,8 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (trimmedMessageBody.startsWith(activePrefix)) {
                 const withoutPrefix = trimmedMessageBody.slice(activePrefix.length).trim();
                 const spaceIndex = withoutPrefix.indexOf(' ');
-                if (spaceIndex === -1) {
-                    command = withoutPrefix.toLowerCase();
-                    args = '';
-                } else {
-                    command = withoutPrefix.slice(0, spaceIndex).toLowerCase();
-                    args = withoutPrefix.slice(spaceIndex + 1).trim();
-                }
+                command = spaceIndex === -1 ? withoutPrefix.toLowerCase() : withoutPrefix.slice(0, spaceIndex).toLowerCase();
+                args = spaceIndex === -1 ? '' : withoutPrefix.slice(spaceIndex + 1).trim();
             } else {
                 const targetLower = trimmedMessageBody.toLowerCase();
                 if (typeof commands === 'object' && !Array.isArray(commands) && commands[targetLower]) {
@@ -465,7 +385,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         if (!command) return;
 
-        // ─── AGENT CONTEXT ───
         if (command === 'gojo_chat') global.activeAgentContext = 'gojo';
         else if (command === 'uriel') global.activeAgentContext = 'uriel';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
@@ -480,8 +399,9 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         if (ownerCommands.includes(cleanCommand) && isSudo && !isOwner && !isDev) return;
         if (devOnlyCommands.includes(cleanCommand) && !isDev) return;
 
-        // Expanded Whitelist for Interactive Game Replies, Button Responses, and Granular Permissions
+        // ─── WHITELIST FOR INTERACTIVE GAMES & BEN 10 CARDS ─────
         const interactiveResponses = [
+            'upgrade', 'alien', 'omnitrix', 'alienspawn',
             'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
             'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'repo_url', 'pvp_defend',
@@ -492,39 +412,23 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             'wcg_ans', 'torf_ans', 'millionaire_ans', 'quiz_cat', 'jail_ans'
         ];
 
-        // Granular Permission Check via storage/permissions.json
         const isAllowedViaPerms = isCommandAllowed(senderJid, jid, cleanCommand);
 
         if (!isPublicMode && !isAuthorized && !isDev && !interactiveResponses.includes(command) && !isAllowedViaPerms) {
             return;
         }
 
-        // ─── LOG COMMAND EXECUTION ───
-        global.recentLogs = global.recentLogs || [];
-        global.recentLogs.push({
-            time: new Date().toISOString(),
-            level: 'CMD',
-            message: `${command} ${args || ''}`.trim()
-        });
-        if (global.recentLogs.length > 2000) global.recentLogs.shift();
-
         console.log(`⚙️ [PARSER] Triggering command: "${command}"`);
 
         if (config.autoReact === 'cmd' && !msg.key.fromMe) {
             let reactEmoji = isDev ? "♾️" : (isOwner ? "🪯" : (isSudo ? "☸️" : "❄"));
-            try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) { /* ignore */ }
+            try { await sock.sendMessage(jid, { react: { text: reactEmoji, key: msg.key } }); } catch (err) {}
         }
 
-        await executeBotCommand(command, sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, senderNumber });
+        await executeBotCommand(command, sock, msg, args, { isOwner, isSudo, isDev, isPrimaryOwner, isAdmin, senderNumber });
 
     } catch (err) {
         console.error('Error handling message stream:', err);
-        global.recentLogs = global.recentLogs || [];
-        global.recentLogs.push({
-            time: new Date().toISOString(),
-            level: 'ERROR',
-            message: err.message + '\n' + (err.stack || '')
-        });
     }
 }
 
