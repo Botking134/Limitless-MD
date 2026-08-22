@@ -29,7 +29,9 @@ function saveJSON(filePath, data) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
-// ─── BEN 10 ROSTER ─────────────────────────────────────────────
+// ─── GITHUB RAW CDN BEN 10 ROSTER (99.9% Uptime, Zero Blocks) ───
+const CDN_BASE = "https://raw.githubusercontent.com/Dark-Infinity-Ops/assets-hub/main/ben10";
+
 const ALIEN_DATABASE = [
     {
         id: "heatblast",
@@ -39,7 +41,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3450,
         bounty: 1850,
-        image: "https://static.wikia.nocookie.net/ben10/images/2/23/Heatblast_Classic.png"
+        image: `${CDN_BASE}/heatblast.png`
     },
     {
         id: "fourarms",
@@ -49,7 +51,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2900,
         bounty: 1400,
-        image: "https://static.wikia.nocookie.net/ben10/images/5/52/Fourarms_Classic.png"
+        image: `${CDN_BASE}/fourarms.png`
     },
     {
         id: "xlr8",
@@ -59,7 +61,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3600,
         bounty: 2100,
-        image: "https://static.wikia.nocookie.net/ben10/images/c/c5/XLR8_Classic.png"
+        image: `${CDN_BASE}/xlr8.png`
     },
     {
         id: "diamondhead",
@@ -69,7 +71,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3800,
         bounty: 2250,
-        image: "https://static.wikia.nocookie.net/ben10/images/b/be/Diamondhead_Classic.png"
+        image: `${CDN_BASE}/diamondhead.png`
     },
     {
         id: "upgrade",
@@ -79,7 +81,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3100,
         bounty: 1650,
-        image: "https://static.wikia.nocookie.net/ben10/images/3/30/Upgrade_Classic.png"
+        image: `${CDN_BASE}/upgrade.png`
     },
     {
         id: "ghostfreak",
@@ -89,7 +91,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3950,
         bounty: 2400,
-        image: "https://static.wikia.nocookie.net/ben10/images/0/0c/Ghostfreak_Classic.png"
+        image: `${CDN_BASE}/ghostfreak.png`
     },
     {
         id: "waybig",
@@ -99,7 +101,7 @@ const ALIEN_DATABASE = [
         rarity: "Legendary",
         power: 6500,
         bounty: 5000,
-        image: "https://static.wikia.nocookie.net/ben10/images/6/66/Way_Big_Original.png"
+        image: `${CDN_BASE}/waybig.png`
     },
     {
         id: "alienx",
@@ -109,7 +111,7 @@ const ALIEN_DATABASE = [
         rarity: "Celestial",
         power: 9999,
         bounty: 10000,
-        image: "https://static.wikia.nocookie.net/ben10/images/7/7b/Alien_X_UAF.png"
+        image: `${CDN_BASE}/alienx.png`
     },
     {
         id: "swampfire",
@@ -119,7 +121,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3700,
         bounty: 2200,
-        image: "https://static.wikia.nocookie.net/ben10/images/8/87/Swampfire_AF.png"
+        image: `${CDN_BASE}/swampfire.png`
     },
     {
         id: "humungousaur",
@@ -129,7 +131,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3300,
         bounty: 1750,
-        image: "https://static.wikia.nocookie.net/ben10/images/7/7e/Humungousaur_AF.png"
+        image: `${CDN_BASE}/humungousaur.png`
     },
     {
         id: "bigchill",
@@ -139,7 +141,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3750,
         bounty: 2300,
-        image: "https://static.wikia.nocookie.net/ben10/images/c/cd/Big_Chill_AF.png"
+        image: `${CDN_BASE}/bigchill.png`
     },
     {
         id: "feedback",
@@ -149,7 +151,27 @@ const ALIEN_DATABASE = [
         rarity: "Legendary",
         power: 5800,
         bounty: 4500,
-        image: "https://static.wikia.nocookie.net/ben10/images/7/79/Feedback_OV.png"
+        image: `${CDN_BASE}/feedback.png`
+    },
+    {
+        id: "cannonbolt",
+        name: "Cannonbolt",
+        species: "Arburian Pelarota",
+        planet: "Arburia",
+        rarity: "Rare",
+        power: 2950,
+        bounty: 1500,
+        image: `${CDN_BASE}/cannonbolt.png`
+    },
+    {
+        id: "chromastone",
+        name: "Chromastone",
+        species: "Crystalsapien",
+        planet: "Petropia",
+        rarity: "Epic",
+        power: 3850,
+        bounty: 2350,
+        image: `${CDN_BASE}/chromastone.png`
     }
 ];
 
@@ -164,7 +186,7 @@ function generateCaptcha(length = 5) {
     return code;
 }
 
-// ─── SPAWNER LOGIC ──────────────────────────────────────────────
+// ─── STRICT IMAGE SPAWNER LOGIC ─────────────────────────────────
 async function spawnAlienCard(sock, jid) {
     const randomAlien = ALIEN_DATABASE[Math.floor(Math.random() * ALIEN_DATABASE.length)];
     const captcha = generateCaptcha(5);
@@ -189,14 +211,11 @@ async function spawnAlienCard(sock, jid) {
         `━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `_Type *.upgrade ${captcha}* to secure DNA sample!_`;
 
-    try {
-        await sock.sendMessage(jid, {
-            image: { url: randomAlien.image },
-            caption: cardCaption
-        });
-    } catch (e) {
-        console.error("❌ [BEN10] Spawn send failed:", e.message);
-    }
+    // Strictly sends with image
+    await sock.sendMessage(jid, {
+        image: { url: randomAlien.image },
+        caption: cardCaption
+    });
 }
 
 // ─── BACKGROUND AUTO-SPAWNER (30 Mins) ─────────────────────────
@@ -209,7 +228,9 @@ function startAutoSpawner(sock) {
         for (const groupJid of activeGroups) {
             try {
                 await spawnAlienCard(sock, groupJid);
-            } catch (e) {}
+            } catch (e) {
+                console.error(`❌ [BEN10 AUTO] Spawn error in ${groupJid}:`, e.message);
+            }
         }
     }, 30 * 60 * 1000);
 }
@@ -369,7 +390,6 @@ const alienSpawnCommand = {
     }
 };
 
-// ─── EXPORT AS AN ARRAY OF COMMAND OBJECTS ──────────────────────
 module.exports = [
     alienCommand,
     upgradeCommand,
