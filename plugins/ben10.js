@@ -1,6 +1,7 @@
 // plugins/ben10.js
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 const { normalizeToJid } = require('../stateManager');
 
 // ─── STORAGE PATHS ─────────────────────────────────────────────
@@ -29,7 +30,24 @@ function saveJSON(filePath, data) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
-// ─── LIVE, VERIFIED BEN 10 IMAGE ROSTER ─────────────────────────
+// ─── DIRECT BUFFER FETCHER (Bypasses Baileys URL stream bug) ───
+async function getMediaBuffer(url) {
+    try {
+        const response = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        return Buffer.from(response.data);
+    } catch (e) {
+        console.error(`❌ [BUFFER FETCH] Failed for ${url}:`, e.message);
+        return null;
+    }
+}
+
+// ─── VERIFIED LIVE BEN 10 IMAGE ROSTER ──────────────────────────
 const ALIEN_DATABASE = [
     {
         id: "heatblast",
@@ -39,7 +57,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3450,
         bounty: 1850,
-        image: "https://i.postimg.cc/k4Wn7N0v/heatblast.png"
+        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Heatblast-Ben-10-e5bf7db.jpg"
     },
     {
         id: "fourarms",
@@ -49,7 +67,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2900,
         bounty: 1400,
-        image: "https://i.postimg.cc/85z1XqjT/fourarms.png"
+        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Four-Arms-Ben-10-8b1e4c7.jpg"
     },
     {
         id: "xlr8",
@@ -59,7 +77,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3600,
         bounty: 2100,
-        image: "https://i.postimg.cc/BnvW5L4z/xlr8.png"
+        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/XLR8-Ben-10-53bc3a7.jpg"
     },
     {
         id: "diamondhead",
@@ -69,7 +87,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3800,
         bounty: 2250,
-        image: "https://i.postimg.cc/Wb7S3rG5/diamondhead.png"
+        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Diamondhead-Ben-10-096d2b5.jpg"
     },
     {
         id: "upgrade",
@@ -79,77 +97,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3100,
         bounty: 1650,
-        image: "https://i.postimg.cc/sX2K4N8M/upgrade.png"
-    },
-    {
-        id: "ghostfreak",
-        name: "Ghostfreak",
-        species: "Ectonurite",
-        planet: "Anur Phaetos",
-        rarity: "Epic",
-        power: 3950,
-        bounty: 2400,
-        image: "https://i.postimg.cc/G3x7B1T8/ghostfreak.png"
-    },
-    {
-        id: "waybig",
-        name: "Way Big",
-        species: "To'kustar",
-        planet: "Cosmic Storms",
-        rarity: "Legendary",
-        power: 6500,
-        bounty: 5000,
-        image: "https://i.postimg.cc/Y9Z9JkX4/waybig.png"
-    },
-    {
-        id: "alienx",
-        name: "Alien X",
-        species: "Celestialsapien",
-        planet: "Forge of Creation",
-        rarity: "Celestial",
-        power: 9999,
-        bounty: 10000,
-        image: "https://i.postimg.cc/52j5K4tM/alienx.png"
-    },
-    {
-        id: "swampfire",
-        name: "Swampfire",
-        species: "Methanosian",
-        planet: "Methanos",
-        rarity: "Epic",
-        power: 3700,
-        bounty: 2200,
-        image: "https://i.postimg.cc/d08hR3YJ/swampfire.png"
-    },
-    {
-        id: "humungousaur",
-        name: "Humungousaur",
-        species: "Vaxasaurian",
-        planet: "Terradino",
-        rarity: "Rare",
-        power: 3300,
-        bounty: 1750,
-        image: "https://i.postimg.cc/mD8T9N1b/humungousaur.png"
-    },
-    {
-        id: "bigchill",
-        name: "Big Chill",
-        species: "Necrofriggian",
-        planet: "Kylmyys",
-        rarity: "Epic",
-        power: 3750,
-        bounty: 2300,
-        image: "https://i.postimg.cc/02W8Yv7p/bigchill.png"
-    },
-    {
-        id: "feedback",
-        name: "Feedback",
-        species: "Conductoid",
-        planet: "Teslavorr",
-        rarity: "Legendary",
-        power: 5800,
-        bounty: 4500,
-        image: "https://i.postimg.cc/Kz8j6p6F/feedback.png"
+        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Upgrade-Ben-10-67a6d81.jpg"
     },
     {
         id: "cannonbolt",
@@ -159,17 +107,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2950,
         bounty: 1500,
-        image: "https://i.postimg.cc/9F4P5WJg/cannonbolt.png"
-    },
-    {
-        id: "chromastone",
-        name: "Chromastone",
-        species: "Crystalsapien",
-        planet: "Petropia",
-        rarity: "Epic",
-        power: 3850,
-        bounty: 2350,
-        image: "https://i.postimg.cc/qR1Y8T1b/chromastone.png"
+        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Cannonbolt-Ben-10-705a6f8.jpg"
     }
 ];
 
@@ -184,10 +122,17 @@ function generateCaptcha(length = 5) {
     return code;
 }
 
-// ─── STRICT IMAGE SPAWNER LOGIC ─────────────────────────────────
+// ─── STRICT BUFFER SPAWNER LOGIC ────────────────────────────────
 async function spawnAlienCard(sock, jid) {
     const randomAlien = ALIEN_DATABASE[Math.floor(Math.random() * ALIEN_DATABASE.length)];
     const captcha = generateCaptcha(5);
+
+    // Download direct binary buffer before sending
+    const imageBuffer = await getMediaBuffer(randomAlien.image);
+    if (!imageBuffer) {
+        console.error("❌ Failed to buffer alien image.");
+        return;
+    }
 
     global.activeAlienSpawns[jid] = {
         alien: randomAlien,
@@ -210,7 +155,8 @@ async function spawnAlienCard(sock, jid) {
         `_Type *.upgrade ${captcha}* to secure DNA sample!_`;
 
     await sock.sendMessage(jid, {
-        image: { url: randomAlien.image },
+        image: imageBuffer,
+        mimetype: 'image/jpeg',
         caption: cardCaption
     });
 }
