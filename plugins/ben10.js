@@ -29,9 +29,7 @@ function saveJSON(filePath, data) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
-// ─── GITHUB RAW CDN BEN 10 ROSTER (99.9% Uptime, Zero Blocks) ───
-const CDN_BASE = "https://raw.githubusercontent.com/Dark-Infinity-Ops/assets-hub/main/ben10";
-
+// ─── LIVE, VERIFIED BEN 10 IMAGE ROSTER ─────────────────────────
 const ALIEN_DATABASE = [
     {
         id: "heatblast",
@@ -41,7 +39,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3450,
         bounty: 1850,
-        image: `${CDN_BASE}/heatblast.png`
+        image: "https://i.postimg.cc/k4Wn7N0v/heatblast.png"
     },
     {
         id: "fourarms",
@@ -51,7 +49,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2900,
         bounty: 1400,
-        image: `${CDN_BASE}/fourarms.png`
+        image: "https://i.postimg.cc/85z1XqjT/fourarms.png"
     },
     {
         id: "xlr8",
@@ -61,7 +59,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3600,
         bounty: 2100,
-        image: `${CDN_BASE}/xlr8.png`
+        image: "https://i.postimg.cc/BnvW5L4z/xlr8.png"
     },
     {
         id: "diamondhead",
@@ -71,7 +69,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3800,
         bounty: 2250,
-        image: `${CDN_BASE}/diamondhead.png`
+        image: "https://i.postimg.cc/Wb7S3rG5/diamondhead.png"
     },
     {
         id: "upgrade",
@@ -81,7 +79,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3100,
         bounty: 1650,
-        image: `${CDN_BASE}/upgrade.png`
+        image: "https://i.postimg.cc/sX2K4N8M/upgrade.png"
     },
     {
         id: "ghostfreak",
@@ -91,7 +89,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3950,
         bounty: 2400,
-        image: `${CDN_BASE}/ghostfreak.png`
+        image: "https://i.postimg.cc/G3x7B1T8/ghostfreak.png"
     },
     {
         id: "waybig",
@@ -101,7 +99,7 @@ const ALIEN_DATABASE = [
         rarity: "Legendary",
         power: 6500,
         bounty: 5000,
-        image: `${CDN_BASE}/waybig.png`
+        image: "https://i.postimg.cc/Y9Z9JkX4/waybig.png"
     },
     {
         id: "alienx",
@@ -111,7 +109,7 @@ const ALIEN_DATABASE = [
         rarity: "Celestial",
         power: 9999,
         bounty: 10000,
-        image: `${CDN_BASE}/alienx.png`
+        image: "https://i.postimg.cc/52j5K4tM/alienx.png"
     },
     {
         id: "swampfire",
@@ -121,7 +119,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3700,
         bounty: 2200,
-        image: `${CDN_BASE}/swampfire.png`
+        image: "https://i.postimg.cc/d08hR3YJ/swampfire.png"
     },
     {
         id: "humungousaur",
@@ -131,7 +129,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3300,
         bounty: 1750,
-        image: `${CDN_BASE}/humungousaur.png`
+        image: "https://i.postimg.cc/mD8T9N1b/humungousaur.png"
     },
     {
         id: "bigchill",
@@ -141,7 +139,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3750,
         bounty: 2300,
-        image: `${CDN_BASE}/bigchill.png`
+        image: "https://i.postimg.cc/02W8Yv7p/bigchill.png"
     },
     {
         id: "feedback",
@@ -151,7 +149,7 @@ const ALIEN_DATABASE = [
         rarity: "Legendary",
         power: 5800,
         bounty: 4500,
-        image: `${CDN_BASE}/feedback.png`
+        image: "https://i.postimg.cc/Kz8j6p6F/feedback.png"
     },
     {
         id: "cannonbolt",
@@ -161,7 +159,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2950,
         bounty: 1500,
-        image: `${CDN_BASE}/cannonbolt.png`
+        image: "https://i.postimg.cc/9F4P5WJg/cannonbolt.png"
     },
     {
         id: "chromastone",
@@ -171,7 +169,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3850,
         bounty: 2350,
-        image: `${CDN_BASE}/chromastone.png`
+        image: "https://i.postimg.cc/qR1Y8T1b/chromastone.png"
     }
 ];
 
@@ -211,7 +209,6 @@ async function spawnAlienCard(sock, jid) {
         `━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `_Type *.upgrade ${captcha}* to secure DNA sample!_`;
 
-    // Strictly sends with image
     await sock.sendMessage(jid, {
         image: { url: randomAlien.image },
         caption: cardCaption
