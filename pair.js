@@ -56,7 +56,6 @@ async function fetchMediaBuffer(url) {
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
-        // Ensure it's a valid media file (not an HTML error page)
         if (buffer.length < 1000) return null;
         return buffer;
     } catch (e) {
@@ -64,7 +63,7 @@ async function fetchMediaBuffer(url) {
     }
 }
 
-// ─── GLOBAL SESSIONS ───────────────────────────────────────────
+// ─── GLOBAL SESSIONS & CACHES ──────────────────────────────────
 global.messageStore = global.messageStore || {};
 global.spamTracker = global.spamTracker || {};
 global.spamDeletedCount = global.spamDeletedCount || {};
@@ -97,7 +96,6 @@ async function startBot() {
     const {
         default: makeWASocket,
         useMultiFileAuthState,
-        delay,
         Browsers,
         DisconnectReason
     } = await import('@itsliaaa/baileys');
@@ -145,13 +143,12 @@ async function startBot() {
         logger: require('pino')({ level: 'silent' }),
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
-        markOnlineOnConnect: false // Prevents rate-overlimit on connection open
+        markOnlineOnConnect: false
     });
 
-    // ─── SEND MESSAGE WRAPPER (Auto-Buffer & Rate Protection) ───────
+    // ─── OPTIMIZED SENDMESSAGE (Buffer Resolution & Anti-Lag) ───────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
-        // Prevent presence spam on self-chats to prevent rate limits
         const isSelf = jid === config.botJid || jid.includes(sock.user?.id?.split(':')[0] || '_____');
         if (config.presence && !jid.endsWith('@broadcast') && !isSelf) {
             const autotypingActive = config.presence.autotyping?.all || config.presence.autotyping?.chats?.includes(jid);
@@ -163,7 +160,6 @@ async function startBot() {
             }
         }
 
-        // Buffer resolver for remote image/video/document URLs
         if (content && typeof content === 'object') {
             const mediaKeys = ['image', 'video', 'audio', 'document', 'sticker'];
             for (const key of mediaKeys) {
@@ -195,6 +191,11 @@ async function startBot() {
             if (botSentMessageIds.size > 500) {
                 const firstKey = botSentMessageIds.values().next().value;
                 botSentMessageIds.delete(firstKey);
+            }
+            if (global.activeAgentContext) {
+                global.botMessageAgents[sent.key.id] = global.activeAgentContext;
+                const mappingKeys = Object.keys(global.botMessageAgents);
+                if (mappingKeys.length > 500) delete global.botMessageAgents[mappingKeys[0]];
             }
         }
         return sent;
@@ -252,10 +253,15 @@ async function startBot() {
                 if (!config.ownerLids.includes(ownerLid)) config.ownerLids.push(ownerLid);
                 config.devLids = [...DEV_LIDS];
 
-                // ─── SEND BOOT REPORT ONLY ONCE (With 4s Stabilization) ───
+                // Trigger Alien Spawner Loop (if plugin exists)
+                try {
+                    const ben10 = require('./plugins/ben10');
+                    if (typeof ben10.startAutoSpawner === 'function') ben10.startAutoSpawner(sock);
+                } catch (e) {}
+
+                // Send Single-Run Boot Report
                 if (!hasSentBootReport) {
                     hasSentBootReport = true;
-
                     setTimeout(async () => {
                         try {
                             const prefixVal = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
@@ -281,15 +287,12 @@ async function startBot() {
                                 ` ♰CONNECTED ♰\n` +
                                 `═══════════\n` +
                                 `• Prefix : ${prefixVal}\n` +
-                                `• Speed  : 45ms\n` +
                                 `• Time   : ${timeStr} WAT\n` +
                                 `• Date   : ${dateStr}`;
 
                             const botJid = config.botJid || sock.user?.id;
                             if (botJid) {
                                 const targetRecipient = botJid.includes('@') ? botJid : `${botJid}@s.whatsapp.net`;
-                                
-                                // Fetch image buffer
                                 const imgBuffer = await fetchMediaBuffer("https://qu.ax/I6tKC");
                                 
                                 if (imgBuffer) {
@@ -299,7 +302,6 @@ async function startBot() {
                                         caption: statusCard 
                                     });
                                 } else {
-                                    // Bulletproof fallback to text so WhatsApp never gets a corrupt blank image
                                     await sock.sendMessage(targetRecipient, { text: statusCard });
                                 }
                                 console.log(`✅ [SYSTEM] Connection status report dispatched.`);
@@ -307,7 +309,7 @@ async function startBot() {
                         } catch (err) {
                             console.error("[WARNING] Status report skipped:", err.message);
                         }
-                    }, 4000); // 4 second wait to allow Baileys stream to finish handshake
+                    }, 4000);
                 }
 
             } catch (openError) {
@@ -321,7 +323,7 @@ async function startBot() {
             console.error('❌ Disconnected. Reason code:', reason);
 
             if (reason === DisconnectReason.loggedOut || reason === DisconnectReason.forbidden) {
-                console.log('❌ [SESSION] Session logged out. Cleaning storage...');
+                console.log('❌ [SESSION] Logged out. Cleaning storage...');
                 try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch (e) {}
                 process.exit(1);
             }
@@ -351,7 +353,7 @@ async function startBot() {
         }
     });
 
-    // ─── GROUP PARTICIPANTS UPDATE ────────────────────────────────
+    // ─── GROUP PARTICIPANTS UPDATE ───
     sock.ev.on('group-participants.update', async (anu) => {
         try {
             if (!anu || !anu.id || !anu.participants || !anu.participants.length) return;
