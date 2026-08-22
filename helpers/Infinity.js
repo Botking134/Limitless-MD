@@ -45,9 +45,6 @@ async function getCachedGroupMetadata(sock, jid) {
     }
 }
 
-/**
- * Extract current active prefix safely supporting arrays and strings.
- */
 function getActivePrefix() {
     return Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
 }
@@ -100,7 +97,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const jid = msg.key.remoteJid;
 
-        // ─── STATUS BROADCAST (Instant Entry Point) ───
         if (jid === 'status@broadcast') {
             if (config.autoviewstatus === 'on') {
                 try {
@@ -123,21 +119,17 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const isGroup = jid.endsWith('@g.us');
         const cleanChatJid = cleanJid(jid);
 
-        // ─── EXTRACT BODY ───
         const { rawMsg, body, trimmedMessageBody, lowerMessage } = extractBodyAndTrim(msg);
 
-        // ─── CUSTOM MESSAGE FILTERS INTERCEPTOR ───
         try {
             const filterTriggered = await handleFilterInterceptor(sock, msg, trimmedMessageBody, jid);
             if (filterTriggered) return;
         } catch (e) {}
 
-        // ─── LINK SUMMARY LOGS ───
         if (isGroup && trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix) && !msg.key.fromMe) {
             recordMessage(jid, msg.pushName || senderNumber, trimmedMessageBody);
         }
 
-        // ─── RECORD CONVERSATION STATS ───
         if (isGroup && !msg.key.fromMe) {
             const todayStr = new Date().toDateString();
             config.totalMessages = config.totalMessages || {};
@@ -164,7 +156,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         let command;
         let args;
 
-        // ─── HOOKS ─────────────────────────────────────────────────────────────
         const isNoteHandled = await handleNoteSession(sock, msg);
         if (isNoteHandled) return;
 
@@ -180,13 +171,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const dlHandled = await handleDownloaderSessions(sock, msg, trimmedMessageBody, quotedMsgId);
         if (dlHandled) return;
 
-        // ─── QUIZ CATEGORY SELECTION ────────────────────────────
+        // Quiz session check
         const quizSingleKey = jid + '_' + senderJid;
         const quizMultiKey = jid;
         let activeQuizKey = '';
 
         if (global.triviaSessions && global.triviaSessions[quizSingleKey] && global.triviaSessions[quizSingleKey].status === 'playing') {
-            // Active gameplay
         } else {
             if (global.triviaSessions && global.triviaSessions[quizSingleKey] && global.triviaSessions[quizSingleKey].status === 'awaiting_category') {
                 activeQuizKey = quizSingleKey;
@@ -203,13 +193,11 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── QUIZ ANSWER INTERCEPTOR ────────────────────────────
         const answered = await handleActiveGameAnswers(sock, msg, quotedMsgId, trimmedMessageBody, jid, senderJid, senderNumber, executeBotCommand);
         if (answered) return;
 
         await handleAfkDeactivation(sock, msg);
 
-        // ─── PERMISSIONS ─────
         const botJid = config.botJid || (sock.user?.id ? normalizeToJid(sock.user.id) : '');
         const botLid = config.botLid || (sock.user?.id?.includes('@lid') ? normalizeToJid(sock.user.id) : (config.botLid || ''));
 
@@ -258,14 +246,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
-        // ─── TEXT-GAME REPLY REDIRECTOR ───
         const redirectedGame = handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody);
         if (redirectedGame) {
             command = redirectedGame.command;
             args = redirectedGame.args;
         }
 
-        // ─── SILENCE CHECK ───────────────────────────────────────
         if (isGroup) {
             const silenceData = isUserSilenced(global.silencedUsers, jid, senderJid);
             if (silenceData && Date.now() < silenceData.endTime) {
@@ -284,7 +270,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        // ─── AI AGENT ROUTING ───────────────────────────────────
+        // AI Agents
         const isReplyingToBot = (quotedMsgId && botSentMessageIds && botSentMessageIds.has(quotedMsgId)) ||
                                (quotedMsg && quotedMsg.key && quotedMsg.key.fromMe) ||
                                (!isGroup && !msg.key.fromMe && quotedMsgId);
@@ -319,7 +305,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             else if (identifiedAgent === 'uriel') { command = 'uriel'; args = trimmedMessageBody; }
         }
 
-        // ─── SECURITY INTERCEPTORS ──────────────────────────────
         if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
             const secured = await handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid, mentionedJids, isAuthorized, isDev, isAdmin);
             if (secured) return;
@@ -340,7 +325,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
             if (spammed) return;
         }
 
-        // ─── COMMAND EXTRACTION ─────────────────────────────────
         if (!command) {
             const rawUnwrapped = getRawMessage(msg.message);
             let rawButtonId = '';
@@ -395,13 +379,12 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
         const isPublicMode = config.isPublic ?? false;
         const cleanCommand = command.startsWith(activePrefix) ? command.slice(activePrefix.length) : command;
 
-        // ─── PERMISSION CHECKS ───
         if (ownerCommands.includes(cleanCommand) && isSudo && !isOwner && !isDev) return;
         if (devOnlyCommands.includes(cleanCommand) && !isDev) return;
 
-        // ─── WHITELIST FOR INTERACTIVE GAMES & BEN 10 CARDS ─────
+        // ─── WHITELIST: YU-GI-OH CARDS & INTERACTIVE GAMES ───────
         const interactiveResponses = [
-            'upgrade', 'alien', 'omnitrix', 'alienspawn',
+            'card', 'upgrade', 'deck', 'cardspawn',
             'prop_ans', 'ask_ans', 'wed_ans', 'v8_btn', 'purple_ans',
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
             'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'repo_url', 'pvp_defend',
