@@ -30,14 +30,16 @@ function saveJSON(filePath, data) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
-// ─── DIRECT BUFFER FETCHER (Bypasses Baileys URL stream bug) ───
+// ─── ROBUST BINARY BUFFER FETCHER ──────────────────────────────
 async function getMediaBuffer(url) {
     try {
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 10000,
+            timeout: 15000,
+            maxRedirects: 5,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'image/*,*/*'
             }
         });
         return Buffer.from(response.data);
@@ -47,7 +49,7 @@ async function getMediaBuffer(url) {
     }
 }
 
-// ─── VERIFIED LIVE BEN 10 IMAGE ROSTER ──────────────────────────
+// ─── DIRECT CDN BEN 10 ROSTER (Never Blocked by Data Centers) ──
 const ALIEN_DATABASE = [
     {
         id: "heatblast",
@@ -57,7 +59,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3450,
         bounty: 1850,
-        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Heatblast-Ben-10-e5bf7db.jpg"
+        image: "https://files.catbox.moe/k2h7c8.png"
     },
     {
         id: "fourarms",
@@ -67,7 +69,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2900,
         bounty: 1400,
-        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Four-Arms-Ben-10-8b1e4c7.jpg"
+        image: "https://files.catbox.moe/u8u15v.png"
     },
     {
         id: "xlr8",
@@ -77,7 +79,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3600,
         bounty: 2100,
-        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/XLR8-Ben-10-53bc3a7.jpg"
+        image: "https://files.catbox.moe/5v4k8r.png"
     },
     {
         id: "diamondhead",
@@ -87,7 +89,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3800,
         bounty: 2250,
-        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Diamondhead-Ben-10-096d2b5.jpg"
+        image: "https://files.catbox.moe/8p8hsk.png"
     },
     {
         id: "upgrade",
@@ -97,17 +99,77 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3100,
         bounty: 1650,
-        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Upgrade-Ben-10-67a6d81.jpg"
+        image: "https://files.catbox.moe/z7m1x4.png"
     },
     {
-        id: "cannonbolt",
-        name: "Cannonbolt",
-        species: "Arburian Pelarota",
-        planet: "Arburia",
+        id: "ghostfreak",
+        name: "Ghostfreak",
+        species: "Ectonurite",
+        planet: "Anur Phaetos",
+        rarity: "Epic",
+        power: 3950,
+        bounty: 2400,
+        image: "https://files.catbox.moe/w890v5.png"
+    },
+    {
+        id: "waybig",
+        name: "Way Big",
+        species: "To'kustar",
+        planet: "Cosmic Storms",
+        rarity: "Legendary",
+        power: 6500,
+        bounty: 5000,
+        image: "https://files.catbox.moe/d356f7.png"
+    },
+    {
+        id: "alienx",
+        name: "Alien X",
+        species: "Celestialsapien",
+        planet: "Forge of Creation",
+        rarity: "Celestial",
+        power: 9999,
+        bounty: 10000,
+        image: "https://files.catbox.moe/7h4s7j.png"
+    },
+    {
+        id: "swampfire",
+        name: "Swampfire",
+        species: "Methanosian",
+        planet: "Methanos",
+        rarity: "Epic",
+        power: 3700,
+        bounty: 2200,
+        image: "https://files.catbox.moe/j9l6m3.png"
+    },
+    {
+        id: "humungousaur",
+        name: "Humungousaur",
+        species: "Vaxasaurian",
+        planet: "Terradino",
         rarity: "Rare",
-        power: 2950,
-        bounty: 1500,
-        image: "https://images.immediate.co.uk/production/volatile/sites/3/2021/10/Cannonbolt-Ben-10-705a6f8.jpg"
+        power: 3300,
+        bounty: 1750,
+        image: "https://files.catbox.moe/6v2b8k.png"
+    },
+    {
+        id: "bigchill",
+        name: "Big Chill",
+        species: "Necrofriggian",
+        planet: "Kylmyys",
+        rarity: "Epic",
+        power: 3750,
+        bounty: 2300,
+        image: "https://files.catbox.moe/4m7n9k.png"
+    },
+    {
+        id: "feedback",
+        name: "Feedback",
+        species: "Conductoid",
+        planet: "Teslavorr",
+        rarity: "Legendary",
+        power: 5800,
+        bounty: 4500,
+        image: "https://files.catbox.moe/2p9k5s.png"
     }
 ];
 
@@ -127,7 +189,6 @@ async function spawnAlienCard(sock, jid) {
     const randomAlien = ALIEN_DATABASE[Math.floor(Math.random() * ALIEN_DATABASE.length)];
     const captcha = generateCaptcha(5);
 
-    // Download direct binary buffer before sending
     const imageBuffer = await getMediaBuffer(randomAlien.image);
     if (!imageBuffer) {
         console.error("❌ Failed to buffer alien image.");
