@@ -30,26 +30,27 @@ function saveJSON(filePath, data) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
-// ─── ROBUST BINARY BUFFER FETCHER ──────────────────────────────
+// ─── ROBUST BUFFER FETCHER ─────────────────────────────────────
 async function getMediaBuffer(url) {
     try {
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 15000,
+            timeout: 8000,
             maxRedirects: 5,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'image/*,*/*'
             }
         });
-        return Buffer.from(response.data);
+        const buffer = Buffer.from(response.data);
+        if (buffer.length < 500) return null;
+        return buffer;
     } catch (e) {
-        console.error(`❌ [BUFFER FETCH] Failed for ${url}:`, e.message);
         return null;
     }
 }
 
-// ─── DIRECT CDN BEN 10 ROSTER (Never Blocked by Data Centers) ──
+// ─── BEN 10 CARD ROSTER ─────────────────────────────────────────
 const ALIEN_DATABASE = [
     {
         id: "heatblast",
@@ -59,7 +60,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3450,
         bounty: 1850,
-        image: "https://files.catbox.moe/k2h7c8.png"
+        image: "https://qu.ax/yQcR.png"
     },
     {
         id: "fourarms",
@@ -69,7 +70,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2900,
         bounty: 1400,
-        image: "https://files.catbox.moe/u8u15v.png"
+        image: "https://qu.ax/gYvX.png"
     },
     {
         id: "xlr8",
@@ -79,7 +80,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3600,
         bounty: 2100,
-        image: "https://files.catbox.moe/5v4k8r.png"
+        image: "https://qu.ax/uHqj.png"
     },
     {
         id: "diamondhead",
@@ -89,7 +90,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3800,
         bounty: 2250,
-        image: "https://files.catbox.moe/8p8hsk.png"
+        image: "https://qu.ax/tJpZ.png"
     },
     {
         id: "upgrade",
@@ -99,17 +100,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3100,
         bounty: 1650,
-        image: "https://files.catbox.moe/z7m1x4.png"
-    },
-    {
-        id: "ghostfreak",
-        name: "Ghostfreak",
-        species: "Ectonurite",
-        planet: "Anur Phaetos",
-        rarity: "Epic",
-        power: 3950,
-        bounty: 2400,
-        image: "https://files.catbox.moe/w890v5.png"
+        image: "https://qu.ax/kJwM.png"
     },
     {
         id: "waybig",
@@ -119,7 +110,7 @@ const ALIEN_DATABASE = [
         rarity: "Legendary",
         power: 6500,
         bounty: 5000,
-        image: "https://files.catbox.moe/d356f7.png"
+        image: "https://qu.ax/vLkN.png"
     },
     {
         id: "alienx",
@@ -129,7 +120,7 @@ const ALIEN_DATABASE = [
         rarity: "Celestial",
         power: 9999,
         bounty: 10000,
-        image: "https://files.catbox.moe/7h4s7j.png"
+        image: "https://qu.ax/qWzY.png"
     },
     {
         id: "swampfire",
@@ -139,7 +130,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3700,
         bounty: 2200,
-        image: "https://files.catbox.moe/j9l6m3.png"
+        image: "https://qu.ax/mNpR.png"
     },
     {
         id: "humungousaur",
@@ -149,27 +140,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3300,
         bounty: 1750,
-        image: "https://files.catbox.moe/6v2b8k.png"
-    },
-    {
-        id: "bigchill",
-        name: "Big Chill",
-        species: "Necrofriggian",
-        planet: "Kylmyys",
-        rarity: "Epic",
-        power: 3750,
-        bounty: 2300,
-        image: "https://files.catbox.moe/4m7n9k.png"
-    },
-    {
-        id: "feedback",
-        name: "Feedback",
-        species: "Conductoid",
-        planet: "Teslavorr",
-        rarity: "Legendary",
-        power: 5800,
-        bounty: 4500,
-        image: "https://files.catbox.moe/2p9k5s.png"
+        image: "https://qu.ax/xTzK.png"
     }
 ];
 
@@ -184,19 +155,30 @@ function generateCaptcha(length = 5) {
     return code;
 }
 
-// ─── STRICT BUFFER SPAWNER LOGIC ────────────────────────────────
+// ─── SAFE AUTO-RETRY SPAWNER (Never crashes on bad links) ──────
 async function spawnAlienCard(sock, jid) {
-    const randomAlien = ALIEN_DATABASE[Math.floor(Math.random() * ALIEN_DATABASE.length)];
-    const captcha = generateCaptcha(5);
+    let chosenAlien = null;
+    let imageBuffer = null;
 
-    const imageBuffer = await getMediaBuffer(randomAlien.image);
-    if (!imageBuffer) {
-        console.error("❌ Failed to buffer alien image.");
+    // Shuffle and pick the first alien that buffers successfully
+    const shuffled = [...ALIEN_DATABASE].sort(() => 0.5 - Math.random());
+    for (const alien of shuffled) {
+        imageBuffer = await getMediaBuffer(alien.image);
+        if (imageBuffer) {
+            chosenAlien = alien;
+            break;
+        }
+    }
+
+    if (!chosenAlien || !imageBuffer) {
+        console.error("❌ [BEN10] Could not buffer any alien image.");
         return;
     }
 
+    const captcha = generateCaptcha(5);
+
     global.activeAlienSpawns[jid] = {
-        alien: randomAlien,
+        alien: chosenAlien,
         captcha: captcha,
         spawnedAt: Date.now(),
         expiresAt: Date.now() + (5 * 60 * 1000)
@@ -205,19 +187,19 @@ async function spawnAlienCard(sock, jid) {
     const cardCaption =
         `🛸 *WILD ALIEN APPEARED!* 🛸\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `⭐ *Name*       : ${randomAlien.name}\n` +
-        `🧬 *Species*    : ${randomAlien.species}\n` +
-        `🪐 *Planet*     : ${randomAlien.planet}\n` +
-        `🎖️ *Rarity*     : ${randomAlien.rarity}\n` +
-        `⚔️ *Power*      : ${randomAlien.power.toLocaleString()}\n` +
-        `💰 *Bounty*     : ${randomAlien.bounty.toLocaleString()} Gold\n\n` +
+        `⭐ *Name*       : ${chosenAlien.name}\n` +
+        `🧬 *Species*    : ${chosenAlien.species}\n` +
+        `🪐 *Planet*     : ${chosenAlien.planet}\n` +
+        `🎖️ *Rarity*     : ${chosenAlien.rarity}\n` +
+        `⚔️ *Power*      : ${chosenAlien.power.toLocaleString()}\n` +
+        `💰 *Bounty*     : ${chosenAlien.bounty.toLocaleString()} Gold\n\n` +
         `🔒 *Captcha*    : \`${captcha}\`\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `_Type *.upgrade ${captcha}* to secure DNA sample!_`;
 
     await sock.sendMessage(jid, {
         image: imageBuffer,
-        mimetype: 'image/jpeg',
+        mimetype: 'image/png',
         caption: cardCaption
     });
 }
