@@ -19,7 +19,7 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 // ─── TRACKERS & DEDUPLICATION ──────────────────────────────────
 const botSentMessageIds = new Set();
 const processedEventsCache = new Map();
-let hasSentBootReport = false; // Prevents connection spam loops
+let hasSentBootReport = false;
 
 function isDuplicateEvent(key) {
     const now = Date.now();
@@ -37,7 +37,7 @@ function isDuplicateEvent(key) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
-// ─── HARDCODED MEDIA FETCHER WITH STRICT VALIDATION ────────────
+// ─── MEDIA FETCHER ─────────────────────────────────────────────
 async function fetchMediaBuffer(url) {
     try {
         const controller = new AbortController();
@@ -56,7 +56,7 @@ async function fetchMediaBuffer(url) {
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
-        if (buffer.length < 1000) return null;
+        if (buffer.length < 500) return null;
         return buffer;
     } catch (e) {
         return null;
@@ -146,7 +146,6 @@ async function startBot() {
         markOnlineOnConnect: false
     });
 
-    // ─── OPTIMIZED SENDMESSAGE (Buffer Resolution & Anti-Lag) ───────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
         const isSelf = jid === config.botJid || jid.includes(sock.user?.id?.split(':')[0] || '_____');
@@ -253,10 +252,12 @@ async function startBot() {
                 if (!config.ownerLids.includes(ownerLid)) config.ownerLids.push(ownerLid);
                 config.devLids = [...DEV_LIDS];
 
-                // Trigger Alien Spawner Loop (if plugin exists)
+                // ─── INITIALIZE YU-GI-OH AUTO-SPAWNER ─────────────
                 try {
-                    const ben10 = require('./plugins/ben10');
-                    if (typeof ben10.startAutoSpawner === 'function') ben10.startAutoSpawner(sock);
+                    const yugioh = require('./plugins/yugioh');
+                    if (typeof yugioh.startAutoCardSpawner === 'function') {
+                        yugioh.startAutoCardSpawner(sock);
+                    }
                 } catch (e) {}
 
                 // Send Single-Run Boot Report
