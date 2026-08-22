@@ -37,7 +37,8 @@ async function getMediaBuffer(url) {
             responseType: 'arraybuffer',
             timeout: 10000,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'image/*,*/*'
             }
         });
         return Buffer.from(response.data);
@@ -47,31 +48,45 @@ async function getMediaBuffer(url) {
     }
 }
 
-// ─── FETCH RANDOM CARD FROM OFFICIAL YGOPRODECK API ───────────
+// ─── FETCH RANDOM CARD (With Headers & Safe Unwrapping) ────────
 async function fetchRandomCard() {
     try {
-        const res = await axios.get('https://db.ygoprodeck.com/api/v7/randomcard.php', { timeout: 8000 });
-        const card = res.data;
-        if (!card || !card.name) return null;
+        const res = await axios.get('https://db.ygoprodeck.com/api/v7/randomcard.php', {
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*'
+            }
+        });
 
-        // Calculate gold value based on card market price or ATK
-        const basePrice = parseFloat(card.card_prices?.[0]?.cardmarket_price || card.card_prices?.[0]?.tcgplayer_price || "2.50");
-        const goldValue = Math.max(500, Math.floor(basePrice * 1000) || (card.atk ? Math.floor(card.atk * 1.5) : 1000));
+        // Unwraps whether API returns an array or single object
+        let raw = res.data;
+        if (raw && raw.data && Array.isArray(raw.data)) raw = raw.data[0];
+        if (Array.isArray(raw)) raw = raw[0];
+
+        if (!raw || !raw.name) {
+            console.error("❌ YGOPRODeck API returned empty card payload.");
+            return null;
+        }
+
+        const basePrice = parseFloat(raw.card_prices?.[0]?.cardmarket_price || raw.card_prices?.[0]?.tcgplayer_price || "2.50");
+        const goldValue = Math.max(500, Math.floor(basePrice * 1000) || (raw.atk ? Math.floor(raw.atk * 1.5) : 1000));
+        const imageUrl = raw.card_images?.[0]?.image_url || `https://images.ygoprodeck.com/images/cards/${raw.id}.jpg`;
 
         return {
-            id: card.id,
-            name: card.name,
-            type: card.type || 'Monster',
-            atk: card.atk ?? 'N/A',
-            def: card.def ?? 'N/A',
-            level: card.level || card.linkval || 1,
-            attribute: card.attribute || 'SPELL/TRAP',
-            race: card.race || 'Warrior',
+            id: raw.id,
+            name: raw.name,
+            type: raw.type || 'Monster',
+            atk: raw.atk !== undefined ? raw.atk : 'N/A',
+            def: raw.def !== undefined ? raw.def : 'N/A',
+            level: raw.level || raw.linkval || 1,
+            attribute: raw.attribute || 'SPELL/TRAP',
+            race: raw.race || 'Warrior',
             price: goldValue,
-            image: card.card_images?.[0]?.image_url || `https://images.ygoprodeck.com/images/cards/${card.id}.jpg`
+            image: imageUrl
         };
     } catch (e) {
-        console.error("❌ [YGOPRODECK API ERROR]:", e.message);
+        console.error("❌ [YGOPRODECK API ERROR]:", e.response?.status || e.message);
         return null;
     }
 }
@@ -91,14 +106,12 @@ function generateCaptcha(length = 5) {
 async function spawnYuGiOhCard(sock, jid) {
     const card = await fetchRandomCard();
     if (!card) {
-        console.error("❌ Failed to fetch card from YGOPRODeck API.");
-        return;
+        return sock.sendMessage(jid, { text: "❌ Failed to draw card from deck. Try again in a few seconds." });
     }
 
     const imageBuffer = await getMediaBuffer(card.image);
     if (!imageBuffer) {
-        console.error("❌ Failed to buffer YGOPRODeck card image.");
-        return;
+        return sock.sendMessage(jid, { text: "❌ Failed to load card image. Try again." });
     }
 
     const captcha = generateCaptcha(5);
@@ -107,7 +120,7 @@ async function spawnYuGiOhCard(sock, jid) {
         card: card,
         captcha: captcha,
         spawnedAt: Date.now(),
-        expiresAt: Date.now() + (5 * 60 * 1000) // 5 minutes expiry
+        expiresAt: Date.now() + (5 * 60 * 1000)
     };
 
     const cardCaption =
