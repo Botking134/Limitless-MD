@@ -30,27 +30,26 @@ function saveJSON(filePath, data) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
-// ─── ROBUST BUFFER FETCHER ─────────────────────────────────────
+// ─── TELEGRAPH CDN BUFFER FETCHER ──────────────────────────────
 async function getMediaBuffer(url) {
     try {
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 8000,
-            maxRedirects: 5,
+            timeout: 6000,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'image/*,*/*'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
         const buffer = Buffer.from(response.data);
         if (buffer.length < 500) return null;
         return buffer;
     } catch (e) {
+        console.error(`⚠️ [BUFFER FETCH ERROR] ${url} -> ${e.message}`);
         return null;
     }
 }
 
-// ─── BEN 10 CARD ROSTER ─────────────────────────────────────────
+// ─── TELEGRAPH CDN BEN 10 ROSTER (100% Data-Center Compatible) ─
 const ALIEN_DATABASE = [
     {
         id: "heatblast",
@@ -60,7 +59,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3450,
         bounty: 1850,
-        image: "https://qu.ax/yQcR.png"
+        image: "https://telegra.ph/file/0c9343eeeaae89d1b09b5.jpg"
     },
     {
         id: "fourarms",
@@ -70,7 +69,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2900,
         bounty: 1400,
-        image: "https://qu.ax/gYvX.png"
+        image: "https://telegra.ph/file/984b55c6e8e8fb816cf61.jpg"
     },
     {
         id: "xlr8",
@@ -80,7 +79,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3600,
         bounty: 2100,
-        image: "https://qu.ax/uHqj.png"
+        image: "https://telegra.ph/file/df3413ef5ee83fcfce023.jpg"
     },
     {
         id: "diamondhead",
@@ -90,7 +89,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3800,
         bounty: 2250,
-        image: "https://qu.ax/tJpZ.png"
+        image: "https://telegra.ph/file/1795c37894a45749f7823.jpg"
     },
     {
         id: "upgrade",
@@ -100,17 +99,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 3100,
         bounty: 1650,
-        image: "https://qu.ax/kJwM.png"
-    },
-    {
-        id: "waybig",
-        name: "Way Big",
-        species: "To'kustar",
-        planet: "Cosmic Storms",
-        rarity: "Legendary",
-        power: 6500,
-        bounty: 5000,
-        image: "https://qu.ax/vLkN.png"
+        image: "https://telegra.ph/file/848cf6cb885ca645f7820.jpg"
     },
     {
         id: "alienx",
@@ -120,27 +109,7 @@ const ALIEN_DATABASE = [
         rarity: "Celestial",
         power: 9999,
         bounty: 10000,
-        image: "https://qu.ax/qWzY.png"
-    },
-    {
-        id: "swampfire",
-        name: "Swampfire",
-        species: "Methanosian",
-        planet: "Methanos",
-        rarity: "Epic",
-        power: 3700,
-        bounty: 2200,
-        image: "https://qu.ax/mNpR.png"
-    },
-    {
-        id: "humungousaur",
-        name: "Humungousaur",
-        species: "Vaxasaurian",
-        planet: "Terradino",
-        rarity: "Rare",
-        power: 3300,
-        bounty: 1750,
-        image: "https://qu.ax/xTzK.png"
+        image: "https://telegra.ph/file/5a5450fa2caec5aa9b2ff.jpg"
     }
 ];
 
@@ -155,12 +124,11 @@ function generateCaptcha(length = 5) {
     return code;
 }
 
-// ─── SAFE AUTO-RETRY SPAWNER (Never crashes on bad links) ──────
+// ─── STRICT IMAGE SPAWNER LOGIC ─────────────────────────────────
 async function spawnAlienCard(sock, jid) {
     let chosenAlien = null;
     let imageBuffer = null;
 
-    // Shuffle and pick the first alien that buffers successfully
     const shuffled = [...ALIEN_DATABASE].sort(() => 0.5 - Math.random());
     for (const alien of shuffled) {
         imageBuffer = await getMediaBuffer(alien.image);
@@ -171,7 +139,7 @@ async function spawnAlienCard(sock, jid) {
     }
 
     if (!chosenAlien || !imageBuffer) {
-        console.error("❌ [BEN10] Could not buffer any alien image.");
+        console.error("❌ [BEN10] Could not buffer any alien image from Telegraph CDN.");
         return;
     }
 
@@ -199,7 +167,7 @@ async function spawnAlienCard(sock, jid) {
 
     await sock.sendMessage(jid, {
         image: imageBuffer,
-        mimetype: 'image/png',
+        mimetype: 'image/jpeg',
         caption: cardCaption
     });
 }
