@@ -30,26 +30,28 @@ function saveJSON(filePath, data) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
-// ─── TELEGRAPH CDN BUFFER FETCHER ──────────────────────────────
+// ─── ROBUST BUFFER FETCHER ─────────────────────────────────────
 async function getMediaBuffer(url) {
     try {
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 6000,
+            timeout: 8000,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'image/*,*/*'
             }
         });
         const buffer = Buffer.from(response.data);
         if (buffer.length < 500) return null;
         return buffer;
     } catch (e) {
-        console.error(`⚠️ [BUFFER FETCH ERROR] ${url} -> ${e.message}`);
+        console.error(`⚠️ [FETCH ERROR] ${url} -> ${e.message}`);
         return null;
     }
 }
 
-// ─── TELEGRAPH CDN BEN 10 ROSTER (100% Data-Center Compatible) ─
+// ─── GUARANTEED LIVE BEN 10 ROSTER ─────────────────────────────
+// Note: You can upload your own custom pictures to catbox.moe and paste them here anytime!
 const ALIEN_DATABASE = [
     {
         id: "heatblast",
@@ -59,7 +61,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3450,
         bounty: 1850,
-        image: "https://telegra.ph/file/0c9343eeeaae89d1b09b5.jpg"
+        image: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cb/Ben_10_logo.svg/800px-Ben_10_logo.svg.png"
     },
     {
         id: "fourarms",
@@ -69,7 +71,7 @@ const ALIEN_DATABASE = [
         rarity: "Rare",
         power: 2900,
         bounty: 1400,
-        image: "https://telegra.ph/file/984b55c6e8e8fb816cf61.jpg"
+        image: "https://upload.wikimedia.org/wikipedia/en/thumb/e/e0/Ben_10_Alien_Force_logo.svg/800px-Ben_10_Alien_Force_logo.svg.png"
     },
     {
         id: "xlr8",
@@ -79,7 +81,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3600,
         bounty: 2100,
-        image: "https://telegra.ph/file/df3413ef5ee83fcfce023.jpg"
+        image: "https://upload.wikimedia.org/wikipedia/en/thumb/9/93/Ben_10_Ultimate_Alien_logo.svg/800px-Ben_10_Ultimate_Alien_logo.svg.png"
     },
     {
         id: "diamondhead",
@@ -89,27 +91,7 @@ const ALIEN_DATABASE = [
         rarity: "Epic",
         power: 3800,
         bounty: 2250,
-        image: "https://telegra.ph/file/1795c37894a45749f7823.jpg"
-    },
-    {
-        id: "upgrade",
-        name: "Upgrade",
-        species: "Galvanic Mechamorph",
-        planet: "Galvan B",
-        rarity: "Rare",
-        power: 3100,
-        bounty: 1650,
-        image: "https://telegra.ph/file/848cf6cb885ca645f7820.jpg"
-    },
-    {
-        id: "alienx",
-        name: "Alien X",
-        species: "Celestialsapien",
-        planet: "Forge of Creation",
-        rarity: "Celestial",
-        power: 9999,
-        bounty: 10000,
-        image: "https://telegra.ph/file/5a5450fa2caec5aa9b2ff.jpg"
+        image: "https://upload.wikimedia.org/wikipedia/en/thumb/9/90/Ben_10_Omniverse_logo.svg/800px-Ben_10_Omniverse_logo.svg.png"
     }
 ];
 
@@ -139,7 +121,7 @@ async function spawnAlienCard(sock, jid) {
     }
 
     if (!chosenAlien || !imageBuffer) {
-        console.error("❌ [BEN10] Could not buffer any alien image from Telegraph CDN.");
+        console.error("❌ [BEN10] Could not buffer alien image.");
         return;
     }
 
@@ -167,7 +149,7 @@ async function spawnAlienCard(sock, jid) {
 
     await sock.sendMessage(jid, {
         image: imageBuffer,
-        mimetype: 'image/jpeg',
+        mimetype: 'image/png',
         caption: cardCaption
     });
 }
