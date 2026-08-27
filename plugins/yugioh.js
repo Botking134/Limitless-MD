@@ -125,7 +125,7 @@ async function spawnYuGiOhCard(sock, jid) {
 
     const cardCaption =
         `🎴 *Yu-Gi-Oh Card Appeared!*\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `━━━━━━━━━━━━━━━━━━━\n\n` +
         `⭐ *Name*      : ${card.name}\n` +
         `🎭 *Type*      : ${card.type}\n` +
         `⚔️ *ATK*       : ${card.atk}\n` +
@@ -135,7 +135,7 @@ async function spawnYuGiOhCard(sock, jid) {
         `🧩 *Race*      : ${card.race}\n\n` +
         `💰 *Price*     : ${card.price.toLocaleString()} gold\n` +
         `🔒 *Captcha*   : \`${captcha}\`\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
         `_Type *.upgrade ${captcha}* to claim this card!_`;
 
     await sock.sendMessage(jid, {
