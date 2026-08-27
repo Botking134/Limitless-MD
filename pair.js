@@ -19,7 +19,7 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 const botSentMessageIds = new Set();
 const processedEventsCache = new Map();
 let hasSentBootReport = false;
-let activeSocketInstance = null; // Single active socket tracker
+let activeSocketInstance = null;
 
 function isDuplicateEvent(key) {
     const now = Date.now();
@@ -93,7 +93,6 @@ global.reconnectTimeout = global.reconnectTimeout || null;
 // ─── MAIN BOT STARTER ──────────────────────────────────────────
 
 async function startBot() {
-    // 1. Destroy any existing ghost socket before creating a new one
     if (activeSocketInstance) {
         try {
             activeSocketInstance.ev.removeAllListeners();
@@ -146,7 +145,6 @@ async function startBot() {
         }
     }
 
-    // 2. Create Socket with Anti-Disconnect Keep-Alive Options
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
@@ -154,7 +152,7 @@ async function startBot() {
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        keepAliveIntervalMs: 20000,    // Sends ping every 20s (stops 60s proxy drops)
+        keepAliveIntervalMs: 20000,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         retryRequestDelayMs: 3000
@@ -162,15 +160,9 @@ async function startBot() {
 
     activeSocketInstance = sock;
 
-    // ─── SEND MESSAGE WRAPPER WITH STATE CHECK ─────────────────────
+    // ─── UNBLOCKED SEND MESSAGE WRAPPER ───────────────────────────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
-        // Prevent sending on dead socket
-        if (sock.ws && sock.ws.readyState !== 1) { // 1 = OPEN
-            console.warn("⚠️ [SOCKET] Message skipped: Socket is not open.");
-            return null;
-        }
-
         const isSelf = jid === config.botJid || jid.includes(sock.user?.id?.split(':')[0] || '_____');
         if (config.presence && !jid.endsWith('@broadcast') && !isSelf) {
             const autotypingActive = config.presence.autotyping?.all || config.presence.autotyping?.chats?.includes(jid);
@@ -346,7 +338,6 @@ async function startBot() {
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
             console.error('❌ Disconnected. Reason code:', reason);
 
-            // Clean up the dead socket instance immediately
             try {
                 sock.ev.removeAllListeners();
                 if (sock.ws) sock.ws.close();
