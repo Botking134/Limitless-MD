@@ -12,7 +12,6 @@ const { normalizeToJid, getPhoneJid, loadState } = require('./stateManager');
 // ─── INITIALIZE STATE ON BOOT ──────────────────────────────────
 try { loadState(); } catch (e) { console.error("⚠️ State load error:", e.message); }
 
-// ─── READLINE FOR AUTH ──────────────────────────────────────────
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
@@ -20,6 +19,7 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 const botSentMessageIds = new Set();
 const processedEventsCache = new Map();
 let hasSentBootReport = false;
+let activeSocketInstance = null; // Single active socket tracker
 
 function isDuplicateEvent(key) {
     const now = Date.now();
@@ -93,6 +93,15 @@ global.reconnectTimeout = global.reconnectTimeout || null;
 // ─── MAIN BOT STARTER ──────────────────────────────────────────
 
 async function startBot() {
+    // 1. Destroy any existing ghost socket before creating a new one
+    if (activeSocketInstance) {
+        try {
+            activeSocketInstance.ev.removeAllListeners();
+            if (activeSocketInstance.ws) activeSocketInstance.ws.close();
+        } catch (e) {}
+        activeSocketInstance = null;
+    }
+
     const {
         default: makeWASocket,
         useMultiFileAuthState,
@@ -137,17 +146,31 @@ async function startBot() {
         }
     }
 
+    // 2. Create Socket with Anti-Disconnect Keep-Alive Options
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
         logger: require('pino')({ level: 'silent' }),
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
-        markOnlineOnConnect: false
+        markOnlineOnConnect: false,
+        keepAliveIntervalMs: 20000,    // Sends ping every 20s (stops 60s proxy drops)
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        retryRequestDelayMs: 3000
     });
 
+    activeSocketInstance = sock;
+
+    // ─── SEND MESSAGE WRAPPER WITH STATE CHECK ─────────────────────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
+        // Prevent sending on dead socket
+        if (sock.ws && sock.ws.readyState !== 1) { // 1 = OPEN
+            console.warn("⚠️ [SOCKET] Message skipped: Socket is not open.");
+            return null;
+        }
+
         const isSelf = jid === config.botJid || jid.includes(sock.user?.id?.split(':')[0] || '_____');
         if (config.presence && !jid.endsWith('@broadcast') && !isSelf) {
             const autotypingActive = config.presence.autotyping?.all || config.presence.autotyping?.chats?.includes(jid);
@@ -179,10 +202,10 @@ async function startBot() {
         try {
             sent = await originalSendMessage(jid, content, options);
         } catch (sendErr) {
-            if (!sendErr.message?.includes('rate-overlimit')) {
-                console.error("❌ [SOCKET] sendMessage failed:", sendErr.message);
+            if (!sendErr.message?.includes('Connection Closed') && !sendErr.message?.includes('rate-overlimit')) {
+                console.error("❌ [SOCKET] sendMessage error:", sendErr.message);
             }
-            throw sendErr;
+            return null;
         }
 
         if (sent && sent.key && sent.key.id) {
@@ -252,7 +275,7 @@ async function startBot() {
                 if (!config.ownerLids.includes(ownerLid)) config.ownerLids.push(ownerLid);
                 config.devLids = [...DEV_LIDS];
 
-                // ─── INITIALIZE YU-GI-OH AUTO-SPAWNER ─────────────
+                // Yu-Gi-Oh Auto-spawner
                 try {
                     const yugioh = require('./plugins/yugioh');
                     if (typeof yugioh.startAutoCardSpawner === 'function') {
@@ -322,6 +345,12 @@ async function startBot() {
         if (connection === 'close') {
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
             console.error('❌ Disconnected. Reason code:', reason);
+
+            // Clean up the dead socket instance immediately
+            try {
+                sock.ev.removeAllListeners();
+                if (sock.ws) sock.ws.close();
+            } catch (e) {}
 
             if (reason === DisconnectReason.loggedOut || reason === DisconnectReason.forbidden) {
                 console.log('❌ [SESSION] Logged out. Cleaning storage...');
