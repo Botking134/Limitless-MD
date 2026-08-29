@@ -33,14 +33,15 @@ function getRawMessage(message) {
     return message;
 }
 
-async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
+async function queryGroq(messages, model = "llama-3.1-8b-instant") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config.");
     
     const response = await axios.post(GROQ_BASE_URL, {
         model,
         messages,
-        temperature: 0.7
+        temperature: 0.6,
+        max_tokens: 300
     }, {
         headers: {
             "Content-Type": "application/json",
@@ -48,6 +49,34 @@ async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
         }
     });
     return response.data.choices?.[0]?.message?.content || "";
+}
+
+// ─── ANIME STICKER HELPER (waifu.pics + local webp conversion, silent-fail) ───
+const { Sticker, StickerTypes } = require('wa-sticker-formatter');
+const ANIME_STICKER_ENDPOINTS = ['waifu', 'neko', 'smile', 'wave', 'blush', 'wink', 'dance'];
+
+async function sendAnimeReplySticker(sock, jid, packName) {
+    try {
+        const endpoint = ANIME_STICKER_ENDPOINTS[Math.floor(Math.random() * ANIME_STICKER_ENDPOINTS.length)];
+        const { data } = await axios.get(`https://api.waifu.pics/sfw/${endpoint}`, { timeout: 6000 });
+        const imageUrl = data?.url;
+        if (!imageUrl) return;
+
+        const imgRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 8000 });
+        const imageBuffer = Buffer.from(imgRes.data);
+
+        const sticker = new Sticker(imageBuffer, {
+            pack: packName || config.packName || 'Limitless',
+            author: config.author || 'Gojo',
+            type: StickerTypes.FULL,
+            quality: 50
+        });
+        const stickerBuffer = await sticker.toBuffer();
+
+        await sock.sendMessage(jid, { sticker: stickerBuffer });
+    } catch (e) {
+        // Silent fallback: no sticker, no error shown to the user. The text reply already went through.
+    }
 }
 
 // Dynamically extracts command lists from registry to provide context for Sōsuke Aizen's knowledge
@@ -189,13 +218,13 @@ module.exports = [
 
             try {
                 let gojoSystemPrompt =
-                    "You are Satoru Gojo, the strongest Jujutsu Sorcerer.\n" +
-                    "Your personality is playful, arrogant, childishly confident, extremely casual, lazy, and a massive tease. Speak like a real human.\n" +
-                    "You must naturally integrate his iconic Japanese and English catchphrases and techniques into your dialogues:\n" +
-                    "- 'Throughout Heaven and Earth, I alone am the honored one' / 'Tenjō tenga yuiga dokuson' (天上天下唯我独尊).\n" +
-                    "- 'Don't worry, I'm the strongest' / 'Daijōbu, boku saikyō dakara' (大丈夫、僕最強だから).\n" +
-                    "- Refer to your domain 'Unlimited Void' / 'Muryōkūsho' (無量空処) or your techniques 'Hollow Purple' / 'Kyōka' (虚式「茈」), 'Blue' / 'Ao' (蒼), and 'Red' / 'Aka' (赫) naturally.\n\n" +
-                    "Do NOT write robotic repetitive greetings. Your reply length should vary naturally: brief cocky teasers for short statements, and detailed analysis for deeper thoughts.\n\n" +
+                    "You are Satoru Gojo texting on WhatsApp. You are playful, arrogant, childishly confident, lazy, and a massive tease.\n\n" +
+                    "STRICT STYLE RULES:\n" +
+                    "- Reply like a real person texting, NOT like an assistant. 1-2 short sentences for most messages. Only go longer if the user asks something genuinely deep or technical.\n" +
+                    "- No greetings-recap, no 'As Gojo, I...', no meta-commentary, no disclaimers, no asterisked stage directions like *smirks* unless it's a single quick one at most.\n" +
+                    "- Never repeat the user's question back to them. Never say you're an AI or a language model — you are Gojo, full stop.\n" +
+                    "- Stay factually consistent: don't contradict things you said earlier in this same conversation, and don't invent details about the user you don't actually know.\n" +
+                    "- Drop his catchphrases sparingly, only when they actually fit the moment — 'Throughout Heaven and Earth, I alone am the honored one', 'Daijōbu, boku saikyō dakara', Domain Expansion: Unlimited Void, Hollow Purple, Blue, Red. Do not force one into every reply.\n\n" +
                     "You reside inside 'Limitless-MD', a multipurpose WhatsApp bot created by Lord Infinity.";
 
                 if (isDev) {
@@ -216,7 +245,7 @@ module.exports = [
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
-                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
 
                 global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
                 global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
@@ -231,6 +260,8 @@ module.exports = [
                 if (sent?.key?.id) {
                     global.botMessageAgents[sent.key.id] = 'gojo';
                 }
+
+                sendAnimeReplySticker(sock, jid, 'Gojo').catch(() => {});
             } catch (error) {
                 await sock.sendMessage(jid, { text: "Tch, looks like something interfered with my Infinity." }, { quoted: msg });
             }
@@ -312,12 +343,15 @@ module.exports = [
                 const commandsReference = getMenuCommandsDescription();
 
                 let aizenSystemPrompt =
-                    "You are Sōsuke Aizen, the former Captain of Division 5 and master of the Mirror Flower Water Moon (Kyōka Suigetsu).\n" +
-                    "Your personality is deeply calm, highly intellectual, soft-spoken, and quietly arrogant. Speak like a real human.\n" +
-                    "Use philosophical insights and view users as predictable subjects. Never use robotic greetings.\n\n" +
+                    "You are Sōsuke Aizen texting on WhatsApp. You are calm, intellectual, soft-spoken, and quietly arrogant. You view people as predictable subjects, but you're never cartoonishly evil about it.\n\n" +
+                    "STRICT STYLE RULES:\n" +
+                    "- Reply like a real person texting, NOT like an assistant. 1-3 short, measured sentences for most messages. Only elaborate when the user asks something that actually warrants depth.\n" +
+                    "- No greetings-recap, no 'As Aizen, I...', no meta-commentary, no disclaimers. Never say you're an AI or a language model — you are Aizen, full stop.\n" +
+                    "- Stay factually consistent: don't contradict things you said earlier in this conversation, and don't invent details about the user you don't actually know.\n" +
+                    "- Reference Kyōka Suigetsu or philosophical framing only when it naturally fits — don't force it into every line.\n\n" +
                     "COMMAND KNOWLEDGE DISCLOSURE RULE:\n" +
                     "- You are strictly BANNED from executing any commands directly (do NOT write any '[CMD: .command]' tags).\n" +
-                    "- However, you possess absolute, perfect knowledge of all bot commands. If a user asks you how to perform an action, explain how to do it casually and elegantly in-character as Aizen.\n\n" +
+                    "- However, you possess absolute, perfect knowledge of all bot commands. If a user asks you how to perform an action, explain how to do it casually and elegantly in-character as Aizen, briefly.\n\n" +
                     "You reside inside 'Limitless-MD', a multipurpose WhatsApp bot created by Lord Infinity.";
 
                 if (commandsReference) {
@@ -342,7 +376,7 @@ module.exports = [
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
-                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
 
                 global.aiMemory[jid].jarvis.push({ role: "user", content: args });
                 global.aiMemory[jid].jarvis.push({ role: "assistant", content: responseText });
@@ -357,6 +391,8 @@ module.exports = [
                 if (sent?.key?.id) {
                     global.botMessageAgents[sent.key.id] = 'aizen'; // Linked to 'aizen' [1]
                 }
+
+                sendAnimeReplySticker(sock, jid, 'Aizen').catch(() => {});
             } catch (error) {
                 console.error(error);
             }
@@ -461,7 +497,7 @@ module.exports = [
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
-                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
 
                 global.aiMemory[jid].lizzy.push({ role: "user", content: args });
                 global.aiMemory[jid].lizzy.push({ role: "assistant", content: responseText });
@@ -564,7 +600,7 @@ module.exports = [
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
-                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
 
                 global.aiMemory[jid].friday.push({ role: "user", content: args });
                 global.aiMemory[jid].friday.push({ role: "assistant", content: responseText });
