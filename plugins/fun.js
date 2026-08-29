@@ -102,7 +102,7 @@ function toSans(text) {
     }).join('');
 }
 
-async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
+async function queryGroq(messages, model = "llama-3.1-8b-instant") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
     const response = await fetch(GROQ_BASE_URL, {
