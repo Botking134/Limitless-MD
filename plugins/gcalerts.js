@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
+const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('./devs');
 
 const alertsPath = path.join(__dirname, '../storage/gcalerts.json');
 
@@ -29,6 +30,52 @@ function saveAlertsData(data) {
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(alertsPath, JSON.stringify(data, null, 2), 'utf-8');
     } catch (e) { /* ignore */ }
+}
+
+// ─── SHARED EMERGENCY PURGE (used by .overkill panic AND the auto-trap in pair.js) ───
+async function triggerEmergencyPurge(sock, jid, executorJid) {
+    const metadata = await sock.groupMetadata(jid);
+    const botJid = normalizeToJid(sock.user.id);
+    const botLid = sock.user.lid ? normalizeToJid(sock.user.lid) : '';
+
+    const targetsToDemote = [];
+    for (const p of metadata.participants) {
+        const pJid = normalizeToJid(p.id);
+        if (p.admin === 'admin' || p.admin === 'superadmin') {
+            const isExempt = pJid === botJid || pJid === botLid ||
+                             DEV_LIDS.includes(pJid) || DEV_JIDS.includes(pJid) || DEV_PHONE_JIDS.includes(pJid) ||
+                             pJid === config.ownerJid || pJid === config.ownerLid ||
+                             (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(pJid)) ||
+                             (Array.isArray(config.sudos) && config.sudos.includes(pJid));
+
+            if (!isExempt) {
+                targetsToDemote.push(pJid);
+            }
+        }
+    }
+
+    const emergencyStatus = await sock.sendMessage(jid, { text: `🚨 *OVERKILL EMERGENCY PURGE STARTED* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nPurging \`${targetsToDemote.length}\` non-exempt administrators...` });
+
+    if (targetsToDemote.length > 0) {
+        try { await sock.groupParticipantsUpdate(jid, targetsToDemote, "demote"); } catch (e) {}
+    }
+
+    try {
+        await sock.groupSettingUpdate(jid, 'announcement');
+        await sock.groupSettingUpdate(jid, 'locked');
+    } catch (e) {}
+
+    const executor = executorJid || jid;
+    const summaryText =
+        `🚨 *CONTAINMENT COMPLETE* 🚨\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `⚠️ *Threat Contained:* \`${targetsToDemote.length}\` admin(s) demoted [1.1].\n` +
+        `🔒 *Innate Domain:* Group successfully locked to Admins-Only [1.1].\n` +
+        `⚖️ *Trigger:* @${executor.split('@')[0]}\n\n` +
+        `_System operations will resume once verified by my creator._`;
+
+    await sock.sendMessage(jid, { text: summaryText, mentions: [executor] });
+    try { await sock.sendMessage(jid, { delete: emergencyStatus.key }); } catch (e) { /* ignore */ }
 }
 
 function getRawMessage(message) {
@@ -416,52 +463,6 @@ module.exports = [
             const data = readAlertsData();
             data.overkill = data.overkill || {};
 
-            // Helper to execute instant group-purge on-demand (Panic Mode) [1.1]
-            const triggerEmergencyPurge = async () => {
-                const metadata = await sock.groupMetadata(jid);
-                const botJid = normalizeToJid(sock.user.id);
-                const botLid = sock.user.lid ? normalizeToJid(sock.user.lid) : '';
-
-                // Identify vulnerable admins (non-exempt) [1.1]
-                const targetsToDemote = [];
-                for (const p of metadata.participants) {
-                    const pJid = normalizeToJid(p.id);
-                    if (p.admin === 'admin' || p.admin === 'superadmin') {
-                        const isExempt = pJid === botJid || pJid === botLid ||
-                                         DEV_LIDS.includes(pJid) || DEV_JIDS.includes(pJid) || DEV_PHONE_JIDS.includes(pJid) ||
-                                         pJid === config.ownerJid || pJid === config.ownerLid ||
-                                         (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(pJid)) ||
-                                         (Array.isArray(config.sudos) && config.sudos.includes(pJid));
-
-                        if (!isExempt) {
-                            targetsToDemote.push(pJid);
-                        }
-                    }
-                }
-
-                const emergencyStatus = await sock.sendMessage(jid, { text: `🚨 *OVERKILL EMERGENCY PURGE STARTED* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nPurging \`${targetsToDemote.length}\` non-exempt administrators...` });
-
-                // 1. Demote all vulnerable administrators [1.1]
-                if (targetsToDemote.length > 0) {
-                    await sock.groupParticipantsUpdate(jid, targetsToDemote, "demote");
-                }
-
-                // 2. Closed-channel lockouts [1.1]
-                await sock.groupSettingUpdate(jid, 'announcement');
-                await sock.groupSettingUpdate(jid, 'locked');
-
-                const summaryText =
-                    `🚨 *CONTAINMENT COMPLETE* 🚨\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `⚠️ *Threat Contained:* \`${targetsToDemote.length}\` admin(s) demoted [1.1].\n` +
-                    `🔒 *Innate Domain:* Group successfully locked to Admins-Only [1.1].\n` +
-                    `⚖️ *Executioner:* @${(msg.key.participant || jid).split('@')[0]}\n\n` +
-                    `_System operations will resume once verified by my creator._`;
-
-                await sock.sendMessage(jid, { text: summaryText, mentions: [msg.key.participant || jid] }, { quoted: msg });
-                try { await sock.sendMessage(jid, { delete: emergencyStatus.key }); } catch (e) { /* ignore */ }
-            };
-
             // ─── CASE A: DISPLAY STATUS & PANIC BUTTON ─── [1.1]
             if (!subCommand) {
                 const currentStatus = (data.overkill[jid] === 'on') ? 'Active 🟢' : 'Inactive 💤';
@@ -499,7 +500,7 @@ module.exports = [
 
             // ─── CASE C: PANIC MODE ON-DEMAND TRIGGER (.overkill panic) ─── [1.1]
             if (subCommand === 'panic' || subCommand === 'trigger' || subCommand === 'lock') {
-                return await triggerEmergencyPurge();
+                return await triggerEmergencyPurge(sock, jid, msg.key.participant || jid);
             }
 
             await sock.sendMessage(jid, { text: `❌ Unknown option. Type \`${config.prefix}overkill\` to see options.` }, { quoted: msg });
@@ -518,3 +519,8 @@ module.exports.forEach(cmd => {
     }
 });
 module.exports.push(...aliases);
+
+// Shared with pair.js so the group-participants.update handler can enforce
+// antipromote/antidemote/overkill using the exact same purge logic as .overkill panic
+module.exports.triggerEmergencyPurge = triggerEmergencyPurge;
+module.exports.readAlertsData = readAlertsData;
