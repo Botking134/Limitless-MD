@@ -21,6 +21,18 @@ const processedEventsCache = new Map();
 let hasSentBootReport = false;
 let activeSocketInstance = null;
 
+global.pairingStatus = global.pairingStatus || {
+    status: 'initializing',
+    qrRaw: null,
+    qrImage: null,
+    pairingCode: null,
+    phoneNumber: null,
+    lastUpdate: Date.now(),
+    errorMessage: null,
+    user: null,
+    registered: false
+};
+
 function isDuplicateEvent(key) {
     const now = Date.now();
     if (processedEventsCache.has(key)) {
@@ -92,6 +104,94 @@ global.reconnectTimeout = global.reconnectTimeout || null;
 
 // ─── MAIN BOT STARTER ──────────────────────────────────────────
 
+async function requestPairingCode(phoneNumber) {
+    if (!activeSocketInstance) {
+        throw new Error("Bot socket engine is not initialized yet. Please wait a few seconds.");
+    }
+    const cleanNumber = String(phoneNumber || '').replace(/[^0-9]/g, '');
+    if (!cleanNumber || cleanNumber.length < 7) {
+        throw new Error("Invalid phone number. Please include country code, e.g. 2347059092107");
+    }
+
+    global.pairingStatus.status = 'requesting_code';
+    global.pairingStatus.phoneNumber = cleanNumber;
+    global.pairingStatus.errorMessage = null;
+    global.pairingStatus.lastUpdate = Date.now();
+
+    try {
+        const code = await activeSocketInstance.requestPairingCode(cleanNumber, "INFINITY");
+        global.pairingStatus.status = 'pairing_code_ready';
+        global.pairingStatus.pairingCode = code;
+        global.pairingStatus.lastUpdate = Date.now();
+        console.log(`\n🔑 [PAIRING CODE] Generated for ${cleanNumber}: \x1b[32m\x1b[1m${code}\x1b[0m\n`);
+        return code;
+    } catch (error) {
+        global.pairingStatus.status = 'error';
+        global.pairingStatus.errorMessage = error.message || "Failed to request pairing code";
+        global.pairingStatus.lastUpdate = Date.now();
+        console.error("❌ Failed to request pairing code:", error.message);
+        throw error;
+    }
+}
+
+function getPairingStatus() {
+    return {
+        ...global.pairingStatus,
+        botName: config.botName,
+        prefix: config.prefix,
+        ownerNumber: config.ownerNumber,
+        uptime: process.uptime()
+    };
+}
+
+async function clearAuthSession() {
+    const authFolder = path.join(__dirname, 'storage', 'session_auth');
+    try {
+        if (activeSocketInstance) {
+            activeSocketInstance.ev.removeAllListeners();
+            if (activeSocketInstance.ws) activeSocketInstance.ws.close();
+            activeSocketInstance = null;
+        }
+        if (fs.existsSync(authFolder)) {
+            fs.rmSync(authFolder, { recursive: true, force: true });
+        }
+        global.pairingStatus.status = 'unregistered';
+        global.pairingStatus.registered = false;
+        global.pairingStatus.qrImage = null;
+        global.pairingStatus.qrRaw = null;
+        global.pairingStatus.pairingCode = null;
+        global.pairingStatus.user = null;
+        global.pairingStatus.lastUpdate = Date.now();
+        console.log("🧹 [SESSION] Auth storage cleared successfully.");
+        return true;
+    } catch (e) {
+        console.error("❌ [SESSION] Failed to clear auth storage:", e.message);
+        throw e;
+    }
+}
+
+async function restartBot() {
+    if (activeSocketInstance) {
+        try {
+            activeSocketInstance.ev.removeAllListeners();
+            if (activeSocketInstance.ws) activeSocketInstance.ws.close();
+        } catch (e) {}
+        activeSocketInstance = null;
+    }
+    hasSentBootReport = false;
+    global.reconnectAttempts = 0;
+    global.isReconnecting = false;
+    if (global.reconnectTimeout) {
+        clearTimeout(global.reconnectTimeout);
+        global.reconnectTimeout = null;
+    }
+    return startBot();
+}
+
+function getActiveSocket() {
+    return activeSocketInstance;
+}
+
 async function startBot() {
     if (activeSocketInstance) {
         try {
@@ -111,10 +211,15 @@ async function startBot() {
     const authFolder = path.join(__dirname, 'storage', 'session_auth');
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
+    global.pairingStatus.registered = !!state.creds.registered;
+    global.pairingStatus.status = state.creds.registered ? 'connecting' : 'waiting_for_auth';
+    global.pairingStatus.lastUpdate = Date.now();
+
     let targetNumber = null;
     let pairingMode = false;
 
-    if (!state.creds.registered) {
+    // In interactive terminal, allow fast CLI prompt; in web/headless mode, don't block
+    if (!state.creds.registered && process.stdin.isTTY) {
         console.log(`
 ========================================
 ⚡ AUTHENTICATION REQUIRED
@@ -122,32 +227,35 @@ async function startBot() {
 1. Request Pairing Code (Enter number)
 2. Scan QR Code (Display QR)
 ========================================
+(You can also use the Web UI on port 3000 to scan QR or generate code)
 `);
-        let choice = await question('Select option (1 or 2): ');
-        choice = choice.trim();
+        try {
+            const promptPromise = question('Select option (1 or 2, or press Enter for QR): ');
+            const timeoutPromise = new Promise(r => setTimeout(() => r('timeout'), 8000));
+            const choice = await Promise.race([promptPromise, timeoutPromise]);
 
-        if (choice === '1') {
-            pairingMode = true;
-            console.log('👉 Enter your WhatsApp number with country code:');
-            let numberInput = await question('');
-            targetNumber = numberInput.replace(/[^0-9]/g, '');
-            if (!targetNumber) {
-                console.log('❌ Invalid number. Restart and try again.');
-                process.exit(1);
+            if (choice === '1') {
+                pairingMode = true;
+                console.log('👉 Enter your WhatsApp number with country code:');
+                let numberInput = await question('');
+                targetNumber = numberInput.replace(/[^0-9]/g, '');
+                if (targetNumber) {
+                    console.log(`\n⏳ Requesting pairing code for ${targetNumber}...\n`);
+                }
+            } else if (choice === '2' || choice === '' || choice === 'timeout') {
+                pairingMode = false;
+                console.log('\n📱 QR mode active. Waiting for QR...\n');
             }
-            console.log(`\n⏳ Requesting pairing code for ${targetNumber}...\n`);
-        } else if (choice === '2') {
-            pairingMode = false;
-            console.log('\n📱 QR mode selected. Waiting for QR to display...\n');
-        } else {
-            console.log('❌ Invalid option. Restart and choose 1 or 2.');
-            process.exit(1);
+        } catch (e) {
+            // Ignore prompt error and proceed with standard QR/web pairing
         }
     }
 
+    const QRCode = require('qrcode');
+
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false,
+        printQRInTerminal: true,
         logger: require('pino')({ level: 'silent' }),
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
@@ -223,30 +331,46 @@ async function startBot() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        if (qr && !pairingMode && !qrDisplayed) {
-            qrDisplayed = true;
-            console.log('\n📱 Scan this QR code with WhatsApp:\n');
-            console.log(qr);
-            console.log('\n👉 Open WhatsApp > Linked Devices > Link a Device\n');
+        if (qr) {
+            global.pairingStatus.status = 'qr';
+            global.pairingStatus.qrRaw = qr;
+            try {
+                global.pairingStatus.qrImage = await QRCode.toDataURL(qr, { margin: 2, scale: 8 });
+            } catch (qrErr) {
+                console.error("QR render error:", qrErr.message);
+            }
+            global.pairingStatus.lastUpdate = Date.now();
+
+            if (!pairingMode && !qrDisplayed) {
+                qrDisplayed = true;
+                console.log('\n📱 [QR CODE] Ready! Scan with WhatsApp or open the Web UI:');
+                console.log('\n👉 Open WhatsApp > Linked Devices > Link a Device\n');
+            }
         }
 
         if (targetNumber && !pairingCodeRequested && pairingMode) {
             pairingCodeRequested = true;
             setTimeout(async () => {
                 try {
-                    const code = await sock.requestPairingCode(targetNumber, "INFINITY");
-                    console.log(`\n🔑 Your Pairing Code: \x1b[32m\x1b[1m${code}\x1b[0m`);
-                    console.log(`\n👉 Enter this code in WhatsApp > Linked Devices\n`);
+                    await requestPairingCode(targetNumber);
                 } catch (error) {
-                    console.error('❌ Failed to request pairing code:', error.message);
                     pairingCodeRequested = false;
                 }
-            }, 4000);
+            }, 3000);
         }
 
         // ─── CONNECTION OPEN ───
         if (connection === 'open') {
             console.log('\n✅ Connection established successfully!');
+            global.pairingStatus.status = 'connected';
+            global.pairingStatus.registered = true;
+            global.pairingStatus.qrRaw = null;
+            global.pairingStatus.qrImage = null;
+            global.pairingStatus.pairingCode = null;
+            global.pairingStatus.user = sock.user;
+            global.pairingStatus.errorMessage = null;
+            global.pairingStatus.lastUpdate = Date.now();
+
             global.reconnectAttempts = 0;
             global.isReconnecting = false;
             if (global.reconnectTimeout) {
@@ -505,4 +629,11 @@ async function startBot() {
     });
 }
 
-module.exports = { startBot };
+module.exports = {
+    startBot,
+    requestPairingCode,
+    getPairingStatus,
+    restartBot,
+    clearAuthSession,
+    getActiveSocket
+};

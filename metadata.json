@@ -1,0 +1,8 @@
+{
+  "name": "Limitless WhatsApp Bot",
+  "description": "A modular WhatsApp bot named Limitless with AI capabilities, live pairing console, commands manager, and dashboard",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

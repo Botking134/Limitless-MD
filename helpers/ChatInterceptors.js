@@ -82,23 +82,45 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
         }
     }
 
+    // Attempt message deletion safely
+    try {
+        await sock.sendMessage(jid, { delete: msg.key });
+    } catch (delErr) { /* ignore deletion failure */ }
+
+    // Helper to resolve the exact participant ID from group metadata for kicking
+    async function getKickTargets(target) {
+        let targets = [target];
+        try {
+            const meta = await sock.groupMetadata(jid);
+            const cleanT = cleanJid(target);
+            const match = meta.participants?.find(p => cleanJid(p.id) === cleanT || (p.lid && cleanJid(p.lid) === cleanT));
+            if (match && match.id) {
+                targets = [match.id];
+            }
+        } catch (e) {}
+        return targets;
+    }
+
     if (effectivePolicy === 'delete') {
         try {
-            await sock.sendMessage(jid, { delete: msg.key });
             const deleteMsgText = `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`;
             await sock.sendMessage(jid, { text: deleteMsgText, mentions: [resolvedSender] });
         } catch (e) { /* ignore */ }
     } else if (effectivePolicy === 'warn') {
         try {
-            await sock.sendMessage(jid, { delete: msg.key });
             const warnKey = `${jid}_${senderNumber}`;
             config.warns = config.warns || {};
             config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
             const count = config.warns[warnKey];
-            const threshold = config.warnThreshold || 5;
+            const threshold = Number(config.warnThreshold) || 5;
 
             if (count >= threshold) {
-                await sock.groupParticipantsUpdate(jid, [resolvedSender], "remove");
+                const kickTargets = await getKickTargets(resolvedSender);
+                try {
+                    await sock.groupParticipantsUpdate(jid, kickTargets, "remove");
+                } catch (kErr) {
+                    console.error("❌ [SECURITY KICK ERROR]:", kErr.message);
+                }
                 const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${senderNumber}. Warnings exceeded (${count}/${threshold}) for violating ${violationReason} rules.`;
                 await sock.sendMessage(jid, { text: kickText, mentions: [resolvedSender] });
                 config.warns[warnKey] = 0;
@@ -107,14 +129,18 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
                 await sock.sendMessage(jid, { text: warningText, mentions: [resolvedSender] });
             }
             saveState();
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+            console.error("❌ [WARN POLICY ERROR]:", e.message);
+        }
     } else if (effectivePolicy === 'kick') {
         try {
-            await sock.sendMessage(jid, { delete: msg.key });
-            await sock.groupParticipantsUpdate(jid, [resolvedSender], "remove");
+            const kickTargets = await getKickTargets(resolvedSender);
+            await sock.groupParticipantsUpdate(jid, kickTargets, "remove");
             const directKickText = `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`;
             await sock.sendMessage(jid, { text: directKickText, mentions: [resolvedSender] });
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+            console.error("❌ [KICK POLICY ERROR]:", e.message);
+        }
     }
 }
 

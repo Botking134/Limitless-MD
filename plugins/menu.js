@@ -277,6 +277,42 @@ _┃ ⊱ qty_
 _┃ ⊱ currency_
 `;
 
+async function renderMenu(sock, msg) {
+    const jid = msg.key.remoteJid;
+    const uptime = formatUptime(process.uptime());
+    const prefixVal = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+    const pushName = msg.pushName || 'User';
+
+    const fullMenu =
+`┌──────────────┐
+│  *${config.botName || 'Limitless-MD'}*
+└──────────────┘
+_👑 Owner: ${config.ownerName || 'Unknown'}_
+_👤 User: ${pushName}_
+_⏱️ Uptime: ${uptime}_
+_🔑 Prefix: [ ${prefixVal} ]_
+════════════════════════
+> Throughout Heaven And Earth
+┌───────────────────┐
+│ *I alone am the Honoured one* 
+└───────────────────┘
+
+${menuText}`;
+
+    const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
+    const imageBuffer = await fetchImageBuffer(randomImage);
+
+    if (imageBuffer) {
+        await sock.sendMessage(jid, {
+            image: imageBuffer,
+            mimetype: 'image/jpeg',
+            caption: fullMenu
+        }, { quoted: msg });
+    } else {
+        await sock.sendMessage(jid, { text: fullMenu }, { quoted: msg });
+    }
+}
+
 async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());

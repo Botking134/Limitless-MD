@@ -2,10 +2,14 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { DEV_LIDS } = require('./plugins/devs');
 
-// Load vars module for dynamic variable persistence
-const { saveDynamicVars } = require('./vars');
+const DEV_LIDS = [
+    '90181998776472@lid',
+    '139780398567572@lid',
+    '724371671200049@lid',
+    '70442412994675@lid',
+    '66113102717169@lid'
+];
 
 const STATE_PATH = path.join(__dirname, 'storage', 'state.json');
 
@@ -164,7 +168,8 @@ function saveState() {
 
         // Sync variables to vars.json
         try {
-            saveDynamicVars();
+            const { saveDynamicVars } = require('./vars');
+            if (typeof saveDynamicVars === 'function') saveDynamicVars();
         } catch (e) {
             console.warn('⚠️ [STATE] Could not save dynamic vars:', e.message);
         }

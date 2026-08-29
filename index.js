@@ -21,6 +21,7 @@ const { loadVars, syncVarsToConfig } = require('./vars');
 const { loadState } = require('./stateManager');
 const { DEV_JIDS } = require('./plugins/devs');
 const { startBot } = require('./pair');
+const { createServer } = require('./server');
 
 // ─── TEMPORARY LOG CAPTURE ──────────────────────────────────────
 global.recentLogs = global.recentLogs || [];
@@ -62,11 +63,16 @@ console.log(`📦 Owners  : ${config.secondaryOwners.length} secondary`);
 console.log(`🛡️ Sudos   : ${config.sudos.length} registered`);
 console.log(`========================================\n`);
 
-// ─── START THE BOT ──────────────────────────────────────────────
+// ─── START WEB CONSOLE & BOT ────────────────────────────────────
+
+try {
+    createServer();
+} catch (webErr) {
+    console.error("[ERROR] Failed to start web console:", webErr);
+}
 
 startBot().catch((error) => {
     console.error("[FATAL ERROR] Failed to ignite system engine:", error);
-    process.exit(1);
 });
 
 // ─── GLOBAL ERROR CATCHERS ────────────────────────────────────

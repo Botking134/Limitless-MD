@@ -91,50 +91,32 @@ function parseDuration(str) {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ─── UPDATED verifyPermissions ──────────────────────
-async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo = false, commandName = '') {
-    const senderJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
-
-    if (isDev) {
-        return true;
-    }
-
-    const isAuthorized = isOwner || isSudo;
-    if (!isAuthorized) return false;
-
-    const exemptCommands = [
-        'tag', 'tagall', 'htag', 'admins', 'link', 'invite', 'gclink',
-        'gcjid', 'getgpp', 'poll', 'togcstatus', 'togcjid',
-        'join', 'exit', 'listonline', 'msgs'
-    ];
-    if (exemptCommands.includes(commandName.toLowerCase())) {
-        return true;
-    }
-
-    const groupMetadata = await sock.groupMetadata(jid);
-    const participants = groupMetadata.participants;
-
-    const botJid = sock.user?.id ? cleanJid(sock.user.id) : '';
-    const botLid = sock.user?.lid ? cleanJid(sock.user.lid) : (config.botLid || '');
-
-    const botParticipant = participants.find(p => {
-        const pId = cleanJid(p.id);
-        const pLid = p.lid ? cleanJid(p.lid) : '';
-        return (botJid && (pId === botJid || pLid === botJid)) ||
-               (botLid && (pId === botLid || pLid === botLid));
-    });
-    const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
-
-    if (!isBotAdmin) {
-        await sock.sendMessage(jid, { text: "❌ I must be an administrator in this group first!" }, { quoted: msg });
+async function verifyPermissions(sock, msg, jid, isOwner = false, isDev = false, isSudo = false, commandName = '', isAdmin = false) {
+    if (!jid.endsWith('@g.us')) {
+        await sock.sendMessage(jid, { text: "❌ This command is only available in group chats." }, { quoted: msg });
         return false;
     }
+
+    if (isDev || isOwner || isSudo) {
+        return true;
+    }
+
+    const senderJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
+
+    let groupMetadata = null;
+    try {
+        groupMetadata = await sock.groupMetadata(jid);
+    } catch (e) {}
+
+    const participants = groupMetadata?.participants || [];
 
     let sender = participants.find(p => {
         const pId = cleanJid(p.id);
         const pLid = p.lid ? cleanJid(p.lid) : '';
         return pId === senderJid || (pLid && pLid === senderJid);
     });
-    const isSenderAdmin = sender?.admin === 'admin' || sender?.admin === 'superadmin';
+
+    const isSenderAdmin = isAdmin || sender?.admin === 'admin' || sender?.admin === 'superadmin';
     if (!isSenderAdmin) {
         await sock.sendMessage(jid, { text: "❌ You must be an administrator in this group to run this command!" }, { quoted: msg });
         return false;
@@ -150,12 +132,12 @@ const securityCommands = [
     {
         name: 'antilink',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antilink');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antilink', isAdmin);
             if (!isAuthorized) return;
 
             config.antilink = config.antilink || {};
@@ -191,12 +173,12 @@ const securityCommands = [
     {
         name: 'antitag',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antitag');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antitag', isAdmin);
             if (!isAuthorized) return;
 
             config.antitag = config.antitag || {};
@@ -234,12 +216,12 @@ const securityCommands = [
     {
         name: 'antibot',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antibot');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antibot', isAdmin);
             if (!isAuthorized) return;
 
             config.antibot = config.antibot || {};
@@ -275,12 +257,12 @@ const securityCommands = [
     {
         name: 'antigm',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antigm');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antigm', isAdmin);
             if (!isAuthorized) return;
 
             config.antigm = config.antigm || {};
@@ -316,12 +298,12 @@ const securityCommands = [
     {
         name: 'antispam',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antispam');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antispam', isAdmin);
             if (!isAuthorized) return;
 
             if (!config.antispam) config.antispam = {};
@@ -369,10 +351,10 @@ const securityCommands = [
     {
         name: 'antigcstatus',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antigcstatus');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antigcstatus', isAdmin);
             if (!isAuthorized) return;
 
             if (!config.antigcstatus) {
@@ -416,12 +398,12 @@ const securityCommands = [
     {
         name: 'antipromote',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antipromote');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antipromote', isAdmin);
             if (!isAuthorized) return;
 
             if (!config.antipromote) config.antipromote = {};
@@ -445,12 +427,12 @@ const securityCommands = [
     {
         name: 'antidemote',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antidemote');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antidemote', isAdmin);
             if (!isAuthorized) return;
 
             if (!config.antidemote) config.antidemote = {};
@@ -474,12 +456,12 @@ const securityCommands = [
     {
         name: 'warn',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'warn');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'warn', isAdmin);
             if (!isAuthorized) return;
 
             const targetJid = parseTargetUser(msg, args);
@@ -488,7 +470,7 @@ const securityCommands = [
             }
 
             const targetNumber = targetJid.split('@')[0];
-            const botJid = config.botJid || (sock.user.id.split(':')[0] + '@s.whatsapp.net');
+            const botJid = config.botJid || (sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '');
 
             if (isDeveloper(targetJid)) {
                 return await sock.sendMessage(jid, { text: "🛡️ *Immunity Triggered:* Cannot restrict a Core Developer of this domain." }, { quoted: msg });
@@ -548,17 +530,29 @@ const securityCommands = [
             config.warns = config.warns || {};
             config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
             const count = config.warns[warnKey];
-            const threshold = config.warnThreshold || 5;
+            const threshold = Number(config.warnThreshold) || 5;
 
             if (count >= threshold) {
+                let kickTargets = [targetJid];
                 try {
-                    await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
-                    
-                    // Domain Expansion kick message
-                    const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${targetNumber}. Warnings exceeded (${count}/${threshold}).`;
-                    await sock.sendMessage(jid, { text: kickText, mentions: [targetJid] });
-                    config.warns[warnKey] = 0;
-                } catch (err) { /* ignore */ }
+                    const meta = await sock.groupMetadata(jid);
+                    const cleanT = cleanJid(targetJid);
+                    const match = meta.participants?.find(p => cleanJid(p.id) === cleanT || (p.lid && cleanJid(p.lid) === cleanT));
+                    if (match && match.id) {
+                        kickTargets = [match.id];
+                    }
+                } catch (e) {}
+
+                try {
+                    await sock.groupParticipantsUpdate(jid, kickTargets, "remove");
+                } catch (err) {
+                    console.error("❌ [WARN KICK ERROR]:", err.message);
+                }
+
+                // Domain Expansion kick message
+                const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${targetNumber}. Warnings exceeded (${count}/${threshold}).`;
+                await sock.sendMessage(jid, { text: kickText, mentions: [targetJid] });
+                config.warns[warnKey] = 0;
             } else {
                 // Customized Warning response
                 const warningText = `            ☯ *Warning!!!!* ☯\n\n` +
@@ -576,12 +570,12 @@ const securityCommands = [
     {
         name: 'silence',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'silence');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'silence', isAdmin);
             if (!isAuthorized) return;
 
             const targetJid = parseTargetUser(msg, args);
@@ -679,11 +673,11 @@ const securityCommands = [
     {
         name: 'silence_ans',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             if (!args) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'silence');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'silence', isAdmin);
             if (!isAuthorized) return;
 
             const parts = args.split(' ');
@@ -742,12 +736,12 @@ const securityCommands = [
     {
         name: 'unsilence',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'unsilence');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'unsilence', isAdmin);
             if (!isAuthorized) return;
 
             const targetJid = parseTargetUser(msg, args);
@@ -796,12 +790,12 @@ const securityCommands = [
     {
         name: 'delspam',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             if (!isGroup) return;
 
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delspam');
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'delspam', isAdmin);
             if (!isAuthorized) return;
 
             const targetJid = parseTargetUser(msg, args);

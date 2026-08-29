@@ -109,11 +109,6 @@ async function spawnYuGiOhCard(sock, jid) {
         return sock.sendMessage(jid, { text: "❌ Failed to draw card from deck. Try again in a few seconds." });
     }
 
-    const imageBuffer = await getMediaBuffer(card.image);
-    if (!imageBuffer) {
-        return sock.sendMessage(jid, { text: "❌ Failed to load card image. Try again." });
-    }
-
     const captcha = generateCaptcha(5);
 
     global.activeCardSpawns[jid] = {
@@ -136,29 +131,38 @@ async function spawnYuGiOhCard(sock, jid) {
         `💰 *Price*     : ${card.price.toLocaleString()} gold\n` +
         `🔒 *Captcha*   : \`${captcha}\`\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `_Type *.upgrade ${captcha}* to claim this card!_`;
+        `_Type *.claim ${captcha}* or *.upgrade ${captcha}* to claim this card!_`;
 
-    await sock.sendMessage(jid, {
-        image: imageBuffer,
-        mimetype: 'image/jpeg',
-        caption: cardCaption
-    });
+    const imageBuffer = await getMediaBuffer(card.image);
+    if (imageBuffer) {
+        await sock.sendMessage(jid, {
+            image: imageBuffer,
+            mimetype: 'image/jpeg',
+            caption: cardCaption
+        });
+    } else {
+        await sock.sendMessage(jid, {
+            text: cardCaption
+        });
+    }
 }
 
 // ─── 30-MINUTE BACKGROUND SCHEDULER ────────────────────────────
 function startAutoCardSpawner(sock) {
     if (global.cardSpawnerInterval) clearInterval(global.cardSpawnerInterval);
     global.cardSpawnerInterval = setInterval(async () => {
-        const settings = loadJSON(SETTINGS_FILE, {});
-        const activeGroups = Object.keys(settings).filter(jid => isEnabled(settings[jid]));
+        try {
+            const settings = loadJSON(SETTINGS_FILE, {});
+            const activeGroups = Object.keys(settings).filter(jid => isEnabled(settings[jid]));
 
-        for (const groupJid of activeGroups) {
-            try {
-                await spawnYuGiOhCard(sock, groupJid);
-            } catch (e) {
-                console.error(`❌ [CARD AUTO] Spawn error in ${groupJid}:`, e.message);
+            for (const groupJid of activeGroups) {
+                try {
+                    await spawnYuGiOhCard(sock, groupJid);
+                } catch (e) {
+                    console.error(`❌ [CARD AUTO] Spawn error in ${groupJid}:`, e.message);
+                }
             }
-        }
+        } catch (err) {}
     }, 30 * 60 * 1000);
 }
 
@@ -188,7 +192,7 @@ const upgradeClaimCommand = {
 
         const inputCode = (args || '').trim().toUpperCase();
         if (!inputCode) {
-            return sock.sendMessage(jid, { text: `⚠️ Captcha code required: \`.upgrade ${activeSpawn.captcha}\`` });
+            return sock.sendMessage(jid, { text: `⚠️ Captcha code required: \`.claim ${activeSpawn.captcha}\`` });
         }
 
         if (inputCode !== activeSpawn.captcha) {
@@ -230,6 +234,18 @@ const upgradeClaimCommand = {
             mentions: [sender]
         });
     }
+};
+
+const claimCardCommand = {
+    name: 'claim',
+    category: 'games',
+    execute: upgradeClaimCommand.execute
+};
+
+const cardClaimAltCommand = {
+    name: 'cardclaim',
+    category: 'games',
+    execute: upgradeClaimCommand.execute
 };
 
 const deckInventoryCommand = {
@@ -315,9 +331,16 @@ const cardSpawnToggleCommand = {
     }
 };
 
-module.exports = [
+const commands = [
     cardSpawnManualCommand,
     upgradeClaimCommand,
+    claimCardCommand,
+    cardClaimAltCommand,
     deckInventoryCommand,
     cardSpawnToggleCommand
 ];
+
+commands.startAutoCardSpawner = startAutoCardSpawner;
+commands.spawnYuGiOhCard = spawnYuGiOhCard;
+
+module.exports = commands;
