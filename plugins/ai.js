@@ -1,3 +1,4 @@
+//plugins/ai.js
 const config = require('../config');
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -14,7 +15,7 @@ function getRawMessage(message) {
     return message;
 }
 
-async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
+async function queryGroq(messages, model = "llama-3.1-8b-instant") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
     const response = await fetch(GROQ_BASE_URL, {
@@ -56,7 +57,7 @@ module.exports = [
                     { role: "user", content: args }
                 ];
 
-                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "Tch, looks like something interfered with my system." }, { quoted: msg });
@@ -88,7 +89,7 @@ module.exports = [
                     { role: "user", content: debugPrompt }
                 ];
 
-                const responseText = await queryGroq(messages, "llama-3.3-70b-versatile");
+                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to complete code analysis." }, { quoted: msg });
