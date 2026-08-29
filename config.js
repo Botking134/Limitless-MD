@@ -202,13 +202,13 @@ module.exports = {
 ].join(''),
 
     groqApiKey: [
-        'gsk_Pq0e',
-        'zrYKQNlr',
-        '77fmp7bi',
+        'gsk_RaLm',
+        '0ybzF5qD',
+        'Va8Kq8Gh',
         'WGdyb3FY',
-        'juaKTR64',
-        'bSbIHjLe',
-        'RxGeL9yw'
+        '4E6UipgY',
+        'DS28GAua',
+        'cRTVRoxq'
     ].join(''),
 
 
