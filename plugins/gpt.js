@@ -33,7 +33,7 @@ function getRawMessage(message) {
     return message;
 }
 
-async function queryGroq(messages, model = "llama-3.1-8b-instant") {
+async function queryGroq(messages, model = "openai/gpt-oss-20b") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config.");
     
@@ -245,7 +245,7 @@ module.exports = [
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
-                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
+                const responseText = await queryGroq(messages, "openai/gpt-oss-20b");
 
                 global.aiMemory[jid].gojo.push({ role: "user", content: cleanQuery });
                 global.aiMemory[jid].gojo.push({ role: "assistant", content: responseText });
@@ -376,7 +376,7 @@ module.exports = [
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
-                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
+                const responseText = await queryGroq(messages, "openai/gpt-oss-20b");
 
                 global.aiMemory[jid].jarvis.push({ role: "user", content: args });
                 global.aiMemory[jid].jarvis.push({ role: "assistant", content: responseText });
@@ -395,6 +395,9 @@ module.exports = [
                 sendAnimeReplySticker(sock, jid, 'Aizen').catch(() => {});
             } catch (error) {
                 console.error(error);
+                try {
+                    await sock.sendMessage(jid, { text: "...it seems something has interfered with Kyōka Suigetsu. Ask again in a moment." }, { quoted: msg });
+                } catch (e) { /* ignore secondary failure */ }
             }
         }
     },
@@ -497,7 +500,7 @@ module.exports = [
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
-                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
+                const responseText = await queryGroq(messages, "openai/gpt-oss-20b");
 
                 global.aiMemory[jid].lizzy.push({ role: "user", content: args });
                 global.aiMemory[jid].lizzy.push({ role: "assistant", content: responseText });
@@ -600,7 +603,7 @@ module.exports = [
                 ];
 
                 await sock.sendPresenceUpdate('composing', jid);
-                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
+                const responseText = await queryGroq(messages, "openai/gpt-oss-20b");
 
                 global.aiMemory[jid].friday.push({ role: "user", content: args });
                 global.aiMemory[jid].friday.push({ role: "assistant", content: responseText });
