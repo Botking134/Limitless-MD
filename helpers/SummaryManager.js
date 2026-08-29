@@ -66,7 +66,7 @@ async function queryGroq(messages) {
 
     try {
         const resp = await axios.post(GROQ_BASE_URL, {
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b",
             messages,
             temperature: 0.6,
             max_tokens: 1500
