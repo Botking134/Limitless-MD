@@ -25,7 +25,7 @@ async function queryLLM(prompt, temperature = 0.8) {
             "Authorization": `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b",
             messages: [{ role: "user", content: prompt }],
             temperature: temperature
         })
