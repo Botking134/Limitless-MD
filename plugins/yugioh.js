@@ -3,25 +3,12 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 
-// ─── SAFE GRAPHICS LOADER (Canvas / Sharp / Jimp) ──────────────
-let CanvasModule = null;
-let JimpModule = null;
+// ─── SAFE IMAGE ENGINE (Sharp / Jimp / Canvas) ────────────────
+let sharp = null;
+let Jimp = null;
 
-try {
-    CanvasModule = require('@napi-rs/canvas');
-} catch (e1) {
-    try {
-        CanvasModule = require('canvas');
-    } catch (e2) {
-        CanvasModule = null;
-    }
-}
-
-try {
-    JimpModule = require('jimp');
-} catch (e3) {
-    JimpModule = null;
-}
+try { sharp = require('sharp'); } catch (e) {}
+try { Jimp = require('jimp'); } catch (e) {}
 
 // ─── CONFIGURATION & STORAGE PATHS ─────────────────────────────
 const MAX_DECK_SIZE = 20; 
@@ -59,12 +46,11 @@ function getPrefix() {
     return (typeof global !== 'undefined' && global.config && global.config.prefix) ? global.config.prefix : '.';
 }
 
-// ─── SENDER & USERNAME RESOLVER ────────────────────────────────
+// ─── USER & SENDER RESOLVER ────────────────────────────────────
 function resolveUser(msg) {
     let raw = msg.key.participant || msg.participant || msg.key.remoteJid || '';
     if (typeof raw !== 'string') raw = String(raw);
 
-    // Normalize WhatsApp LID or standard JID
     let cleanJid = raw.split(':')[0].replace(/@.+/, '') + '@s.whatsapp.net';
     let userNumber = cleanJid.split('@')[0].replace(/[^0-9]/g, '');
     let pushName = msg.pushName || userNumber || 'Duelist';
@@ -77,12 +63,12 @@ function resolveUser(msg) {
     };
 }
 
-// ─── DIRECT BUFFER FETCHER ─────────────────────────────────────
+// ─── BUFFER FETCHER ────────────────────────────────────────────
 async function getMediaBuffer(url) {
     try {
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 10000,
+            timeout: 8000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'image/*,*/*'
@@ -94,7 +80,7 @@ async function getMediaBuffer(url) {
     }
 }
 
-// ─── FETCH RANDOM CARD ─────────────────────────────────────────
+// ─── RANDOM CARD FETCHER ───────────────────────────────────────
 async function fetchRandomCard() {
     try {
         const res = await axios.get('https://db.ygoprodeck.com/api/v7/randomcard.php', {
@@ -109,10 +95,7 @@ async function fetchRandomCard() {
         if (raw && raw.data && Array.isArray(raw.data)) raw = raw.data[0];
         if (Array.isArray(raw)) raw = raw[0];
 
-        if (!raw || !raw.name) {
-            console.error("❌ YGOPRODeck API returned empty payload.");
-            return null;
-        }
+        if (!raw || !raw.name) return null;
 
         const basePrice = parseFloat(raw.card_prices?.[0]?.cardmarket_price || raw.card_prices?.[0]?.tcgplayer_price || "2.50");
         const goldValue = Math.max(500, Math.floor(basePrice * 1000) || (raw.atk ? Math.floor(raw.atk * 1.5) : 1000));
@@ -131,7 +114,6 @@ async function fetchRandomCard() {
             image: imageUrl
         };
     } catch (e) {
-        console.error("❌ [YGOPRODECK API ERROR]:", e.response?.status || e.message);
         return null;
     }
 }
@@ -155,155 +137,121 @@ function getUserProfile(inventoryData, userJid) {
     return inventoryData[userJid];
 }
 
-// ─── ROBUST COLLAGE GENERATOR (Canvas & Jimp fallback) ─────────
+// ─── SHARP COLLAGE ENGINE (Uses installed sharp) ───────────────
 async function generateDeckCollage(cards, ownerName = 'Duelist') {
-    if (!cards || cards.length === 0) return null;
+    if (!sharp || !cards || cards.length === 0) return null;
 
-    const total = cards.length;
-    let cols = 5;
-    let cardW = 160;
-    let cardH = 234;
+    try {
+        const total = cards.length;
+        let cols = 5;
+        let cardW = 160;
+        let cardH = 234;
 
-    if (total <= 4) {
-        cols = total;
-        cardW = 200;
-        cardH = 292;
-    } else if (total <= 10) {
-        cols = 5;
-        cardW = 175;
-        cardH = 255;
-    } else if (total <= 25) {
-        cols = 5;
-        cardW = 150;
-        cardH = 219;
-    } else {
-        cols = 6;
-        cardW = 135;
-        cardH = 197;
-    }
+        if (total <= 4) {
+            cols = total;
+            cardW = 200;
+            cardH = 292;
+        } else if (total <= 10) {
+            cols = 5;
+            cardW = 175;
+            cardH = 255;
+        } else if (total <= 25) {
+            cols = 5;
+            cardW = 150;
+            cardH = 219;
+        } else {
+            cols = 6;
+            cardW = 135;
+            cardH = 197;
+        }
 
-    const gap = 12;
-    const padding = 20;
-    const headerHeight = 70;
-    const rows = Math.ceil(total / cols);
+        const gap = 12;
+        const padding = 20;
+        const headerHeight = 70;
+        const rows = Math.ceil(total / cols);
 
-    const canvasW = padding * 2 + cols * cardW + (cols - 1) * gap;
-    const canvasH = headerHeight + padding * 2 + rows * cardH + (rows - 1) * gap;
+        const canvasW = padding * 2 + cols * cardW + (cols - 1) * gap;
+        const canvasH = headerHeight + padding * 2 + rows * cardH + (rows - 1) * gap;
 
-    // Fetch all card images in parallel
-    const imageBuffers = await Promise.all(
-        cards.map(c => {
-            const imgUrl = c.image || (c.id ? `https://images.ygoprodeck.com/images/cards/${c.id}.jpg` : null);
-            return imgUrl ? getMediaBuffer(imgUrl) : Promise.resolve(null);
-        })
-    );
+        // Fetch card images in parallel
+        const imageBuffers = await Promise.all(
+            cards.map(c => {
+                const imgUrl = c.image || (c.id ? `https://images.ygoprodeck.com/images/cards/${c.id}.jpg` : null);
+                return imgUrl ? getMediaBuffer(imgUrl) : Promise.resolve(null);
+            })
+        );
 
-    // 1. Try with Canvas if available
-    if (CanvasModule) {
-        try {
-            const { createCanvas, loadImage } = CanvasModule;
-            const canvas = createCanvas(canvasW, canvasH);
-            const ctx = canvas.getContext('2d');
+        const composites = [];
 
-            ctx.fillStyle = '#0b0f19';
-            ctx.fillRect(0, 0, canvasW, canvasH);
+        // Header SVG banner
+        const headerSvg = Buffer.from(`
+            <svg width="${canvasW - 20}" height="${headerHeight}">
+                <rect x="0" y="0" width="${canvasW - 20}" height="${headerHeight}" rx="8" fill="#111827" stroke="#f59e0b" stroke-width="2"/>
+                <text x="20" y="32" font-family="sans-serif" font-size="20" font-weight="bold" fill="#f8fafc">DUELIST DECK [${total}/${MAX_DECK_SIZE}]</text>
+                <text x="20" y="54" font-family="sans-serif" font-size="14" fill="#9ca3af">Owner: ${ownerName}</text>
+            </svg>
+        `);
+        composites.push({ input: headerSvg, top: 10, left: 10 });
 
-            ctx.fillStyle = '#111827';
-            ctx.fillRect(10, 10, canvasW - 20, headerHeight);
-            ctx.strokeStyle = '#f59e0b';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(10, 10, canvasW - 20, headerHeight);
+        // Process cards & number badges
+        for (let i = 0; i < cards.length; i++) {
+            const col = i % cols;
+            const row = Math.floor(i / cols);
+            const left = padding + col * (cardW + gap);
+            const top = headerHeight + padding + row * (cardH + gap);
 
-            ctx.fillStyle = '#f8fafc';
-            ctx.font = 'bold 22px sans-serif';
-            ctx.fillText(`DUELIST DECK [${total}/${MAX_DECK_SIZE}]`, 30, 40);
+            const buffer = imageBuffers[i];
+            let cardBuffer = null;
 
-            ctx.fillStyle = '#9ca3af';
-            ctx.font = '15px sans-serif';
-            ctx.fillText(`Owner: ${ownerName}`, 30, 64);
+            if (buffer) {
+                try {
+                    cardBuffer = await sharp(buffer)
+                        .resize(cardW, cardH, { fit: 'fill' })
+                        .toBuffer();
+                } catch (e) {}
+            }
 
-            for (let i = 0; i < cards.length; i++) {
-                const col = i % cols;
-                const row = Math.floor(i / cols);
-                const x = padding + col * (cardW + gap);
-                const y = headerHeight + padding + row * (cardH + gap);
-                const buffer = imageBuffers[i];
-
-                if (buffer) {
-                    try {
-                        const img = await loadImage(buffer);
-                        ctx.drawImage(img, x, y, cardW, cardH);
-                    } catch (e) {
-                        ctx.fillStyle = '#1f2937';
-                        ctx.fillRect(x, y, cardW, cardH);
+            if (!cardBuffer) {
+                cardBuffer = await sharp({
+                    create: {
+                        width: cardW,
+                        height: cardH,
+                        channels: 4,
+                        background: { r: 31, g: 41, b: 55, alpha: 1 }
                     }
-                } else {
-                    ctx.fillStyle = '#1f2937';
-                    ctx.fillRect(x, y, cardW, cardH);
-                }
-
-                ctx.strokeStyle = '#d97706';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(x, y, cardW, cardH);
-
-                const badgeRadius = 15;
-                const badgeX = x + badgeRadius + 4;
-                const badgeY = y + badgeRadius + 4;
-
-                ctx.beginPath();
-                ctx.arc(badgeX, badgeY, badgeRadius, 0, Math.PI * 2);
-                ctx.fillStyle = '#dc2626';
-                ctx.fill();
-                ctx.lineWidth = 2;
-                ctx.strokeStyle = '#ffffff';
-                ctx.stroke();
-
-                ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 14px sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(`${i + 1}`, badgeX, badgeY);
-                ctx.textAlign = 'start';
-                ctx.textBaseline = 'alphabetic';
+                }).png().toBuffer();
             }
 
-            return canvas.toBuffer('image/jpeg');
-        } catch (e) {
-            console.error("❌ Canvas build failed:", e.message);
+            composites.push({ input: cardBuffer, top, left });
+
+            // Card Badge Overlay SVG (#1, #2, etc.)
+            const badgeSvg = Buffer.from(`
+                <svg width="${cardW}" height="${cardH}">
+                    <rect x="0" y="0" width="${cardW}" height="${cardH}" fill="none" stroke="#d97706" stroke-width="2"/>
+                    <circle cx="20" cy="20" r="14" fill="#dc2626" stroke="#ffffff" stroke-width="2"/>
+                    <text x="20" y="25" font-family="sans-serif" font-size="13" font-weight="bold" fill="#ffffff" text-anchor="middle">${i + 1}</text>
+                </svg>
+            `);
+            composites.push({ input: badgeSvg, top, left });
         }
-    }
 
-    // 2. Jimp Fallback (if canvas isn't installed)
-    if (JimpModule) {
-        try {
-            const base = new JimpModule(canvasW, canvasH, 0x0b0f19ff);
-            for (let i = 0; i < cards.length; i++) {
-                const col = i % cols;
-                const row = Math.floor(i / cols);
-                const x = padding + col * (cardW + gap);
-                const y = headerHeight + padding + row * (cardH + gap);
-                const buffer = imageBuffers[i];
-
-                if (buffer) {
-                    try {
-                        const cardImg = await JimpModule.read(buffer);
-                        cardImg.resize(cardW, cardH);
-                        base.composite(cardImg, x, y);
-                    } catch (e) {}
-                }
+        // Composite final image
+        return await sharp({
+            create: {
+                width: canvasW,
+                height: canvasH,
+                channels: 4,
+                background: { r: 11, g: 15, b: 25, alpha: 1 }
             }
-            return await base.getBufferAsync(JimpModule.MIME_JPEG);
-        } catch (e) {
-            console.error("❌ Jimp build failed:", e.message);
-        }
-    }
+        })
+        .composite(composites)
+        .jpeg({ quality: 90 })
+        .toBuffer();
 
-    // 3. Fallback to single card if only 1 card exists
-    if (cards.length === 1 && imageBuffers[0]) {
-        return imageBuffers[0];
+    } catch (err) {
+        console.error("❌ Sharp collage error:", err);
+        return null;
     }
-
-    return null;
 }
 
 // ─── SPAWNER ENGINE ────────────────────────────────────────────
@@ -702,7 +650,7 @@ const cardSpawnToggleCommand = {
     }
 };
 
-// ─── EXPORT ALL COMMANDS AND ALIAS OBJECTS ──────────────────────
+// ─── EXPORT ALL COMMANDS AND INDEPENDENT ALIAS OBJECTS ─────────
 const commands = [
     cardSpawnManualCommand,
     claimCardCommand,
