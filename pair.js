@@ -580,20 +580,68 @@ async function startBot() {
                         await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
                     }
                 } else if (action === 'promote') {
-                    const isPromoteOn = isEnabled(data.promote?.[jid]) || isEnabled(config.promote?.[jid]);
-                    if (isPromoteOn) {
-                        await sock.sendMessage(jid, {
-                            text: `👑 *PROMOTION ALERT!*\n\n🎉 @${phoneNumber} promoted to Admin in *${groupName}*!`,
-                            mentions: [targetJid]
-                        });
+                    let handledByProtection = false;
+                    if (!isActorAuthorized) {
+                        const antipromoteMode = data.antipromote?.[jid] || 'off';
+                        const overkillArmed = isEnabled(data.overkill?.[jid]);
+                        if (antipromoteMode === 'overkill' || overkillArmed) {
+                            handledByProtection = true;
+                            try {
+                                const { triggerEmergencyPurge } = require('./plugins/gcalerts');
+                                await triggerEmergencyPurge(sock, jid, actorJid || targetJid);
+                            } catch (e) { console.error('❌ [OVERKILL PURGE ERROR]:', e.message); }
+                        } else if (antipromoteMode === 'on') {
+                            handledByProtection = true;
+                            try {
+                                await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
+                                await sock.sendMessage(jid, {
+                                    text: `🛡️ *Anti-Promote Protection!* Unauthorized promotion of @${phoneNumber} was reverted.`,
+                                    mentions: [targetJid]
+                                });
+                            } catch (e) { console.error('❌ [ANTIPROMOTE REVERT ERROR]:', e.message); }
+                        }
+                    }
+
+                    if (!handledByProtection) {
+                        const isPromoteOn = isEnabled(data.promote?.[jid]) || isEnabled(config.promote?.[jid]);
+                        if (isPromoteOn) {
+                            await sock.sendMessage(jid, {
+                                text: `👑 *PROMOTION ALERT!*\n\n🎉 @${phoneNumber} promoted to Admin in *${groupName}*!`,
+                                mentions: [targetJid]
+                            });
+                        }
                     }
                 } else if (action === 'demote') {
-                    const isDemoteOn = isEnabled(data.demote?.[jid]) || isEnabled(config.demote?.[jid]);
-                    if (isDemoteOn) {
-                        await sock.sendMessage(jid, {
-                            text: `🛡️ *DEMOTION ALERT!*\n\n👋 @${phoneNumber} demoted to Member in *${groupName}*.`,
-                            mentions: [targetJid]
-                        });
+                    let handledByProtection = false;
+                    if (!isActorAuthorized) {
+                        const antidemoteMode = data.antidemote?.[jid] || 'off';
+                        const overkillArmed = isEnabled(data.overkill?.[jid]);
+                        if (antidemoteMode === 'overkill' || overkillArmed) {
+                            handledByProtection = true;
+                            try {
+                                const { triggerEmergencyPurge } = require('./plugins/gcalerts');
+                                await triggerEmergencyPurge(sock, jid, actorJid || targetJid);
+                            } catch (e) { console.error('❌ [OVERKILL PURGE ERROR]:', e.message); }
+                        } else if (antidemoteMode === 'on') {
+                            handledByProtection = true;
+                            try {
+                                await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
+                                await sock.sendMessage(jid, {
+                                    text: `🛡️ *Anti-Demote Protection!* Unauthorized demotion of @${phoneNumber} was reverted.`,
+                                    mentions: [targetJid]
+                                });
+                            } catch (e) { console.error('❌ [ANTIDEMOTE REVERT ERROR]:', e.message); }
+                        }
+                    }
+
+                    if (!handledByProtection) {
+                        const isDemoteOn = isEnabled(data.demote?.[jid]) || isEnabled(config.demote?.[jid]);
+                        if (isDemoteOn) {
+                            await sock.sendMessage(jid, {
+                                text: `🛡️ *DEMOTION ALERT!*\n\n👋 @${phoneNumber} demoted to Member in *${groupName}*.`,
+                                mentions: [targetJid]
+                            });
+                        }
                     }
                 }
             }
