@@ -415,7 +415,7 @@ function buildCommandList(userContext) {
 // ─── HIGH-THROUGHPUT GROQ API CALL ─────────────────────────────────
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
-    const model = "llama-3.1-8b-instant"; 
+    const model = "openai/gpt-oss-20b"; 
 
     if (!apiKey) {
         console.error('[URIEL] Groq API key missing.');
