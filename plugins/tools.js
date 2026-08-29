@@ -88,7 +88,7 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("Catbox and qu.ax upload hosts failed.");
 }
 
-async function queryGroq(messages, model = "llama-3.1-8b-instant") {
+async function queryGroq(messages, model = "openai/gpt-oss-20b") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
     const response = await fetch(GROQ_BASE_URL, {
@@ -1144,7 +1144,7 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
                 const responseText = await queryGroq([
                     { role: "system", content: "You are a professional weather assistant." },
                     { role: "user", content: `${prompt}\n\nData:\n${weatherData}` }
-                ], "llama-3.1-8b-instant");
+                ], "openai/gpt-oss-20b");
 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
@@ -1354,7 +1354,7 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
                     translatedText = await queryGroq([
                         { role: "system", content: "You are an expert translator." },
                         { role: "user", content: `${prompt}\n\nText:\n"${textToTranslate}"` }
-                    ], "llama-3.1-8b-instant");
+                    ], "openai/gpt-oss-20b");
                 } catch (groqErr) {
                     console.error("❌ [GROQ TRANSLATE FAILED]:", groqErr.message);
                 }
