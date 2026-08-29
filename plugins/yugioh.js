@@ -127,9 +127,9 @@ async function spawnYuGiOhCard(sock, jid) {
         `🛡️ *DEF*     : ${card.def}\n` +
         `🔯 *Level*   : ${card.level}\n` +
         `🌌 *Attribute* : ${card.attribute}\n` +
-        `🧩 *Race*    : ${card.race}\n\n` +
+        `🧩 *Race*    : ${card.race}\n` +
         `💰 *Price*   : ${card.price.toLocaleString()} gold\n` +
-        `🔒 *Captcha*   : \`${captcha}\`\n` +
+        `🔒 *Captcha* : \`${captcha}\`\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
         `_Type *${config.prefix}claim ${captcha}* to claim this card!_`;
 
