@@ -87,7 +87,7 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("Catbox and qu.ax upload hosts failed.");
 }
 
-async function queryGroq(messages, model = "llama-3.3-70b-versatile") {
+async function queryGroq(messages, model = "llama-3.1-8b-instant") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
     const response = await fetch(GROQ_BASE_URL, {
@@ -1143,7 +1143,7 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
                 const responseText = await queryGroq([
                     { role: "system", content: "You are a professional weather assistant." },
                     { role: "user", content: `${prompt}\n\nData:\n${weatherData}` }
-                ], "llama-3.3-70b-versatile");
+                ], "llama-3.1-8b-instant");
 
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
