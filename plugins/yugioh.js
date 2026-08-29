@@ -2,10 +2,11 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { normalizeToJid } = require('../stateManager');
 
-// ─── CANVAS LOADER (Safe import for image collage) ─────────────
+// ─── SAFE GRAPHICS LOADER (Canvas / Sharp / Jimp) ──────────────
 let CanvasModule = null;
+let JimpModule = null;
+
 try {
     CanvasModule = require('@napi-rs/canvas');
 } catch (e1) {
@@ -16,8 +17,13 @@ try {
     }
 }
 
+try {
+    JimpModule = require('jimp');
+} catch (e3) {
+    JimpModule = null;
+}
+
 // ─── CONFIGURATION & STORAGE PATHS ─────────────────────────────
-// 💡 Change this to 20, 30, 40, or 60 depending on your preference!
 const MAX_DECK_SIZE = 20; 
 
 const INVENTORY_FILE = path.join(__dirname, '..', 'storage', 'yugioh_decks.json');
@@ -26,6 +32,8 @@ const SETTINGS_FILE = path.join(__dirname, '..', 'storage', 'cardspawn_settings.
 function loadJSON(filePath, defaultData = {}) {
     try {
         if (!fs.existsSync(filePath)) {
+            const dir = path.dirname(filePath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(filePath, JSON.stringify(defaultData, null, 2));
             return defaultData;
         }
@@ -37,6 +45,8 @@ function loadJSON(filePath, defaultData = {}) {
 
 function saveJSON(filePath, data) {
     try {
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
     } catch (e) {
         console.error(`❌ Failed to save ${filePath}:`, e.message);
@@ -49,12 +59,30 @@ function getPrefix() {
     return (typeof global !== 'undefined' && global.config && global.config.prefix) ? global.config.prefix : '.';
 }
 
+// ─── SENDER & USERNAME RESOLVER ────────────────────────────────
+function resolveUser(msg) {
+    let raw = msg.key.participant || msg.participant || msg.key.remoteJid || '';
+    if (typeof raw !== 'string') raw = String(raw);
+
+    // Normalize WhatsApp LID or standard JID
+    let cleanJid = raw.split(':')[0].replace(/@.+/, '') + '@s.whatsapp.net';
+    let userNumber = cleanJid.split('@')[0].replace(/[^0-9]/g, '');
+    let pushName = msg.pushName || userNumber || 'Duelist';
+
+    return {
+        jid: cleanJid,
+        number: userNumber,
+        pushName: pushName,
+        mention: `@${userNumber}`
+    };
+}
+
 // ─── DIRECT BUFFER FETCHER ─────────────────────────────────────
 async function getMediaBuffer(url) {
     try {
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 8000,
+            timeout: 10000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'image/*,*/*'
@@ -82,7 +110,7 @@ async function fetchRandomCard() {
         if (Array.isArray(raw)) raw = raw[0];
 
         if (!raw || !raw.name) {
-            console.error("❌ YGOPRODeck API returned empty card payload.");
+            console.error("❌ YGOPRODeck API returned empty payload.");
             return null;
         }
 
@@ -117,25 +145,21 @@ function generateCaptcha(length = 5) {
     return code;
 }
 
-function getUserProfile(inventoryData, sender) {
-    if (!inventoryData[sender]) {
-        inventoryData[sender] = { gold: 0, deck: [], collection: [] };
+function getUserProfile(inventoryData, userJid) {
+    if (!inventoryData[userJid]) {
+        inventoryData[userJid] = { gold: 0, deck: [], collection: [] };
     }
-    if (!Array.isArray(inventoryData[sender].deck)) inventoryData[sender].deck = [];
-    if (!Array.isArray(inventoryData[sender].collection)) inventoryData[sender].collection = [];
-    if (typeof inventoryData[sender].gold !== 'number') inventoryData[sender].gold = 0;
-    return inventoryData[sender];
+    if (!Array.isArray(inventoryData[userJid].deck)) inventoryData[userJid].deck = [];
+    if (!Array.isArray(inventoryData[userJid].collection)) inventoryData[userJid].collection = [];
+    if (typeof inventoryData[userJid].gold !== 'number') inventoryData[userJid].gold = 0;
+    return inventoryData[userJid];
 }
 
-// ─── HIGH-PERFORMANCE DECK COLLAGE BUILDER ─────────────────────
-async function generateDeckCollage(cards, duelistTag = '') {
-    if (!CanvasModule || !cards || cards.length === 0) return null;
-
-    const { createCanvas, loadImage } = CanvasModule;
+// ─── ROBUST COLLAGE GENERATOR (Canvas & Jimp fallback) ─────────
+async function generateDeckCollage(cards, ownerName = 'Duelist') {
+    if (!cards || cards.length === 0) return null;
 
     const total = cards.length;
-
-    // Responsive grid calculation based on card count
     let cols = 5;
     let cardW = 160;
     let cardH = 234;
@@ -166,90 +190,123 @@ async function generateDeckCollage(cards, duelistTag = '') {
     const canvasW = padding * 2 + cols * cardW + (cols - 1) * gap;
     const canvasH = headerHeight + padding * 2 + rows * cardH + (rows - 1) * gap;
 
-    const canvas = createCanvas(canvasW, canvasH);
-    const ctx = canvas.getContext('2d');
-
-    // Background styling
-    ctx.fillStyle = '#0b0f19';
-    ctx.fillRect(0, 0, canvasW, canvasH);
-
-    // Decorative Header Banner
-    ctx.fillStyle = '#111827';
-    ctx.fillRect(10, 10, canvasW - 20, headerHeight);
-    ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(10, 10, canvasW - 20, headerHeight);
-
-    // Duelist Title
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillText(`DUELIST DECK [${total}/${MAX_DECK_SIZE}]`, 30, 42);
-
-    ctx.fillStyle = '#9ca3af';
-    ctx.font = '15px sans-serif';
-    ctx.fillText(duelistTag ? `Owner: ${duelistTag}` : 'Yu-Gi-Oh! Deck Archive', 30, 66);
-
-    // ⚡ Fast Parallel Image Fetching
+    // Fetch all card images in parallel
     const imageBuffers = await Promise.all(
         cards.map(c => {
-            const imgUrl = c.image || `https://images.ygoprodeck.com/images/cards/${c.id}.jpg`;
-            return getMediaBuffer(imgUrl);
+            const imgUrl = c.image || (c.id ? `https://images.ygoprodeck.com/images/cards/${c.id}.jpg` : null);
+            return imgUrl ? getMediaBuffer(imgUrl) : Promise.resolve(null);
         })
     );
 
-    // Draw cards on canvas
-    for (let i = 0; i < cards.length; i++) {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
+    // 1. Try with Canvas if available
+    if (CanvasModule) {
+        try {
+            const { createCanvas, loadImage } = CanvasModule;
+            const canvas = createCanvas(canvasW, canvasH);
+            const ctx = canvas.getContext('2d');
 
-        const x = padding + col * (cardW + gap);
-        const y = headerHeight + padding + row * (cardH + gap);
-        const buffer = imageBuffers[i];
+            ctx.fillStyle = '#0b0f19';
+            ctx.fillRect(0, 0, canvasW, canvasH);
 
-        if (buffer) {
-            try {
-                const img = await loadImage(buffer);
-                ctx.drawImage(img, x, y, cardW, cardH);
-            } catch (err) {
-                ctx.fillStyle = '#1f2937';
-                ctx.fillRect(x, y, cardW, cardH);
+            ctx.fillStyle = '#111827';
+            ctx.fillRect(10, 10, canvasW - 20, headerHeight);
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(10, 10, canvasW - 20, headerHeight);
+
+            ctx.fillStyle = '#f8fafc';
+            ctx.font = 'bold 22px sans-serif';
+            ctx.fillText(`DUELIST DECK [${total}/${MAX_DECK_SIZE}]`, 30, 40);
+
+            ctx.fillStyle = '#9ca3af';
+            ctx.font = '15px sans-serif';
+            ctx.fillText(`Owner: ${ownerName}`, 30, 64);
+
+            for (let i = 0; i < cards.length; i++) {
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                const x = padding + col * (cardW + gap);
+                const y = headerHeight + padding + row * (cardH + gap);
+                const buffer = imageBuffers[i];
+
+                if (buffer) {
+                    try {
+                        const img = await loadImage(buffer);
+                        ctx.drawImage(img, x, y, cardW, cardH);
+                    } catch (e) {
+                        ctx.fillStyle = '#1f2937';
+                        ctx.fillRect(x, y, cardW, cardH);
+                    }
+                } else {
+                    ctx.fillStyle = '#1f2937';
+                    ctx.fillRect(x, y, cardW, cardH);
+                }
+
+                ctx.strokeStyle = '#d97706';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, cardW, cardH);
+
+                const badgeRadius = 15;
+                const badgeX = x + badgeRadius + 4;
+                const badgeY = y + badgeRadius + 4;
+
+                ctx.beginPath();
+                ctx.arc(badgeX, badgeY, badgeRadius, 0, Math.PI * 2);
+                ctx.fillStyle = '#dc2626';
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#ffffff';
+                ctx.stroke();
+
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 14px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(`${i + 1}`, badgeX, badgeY);
+                ctx.textAlign = 'start';
+                ctx.textBaseline = 'alphabetic';
             }
-        } else {
-            ctx.fillStyle = '#1f2937';
-            ctx.fillRect(x, y, cardW, cardH);
+
+            return canvas.toBuffer('image/jpeg');
+        } catch (e) {
+            console.error("❌ Canvas build failed:", e.message);
         }
-
-        // Card Gold Border
-        ctx.strokeStyle = '#d97706';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, cardW, cardH);
-
-        // Number Badge (#1, #2, etc.)
-        const badgeRadius = 16;
-        const badgeX = x + badgeRadius + 4;
-        const badgeY = y + badgeRadius + 4;
-
-        ctx.beginPath();
-        ctx.arc(badgeX, badgeY, badgeRadius, 0, Math.PI * 2);
-        ctx.fillStyle = '#dc2626';
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#ffffff';
-        ctx.stroke();
-
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 15px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(`${i + 1}`, badgeX, badgeY);
-        ctx.textAlign = 'start';
-        ctx.textBaseline = 'alphabetic';
     }
 
-    return canvas.toBuffer('image/jpeg');
+    // 2. Jimp Fallback (if canvas isn't installed)
+    if (JimpModule) {
+        try {
+            const base = new JimpModule(canvasW, canvasH, 0x0b0f19ff);
+            for (let i = 0; i < cards.length; i++) {
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                const x = padding + col * (cardW + gap);
+                const y = headerHeight + padding + row * (cardH + gap);
+                const buffer = imageBuffers[i];
+
+                if (buffer) {
+                    try {
+                        const cardImg = await JimpModule.read(buffer);
+                        cardImg.resize(cardW, cardH);
+                        base.composite(cardImg, x, y);
+                    } catch (e) {}
+                }
+            }
+            return await base.getBufferAsync(JimpModule.MIME_JPEG);
+        } catch (e) {
+            console.error("❌ Jimp build failed:", e.message);
+        }
+    }
+
+    // 3. Fallback to single card if only 1 card exists
+    if (cards.length === 1 && imageBuffers[0]) {
+        return imageBuffers[0];
+    }
+
+    return null;
 }
 
-// ─── CARD SPAWNER ENGINE ────────────────────────────────────────
+// ─── SPAWNER ENGINE ────────────────────────────────────────────
 global.activeCardSpawns = global.activeCardSpawns || {};
 
 async function spawnYuGiOhCard(sock, jid) {
@@ -291,9 +348,7 @@ async function spawnYuGiOhCard(sock, jid) {
             caption: cardCaption
         });
     } else {
-        await sock.sendMessage(jid, {
-            text: cardCaption
-        });
+        await sock.sendMessage(jid, { text: cardCaption });
     }
 }
 
@@ -329,12 +384,10 @@ const cardSpawnManualCommand = {
 
 const claimCardCommand = {
     name: 'claim',
-    aliases: ['upgrade', 'cardclaim'],
     category: 'games',
     execute: async (sock, msg, args) => {
         const jid = msg.key.remoteJid;
-        const sender = normalizeToJid(msg.key.participant || msg.key.remoteJid).split(':')[0].split('@')[0] + '@s.whatsapp.net';
-        const userNumber = sender.split('@')[0];
+        const user = resolveUser(msg);
         const p = getPrefix();
 
         const activeSpawn = global.activeCardSpawns[jid];
@@ -355,7 +408,7 @@ const claimCardCommand = {
         delete global.activeCardSpawns[jid];
 
         const inventoryData = loadJSON(INVENTORY_FILE, {});
-        const profile = getUserProfile(inventoryData, sender);
+        const profile = getUserProfile(inventoryData, user.jid);
 
         profile.gold += claimedCard.price;
 
@@ -383,7 +436,7 @@ const claimCardCommand = {
         const successMessage =
             `🎉 *CARD CLAIMED!* 🎉\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `👤 *Duelist*     : @${userNumber}\n` +
+            `👤 *Duelist*     : ${user.mention} (${user.pushName})\n` +
             `🃏 *Card*        : *${claimedCard.name}*\n` +
             `🎭 *Type*        : ${claimedCard.type}\n` +
             `⚔️ *ATK/DEF*     : ${claimedCard.atk} / ${claimedCard.def}\n` +
@@ -393,7 +446,7 @@ const claimCardCommand = {
 
         await sock.sendMessage(jid, {
             text: successMessage,
-            mentions: [sender]
+            mentions: [user.jid]
         });
     }
 };
@@ -403,19 +456,18 @@ const deckInventoryCommand = {
     category: 'games',
     execute: async (sock, msg, args) => {
         const jid = msg.key.remoteJid;
-        const sender = normalizeToJid(msg.key.participant || msg.key.remoteJid).split(':')[0].split('@')[0] + '@s.whatsapp.net';
-        const userNumber = sender.split('@')[0];
+        const user = resolveUser(msg);
         const p = getPrefix();
 
         const inventoryData = loadJSON(INVENTORY_FILE, {});
-        const profile = getUserProfile(inventoryData, sender);
+        const profile = getUserProfile(inventoryData, user.jid);
 
         if (profile.deck.length === 0) {
             const hasCollection = profile.collection.length > 0;
             return sock.sendMessage(jid, {
-                text: `🎴 *DECK IS EMPTY*\n\n@${userNumber}, your active deck is empty.` +
+                text: `🎴 *DECK IS EMPTY*\n\n${user.mention}, your active deck has 0 cards.` +
                       (hasCollection ? `\nYou have *${profile.collection.length}* cards in your collection. Move cards using *${p}to-deck <numbers>*` : `\nEncounter cards with *${p}card*!`),
-                mentions: [sender]
+                mentions: [user.jid]
             });
         }
 
@@ -427,7 +479,7 @@ const deckInventoryCommand = {
         const captionText =
             `🎴 *DUELIST DECK ARCHIVE* [${profile.deck.length}/${MAX_DECK_SIZE}]\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `👤 *Duelist*      : @${userNumber}\n` +
+            `👤 *Duelist*      : ${user.mention} (${user.pushName})\n` +
             `💰 *Gold*         : ${profile.gold.toLocaleString()} Gold\n` +
             `📦 *Collection*   : ${profile.collection.length} cards\n` +
             `⚔️ *Combined ATK* : ${totalAtk.toLocaleString()}\n` +
@@ -437,45 +489,38 @@ const deckInventoryCommand = {
             `• *${p}to-coll 1 2* ➜ Send cards #1 & #2 to collection\n` +
             `• *${p}coll* ➜ View your collection`;
 
-        try {
-            const collageBuffer = await generateDeckCollage(profile.deck, `@${userNumber}`);
-            if (collageBuffer) {
-                await sock.sendMessage(jid, {
-                    image: collageBuffer,
-                    mimetype: 'image/jpeg',
-                    caption: captionText,
-                    mentions: [sender]
-                });
-                return;
-            }
-        } catch (err) {
-            console.error("Collage creation error:", err);
+        const collageBuffer = await generateDeckCollage(profile.deck, user.pushName);
+        if (collageBuffer) {
+            await sock.sendMessage(jid, {
+                image: collageBuffer,
+                mimetype: 'image/jpeg',
+                caption: captionText,
+                mentions: [user.jid]
+            });
+        } else {
+            await sock.sendMessage(jid, {
+                text: captionText,
+                mentions: [user.jid]
+            });
         }
-
-        await sock.sendMessage(jid, {
-            text: captionText,
-            mentions: [sender]
-        });
     }
 };
 
 const collectionListCommand = {
     name: 'collection',
-    aliases: ['coll', 'binder'],
     category: 'games',
     execute: async (sock, msg, args) => {
         const jid = msg.key.remoteJid;
-        const sender = normalizeToJid(msg.key.participant || msg.key.remoteJid).split(':')[0].split('@')[0] + '@s.whatsapp.net';
-        const userNumber = sender.split('@')[0];
+        const user = resolveUser(msg);
         const p = getPrefix();
 
         const inventoryData = loadJSON(INVENTORY_FILE, {});
-        const profile = getUserProfile(inventoryData, sender);
+        const profile = getUserProfile(inventoryData, user.jid);
 
         if (profile.collection.length === 0) {
             return sock.sendMessage(jid, {
-                text: `📦 *COLLECTION IS EMPTY*\n\n@${userNumber}, your collection binder has 0 cards.\nSend cards from your deck using *${p}to-coll <numbers>*.`,
-                mentions: [sender]
+                text: `📦 *COLLECTION IS EMPTY*\n\n${user.mention}, your collection binder has 0 cards.\nSend cards from your deck using *${p}to-coll <numbers>*.`,
+                mentions: [user.jid]
             });
         }
 
@@ -486,7 +531,7 @@ const collectionListCommand = {
         const collText =
             `📦 *DUELIST CARD COLLECTION* (${profile.collection.length} Total)\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `👤 *Duelist*   : @${userNumber}\n` +
+            `👤 *Duelist*   : ${user.mention} (${user.pushName})\n` +
             `🎴 *Deck Size* : ${profile.deck.length}/${MAX_DECK_SIZE}\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
             `${cardLines}\n\n` +
@@ -495,18 +540,17 @@ const collectionListCommand = {
 
         await sock.sendMessage(jid, {
             text: collText,
-            mentions: [sender]
+            mentions: [user.jid]
         });
     }
 };
 
 const moveToCollectionCommand = {
     name: 'to-coll',
-    aliases: ['tocoll', 'toco', 'sendcoll'],
     category: 'games',
     execute: async (sock, msg, args) => {
         const jid = msg.key.remoteJid;
-        const sender = normalizeToJid(msg.key.participant || msg.key.remoteJid).split(':')[0].split('@')[0] + '@s.whatsapp.net';
+        const user = resolveUser(msg);
         const p = getPrefix();
 
         if (!args || !args.trim()) {
@@ -516,7 +560,7 @@ const moveToCollectionCommand = {
         }
 
         const inventoryData = loadJSON(INVENTORY_FILE, {});
-        const profile = getUserProfile(inventoryData, sender);
+        const profile = getUserProfile(inventoryData, user.jid);
 
         if (profile.deck.length === 0) {
             return sock.sendMessage(jid, { text: `❌ Your deck is currently empty.` });
@@ -554,11 +598,10 @@ const moveToCollectionCommand = {
 
 const moveToDeckCommand = {
     name: 'to-deck',
-    aliases: ['todeck', 'tode', 'senddeck'],
     category: 'games',
     execute: async (sock, msg, args) => {
         const jid = msg.key.remoteJid;
-        const sender = normalizeToJid(msg.key.participant || msg.key.remoteJid).split(':')[0].split('@')[0] + '@s.whatsapp.net';
+        const user = resolveUser(msg);
         const p = getPrefix();
 
         if (!args || !args.trim()) {
@@ -568,7 +611,7 @@ const moveToDeckCommand = {
         }
 
         const inventoryData = loadJSON(INVENTORY_FILE, {});
-        const profile = getUserProfile(inventoryData, sender);
+        const profile = getUserProfile(inventoryData, user.jid);
 
         if (profile.collection.length === 0) {
             return sock.sendMessage(jid, { text: `❌ Your collection is currently empty.` });
@@ -659,14 +702,22 @@ const cardSpawnToggleCommand = {
     }
 };
 
-// ─── EXPORTS ───────────────────────────────────────────────────
+// ─── EXPORT ALL COMMANDS AND ALIAS OBJECTS ──────────────────────
 const commands = [
     cardSpawnManualCommand,
     claimCardCommand,
+    { ...claimCardCommand, name: 'upgrade' },
+    { ...claimCardCommand, name: 'cardclaim' },
     deckInventoryCommand,
     collectionListCommand,
+    { ...collectionListCommand, name: 'coll' },
+    { ...collectionListCommand, name: 'binder' },
     moveToCollectionCommand,
+    { ...moveToCollectionCommand, name: 'tocoll' },
+    { ...moveToCollectionCommand, name: 'toco' },
     moveToDeckCommand,
+    { ...moveToDeckCommand, name: 'todeck' },
+    { ...moveToDeckCommand, name: 'tode' },
     cardSpawnToggleCommand
 ];
 
