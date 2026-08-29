@@ -15,7 +15,7 @@ function getRawMessage(message) {
     return message;
 }
 
-async function queryGroq(messages, model = "llama-3.1-8b-instant") {
+async function queryGroq(messages, model = "openai/gpt-oss-20b") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
     const response = await fetch(GROQ_BASE_URL, {
@@ -57,7 +57,7 @@ module.exports = [
                     { role: "user", content: args }
                 ];
 
-                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
+                const responseText = await queryGroq(messages, "openai/gpt-oss-20b");
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "Tch, looks like something interfered with my system." }, { quoted: msg });
@@ -89,7 +89,7 @@ module.exports = [
                     { role: "user", content: debugPrompt }
                 ];
 
-                const responseText = await queryGroq(messages, "llama-3.1-8b-instant");
+                const responseText = await queryGroq(messages, "openai/gpt-oss-20b");
                 await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
             } catch (error) {
                 await sock.sendMessage(jid, { text: "❌ Failed to complete code analysis." }, { quoted: msg });
@@ -132,7 +132,7 @@ module.exports = [
                 const summonPrompt = `[System: You are '${character}'. Respond strictly in character using their lore and tone. Keep it concise.]\nQuery: ${query}`;
                 const responseText = await queryGroq(
                     [{ role: "user", content: summonPrompt }], 
-                    "llama-3.1-8b-instant"
+                    "openai/gpt-oss-20b"
                 );
 
                 if (responseText) {
