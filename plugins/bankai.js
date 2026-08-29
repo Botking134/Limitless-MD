@@ -2,11 +2,8 @@
 const config = require('../config');
 const axios = require('axios');
 
-// ─── OBFUSCATED GROQ KEY ─────────
-const I = 'gsk_';
-const love = 'Pq0ezrYKQNlr77fmp7b';
-const lizzy = 'iWGdyb3FYjuaKTR64bSbIHjLeRxGeL9yw';
-const GROQ_API_KEY = process.env.GROQ_API_KEY || config.GROQ_API_KEY || (I + love + lizzy);
+// ─── GROQ KEY (single source of truth: config.js) ─────────
+const GROQ_API_KEY = process.env.GROQ_API_KEY || config.groqApiKey;
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 // ─── BANKAI LIST ──────────────────────────────────────────────────
@@ -261,7 +258,7 @@ async function getBankaiAbility(name, bankai) {
             3. Do not include any introductory or concluding remarks, just the formatted lines describing the abilities.`;
 
         const response = await axios.post(GROQ_BASE_URL, {
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b",
             messages: [
                 { role: "system", content: "You are a knowledgeable Bleach lore expert. You strictly adhere to line count and formatting requirements." },
                 { role: "user", content: prompt }
