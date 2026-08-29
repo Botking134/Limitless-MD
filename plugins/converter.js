@@ -23,66 +23,109 @@ function getRawMessage(message) {
 }
 
 // ─── CATBOX PRIMARY UPLOAD HELPER (412 FIX & PROXY FALLBACK) ───
+function filenameFallback(mimeType) {
+    let ext = (mimeType || '').split('/')[1] || 'bin';
+    ext = ext.split(';')[0].trim();
+    if (ext === 'jpeg') ext = 'jpg';
+    return `file_${Date.now()}.${ext}`;
+}
+
 async function uploadToCatbox(buffer, mimeType) {
     let ext = mimeType.split('/')[1] || 'bin';
     ext = ext.split(';')[0].trim();
     if (ext === 'jpeg') ext = 'jpg';
     const filename = `file_${Date.now()}.${ext}`;
 
+    // Catbox rejects anything over ~200MB anonymously — fail fast instead of
+    // burning 3 timeouts on hosts that will reject it anyway.
+    const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+    if (buffer.length > MAX_UPLOAD_BYTES) {
+        throw new Error(`File is ${(buffer.length / 1024 / 1024).toFixed(1)}MB — exceeds the 200MB hosting limit.`);
+    }
+
+    const attempts = [];
+
     // Host 1: Direct Catbox.moe with Browser Spoofing (Fixes 412 Error)
-    try {
+    attempts.push(async () => {
         const form = new FormData();
         form.append('reqtype', 'fileupload');
         form.append('fileToUpload', buffer, { filename, contentType: mimeType });
 
         const response = await axios.post('https://catbox.moe/user/api.php', form, {
-            headers: { 
+            headers: {
                 ...form.getHeaders(),
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Origin': 'https://catbox.moe',
                 'Referer': 'https://catbox.moe/'
             },
-            timeout: 30000
+            timeout: 45000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
         });
 
         if (response.data && typeof response.data === 'string' && response.data.trim().startsWith('http')) {
             return response.data.trim();
         }
-    } catch (err) {
-        console.warn("⚠️ [DIRECT CATBOX 412/403, TRYING CATBOX PROXY]:", err.message);
-    }
+        throw new Error('Unexpected response from Catbox direct.');
+    });
 
     // Host 2: David Cyril Server-Side Catbox Proxy
-    try {
+    attempts.push(async () => {
         const form = new FormData();
         form.append('file', buffer, { filename, contentType: mimeType });
 
         const response = await axios.post('https://apis.davidcyril.name.ng/tourl', form, {
             headers: { ...form.getHeaders() },
-            timeout: 30000
+            timeout: 30000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
         });
 
         if (response.data?.success && response.data?.url && response.data.url.includes('catbox.moe')) {
             return response.data.url.trim();
         }
-    } catch (err) {
-        console.warn("⚠️ [CATBOX PROXY FAILED, TRYING QU.AX]:", err.message);
-    }
+        throw new Error('Unexpected response from Catbox proxy.');
+    });
 
     // Host 3: qu.ax Fallback
-    try {
+    attempts.push(async () => {
         const form = new FormData();
         form.append('files[]', buffer, { filename, contentType: mimeType });
         const response = await axios.post('https://qu.ax/upload.php', form, {
             headers: { ...form.getHeaders() },
-            timeout: 30000
+            timeout: 30000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
         });
         if (response.data?.success && response.data.files?.[0]?.url) {
             return response.data.files[0].url.trim();
         }
-    } catch (err) { /* ignore */ }
+        throw new Error('Unexpected response from qu.ax.');
+    });
 
-    throw new Error("Catbox upload failed.");
+    const hostNames = ['Catbox (direct)', 'Catbox (proxy)', 'qu.ax'];
+    const errors = [];
+
+    for (let i = 0; i < attempts.length; i++) {
+        try {
+            const url = await attempts[i]();
+            return { url, host: hostNames[i], degraded: i > 0 };
+        } catch (err) {
+            errors.push(`${hostNames[i]}: ${err.message}`);
+            console.warn(`⚠️ [UPLOAD FAILED — ${hostNames[i]}]:`, err.message);
+        }
+    }
+
+    // One final retry against the primary host in case it was a transient blip,
+    // before giving up entirely.
+    try {
+        const url = await attempts[0]();
+        return { url, host: `${hostNames[0]} (retry)`, degraded: true };
+    } catch (err) {
+        errors.push(`Catbox (retry): ${err.message}`);
+    }
+
+    throw new Error(`All hosting attempts failed:\n${errors.join('\n')}`);
 }
 
 // Google Gen AI SDK Text integration supporting gemini-3.5-flash with live search grounding
@@ -255,17 +298,44 @@ module.exports = [
             }
 
             try {
+                await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
+
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const mimeType = mediaMessage.mimetype || (mediaType === 'sticker' ? 'image/webp' : 'application/octet-stream');
-                const url = await uploadToCatbox(buffer, mimeType);
 
-                // Returns strictly the direct Catbox link
-                await sock.sendMessage(jid, { text: url }, { quoted: msg });
+                try {
+                    const { url, host, degraded } = await uploadToCatbox(buffer, mimeType);
+                    const caption = degraded ? `${url}\n\n_(via ${host} — primary host was unavailable)_` : url;
+                    await sock.sendMessage(jid, { text: caption }, { quoted: msg });
+                    await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } });
+                } catch (uploadError) {
+                    // SAFE FALLBACK: every hosting attempt failed — instead of leaving the
+                    // user with nothing, hand the original media straight back to them.
+                    console.error('[TOURL] All hosts failed:', uploadError.message);
+                    await sock.sendMessage(jid, { react: { text: "⚠️", key: msg.key } });
+
+                    const fallbackCaption = "⚠️ Couldn't generate a link right now (all hosting servers are down or rejected the file). Here's your original file back — try `.url` again in a bit.";
+                    if (mediaType === 'image') {
+                        await sock.sendMessage(jid, { image: buffer, caption: fallbackCaption }, { quoted: msg });
+                    } else if (mediaType === 'video') {
+                        await sock.sendMessage(jid, { video: buffer, mimetype: mimeType, caption: fallbackCaption }, { quoted: msg });
+                    } else if (mediaType === 'audio') {
+                        await sock.sendMessage(jid, { audio: buffer, mimetype: mimeType, ptt: false }, { quoted: msg });
+                        await sock.sendMessage(jid, { text: fallbackCaption }, { quoted: msg });
+                    } else if (mediaType === 'sticker') {
+                        await sock.sendMessage(jid, { sticker: buffer }, { quoted: msg });
+                        await sock.sendMessage(jid, { text: fallbackCaption }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(jid, { document: buffer, mimetype: mimeType, fileName: filenameFallback(mimeType) }, { quoted: msg });
+                        await sock.sendMessage(jid, { text: fallbackCaption }, { quoted: msg });
+                    }
+                }
             } catch (error) {
+                await sock.sendMessage(jid, { react: { text: "❌", key: msg.key } });
                 await sock.sendMessage(jid, { text: `❌ Upload failed: ${error.message}` }, { quoted: msg });
             }
         }
