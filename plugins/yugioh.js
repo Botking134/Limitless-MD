@@ -131,7 +131,7 @@ async function spawnYuGiOhCard(sock, jid) {
         `💰 *Price*     : ${card.price.toLocaleString()} gold\n` +
         `🔒 *Captcha*   : \`${captcha}\`\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `_Type *.claim ${captcha}* or *.upgrade ${captcha}* to claim this card!_`;
+        `_Type * ${config.prefix}claim ${captcha}* to claim this card!_`;
 
     const imageBuffer = await getMediaBuffer(card.image);
     if (imageBuffer) {
