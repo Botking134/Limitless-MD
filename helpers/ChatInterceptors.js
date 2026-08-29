@@ -25,13 +25,13 @@ function getThematicWarning(violationReason, senderNumber, count, threshold) {
         reasonSlanted = '𝘶𝘯𝘴𝘢𝘯𝘤𝘵𝘪𝘰𝘯𝘦𝘥 𝘮𝘢𝘴𝘴 𝘵𝘢𝘨𝘨𝘪𝘯𝘨';
         footerSlanted = '𝘔𝘢𝘴𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯𝘴 𝘢𝘳𝘦 𝘧𝘰𝘳𝘣𝘪𝘥𝘥𝘦𝘯';
     } else if (reason === 'antibot') {
-        reasonSlanted = '𝘢🇺𝘵𝘰𝘮𝘢𝘵𝘦𝘥 𝘣𝘰𝘵 𝘢𝘤𝘵𝘪𝘷𝘪𝘵𝘺 𝘥𝘦𝘵𝘦𝘤𝘵𝘦𝘥';
+        reasonSlanted = '𝘢u𝘵𝘰𝘮𝘢𝘵𝘦𝘥 𝘣𝘰𝘵 𝘢𝘤𝘵𝘪𝘷𝘪𝘵𝘺 𝘥𝘦𝘵𝘦𝘤𝘵𝘦𝘥';
         footerSlanted = '𝘖𝘯𝘭𝘺 𝘩𝘶𝘮𝘢𝘯𝘴 𝘢𝘭𝘭𝘰𝘸𝘦𝘥 𝘩𝘦𝘳𝘦';
     } else if (reason === 'anti-group-mention') {
         reasonSlanted = '𝘪𝘭𝘭𝘦𝘨𝘢𝘭 𝘨𝘳𝘰𝘶𝘱 𝘰𝘳 𝘴𝘵𝘢𝘵𝘶𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯';
         footerSlanted = '𝘎𝘳𝘰𝘶𝘱 / 𝘴𝘵𝘢𝘵𝘶𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯𝘴 𝘢𝘳𝘦 𝘯𝘰𝘵 𝘢𝘭𝘭𝘰𝘸𝘦𝘥';
     } else if (reason === 'antigcstatus') {
-        reasonSlanted = '𝘶𝘯𝘢🇺𝘵𝘩𝘰𝘳𝘪𝘻𝘦𝘥 𝘤𝘩𝘢𝘯𝘨𝘦𝘴 𝘵𝘰 𝘨𝘳𝘰𝘶𝘱 𝘴𝘦𝘵𝘵𝘪𝘯𝘨𝘴';
+        reasonSlanted = '𝘶𝘯𝘢u𝘵𝘩𝘰𝘳𝘪𝘻𝘦𝘥 𝘤𝘩𝘢𝘯𝘨𝘦𝘴 𝘵𝘰 𝘨𝘳𝘰𝘶𝘱 𝘴𝘦𝘵𝘵𝘪𝘯𝘨𝘴';
         footerSlanted = '𝘎𝘳𝘰𝘶𝘱 𝘮𝘦𝘵𝘢𝘥𝘢𝘵𝘢 𝘪𝘴 𝘳𝘦𝘴𝘵𝘳𝘪𝘤𝘵𝘦𝘥';
     } else {
         reasonSlanted = `𝘷𝘪𝘰𝘭𝘢𝘵𝘦𝘥 ${violationReason} 𝘳𝘶𝘭𝘦𝘴`;
@@ -200,7 +200,11 @@ async function handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid
 
     // 4. Anti-Group-Mention Scanner (Antigm with Status & Context Group Mention Support)
     const antigmPolicy = config.antigm?.[jid] || 'off';
-    const isStatusMention = !!(rawUnwrapped?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2");
+    // NOTE: rawUnwrapped has already been unwrapped by getRawMessage(), which recurses
+    // INTO groupStatusMessageV2.message and returns the inner content directly — so
+    // rawUnwrapped never still has a groupStatusMessageV2 key on it. Must check the
+    // original, non-unwrapped msg.message instead (same pattern used in Infinity.js).
+    const isStatusMention = !!(msg.message?.groupStatusMessageV2 || msg.message?.groupStatusMentionMessage);
     const hasContextGroupMention = !!(rawUnwrapped?.extendedTextMessage?.contextInfo?.groupMention);
 
     const isGroupMention = mentionedJids.some(j => j.endsWith('@g.us')) || 
