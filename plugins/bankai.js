@@ -261,7 +261,7 @@ async function getBankaiAbility(name, bankai) {
             3. Do not include any introductory or concluding remarks, just the formatted lines describing the abilities.`;
 
         const response = await axios.post(GROQ_BASE_URL, {
-            model: "llama-3.3-70b-versatile",
+            model: "llama-3.1-8b-instant",
             messages: [
                 { role: "system", content: "You are a knowledgeable Bleach lore expert. You strictly adhere to line count and formatting requirements." },
                 { role: "user", content: prompt }
