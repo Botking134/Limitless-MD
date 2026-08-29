@@ -102,7 +102,7 @@ function toSans(text) {
     }).join('');
 }
 
-async function queryGroq(messages, model = "llama-3.1-8b-instant") {
+async function queryGroq(messages, model = "openai/gpt-oss-20b") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
     const response = await fetch(GROQ_BASE_URL, {
@@ -774,7 +774,7 @@ module.exports = [
                 });
             } else if (selection === '200') {
                 const frames = [
-                    toSans("Maximum output!!!") + "\n          " + toSans("Blue!!!🔵"),
+                    toSans("Maximum output!!!") + "\n      " + toSans("Blue!!!🔵"),
                     toSans("Phase!!! Paramita") + "\n    " + toSans("Pillar of light"),
                     toSans("Phase!!!! Twilight") + "\n" + toSans("Eyes of wisdom"),
                     toSans("Nine ropes! Polarized light") + "\n" + toSans("Crow and declaration!"),
