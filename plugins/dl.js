@@ -1,3 +1,5 @@
+// plugins/dl.js
+
 const config = require('../config');
 const { normalizeToJid, saveState } = require('../stateManager');
 const axios = require('axios');
@@ -28,6 +30,8 @@ function registerSession(sessionType, promptId, data) {
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Upgraded fetchBuffer with User-Agent spoofing and direct Content-Type extraction
 async function fetchBuffer(url) {
@@ -281,9 +285,80 @@ async function handleXvidReply(sock, msg, session, userReply) {
         return match ? match[1].trim() : text.trim();
     }
 
+    // ─── CATBOX DOWNLOADER (single file + album support) ───────────
+    async function sendCatboxMedia(sock, jid, msg, url) {
+        const buffer = await fetchBuffer(url);
+        const mime = (buffer.mimeType || '').toLowerCase();
+        const ext = url.split('.').pop().toLowerCase();
+
+        const isVideo = mime.startsWith('video') || ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
+        const isAudio = mime.startsWith('audio') || ['mp3', 'ogg', 'wav', 'm4a'].includes(ext);
+        const isImage = mime.startsWith('image') || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+
+        if (isImage) {
+            await sock.sendMessage(jid, { image: buffer }, { quoted: msg });
+        } else if (isVideo) {
+            await sock.sendMessage(jid, { video: buffer, mimetype: mime || 'video/mp4' }, { quoted: msg });
+        } else if (isAudio) {
+            await sock.sendMessage(jid, { audio: buffer, mimetype: mime || 'audio/mpeg', ptt: false }, { quoted: msg });
+        } else {
+            await sock.sendMessage(jid, { document: buffer, mimetype: mime || 'application/octet-stream', fileName: url.split('/').pop() }, { quoted: msg });
+        }
+    }
+
+    async function getCatboxAlbumFileUrls(albumUrl) {
+        const res = await axios.get(albumUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+            timeout: 15000
+        });
+        const html = res.data.toString();
+        const matches = html.match(/https?:\/\/files\.catbox\.moe\/[A-Za-z0-9]+\.[A-Za-z0-9]+/g) || [];
+        return [...new Set(matches)];
+    }
+
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
+    // 0. Catbox (single file or full album)
+    {
+        name: 'catbox',
+        isPrefixless: false,
+        execute: async (sock, msg, args, opts) => {
+            const jid = msg.key.remoteJid;
+            const url = extractUrlFromMsg(msg, args);
+            if (!url || !/catbox\.moe/i.test(url)) {
+                return await sock.sendMessage(jid, { text: "❌ Please provide a catbox.moe file or album link.\n\nUsage: `.catbox <link>`" }, { quoted: msg });
+            }
+
+            const isAlbum = /catbox\.moe\/c\//i.test(url);
+
+            try {
+                if (isAlbum) {
+                    await sock.sendMessage(jid, { text: "⏳ Fetching album, downloading all images..." }, { quoted: msg });
+                    const fileUrls = await getCatboxAlbumFileUrls(url);
+                    if (!fileUrls.length) {
+                        return await sock.sendMessage(jid, { text: "❌ No files found in that catbox album, or the link is invalid." }, { quoted: msg });
+                    }
+                    for (const fileUrl of fileUrls) {
+                        try {
+                            await sendCatboxMedia(sock, jid, msg, fileUrl);
+                            await delay(600); // avoid rate limiting on rapid sends
+                        } catch (e) {
+                            console.error('[CATBOX ALBUM] Failed on', fileUrl, e.message);
+                        }
+                    }
+                } else {
+                    await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
+                    await sendCatboxMedia(sock, jid, msg, url);
+                    await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } });
+                }
+            } catch (error) {
+                console.error('[CATBOX] Error:', error.message);
+                await sock.sendMessage(jid, { text: `❌ Failed to download from catbox: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
     // 1. Facebook
     {
         name: 'fb',
