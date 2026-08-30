@@ -28,7 +28,9 @@ const OBFUSCATED_KEY_CHUNKS = [
 
 // Reassembles the key at runtime using join
 function getOpenAIKey() {
-    return OBFUSCATED_KEY_CHUNKS.reverse().join('');
+    // Copy before reversing — reversing the original array in place
+    // would flip it back to the wrong order on every subsequent call.
+    return [...OBFUSCATED_KEY_CHUNKS].reverse().join('');
 }
 
 // ─── STICKER ASSETS ───────────────────────────────────────────────
