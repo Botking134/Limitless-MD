@@ -49,6 +49,20 @@ function isDuplicateEvent(key) {
 
 const isEnabled = (val) => val === true || val === 'on' || val === 'enable' || val === 'true' || val === '1';
 
+// This fork adds heavy LID-awareness (it even ships its own 'lid-mapping.update' event),
+// so participant/author entries on group-participants.update can arrive as either a plain
+// JID string OR a richer object (e.g. { id, lid, jid }). Blindly calling String() on an
+// object produces the literal text "[object Object]" — which is exactly the bug reported
+// in welcome/promote/demote alerts ("@[object Object] promoted to Admin..."). This safely
+// extracts the real identifier regardless of which shape actually comes through.
+function resolveParticipantIdentifier(entry) {
+    if (typeof entry === 'string') return entry;
+    if (entry && typeof entry === 'object') {
+        return entry.jid || entry.id || entry.lid || entry.phoneNumber || entry.number || '';
+    }
+    return entry ? String(entry) : '';
+}
+
 // ─── MEDIA FETCHER ─────────────────────────────────────────────
 async function fetchMediaBuffer(url) {
     try {
@@ -535,7 +549,7 @@ async function startBot() {
             const botJid = normalizeToJid(sock.user?.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
             const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
 
-            let rawActor = anu.author || '';
+            let rawActor = resolveParticipantIdentifier(anu.author);
             let actorJid = rawActor ? normalizeToJid(rawActor).split(':')[0].split('@')[0] + '@s.whatsapp.net' : '';
 
             if (rawActor.includes('@lid') && metadata?.participants) {
@@ -551,7 +565,8 @@ async function startBot() {
             const isActorAuthorized = isActorBot || isActorDev || isActorOwner || isActorSudo;
 
             for (const num of participants) {
-                let rawTarget = String(num);
+                let rawTarget = resolveParticipantIdentifier(num);
+                if (!rawTarget) continue;
                 let targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
 
                 if (rawTarget.includes('@lid') && metadata?.participants) {
@@ -605,10 +620,21 @@ async function startBot() {
                         } else if (antipromoteMode === 'on') {
                             handledByProtection = true;
                             try {
+                                // Demote both the person who got promoted AND whoever promoted them
+                                // without authorization — punishing only the victim would leave the
+                                // rogue admin free to just promote someone else again. Separate calls
+                                // so one failing (e.g. actor is the group's real creator, who can't
+                                // be demoted) doesn't block the other from going through.
                                 await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
+                                if (actorJid && actorJid !== targetJid) {
+                                    try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
+                                }
+
+                                const mentionList = actorJid && actorJid !== targetJid ? [targetJid, actorJid] : [targetJid];
+                                const actorLine = actorJid && actorJid !== targetJid ? ` @${actorJid.split('@')[0]} (the promoter) was also demoted.` : '';
                                 await sock.sendMessage(jid, {
-                                    text: `🛡️ *Anti-Promote Protection!* Unauthorized promotion of @${phoneNumber} was reverted.`,
-                                    mentions: [targetJid]
+                                    text: `🛡️ *Anti-Promote Protection!* Unauthorized promotion of @${phoneNumber} was reverted.${actorLine}`,
+                                    mentions: mentionList
                                 });
                             } catch (e) { console.error('❌ [ANTIPROMOTE REVERT ERROR]:', e.message); }
                         }
@@ -637,10 +663,18 @@ async function startBot() {
                         } else if (antidemoteMode === 'on') {
                             handledByProtection = true;
                             try {
+                                // Restore the demoted victim's admin status AND demote whoever
+                                // demoted them without authorization.
                                 await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
+                                if (actorJid && actorJid !== targetJid) {
+                                    try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
+                                }
+
+                                const mentionList = actorJid && actorJid !== targetJid ? [targetJid, actorJid] : [targetJid];
+                                const actorLine = actorJid && actorJid !== targetJid ? ` @${actorJid.split('@')[0]} (the demoter) was also demoted.` : '';
                                 await sock.sendMessage(jid, {
-                                    text: `🛡️ *Anti-Demote Protection!* Unauthorized demotion of @${phoneNumber} was reverted.`,
-                                    mentions: [targetJid]
+                                    text: `🛡️ *Anti-Demote Protection!* Unauthorized demotion of @${phoneNumber} was reverted.${actorLine}`,
+                                    mentions: mentionList
                                 });
                             } catch (e) { console.error('❌ [ANTIDEMOTE REVERT ERROR]:', e.message); }
                         }
