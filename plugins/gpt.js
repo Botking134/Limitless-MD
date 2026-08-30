@@ -146,7 +146,13 @@ async function sendCustomSticker(sock, jid, url, author = 'Limitless') {
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY Missing");
-    const response = await axios.post(GROQ_BASE_URL, { model: "openai/gpt-oss-20b", messages, temperature: 0.75, max_tokens: 45 }, {
+    const response = await axios.post(GROQ_BASE_URL, {
+        model: "openai/gpt-oss-20b",
+        messages,
+        temperature: 0.75,
+        max_tokens: 200,
+        reasoning_effort: "low"
+    }, {
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` }
     });
     return response.data.choices?.[0]?.message?.content || "";
@@ -282,26 +288,17 @@ module.exports = [
                 
                 await sock.sendPresenceUpdate('composing', jid);
                 const response = await queryGroq(messages);
-
-// ADD THESE TWO LINES
-console.log("==== AI RESPONSE ====");
-console.log(`"${response}"`);
-
-global.aiMemory[jid].gojo.push({ role: "user", content: args }, { role: "assistant", content: response });
+                global.aiMemory[jid].gojo.push({ role: "user", content: args }, { role: "assistant", content: response });
                 if (global.aiMemory[jid].gojo.length > 20) global.aiMemory[jid].gojo.splice(0, 2);
 
                 const sent = await sock.sendMessage(jid, { text: response }, { quoted: msg });
                 if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'gojo';
 
-                // Changed to 60% chance to send sticker
-                if (Math.random() < 0.6) {
+                if (Math.random() < 0.8) {
                     const pick = UNIQUE_GOJO[Math.floor(Math.random() * UNIQUE_GOJO.length)];
                     sendCustomSticker(sock, jid, pick, 'Gojo Satoru');
                 }
-            } catch (e) {
-                // Logs to terminal instead of failing silently
-                console.error("[Gojo Chat Error]:", e?.response?.data || e.message);
-            }
+            } catch (e) { }
         }
     },
 
@@ -352,21 +349,14 @@ global.aiMemory[jid].gojo.push({ role: "user", content: args }, { role: "assista
                 const response = await queryGroq(messages);
                 global.aiMemory[jid].aizen.push({ role: "user", content: args }, { role: "assistant", content: response });
                 
-                // Added the missing memory limiter for Aizen so he doesn't break
-                if (global.aiMemory[jid].aizen.length > 20) global.aiMemory[jid].aizen.splice(0, 2);
-
                 const sent = await sock.sendMessage(jid, { text: response }, { quoted: msg });
                 if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'aizen';
 
-                // Changed to 60% chance to send sticker
-                if (Math.random() < 0.6) {
+                if (Math.random() < 0.8) {
                     const pick = UNIQUE_AIZEN[Math.floor(Math.random() * UNIQUE_AIZEN.length)];
                     sendCustomSticker(sock, jid, pick, 'Sōsuke Aizen');
                 }
-            } catch (e) {
-                // Logs to terminal instead of failing silently
-                console.error("[Aizen Chat Error]:", e?.response?.data || e.message);
-            }
+            } catch (e) { }
         }
     },
 
