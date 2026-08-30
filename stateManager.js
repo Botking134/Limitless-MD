@@ -24,6 +24,14 @@ function normalizeToJid(input) {
     const clean = input.replace(/:[\d]+@/, '@');
     if (clean.endsWith('@s.whatsapp.net')) return clean;
     if (clean.endsWith('@lid')) return clean;
+    // Group JIDs (@g.us) and broadcast/newsletter JIDs must pass through untouched —
+    // they are NOT phone-number identifiers, and stripping non-digits + rebuilding as
+    // @s.whatsapp.net (the old behavior) silently turns a real group into a garbage,
+    // nonexistent "contact" JID. This was corrupting every group-scoped operation
+    // (metadata fetch, welcome/goodbye sends, antijoin/antipromote/antidemote/overkill
+    // enforcement) anywhere a group JID was run through this function.
+    if (clean.endsWith('@g.us')) return clean;
+    if (clean.endsWith('@broadcast') || clean.endsWith('@newsletter')) return clean;
     const raw = clean.split('@')[0].replace(/[^0-9]/g, '');
     return raw ? `${raw}@s.whatsapp.net` : '';
 }
