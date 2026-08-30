@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { exec } = require('child_process');
-const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
+const { downloadContentFromMessage } = require('@itsliaaa/baileys');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 
 /* 
