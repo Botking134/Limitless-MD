@@ -282,7 +282,12 @@ module.exports = [
                 
                 await sock.sendPresenceUpdate('composing', jid);
                 const response = await queryGroq(messages);
-                global.aiMemory[jid].gojo.push({ role: "user", content: args }, { role: "assistant", content: response });
+
+// ADD THESE TWO LINES
+console.log("==== AI RESPONSE ====");
+console.log(`"${response}"`);
+
+global.aiMemory[jid].gojo.push({ role: "user", content: args }, { role: "assistant", content: response });
                 if (global.aiMemory[jid].gojo.length > 20) global.aiMemory[jid].gojo.splice(0, 2);
 
                 const sent = await sock.sendMessage(jid, { text: response }, { quoted: msg });
