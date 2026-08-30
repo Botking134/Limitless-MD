@@ -399,6 +399,14 @@ async function startBot() {
                     }
                 } catch (e) {}
 
+                // News Watchers (anime episodes + WWE/football updates)
+                try {
+                    const news = require('./plugins/news');
+                    if (typeof news.startNewsWatchers === 'function') {
+                        news.startNewsWatchers(sock);
+                    }
+                } catch (e) {}
+
                 // Send Single-Run Boot Report
                 if (!hasSentBootReport) {
                     hasSentBootReport = true;
