@@ -75,15 +75,35 @@ async function broadcast(sock, payload) {
 }
 
 // ─── FEATURE 1: ANIME EPISODE WATCHER ──────────────────────────
-// Public, no-key API — returns anime episodes as they're released.
-const ANIME_RECENT_URL = 'https://api.consumet.org/anime/gogoanime/recent-episodes';
+// AniList's official GraphQL API — a legitimate anime tracking/metadata service
+// (not a streaming/piracy aggregator), so it isn't exposed to the legal takedowns
+// that killed the previous consumet/gogoanime source (which was returning HTTP 451,
+// "Unavailable For Legal Reasons"). No key required, free, and widely used/stable.
+const ANIME_API_URL = 'https://graphql.anilist.co';
+const ANIME_QUERY = `
+query ($perPage: Int) {
+  Page(page: 1, perPage: $perPage) {
+    airingSchedules(notYetAired: false, sort: TIME_DESC) {
+      id
+      episode
+      media {
+        title { romaji english }
+        coverImage { large }
+      }
+    }
+  }
+}`;
 
 async function checkAnimeUpdates(sock) {
-    let results;
+    let schedules;
     try {
-        const { data } = await axios.get(ANIME_RECENT_URL, { timeout: 12000 });
-        results = data?.results;
-        if (!Array.isArray(results) || !results.length) return;
+        const { data } = await axios.post(ANIME_API_URL, {
+            query: ANIME_QUERY,
+            variables: { perPage: 20 }
+        }, { headers: { 'Content-Type': 'application/json' }, timeout: 12000 });
+
+        schedules = data?.data?.Page?.airingSchedules;
+        if (!Array.isArray(schedules) || !schedules.length) return;
     } catch (e) {
         console.error('⚠️ [NEWS/ANIME] Fetch failed:', e.message);
         return;
@@ -95,28 +115,29 @@ async function checkAnimeUpdates(sock) {
     // First run ever: just record the current snapshot as the baseline, don't spam
     // every group with the entire recent-episodes backlog.
     if (!seen.seededAnime) {
-        seen.animeIds = trimIds(results.map(r => r.episodeId || r.id));
+        seen.animeIds = trimIds(schedules.map(s => s.id));
         seen.seededAnime = true;
         saveJSON(SEEN_FILE, seen);
         return;
     }
 
     const seenSet = new Set(seen.animeIds);
-    const freshItems = results.filter(r => !seenSet.has(r.episodeId || r.id));
+    const freshItems = schedules.filter(s => !seenSet.has(s.id));
     if (!freshItems.length) return;
 
     // Oldest-first so the announcement order matches release order.
     for (const item of freshItems.reverse()) {
-        const title = item.title?.trim() || 'Unknown Anime';
-        const episodeNum = item.episodeNumber || item.episodeNumber === 0 ? item.episodeNumber : '?';
+        const title = item.media?.title?.english?.trim() || item.media?.title?.romaji?.trim() || 'Unknown Anime';
+        const episodeNum = item.episode ?? '?';
+        const image = item.media?.coverImage?.large;
         const caption =
             `🎬 *NEW EPISODE ALERT!*\n━━━━━━━━━━━━━━━━━━━━\n\n` +
             `📺 *${title}*\n` +
-            `▶️ Episode ${episodeNum} just dropped!`;
+            `▶️ Episode ${episodeNum} just aired!`;
 
         try {
-            if (item.image) {
-                await broadcast(sock, { image: { url: item.image }, caption });
+            if (image) {
+                await broadcast(sock, { image: { url: image }, caption });
             } else {
                 await broadcast(sock, { text: caption });
             }
@@ -125,7 +146,7 @@ async function checkAnimeUpdates(sock) {
         }
     }
 
-    seen.animeIds = trimIds([...seenSet, ...freshItems.map(r => r.episodeId || r.id)]);
+    seen.animeIds = trimIds([...seenSet, ...freshItems.map(s => s.id)]);
     saveJSON(SEEN_FILE, seen);
 }
 
