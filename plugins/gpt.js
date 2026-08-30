@@ -288,11 +288,15 @@ module.exports = [
                 const sent = await sock.sendMessage(jid, { text: response }, { quoted: msg });
                 if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'gojo';
 
-                if (Math.random() < 0.8) {
+                // Changed to 60% chance to send sticker
+                if (Math.random() < 0.6) {
                     const pick = UNIQUE_GOJO[Math.floor(Math.random() * UNIQUE_GOJO.length)];
                     sendCustomSticker(sock, jid, pick, 'Gojo Satoru');
                 }
-            } catch (e) { }
+            } catch (e) {
+                // Logs to terminal instead of failing silently
+                console.error("[Gojo Chat Error]:", e?.response?.data || e.message);
+            }
         }
     },
 
@@ -343,14 +347,21 @@ module.exports = [
                 const response = await queryGroq(messages);
                 global.aiMemory[jid].aizen.push({ role: "user", content: args }, { role: "assistant", content: response });
                 
+                // Added the missing memory limiter for Aizen so he doesn't break
+                if (global.aiMemory[jid].aizen.length > 20) global.aiMemory[jid].aizen.splice(0, 2);
+
                 const sent = await sock.sendMessage(jid, { text: response }, { quoted: msg });
                 if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'aizen';
 
-                if (Math.random() < 0.8) {
+                // Changed to 60% chance to send sticker
+                if (Math.random() < 0.6) {
                     const pick = UNIQUE_AIZEN[Math.floor(Math.random() * UNIQUE_AIZEN.length)];
                     sendCustomSticker(sock, jid, pick, 'Sōsuke Aizen');
                 }
-            } catch (e) { }
+            } catch (e) {
+                // Logs to terminal instead of failing silently
+                console.error("[Aizen Chat Error]:", e?.response?.data || e.message);
+            }
         }
     },
 
