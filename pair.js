@@ -519,14 +519,18 @@ async function startBot() {
             let data = { welcome: {}, goodbye: {}, promote: {}, demote: {}, customWelcome: {}, customGoodbye: {}, antijoin: {}, antipromote: {}, antidemote: {}, overkill: {} };
             try {
                 if (fs.existsSync(alertsPath)) data = JSON.parse(fs.readFileSync(alertsPath, 'utf-8'));
-            } catch (e) {}
+            } catch (e) {
+                console.error('⚠️ [GROUP-PARTICIPANTS.UPDATE] gcalerts.json is corrupt/unreadable, falling back to defaults:', e.message);
+            }
 
             let groupName = 'Group';
             let metadata = null;
             try {
                 metadata = await sock.groupMetadata(jid);
                 groupName = metadata?.subject || 'Group';
-            } catch (e) {}
+            } catch (e) {
+                console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Failed to fetch metadata for ${jid}:`, e.message);
+            }
 
             const botJid = normalizeToJid(sock.user?.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
             const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
@@ -653,7 +657,9 @@ async function startBot() {
                     }
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error('❌ [GROUP-PARTICIPANTS.UPDATE] Handler crashed:', e.message, '\n', e.stack);
+        }
     });
 
     sock.ev.on('messages.update', async (updates) => {
