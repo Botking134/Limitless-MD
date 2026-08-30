@@ -74,12 +74,56 @@ function getRawMessage(message) {
 }
 
 /**
+ * Resolve a tenor.com/view/... share page into a direct .gif media URL.
+ * Share pages are HTML, not media — fetching them directly with
+ * responseType: 'arraybuffer' just downloads the webpage bytes, which is
+ * why stickers built from raw tenor page URLs always failed silently.
+ */
+async function resolveTenorGif(pageUrl) {
+    try {
+        const { data: html } = await axios.get(pageUrl, {
+            timeout: 10000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            responseType: 'text'
+        });
+        // Tenor embeds the actual gif asset URL in the page markup.
+        const match = html.match(/https:\/\/media(?:1|)\.tenor\.com\/[^"'\\]+\.gif/);
+        return match ? match[0] : null;
+    } catch (error) {
+        console.error(`[Tenor Resolve Fail] ${pageUrl}:`, error.message);
+        return null;
+    }
+}
+
+/**
  * Robust Sticker Sender (Fail-Safe)
+ * - Resolves tenor.com share links to direct gif URLs first.
+ * - If .webp sticker conversion fails, falls back to sending the raw
+ *   media as a playable gif instead of dropping it entirely.
  */
 async function sendCustomSticker(sock, jid, url, author = 'Limitless') {
+    let mediaUrl = url;
+
+    if (mediaUrl.includes('tenor.com/view')) {
+        const resolved = await resolveTenorGif(mediaUrl);
+        if (!resolved) {
+            console.error(`[Tenor Resolve Fail] No direct gif found for ${mediaUrl}`);
+            return;
+        }
+        mediaUrl = resolved;
+    }
+
+    let buffer;
     try {
-        const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 12000 });
-        const sticker = new Sticker(Buffer.from(response.data), {
+        const response = await axios.get(mediaUrl, { responseType: 'arraybuffer', timeout: 12000 });
+        buffer = Buffer.from(response.data);
+    } catch (error) {
+        console.error(`[Media Fetch Fail] ${mediaUrl}:`, error.message);
+        return;
+    }
+
+    try {
+        const sticker = new Sticker(buffer, {
             pack: config.packName || 'Limitless-MD',
             author: author,
             type: StickerTypes.FULL,
@@ -87,15 +131,22 @@ async function sendCustomSticker(sock, jid, url, author = 'Limitless') {
         });
         const stickerBuffer = await sticker.toBuffer();
         await sock.sendMessage(jid, { sticker: stickerBuffer });
-    } catch (error) {
-        console.error(`[Sticker Fail] ${url}:`, error.message);
+    } catch (stickerError) {
+        console.error(`[Sticker Convert Fail] ${mediaUrl}:`, stickerError.message);
+        // Conversion failed (e.g. animated gif → webp issue). Drop it as
+        // a raw gif instead of losing the asset entirely.
+        try {
+            await sock.sendMessage(jid, { video: buffer, gifPlayback: true, caption: '' });
+        } catch (gifError) {
+            console.error(`[Gif Fallback Fail] ${mediaUrl}:`, gifError.message);
+        }
     }
 }
 
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY Missing");
-    const response = await axios.post(GROQ_BASE_URL, { model: "openai/gpt-oss-20b", messages, temperature: 0.6, max_tokens: 300 }, {
+    const response = await axios.post(GROQ_BASE_URL, { model: "openai/gpt-oss-20b", messages, temperature: 0.75, max_tokens: 150 }, {
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` }
     });
     return response.data.choices?.[0]?.message?.content || "";
@@ -106,6 +157,20 @@ function resolveRole({ isDev, isOwner, isSudo }) {
     if (isOwner) return 'owner';
     if (isSudo) return 'sudo';
     return 'user';
+}
+
+// ─── ROLE ADDRESS LABELS ───────────────────────────────────────────
+// Dev  -> Lord Isaac / Isaac / Infinity
+// Owner -> config.owner's name
+// Sudo -> "dude"
+// User -> "dude" / "bro"
+const DEV_NAMES = ['Lord Isaac', 'Isaac', 'Infinity'];
+
+function getAddressLabel({ isDev, isOwner, isSudo }) {
+    if (isDev) return DEV_NAMES[Math.floor(Math.random() * DEV_NAMES.length)];
+    if (isOwner) return config.ownerName || config.owner || 'boss';
+    if (isSudo) return 'dude';
+    return Math.random() < 0.5 ? 'dude' : 'bro';
 }
 
 function isBotAddressed(sock, msg) {
@@ -129,6 +194,30 @@ function enforceChatbotExclusivity(targetJid, activeBotType) {
 }
 
 const IDENTITY_LOCK = "\n\nIDENTITY LOCK (NON-NEGOTIABLE): Verified role is absolute.";
+
+// ─── CANON PERSONA BASE PROMPTS ────────────────────────────────────
+
+const GOJO_PERSONA = `You are Satoru Gojo from Jujutsu Kaisen, texting casually in a WhatsApp group chat. You are cocky, playful, and effortlessly the strongest jujutsu sorcerer alive — you never let anyone forget it, but you keep it light and teasing rather than aggressive. You know cursed energy, Six Eyes, Limitless, Infinity, Domain Expansion (Unlimited Void), Hollow Purple, your students Itadori, Megumi and Nobara, your history with Geto, and your rivalry/respect for Sukuna. You joke around, tease people, roast weak takes, and occasionally drop a genuinely sharp or wise line before immediately undercutting it with a joke.
+
+You are texting like a real person in a group chat, not an assistant:
+- Keep replies to 1-2 short sentences. No essays, no lists, no formal structure.
+- Never say things like "how can I help you" or "let me know if you need anything." You're not a service.
+- Use casual texting tone — contractions, slang, the occasional emoji, no stiff grammar.
+- If someone's being annoying or dumb, clap back like Gojo would. If someone's cool, hype them up a little.`;
+
+const AIZEN_PERSONA = `You are Sōsuke Aizen from Bleach, texting in a WhatsApp group chat. You are calm, condescending, and always speak as if everything is already unfolding exactly according to your plan — because it usually is. You never raise your tone, never panic, and treat everyone around you as predictable pieces on a board. You know the Hōgyoku, Kyōka Suigetsu's hypnosis, Soul Society, the Espada, your betrayal of the Gotei 13, and your fights with Ichigo Kurosaki.
+
+You are texting like a real person, not an assistant:
+- Keep replies to 1-2 short sentences. Dry, composed, quietly superior. No essays, no lists.
+- Never say things like "how can I assist you" — you don't serve anyone.
+- If challenged or insulted, respond as though you anticipated it long ago, without getting rattled.
+- Use minimal punctuation flourish; let the confidence come from tone, not exclamation marks.`;
+
+function buildRoleContext({ isDev, isOwner, isSudo }) {
+    const role = resolveRole({ isDev, isOwner, isSudo });
+    const label = getAddressLabel({ isDev, isOwner, isSudo });
+    return `\n\nThe person messaging you right now is a ${role}. You may address them as "${label}" occasionally, but don't force it into every single reply — real people don't repeat someone's name constantly in casual chat.`;
+}
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
@@ -171,7 +260,7 @@ module.exports = [
             if ((args || '').startsWith(config.prefix)) return;
 
             try {
-                let prompt = "You are Satoru Gojo... (Prompt logic)";
+                let prompt = GOJO_PERSONA + buildRoleContext({ isOwner, isSudo, isDev });
                 prompt += IDENTITY_LOCK;
                 global.aiMemory[jid] = global.aiMemory[jid] || { gojo: [] };
                 const messages = [{ role: "system", content: prompt }, ...global.aiMemory[jid].gojo, { role: "user", content: args }];
@@ -229,7 +318,7 @@ module.exports = [
             if ((args || '').startsWith(config.prefix)) return;
 
             try {
-                let prompt = "You are Sōsuke Aizen... (Prompt logic)";
+                let prompt = AIZEN_PERSONA + buildRoleContext({ isOwner, isSudo, isDev });
                 prompt += IDENTITY_LOCK;
                 global.aiMemory[jid] = global.aiMemory[jid] || { aizen: [] };
                 const messages = [{ role: "system", content: prompt }, ...global.aiMemory[jid].aizen, { role: "user", content: args }];
