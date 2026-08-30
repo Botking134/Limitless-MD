@@ -146,7 +146,7 @@ async function sendCustomSticker(sock, jid, url, author = 'Limitless') {
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY Missing");
-    const response = await axios.post(GROQ_BASE_URL, { model: "openai/gpt-oss-20b", messages, temperature: 0.75, max_tokens: 150 }, {
+    const response = await axios.post(GROQ_BASE_URL, { model: "openai/gpt-oss-20b", messages, temperature: 0.75, max_tokens: 45 }, {
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` }
     });
     return response.data.choices?.[0]?.message?.content || "";
@@ -172,6 +172,20 @@ function getAddressLabel({ isDev, isOwner, isSudo }) {
     if (isSudo) return 'dude';
     return Math.random() < 0.5 ? 'dude' : 'bro';
 }
+
+/**
+ * True if the message text mentions any of the given aliases as a whole
+ * word (case-insensitive). This lets people trigger a persona just by
+ * saying its name in chat, not only by replying/@-tagging the bot.
+ */
+function isNameMentioned(text, aliases) {
+    if (!text) return false;
+    const lower = text.toLowerCase();
+    return aliases.some(alias => new RegExp(`\\b${alias}\\b`, 'i').test(lower));
+}
+
+const GOJO_ALIASES = ['gojo', 'satoru'];
+const AIZEN_ALIASES = ['aizen', 'sosuke', 'sōsuke'];
 
 function isBotAddressed(sock, msg) {
     const raw = getRawMessage(msg.message);
@@ -200,7 +214,7 @@ const IDENTITY_LOCK = "\n\nIDENTITY LOCK (NON-NEGOTIABLE): Verified role is abso
 const GOJO_PERSONA = `You are Satoru Gojo from Jujutsu Kaisen, texting casually in a WhatsApp group chat. You are cocky, playful, and effortlessly the strongest jujutsu sorcerer alive — you never let anyone forget it, but you keep it light and teasing rather than aggressive. You know cursed energy, Six Eyes, Limitless, Infinity, Domain Expansion (Unlimited Void), Hollow Purple, your students Itadori, Megumi and Nobara, your history with Geto, and your rivalry/respect for Sukuna. You joke around, tease people, roast weak takes, and occasionally drop a genuinely sharp or wise line before immediately undercutting it with a joke.
 
 You are texting like a real person in a group chat, not an assistant:
-- Keep replies to 1-2 short sentences. No essays, no lists, no formal structure.
+- HARD LIMIT: one sentence, under 20 words. No essays, no lists, no formal structure, no multi-part replies.
 - Never say things like "how can I help you" or "let me know if you need anything." You're not a service.
 - Use casual texting tone — contractions, slang, the occasional emoji, no stiff grammar.
 - If someone's being annoying or dumb, clap back like Gojo would. If someone's cool, hype them up a little.`;
@@ -208,7 +222,7 @@ You are texting like a real person in a group chat, not an assistant:
 const AIZEN_PERSONA = `You are Sōsuke Aizen from Bleach, texting in a WhatsApp group chat. You are calm, condescending, and always speak as if everything is already unfolding exactly according to your plan — because it usually is. You never raise your tone, never panic, and treat everyone around you as predictable pieces on a board. You know the Hōgyoku, Kyōka Suigetsu's hypnosis, Soul Society, the Espada, your betrayal of the Gotei 13, and your fights with Ichigo Kurosaki.
 
 You are texting like a real person, not an assistant:
-- Keep replies to 1-2 short sentences. Dry, composed, quietly superior. No essays, no lists.
+- HARD LIMIT: one sentence, under 20 words. Dry, composed, quietly superior. No essays, no lists.
 - Never say things like "how can I assist you" — you don't serve anyone.
 - If challenged or insulted, respond as though you anticipated it long ago, without getting rattled.
 - Use minimal punctuation flourish; let the confidence come from tone, not exclamation marks.`;
@@ -240,7 +254,7 @@ module.exports = [
                 enforceChatbotExclusivity(jid, 'gojo');
                 config.gojoChats = [...new Set([...(config.gojoChats || []), jid])];
                 saveState();
-                const sent = await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* /n Tenjō tenga yuiga dokuson! 😏" }, { quoted: msg });
+                const sent = await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* Reply to start playing! 😏" }, { quoted: msg });
                 if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'gojo';
                 return sendCustomSticker(sock, jid, GOJO_RISE_STICKER, 'Gojo Satoru');
             }
@@ -256,7 +270,8 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const context = getRawMessage(msg.message)?.extendedTextMessage?.contextInfo || msg.message?.contextInfo;
             const isReplying = context?.stanzaId && global.botMessageAgents[context.stanzaId] === 'gojo';
-            if (!config.gojoChats?.includes(jid) || (!isReplying && !isBotAddressed(sock, msg))) return;
+            const isNamed = isNameMentioned(args, GOJO_ALIASES);
+            if (!config.gojoChats?.includes(jid) || (!isReplying && !isNamed && !isBotAddressed(sock, msg))) return;
             if ((args || '').startsWith(config.prefix)) return;
 
             try {
@@ -314,7 +329,8 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const context = getRawMessage(msg.message)?.extendedTextMessage?.contextInfo || msg.message?.contextInfo;
             const isReplying = context?.stanzaId && global.botMessageAgents[context.stanzaId] === 'aizen';
-            if (!config.chatbotChats?.includes(jid) || (!isReplying && !isBotAddressed(sock, msg))) return;
+            const isNamed = isNameMentioned(args, AIZEN_ALIASES);
+            if (!config.chatbotChats?.includes(jid) || (!isReplying && !isNamed && !isBotAddressed(sock, msg))) return;
             if ((args || '').startsWith(config.prefix)) return;
 
             try {
