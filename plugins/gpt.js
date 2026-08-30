@@ -240,7 +240,7 @@ module.exports = [
                 enforceChatbotExclusivity(jid, 'gojo');
                 config.gojoChats = [...new Set([...(config.gojoChats || []), jid])];
                 saveState();
-                const sent = await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* Reply to start playing! 😏" }, { quoted: msg });
+                const sent = await sock.sendMessage(jid, { text: "👁️ *Satoru Gojo has risen!* /n Tenjō tenga yuiga dokuson! 😏" }, { quoted: msg });
                 if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'gojo';
                 return sendCustomSticker(sock, jid, GOJO_RISE_STICKER, 'Gojo Satoru');
             }
