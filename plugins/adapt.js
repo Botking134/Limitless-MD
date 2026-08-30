@@ -10,27 +10,23 @@ const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 
 /* 
 ======================================================================
-🔐 API KEY OBFUSCATION
-Key is fragmented and reversed to avoid basic automated scrapers.
+🔐 API KEY RECONSTRUCTION
 ======================================================================
 */
 const OBFUSCATED_KEY_CHUNKS = [
-    "BxWbokA", 
-    "SSC8tUNYomep0rgeMjeQzX", 
-    "9s17rupcS8Z7hsa81iKcuE8",
-    "JXxl7dmMKOATFWQDyOq7Sum", 
-    "-aDsT0m8HXLDo1DmT3BlbkF",
-    "6tvcJIHCXLnNK3UcKPRxUi", 
-    "tO5cfDMGa0qRxaf6ynPOpx",
+    "sk-proj-",
     "W-LjDtcjGcYSrI", 
-    "sk-proj-"
+    "tO5cfDMGa0qRxaf6ynPOpx",
+    "6tvcJIHCXLnNK3UcKPRxUi", 
+    "-aDsT0m8HXLDo1DmT3BlbkF",
+    "JXxl7dmMKOATFWQDyOq7Sum", 
+    "9s17rupcS8Z7hsa81iKcuE8",
+    "SSC8tUNYomep0rgeMjeQzX", 
+    "BxWbokA"
 ];
 
-// Reassembles the key at runtime using join
 function getOpenAIKey() {
-    // Copy before reversing — reversing the original array in place
-    // would flip it back to the wrong order on every subsequent call.
-    return [...OBFUSCATED_KEY_CHUNKS].reverse().join('');
+    return OBFUSCATED_KEY_CHUNKS.join('');
 }
 
 // ─── STICKER ASSETS ───────────────────────────────────────────────
@@ -39,11 +35,13 @@ const MAHORAGA_2 = "https://tenor.com/view/mahoraga-gif-3784514205632293942";
 const VORTEX = "https://tenor.com/view/loop-warp-portal-vortex-face-gif-17203234";
 
 // ─── UTILS ────────────────────────────────────────────────────────
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 async function resolveTenorGif(pageUrl) {
     try {
-        const { data: html } = await axios.get(pageUrl, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0' }, responseType: 'text' });
+        const { data: html } = await axios.get(pageUrl, { 
+            timeout: 10000, 
+            headers: { 'User-Agent': 'Mozilla/5.0' }, 
+            responseType: 'text' 
+        });
         const match = html.match(/https:\/\/media(?:1|)\.tenor\.com\/[^"'\\]+\.gif/);
         return match ? match[0] : null;
     } catch (error) {
@@ -53,9 +51,6 @@ async function resolveTenorGif(pageUrl) {
 }
 
 async function sendLoadingSticker(sock, jid, url, author = 'Adapt.js') {
-    // Best-effort only: any failure here (gif fetch, tenor resolution,
-    // sticker conversion, or the send itself) must never bubble up and
-    // must never block/abort the actual adapt/warp workflow.
     try {
         let mediaUrl = url;
         if (mediaUrl.includes('tenor.com/view')) {
@@ -65,7 +60,10 @@ async function sendLoadingSticker(sock, jid, url, author = 'Adapt.js') {
         }
         const response = await axios.get(mediaUrl, { responseType: 'arraybuffer', timeout: 15000 });
         const sticker = new Sticker(Buffer.from(response.data), {
-            pack: 'Limitless-MD', author: author, type: StickerTypes.FULL, quality: 30
+            pack: 'Limitless-MD', 
+            author: author, 
+            type: StickerTypes.FULL, 
+            quality: 30
         });
         await sock.sendMessage(jid, { sticker: await sticker.toBuffer() });
     } catch (e) {
@@ -73,17 +71,11 @@ async function sendLoadingSticker(sock, jid, url, author = 'Adapt.js') {
     }
 }
 
-// Fire-and-forget wrapper: guarantees no unhandled promise rejection
-// can ever escape from the loading-sticker step, no matter what.
-function fireLoadingSticker(sock, jid, url, author) {
-    Promise.resolve(sendLoadingSticker(sock, jid, url, author)).catch((e) => {
-        console.error("[Sticker Drop Error - outer]", e?.message || e);
-    });
-}
-
 // Extracts media from quotes or direct messages
 async function downloadMedia(msg) {
     const raw = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage || msg.message;
+    if (!raw) return null;
+
     const type = Object.keys(raw).find(k => k.endsWith('Message') && k !== 'extendedTextMessage');
     if (!type || (!raw[type].url && !raw[type].directPath)) return null;
 
@@ -109,20 +101,18 @@ function processMedia(inputBuffer, type, mode) {
 
         if (mode === 'low') {
             vf = "scale=iw/2:-2";
-            extra = type === 'video' ? "-b:v 300k -r 15" : "-q:v 31"; // Nuke quality
+            extra = type === 'video' ? "-b:v 200k -r 15" : "-q:v 31";
         } else if (mode === 'mid') {
-            vf = "unsharp=5:5:0.8"; // Slight sharpening
-            extra = type === 'video' ? "-b:v 1M" : "-q:v 5";
+            vf = "scale=iw*1.5:-2:flags=lanczos,unsharp=5:5:1.0:5:5:0.0";
+            extra = type === 'video' ? "-b:v 2M" : "-q:v 2";
         } else if (mode === 'high') {
-            // Lanczos scaling (upscale 2x) + heavy sharpening & denoise
-            vf = "scale=iw*2:-2:flags=lanczos,unsharp=5:5:1.5";
-            extra = type === 'video' ? "-b:v 4M" : "-q:v 1"; 
+            vf = "scale=iw*2:-2:flags=lanczos,unsharp=7:7:1.8:7:7:0.0,eq=contrast=1.05:saturation=1.1";
+            extra = type === 'video' ? "-b:v 6M -c:a copy" : "-q:v 1"; 
         }
 
-        const cmd = `ffmpeg -i ${tempIn} -vf "${vf}" ${extra} -y ${tempOut}`;
+        const cmd = `ffmpeg -i "${tempIn}" -vf "${vf}" ${extra} -y "${tempOut}"`;
         
         exec(cmd, (err) => {
-            // Always clean up tempIn regardless of outcome
             if (fs.existsSync(tempIn)) {
                 try { fs.unlinkSync(tempIn); } catch (_) {}
             }
@@ -144,20 +134,41 @@ function processMedia(inputBuffer, type, mode) {
 
 module.exports = [
     {
+        name: 'adapt',
+        execute: async (sock, msg) => {
+            const jid = msg.key.remoteJid;
+            const media = await downloadMedia(msg);
+            if (!media) return sock.sendMessage(jid, { text: "Reply to an image or video to adapt it." }, { quoted: msg });
+
+            await sendLoadingSticker(sock, jid, MAHORAGA_1, 'Adapting (High)');
+
+            try {
+                const output = await processMedia(media.buffer, media.type, 'high');
+                const content = media.type === 'video' 
+                    ? { video: output, caption: "⚡ Quality Adapted: High" } 
+                    : { image: output, caption: "⚡ Quality Adapted: High" };
+                await sock.sendMessage(jid, content, { quoted: msg });
+            } catch (e) {
+                console.error("[Adapt Error]", e);
+                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media. Ensure FFmpeg is installed." }, { quoted: msg });
+            }
+        }
+    },
+    {
         name: 'adapt-low',
         execute: async (sock, msg) => {
             const jid = msg.key.remoteJid;
             const media = await downloadMedia(msg);
             if (!media) return sock.sendMessage(jid, { text: "Reply to an image or video to adapt it." }, { quoted: msg });
 
-            fireLoadingSticker(sock, jid, MAHORAGA_1, 'Adapting (Low)');
+            await sendLoadingSticker(sock, jid, MAHORAGA_1, 'Adapting (Low)');
             try {
                 const output = await processMedia(media.buffer, media.type, 'low');
                 const content = media.type === 'video' ? { video: output, caption: "📉 Quality Adapted: Low" } : { image: output, caption: "📉 Quality Adapted: Low" };
                 await sock.sendMessage(jid, content, { quoted: msg });
             } catch (e) {
                 console.error("[Adapt Error]", e);
-                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media. Ensure FFmpeg is installed." });
+                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media." }, { quoted: msg });
             }
         }
     },
@@ -168,14 +179,14 @@ module.exports = [
             const media = await downloadMedia(msg);
             if (!media) return sock.sendMessage(jid, { text: "Reply to an image or video to adapt it." }, { quoted: msg });
 
-            fireLoadingSticker(sock, jid, MAHORAGA_2, 'Adapting (Mid)');
+            await sendLoadingSticker(sock, jid, MAHORAGA_2, 'Adapting (Mid)');
             try {
                 const output = await processMedia(media.buffer, media.type, 'mid');
                 const content = media.type === 'video' ? { video: output, caption: "⚖️ Quality Adapted: Mid" } : { image: output, caption: "⚖️ Quality Adapted: Mid" };
                 await sock.sendMessage(jid, content, { quoted: msg });
             } catch (e) {
                 console.error("[Adapt Error]", e);
-                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media. Ensure FFmpeg is installed." });
+                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media." }, { quoted: msg });
             }
         }
     },
@@ -186,14 +197,14 @@ module.exports = [
             const media = await downloadMedia(msg);
             if (!media) return sock.sendMessage(jid, { text: "Reply to an image or video to adapt it." }, { quoted: msg });
 
-            fireLoadingSticker(sock, jid, Math.random() > 0.5 ? MAHORAGA_1 : MAHORAGA_2, 'Adapting (High)');
+            await sendLoadingSticker(sock, jid, MAHORAGA_1, 'Adapting (High)');
             try {
                 const output = await processMedia(media.buffer, media.type, 'high');
                 const content = media.type === 'video' ? { video: output, caption: "📈 Quality Adapted: High" } : { image: output, caption: "📈 Quality Adapted: High" };
                 await sock.sendMessage(jid, content, { quoted: msg });
             } catch (e) {
                 console.error("[Adapt Error]", e);
-                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media. Ensure FFmpeg is installed." });
+                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media." }, { quoted: msg });
             }
         }
     },
@@ -202,23 +213,25 @@ module.exports = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
             const apiKey = getOpenAIKey();
-            if (!apiKey) return sock.sendMessage(jid, { text: "❌ Missing or invalid OpenAI API Key." });
+            if (!apiKey) return sock.sendMessage(jid, { text: "❌ Missing or invalid API Key." }, { quoted: msg });
 
             const media = await downloadMedia(msg);
             if (!media || media.type !== 'image') return sock.sendMessage(jid, { text: "Reply to an **image** to warp reality." }, { quoted: msg });
 
             const userPrompt = args ? args.trim() : null;
-            fireLoadingSticker(sock, jid, VORTEX, 'Warping Reality');
+
+            // Send loading sticker first
+            await sendLoadingSticker(sock, jid, VORTEX, 'Warping Reality');
 
             try {
-                // STEP 1: Vision - Let GPT-4o analyze the image and build a new DALL-E prompt
                 const base64Img = media.buffer.toString('base64');
                 const visionSystemPrompt = userPrompt 
-                    ? `Describe this image in extreme detail. Then, modify your description to fulfill this request: "${userPrompt}". Output ONLY the final detailed prompt, optimized for an AI image generator.`
-                    : `Describe this image in extreme detail. Then, twist the description into something surreal, bizarre, highly corrupted, or completely mind-bending. Output ONLY the final detailed prompt, optimized for an AI image generator.`;
+                    ? `Describe this image in detail. Then, alter the description to fulfill this request: "${userPrompt}". Output ONLY the final detailed prompt for image generation.`
+                    : `Describe this image in detail. Then, mutate the description into a surreal, highly corrupted, reality-warping visual. Output ONLY the final detailed prompt for image generation.`;
 
+                // STEP 1: Vision / Analysis using openai/gpt-5.6-luna
                 const visionRes = await axios.post('https://api.openai.com/v1/chat/completions', {
-                    model: "gpt-5.6-luna",
+                    model: "openai/gpt-5.6-luna",
                     messages: [
                         {
                             role: "user",
@@ -228,23 +241,27 @@ module.exports = [
                             ]
                         }
                     ]
-                }, { headers: { "Authorization": `Bearer ${apiKey}` } });
+                }, { 
+                    headers: { "Authorization": `Bearer ${apiKey}` },
+                    timeout: 120000 
+                });
 
-                const dallePrompt = visionRes.data.choices[0].message.content;
-                console.log(`[Warp] Generated Prompt: ${dallePrompt}`);
+                const generatedPrompt = visionRes.data.choices[0].message.content;
 
-                // STEP 2: Generation - DALL-E 3 creates the new warped reality
+                // STEP 2: Image Synthesis using openai/gpt-5.6-luna
                 const generationRes = await axios.post('https://api.openai.com/v1/images/generations', {
-                    model: "dall-e-3",
-                    prompt: dallePrompt,
+                    model: "openai/gpt-5.6-luna",
+                    prompt: generatedPrompt,
                     n: 1,
-                    size: "1024x1024",
-                    quality: "hd"
-                }, { headers: { "Authorization": `Bearer ${apiKey}` } });
+                    size: "1024x1024"
+                }, { 
+                    headers: { "Authorization": `Bearer ${apiKey}` },
+                    timeout: 120000 
+                });
 
                 const warpedImageUrl = generationRes.data.data[0].url;
 
-                // Send result back to WhatsApp
+                // Send the generated result
                 await sock.sendMessage(jid, { 
                     image: { url: warpedImageUrl }, 
                     caption: `🌌 *Reality Warped*\n\n_Prompt:_ ${userPrompt || "Surreal Mutation"}` 
@@ -252,7 +269,8 @@ module.exports = [
 
             } catch (e) {
                 console.error("[Warp Error]:", e?.response?.data || e.message);
-                sock.sendMessage(jid, { text: "⚠️ The warp matrix collapsed. (AI Generation Failed)" });
+                const errMsg = e?.response?.data?.error?.message || e.message;
+                sock.sendMessage(jid, { text: `⚠️ The warp matrix collapsed: ${errMsg}` }, { quoted: msg });
             }
         }
     }
