@@ -550,12 +550,15 @@ async function startBot() {
             const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
 
             let rawActor = resolveParticipantIdentifier(anu.author);
-            let actorJid = rawActor ? normalizeToJid(rawActor).split(':')[0].split('@')[0] + '@s.whatsapp.net' : '';
-
-            if (rawActor.includes('@lid') && metadata?.participants) {
-                const cleanLid = rawActor.split('@')[0].split(':')[0];
-                const matched = metadata.participants.find(p => p.lid && p.lid.includes(cleanLid));
-                if (matched && matched.id) actorJid = matched.id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+            let actorJid = '';
+            if (rawActor) {
+                actorJid = await getPhoneJid(sock, rawActor, jid);
+                if (!actorJid) {
+                    // Absolute last resort — same old behavior, but now only reached if
+                    // getPhoneJid's local-metadata AND live API lookup both genuinely failed.
+                    actorJid = rawActor.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                    console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve actor LID ${rawActor} to a real phone JID in ${jid}.`);
+                }
             }
 
             const isActorBot = actorJid === botJid || (botLid && rawActor.includes(botLid.split('@')[0]));
@@ -567,12 +570,14 @@ async function startBot() {
             for (const num of participants) {
                 let rawTarget = resolveParticipantIdentifier(num);
                 if (!rawTarget) continue;
-                let targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
 
-                if (rawTarget.includes('@lid') && metadata?.participants) {
-                    const cleanLid = rawTarget.split('@')[0].split(':')[0];
-                    const matchedP = metadata.participants.find(p => p.lid && p.lid.includes(cleanLid));
-                    if (matchedP && matchedP.id) targetJid = matchedP.id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                let targetJid = await getPhoneJid(sock, rawTarget, jid);
+                if (!targetJid) {
+                    // Same absolute last resort as above — this is the fallback that was
+                    // producing the garbage "+7 044..." style fake numbers in mentions,
+                    // now only used if real resolution genuinely fails.
+                    targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                    console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve target LID ${rawTarget} to a real phone JID in ${jid}.`);
                 }
 
                 const phoneNumber = targetJid.split('@')[0];
