@@ -218,7 +218,7 @@ module.exports = [
                     : `Describe this image in extreme detail. Then, twist the description into something surreal, bizarre, highly corrupted, or completely mind-bending. Output ONLY the final detailed prompt, optimized for an AI image generator.`;
 
                 const visionRes = await axios.post('https://api.openai.com/v1/chat/completions', {
-                    model: "gpt-4o",
+                    model: "gpt-5.6-luna",
                     messages: [
                         {
                             role: "user",
