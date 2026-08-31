@@ -165,25 +165,29 @@ function generateMemeSvg(topText, bottomText) {
 
 // ─── KLIPY PACK FETCHER (.sp / .sp2) ─────────────────────────────
 async function klipySearch(query, { onlyAnimated = false, limit = 6 } = {}) {
-    const url = `https://api.klipy.com/v1/gifs/search?q=${encodeURIComponent(query)}&key=${KLIPY_API_KEY}&api_key=${KLIPY_API_KEY}&limit=${limit}`;
+    // Klipy's public endpoint is a drop-in swap for Tenor's v2 search API
+    // (same query shape, just a different host). The old /v1/gifs/search
+    // path with key+api_key both in the query string doesn't exist on
+    // Klipy's servers, so every call was silently returning nothing.
+    const url = `https://api.klipy.com/v2/search?q=${encodeURIComponent(query)}&key=${KLIPY_API_KEY}&limit=${limit}`;
 
-    const { data } = await axios.get(url, {
-        headers: {
-            'x-api-key': KLIPY_API_KEY
-        },
-        timeout: 15000
-    });
+    const { data } = await axios.get(url, { timeout: 15000 });
 
-    const items = data?.data || data?.results || (Array.isArray(data) ? data : []);
-    if (!items.length) return [];
+    const items = data?.results || data?.data?.data || data?.data || (Array.isArray(data) ? data : []);
+    if (!items.length) {
+        console.error(`⚠️ [SP/SP2] Klipy returned no items for "${query}". Raw response:`, JSON.stringify(data).slice(0, 500));
+        return [];
+    }
 
     return items.map(item => {
-        return item?.gif_url ||
+        return item?.media_formats?.gif?.url ||
+               item?.media_formats?.tinygif?.url ||
+               item?.media_formats?.mediumgif?.url ||
+               item?.gif_url ||
                item?.media?.gif?.url ||
                item?.images?.original?.url ||
                item?.file?.url ||
                item?.url ||
-               item?.media_formats?.gif?.url ||
                null;
     }).filter(Boolean);
 }
