@@ -1,11 +1,13 @@
 // plugins/group/group_advanced.js
 const config = require('../../config');
-const { saveState, normalizeToJid } = require('../../stateManager');
+const { saveState, normalizeToJid, getPhoneJid } = require('../../stateManager');
 const { DEV_LIDS } = require('../devs');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const axios = require('axios');
+const { readAlertsData, saveAlertsData } = require('../gcalerts');
+const ActivityManager = require('../../helpers/ActivityManager');
 
 // ─── GLOBALS  ──────────────────────────────────────────────────────
 global.tkickTimers = global.tkickTimers || {};
@@ -223,6 +225,78 @@ const advancedGroupCommands = [
                       `👉 _Scale your typing velocity to breach milestones!_`;
 
             await sock.sendMessage(jid, { text: layout }, { quoted: msg });
+        }
+    },
+
+    // 9b. RANK (Individual standing — self, replied user, or mentioned user)
+    {
+        name: 'rank',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!jid.endsWith('@g.us')) {
+                return await sock.sendMessage(jid, { text: "❌ This command only works inside groups." }, { quoted: msg });
+            }
+
+            let targetJid = parseTargetUser(msg, args);
+            if (!targetJid) {
+                targetJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
+            }
+            if (targetJid.endsWith('@lid')) {
+                const resolved = await safeResolveToPhoneJid(sock, targetJid);
+                if (resolved) targetJid = resolved;
+            }
+
+            const stats = ActivityManager.getRank(jid, targetJid);
+            const targetNumber = targetJid.split('@')[0];
+
+            const bar = stats.nextTier
+                ? `📈 *Next Tier:* ${stats.nextTier.icon} ${stats.nextTier.name} _(${stats.remaining} messages to go)_`
+                : `👑 *Maxed out — Boundless tier reached.*`;
+
+            const card =
+                `📊 *RANK CARD* 📊\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `👤 *User:* @${targetNumber}\n` +
+                `${stats.tier.icon} *Tier:* ${stats.tier.name}\n` +
+                `💬 *Messages Tracked:* \`${stats.messages}\`\n` +
+                `🏆 *Group Position:* \`#${stats.position}\` of \`${stats.totalTracked}\`\n\n` +
+                `${bar}`;
+
+            await sock.sendMessage(jid, { text: card, mentions: [targetJid] }, { quoted: msg });
+        }
+    },
+
+    // 9c. LEADERBOARD (Top members by tracked messages, highest first)
+    {
+        name: 'leaderboard',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!jid.endsWith('@g.us')) {
+                return await sock.sendMessage(jid, { text: "❌ This command only works inside groups." }, { quoted: msg });
+            }
+
+            const limit = Math.min(20, Math.max(1, parseInt(args) || 10));
+            const board = ActivityManager.getLeaderboard(jid, limit);
+
+            if (board.length === 0) {
+                return await sock.sendMessage(jid, { text: "📉 No tracked activity yet in this group — get chatting!" }, { quoted: msg });
+            }
+
+            const medals = ['🥇', '🥈', '🥉'];
+            const mentions = [];
+            let layout = `🏆 *GROUP LEADERBOARD (Top ${board.length})* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+            board.forEach((entry, idx) => {
+                const rankIcon = medals[idx] || `${idx + 1}.`;
+                const num = entry.jid.split('@')[0];
+                mentions.push(entry.jid);
+                layout += `${rankIcon} @${num} — ${entry.tier.icon} ${entry.tier.name} _(${entry.messages} msgs)_\n`;
+            });
+
+            layout += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n👉 _Use \`${config.prefix}rank\` to check your own standing._`;
+
+            await sock.sendMessage(jid, { text: layout, mentions }, { quoted: msg });
         }
     },
 
@@ -687,6 +761,12 @@ advancedGroupCommands.forEach(cmd => {
     }
     if (cmd.name === 'htag') {
         aliases.push({ ...cmd, name: 'ghost' });
+    }
+    if (cmd.name === 'leaderboard') {
+        aliases.push({ ...cmd, name: 'lb' });
+    }
+    if (cmd.name === 'rank') {
+        aliases.push({ ...cmd, name: 'level' });
     }
 });
 advancedGroupCommands.push(...aliases);
