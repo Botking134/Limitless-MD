@@ -40,7 +40,7 @@ function normalizeToJid(input) {
  * Safely resolves an LID JID to a phone JID.
  * Utilizes the local group participants metadata as a fast cache, falling back to an API search.
  */
-async function getPhoneJid(sock, jid, groupJid = null) {
+async function getPhoneJid(sock, jid, groupJid = null, cachedMetadata = null) {
     if (!jid) return '';
     const cleanJid = normalizeToJid(jid);
     if (!cleanJid) return '';
@@ -49,7 +49,12 @@ async function getPhoneJid(sock, jid, groupJid = null) {
 
     if (groupJid) {
         try {
-            const metadata = await sock.groupMetadata(groupJid);
+            // Reuse a metadata object the caller already fetched (e.g. in the
+            // group-participants.update handler) instead of hitting the socket
+            // again for every participant in the same event — repeated
+            // groupMetadata()/findUserId() calls in a tight loop is what was
+            // triggering WhatsApp's flood protection (reason 500 disconnects).
+            const metadata = cachedMetadata || await sock.groupMetadata(groupJid);
             const participant = metadata?.participants?.find(p => {
                 const pLid = p.lid ? normalizeToJid(p.lid) : '';
                 return pLid === cleanJid || normalizeToJid(p.id) === cleanJid;
