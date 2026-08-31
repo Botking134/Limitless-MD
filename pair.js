@@ -8,6 +8,8 @@ const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('./plugins/devs');
 const { handleDeletion } = require('./helpers/log');
 const { handleIncomingMessage } = require('./helpers/Infinity');
 const { normalizeToJid, getPhoneJid, loadState } = require('./stateManager');
+const ActivityManager = require('./helpers/ActivityManager');
+const { generateMemberCard, buildCaption } = require('./helpers/WelcomeCardManager');
 
 // ─── INITIALIZE STATE ON BOOT ──────────────────────────────────
 try { loadState(); } catch (e) { console.error("⚠️ State load error:", e.message); }
@@ -421,6 +423,13 @@ async function startBot() {
                     }
                 } catch (e) {}
 
+                // Reconnect any sub-bots paired via .addbot in a previous run
+                if (!global.subBotsRestored) {
+                    global.subBotsRestored = true;
+                    const SubBotManager = require('./helpers/SubBotManager');
+                    SubBotManager.restoreSubBots().catch(e => console.error('⚠️ [SUBBOT] Restore failed:', e.message));
+                }
+
                 // Send Single-Run Boot Report
                 if (!hasSentBootReport) {
                     hasSentBootReport = true;
@@ -598,18 +607,64 @@ async function startBot() {
                         } catch (e) {}
                     }
 
+                    // Baseline for "activity since joining" is captured regardless of
+                    // whether the welcome card is enabled, so .rank/goodbye stats stay accurate.
+                    try { ActivityManager.registerJoin(jid, targetJid); } catch (e) {}
+
                     const isWelcomeOn = isEnabled(data.welcome?.[jid]) || isEnabled(config.welcome?.[jid]);
                     if (isWelcomeOn) {
-                        const customMsg = data.customWelcome?.[jid] || `Welcome @user to *${groupName}*! 🌸`;
-                        const formattedMsg = customMsg.replace(/@user/g, `@${phoneNumber}`).replace(/@group/g, groupName);
-                        await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
+                        try {
+                            const memberCount = metadata?.participants?.length || 0;
+                            const cardImage = await generateMemberCard(sock, {
+                                type: 'welcome',
+                                targetJid,
+                                displayName: `@${phoneNumber}`,
+                                groupName,
+                                memberCount
+                            });
+                            const caption = buildCaption({
+                                type: 'welcome',
+                                phoneNumber,
+                                groupName,
+                                memberCount,
+                                customMessage: data.customWelcome?.[jid] || null
+                            });
+                            await sock.sendMessage(jid, { image: cardImage, caption, mentions: [targetJid] });
+                        } catch (cardErr) {
+                            console.error('⚠️ [WELCOME CARD] Failed, falling back to text:', cardErr.message);
+                            const customMsg = data.customWelcome?.[jid] || `Welcome @user to *${groupName}*! 🌸`;
+                            const formattedMsg = customMsg.replace(/@user/g, `@${phoneNumber}`).replace(/@group/g, groupName);
+                            await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
+                        }
                     }
                 } else if (action === 'remove') {
                     const isGoodbyeOn = isEnabled(data.goodbye?.[jid]) || isEnabled(config.goodbye?.[jid]);
                     if (isGoodbyeOn) {
-                        const customMsg = data.customGoodbye?.[jid] || `Goodbye @user! 🥀`;
-                        const formattedMsg = customMsg.replace(/@user/g, `@${phoneNumber}`).replace(/@group/g, groupName);
-                        await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
+                        try {
+                            const memberCount = metadata?.participants?.length || 0;
+                            const { activityPercent } = ActivityManager.getLeaveStats(jid, targetJid);
+                            const cardImage = await generateMemberCard(sock, {
+                                type: 'goodbye',
+                                targetJid,
+                                displayName: `@${phoneNumber}`,
+                                groupName,
+                                memberCount
+                            });
+                            const caption = buildCaption({
+                                type: 'goodbye',
+                                phoneNumber,
+                                groupName,
+                                memberCount,
+                                activityPercent,
+                                customMessage: data.customGoodbye?.[jid] || null
+                            });
+                            await sock.sendMessage(jid, { image: cardImage, caption, mentions: [targetJid] });
+                        } catch (cardErr) {
+                            console.error('⚠️ [GOODBYE CARD] Failed, falling back to text:', cardErr.message);
+                            const customMsg = data.customGoodbye?.[jid] || `Goodbye @user! 🥀`;
+                            const formattedMsg = customMsg.replace(/@user/g, `@${phoneNumber}`).replace(/@group/g, groupName);
+                            await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
+                        }
                     }
                 } else if (action === 'promote') {
                     let handledByProtection = false;
