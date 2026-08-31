@@ -561,7 +561,7 @@ async function startBot() {
             let rawActor = resolveParticipantIdentifier(anu.author);
             let actorJid = '';
             if (rawActor) {
-                actorJid = await getPhoneJid(sock, rawActor, jid);
+                actorJid = await getPhoneJid(sock, rawActor, jid, metadata);
                 if (!actorJid) {
                     // Absolute last resort — same old behavior, but now only reached if
                     // getPhoneJid's local-metadata AND live API lookup both genuinely failed.
@@ -580,7 +580,7 @@ async function startBot() {
                 let rawTarget = resolveParticipantIdentifier(num);
                 if (!rawTarget) continue;
 
-                let targetJid = await getPhoneJid(sock, rawTarget, jid);
+                let targetJid = await getPhoneJid(sock, rawTarget, jid, metadata);
                 if (!targetJid) {
                     // Same absolute last resort as above — this is the fallback that was
                     // producing the garbage "+7 044..." style fake numbers in mentions,
