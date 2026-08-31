@@ -524,3 +524,4 @@ module.exports.push(...aliases);
 // antipromote/antidemote/overkill using the exact same purge logic as .overkill panic
 module.exports.triggerEmergencyPurge = triggerEmergencyPurge;
 module.exports.readAlertsData = readAlertsData;
+module.exports.saveAlertsData = saveAlertsData;
