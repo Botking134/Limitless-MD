@@ -11,6 +11,7 @@ const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivati
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 const { recordMessage } = require('./SummaryManager');
+const ActivityManager = require('./ActivityManager');
 
 // Custom Message Filter Manager
 let handleFilterInterceptor;
@@ -243,6 +244,26 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
                          (senderPhoneJid && Array.isArray(config.banned) && config.banned.includes(senderPhoneJid));
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
+
+        // ─── LEVEL/RANK TRACKING (persisted, powers .rank / .leaderboard / .levelup) ───
+        if (isGroup && trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix) && !msg.key.fromMe) {
+            try {
+                const canonicalSenderJid = senderPhoneJid || senderJid;
+                const levelResult = ActivityManager.recordGroupMessage(jid, canonicalSenderJid);
+                if (levelResult?.leveledUp) {
+                    const { readAlertsData } = require('../plugins/gcalerts');
+                    const alerts = readAlertsData();
+                    const levelupOn = alerts.levelup?.[jid] === 'on';
+                    if (levelupOn) {
+                        const num = canonicalSenderJid.split('@')[0];
+                        sock.sendMessage(jid, {
+                            text: `🎉 *LEVEL UP!* 🎉\n\n@${num} has ascended to ${levelResult.newTier.icon} *${levelResult.newTier.name}*!\n_${levelResult.newTier.desc}_`,
+                            mentions: [canonicalSenderJid]
+                        }).catch(() => {});
+                    }
+                }
+            } catch (e) { /* tracking must never break message handling */ }
+        }
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
 
