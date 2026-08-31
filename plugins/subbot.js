@@ -60,7 +60,7 @@ module.exports = [
                 }
 
                 // ...then the pairing code follows as its own separate message.
-                await sock.sendMessage(jid, { text: \${code}\ });
+                await sock.sendMessage(jid, { text: `🔑 *Pairing Code:* \`${code}\`` });
 
             } catch (err) {
                 try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
