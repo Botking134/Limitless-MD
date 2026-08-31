@@ -562,9 +562,16 @@ async function startBot() {
             let actorJid = '';
             if (rawActor) {
                 actorJid = await getPhoneJid(sock, rawActor, jid, metadata);
-                if (!actorJid) {
+                if (!actorJid || actorJid.endsWith('@lid')) {
                     // Absolute last resort — same old behavior, but now only reached if
                     // getPhoneJid's local-metadata AND live API lookup both genuinely failed.
+                    // NOTE: getPhoneJid's own last line returns the raw @lid JID rather than
+                    // '' on failure, so the old `if (!actorJid)` check here never actually
+                    // fired — an unresolved @lid JID was slipping straight through into
+                    // sendMessage()/mentions below. WhatsApp's servers appear to reject a
+                    // stanza that mentions a non-@s.whatsapp.net JID, which is what was
+                    // killing the socket (reason 500) instead of delivering the welcome/
+                    // goodbye card.
                     actorJid = rawActor.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                     console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve actor LID ${rawActor} to a real phone JID in ${jid}.`);
                 }
@@ -581,10 +588,10 @@ async function startBot() {
                 if (!rawTarget) continue;
 
                 let targetJid = await getPhoneJid(sock, rawTarget, jid, metadata);
-                if (!targetJid) {
-                    // Same absolute last resort as above — this is the fallback that was
-                    // producing the garbage "+7 044..." style fake numbers in mentions,
-                    // now only used if real resolution genuinely fails.
+                if (!targetJid || targetJid.endsWith('@lid')) {
+                    // Same fix as the actor lookup above — an unresolved @lid JID must not
+                    // reach sendMessage()/mentions, since that's what was triggering the
+                    // reason-500 disconnects on join/exit.
                     targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
                     console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve target LID ${rawTarget} to a real phone JID in ${jid}.`);
                 }
