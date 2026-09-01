@@ -50,7 +50,7 @@ module.exports = [
                     `2️⃣ Go to *Settings → Linked Devices → Link a Device*.\n` +
                     `3️⃣ Tap *"Link with phone number instead"*.\n` +
                     `4️⃣ Enter the *8-character code* sent in the next message.\n\n` +
-                    `⏱️ The code expires in a couple of minutes — enter it quickly.`;
+                    `⏱️ *The code expires in about 60 seconds* — have WhatsApp open and ready before you request it.`;
 
                 // Instructions go out first, as a caption on the QR image...
                 if (qrBuffer) {
