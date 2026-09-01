@@ -23,6 +23,9 @@ function escapeXml(str) {
     }[c]));
 }
 
+const AVATAR_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const avatarCache = new Map(); // jid -> { buffer, expiresAt }
+
 async function fetchAvatarBuffer(sock, jid) {
     try {
         let url;
@@ -53,7 +56,14 @@ function defaultAvatarSvg() {
 }
 
 async function buildCircularAvatar(sock, jid) {
-    const raw = (await fetchAvatarBuffer(sock, jid)) || (await sharp(defaultAvatarSvg()).png().toBuffer());
+    const cached = avatarCache.get(jid);
+    let raw;
+    if (cached && cached.expiresAt > Date.now()) {
+        raw = cached.buffer;
+    } else {
+        raw = (await fetchAvatarBuffer(sock, jid)) || (await sharp(defaultAvatarSvg()).png().toBuffer());
+        avatarCache.set(jid, { buffer: raw, expiresAt: Date.now() + AVATAR_CACHE_TTL_MS });
+    }
 
     const circleMask = Buffer.from(
         `<svg width="${AVATAR_SIZE}" height="${AVATAR_SIZE}"><circle cx="${AVATAR_SIZE / 2}" cy="${AVATAR_SIZE / 2}" r="${AVATAR_SIZE / 2}" fill="#fff"/></svg>`
@@ -114,7 +124,7 @@ async function generateMemberCard(sock, { type, targetJid, displayName, groupNam
             { input: finalTextSvg, top: 0, left: 0 },
             { input: avatarBuffer, top: avatarY, left: avatarX }
         ])
-        .png()
+        .jpeg({ quality: 90 })
         .toBuffer();
 }
 
