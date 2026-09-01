@@ -102,7 +102,7 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
             codeRequested = true;
             setTimeout(async () => {
                 try {
-                    const code = await sock.requestPairingCode(phoneNumber);
+                    const code = await sock.requestPairingCode(phoneNumber, 'INFINITY');
                     let qrBuffer = null;
                     try {
                         qrBuffer = await QRCode.toBuffer(code, { margin: 2, scale: 8 });
