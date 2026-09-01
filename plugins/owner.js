@@ -126,10 +126,6 @@ function getRawMessage(message) {
 }
 
 // ─── HELPER: REPOSITORY URL (For Git Updates) ───────────────────
-function getRepoUrl() {
-    return config.repoUrl || 'https://github.com/itsliaaa/Limitless.git';
-}
-
 // ─── HELPER: PARSE TARGET ────────────────────────────────────────
 function parseTarget(msg, args) {
     const rawMsg = getRawMessage(msg.message);
@@ -172,6 +168,21 @@ function execWithTimeout(cmd, timeoutMs, callback) {
     child.on('exit', () => clearTimeout(timer));
 }
 
+// Git error text (remote add / fetch / pull failures) can embed the repo
+// URL verbatim — including any credentials baked into it. This strips
+// that out of anything bound for WhatsApp or the console. Scoped to
+// `.update` / `.update setup` only.
+function redactRepoUrl(text) {
+    let out = String(text || '');
+    if (config.repoUrl) {
+        out = out.split(config.repoUrl).join('[repo hidden]');
+    }
+    // Catches any other repo-looking URL (with or without embedded creds)
+    // that might surface from git's own error output.
+    out = out.replace(/https?:\/\/(?:[^\s@]+@)?[^\s]*github\.com[^\s]*/gi, '[repo hidden]');
+    return out;
+}
+
 // ─── UPDATE SUCCESS HELPER ─────────────────────────────────────
 async function sendUpdateSuccess(jid, sock, stdout, quotedMsg) {
     let summary = stdout || 'Update complete.';
@@ -192,27 +203,13 @@ async function sendUpdateSuccess(jid, sock, stdout, quotedMsg) {
 }
 
 // ─── AUTO GIT SETUP ─────────────────────────────────────────────
-async function ensureGitSetup(jid, sock, msg) {
+// Checks if git is already initialized in this working directory.
+// Does NOT auto-configure anything and does NOT reference any repo
+// (not even to the console) — that only happens via `.update setup`,
+// and only using the owner's own config.repoUrl.
+async function isGitSetUp() {
     return new Promise((resolve) => {
-        execWithTimeout('git status', 5000, (err) => {
-            if (!err) {
-                resolve(); // Git already set up
-                return;
-            }
-            // Auto-setup
-            console.log('[UPDATE] Git not initialized – auto‑setting up...');
-            sock.sendMessage(jid, { text: "🔧 *Auto‑setting up Git...*" }, { quoted: msg });
-            const setupCmd = `git init && git remote add origin ${getRepoUrl()} && git fetch origin && (git checkout -f main || git checkout -f master)`;
-            execWithTimeout(setupCmd, 60000, (setupErr) => {
-                if (setupErr) {
-                    console.error('[UPDATE] Auto‑setup failed:', setupErr);
-                    sock.sendMessage(jid, { text: `❌ *Auto‑setup failed:* ${setupErr.message}` }, { quoted: msg });
-                } else {
-                    sock.sendMessage(jid, { text: "🔧 *Git auto‑setup complete.*" }, { quoted: msg });
-                }
-                resolve();
-            });
-        });
+        execWithTimeout('git status', 5000, (err) => resolve(!err));
     });
 }
 
@@ -478,9 +475,6 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            // ─── Ensure Git is set up ──────────────────────────────
-            await ensureGitSetup(jid, sock, msg);
-
             // ─── Extract action from args or button ──────────────────
             let action = '';
             if (args && args.trim() !== '') {
@@ -500,6 +494,33 @@ module.exports = [
 
             console.log(`[UPDATE] Action: "${action}"`);
 
+            // ─── SETUP: only path that ever touches git remotes, and only
+            // with the owner's own config.repoUrl. Never a hardcoded fallback.
+            if (action === 'setup') {
+                if (!config.repoUrl) {
+                    return await sock.sendMessage(jid, {
+                        text: `❌ *No repo configured.*\n\nSet yours first:\n\`${config.prefix}setvar repoUrl=https://github.com/you/your-fork.git\`\n\nThen run \`${config.prefix}update setup\` again.`
+                    }, { quoted: msg });
+                }
+                await sock.sendMessage(jid, { text: "🔧 *Setting up Git...*" }, { quoted: msg });
+                const setupCmd = `git init && git remote add origin ${config.repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+                execWithTimeout(setupCmd, 60000, async (setupErr) => {
+                    if (setupErr) {
+                        return await sock.sendMessage(jid, { text: `❌ *Setup failed:* ${redactRepoUrl(setupErr.message)}` }, { quoted: msg });
+                    }
+                    await sock.sendMessage(jid, { text: "✅ *Git set up.* Run `.update` again to check for updates." }, { quoted: msg });
+                });
+                return;
+            }
+
+            // ─── Not set up yet? Point to `.update setup` — nothing else. ───
+            const gitReady = await isGitSetUp();
+            if (!gitReady) {
+                return await sock.sendMessage(jid, {
+                    text: `❌ *Git isn't set up on this deployment yet.*\n\nRun \`${config.prefix}update setup\` to configure it.`
+                }, { quoted: msg });
+            }
+
             // ─── If action is "proceed" or "pull", just git pull ──
             if (action === 'proceed' || action === 'pull') {
                 await sock.sendMessage(jid, { text: "⏳ *Pulling updates...*" }, { quoted: msg });
@@ -509,10 +530,10 @@ module.exports = [
                     if (pullErr) {
                         if (pullErr.message.includes('CONFLICT')) {
                             return await sock.sendMessage(jid, {
-                                text: `❌ *Merge conflict detected!*\n${pullErr.message}\n\nResolve manually or use \`.git force\` if you're sure.`
+                                text: `❌ *Merge conflict detected!*\n${redactRepoUrl(pullErr.message)}\n\nResolve manually or use \`.git force\` if you're sure.`
                             }, { quoted: msg });
                         }
-                        return await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${pullErr.message}` }, { quoted: msg });
+                        return await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${redactRepoUrl(pullErr.message)}` }, { quoted: msg });
                     }
                     await sendUpdateSuccess(jid, sock, pullOut, msg);
                 });
@@ -525,12 +546,12 @@ module.exports = [
 
                 execWithTimeout('git fetch', 30000, async (fetchErr) => {
                     if (fetchErr) {
-                        return await sock.sendMessage(jid, { text: `❌ *Error fetching updates:* ${fetchErr.message}` }, { quoted: msg });
+                        return await sock.sendMessage(jid, { text: `❌ *Error fetching updates:* ${redactRepoUrl(fetchErr.message)}` }, { quoted: msg });
                     }
 
                     execWithTimeout(`git rev-list HEAD..origin/${branch} --count`, 10000, async (countErr, stdout) => {
                         if (countErr) {
-                            return await sock.sendMessage(jid, { text: `❌ *Error checking behind count:* ${countErr.message}` }, { quoted: msg });
+                            return await sock.sendMessage(jid, { text: `❌ *Error checking behind count:* ${redactRepoUrl(countErr.message)}` }, { quoted: msg });
                         }
                         const behind = parseInt(stdout.trim()) || 0;
 
@@ -540,7 +561,7 @@ module.exports = [
 
                         execWithTimeout(`git log --oneline -5 HEAD..origin/${branch}`, 10000, async (logErr, commitLog) => {
                             if (logErr) {
-                                return await sock.sendMessage(jid, { text: `❌ *Error getting commit log:* ${logErr.message}` }, { quoted: msg });
+                                return await sock.sendMessage(jid, { text: `❌ *Error getting commit log:* ${redactRepoUrl(logErr.message)}` }, { quoted: msg });
                             }
 
                             const techMsg =
