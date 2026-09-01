@@ -601,6 +601,8 @@ async function startBot() {
                 const eventSignature = `${jid}_${targetJid}_${action}`;
                 if (isDuplicateEvent(eventSignature)) continue;
 
+                try {
+
                 if (action === 'add') {
                     const isAntijoinOn = isEnabled(data.antijoin?.[jid]) || isEnabled(config.antijoin?.[jid]);
                     if (isAntijoinOn && !isActorAuthorized) {
@@ -620,8 +622,33 @@ async function startBot() {
 
                     const isWelcomeOn = isEnabled(data.welcome?.[jid]) || isEnabled(config.welcome?.[jid]);
                     if (isWelcomeOn) {
+                        const memberCount = metadata?.participants?.length || 0;
+                        const caption = buildCaption({
+                            type: 'welcome',
+                            phoneNumber,
+                            groupName,
+                            memberCount,
+                            customMessage: data.customWelcome?.[jid] || null
+                        });
+
+                        // Text goes out first and unconditionally — this is the same
+                        // lightweight shape as every other alert in this file (antijoin,
+                        // antipromote, promote) and is what actually needs to land. The
+                        // image card is a nice-to-have sent as a decoupled follow-up:
+                        // building it involves a full sharp render plus a fresh WhatsApp
+                        // media-upload round-trip, which is a much bigger ask of the
+                        // socket than a text mention and appears to be what was tripping
+                        // WhatsApp's flood protection (reason 500) during join/exit
+                        // bursts. If the image fails now, it just logs and stops — no
+                        // second send is attempted on a socket that may already be dead,
+                        // which is what was silently swallowing both messages before.
                         try {
-                            const memberCount = metadata?.participants?.length || 0;
+                            await sock.sendMessage(jid, { text: caption, mentions: [targetJid] });
+                        } catch (textErr) {
+                            console.error('⚠️ [WELCOME TEXT] Failed to send:', textErr.message);
+                        }
+
+                        try {
                             const cardImage = await generateMemberCard(sock, {
                                 type: 'welcome',
                                 targetJid,
@@ -629,27 +656,34 @@ async function startBot() {
                                 groupName,
                                 memberCount
                             });
-                            const caption = buildCaption({
-                                type: 'welcome',
-                                phoneNumber,
-                                groupName,
-                                memberCount,
-                                customMessage: data.customWelcome?.[jid] || null
-                            });
-                            await sock.sendMessage(jid, { image: cardImage, caption, mentions: [targetJid] });
+                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: [targetJid] });
                         } catch (cardErr) {
-                            console.error('⚠️ [WELCOME CARD] Failed, falling back to text:', cardErr.message);
-                            const customMsg = data.customWelcome?.[jid] || `Welcome @user to *${groupName}*! 🌸`;
-                            const formattedMsg = customMsg.replace(/@user/g, `@${phoneNumber}`).replace(/@group/g, groupName);
-                            await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
+                            console.error('⚠️ [WELCOME CARD] Image follow-up failed (text already sent):', cardErr.message);
                         }
                     }
                 } else if (action === 'remove') {
                     const isGoodbyeOn = isEnabled(data.goodbye?.[jid]) || isEnabled(config.goodbye?.[jid]);
                     if (isGoodbyeOn) {
+                        const memberCount = metadata?.participants?.length || 0;
+                        const { activityPercent } = ActivityManager.getLeaveStats(jid, targetJid);
+                        const caption = buildCaption({
+                            type: 'goodbye',
+                            phoneNumber,
+                            groupName,
+                            memberCount,
+                            activityPercent,
+                            customMessage: data.customGoodbye?.[jid] || null
+                        });
+
+                        // Same reasoning as the welcome path above: text first and always,
+                        // image as a decoupled best-effort follow-up.
                         try {
-                            const memberCount = metadata?.participants?.length || 0;
-                            const { activityPercent } = ActivityManager.getLeaveStats(jid, targetJid);
+                            await sock.sendMessage(jid, { text: caption, mentions: [targetJid] });
+                        } catch (textErr) {
+                            console.error('⚠️ [GOODBYE TEXT] Failed to send:', textErr.message);
+                        }
+
+                        try {
                             const cardImage = await generateMemberCard(sock, {
                                 type: 'goodbye',
                                 targetJid,
@@ -657,20 +691,9 @@ async function startBot() {
                                 groupName,
                                 memberCount
                             });
-                            const caption = buildCaption({
-                                type: 'goodbye',
-                                phoneNumber,
-                                groupName,
-                                memberCount,
-                                activityPercent,
-                                customMessage: data.customGoodbye?.[jid] || null
-                            });
-                            await sock.sendMessage(jid, { image: cardImage, caption, mentions: [targetJid] });
+                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: [targetJid] });
                         } catch (cardErr) {
-                            console.error('⚠️ [GOODBYE CARD] Failed, falling back to text:', cardErr.message);
-                            const customMsg = data.customGoodbye?.[jid] || `Goodbye @user! 🥀`;
-                            const formattedMsg = customMsg.replace(/@user/g, `@${phoneNumber}`).replace(/@group/g, groupName);
-                            await sock.sendMessage(jid, { text: formattedMsg, mentions: [targetJid] });
+                            console.error('⚠️ [GOODBYE CARD] Image follow-up failed (text already sent):', cardErr.message);
                         }
                     }
                 } else if (action === 'promote') {
@@ -756,6 +779,10 @@ async function startBot() {
                             });
                         }
                     }
+                }
+
+                } catch (participantErr) {
+                    console.error(`❌ [GROUP-PARTICIPANTS.UPDATE] Failed processing ${targetJid} (${action}) in ${jid}:`, participantErr.message, '\n', participantErr.stack);
                 }
             }
         } catch (e) {
