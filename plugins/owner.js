@@ -13,6 +13,11 @@ const {
 const { setVar, loadVars, syncVarsToConfig, DEFAULT_VARS } = require('../vars');
 const { exec } = require('child_process');
 const fs = require('fs');
+
+// Hardcoded here on purpose — this repo is private and must never be
+// exposed via config (readable/settable through .setvar) or surfaced in
+// any message or log. Used internally by `.update setup` only.
+const REPO_URL = "https://github.com/botking134/limitless-md";
 const path = require('path');
 
 // ─── HELPER: PARSE DURATION ──────────────────────────────────────
@@ -168,18 +173,13 @@ function execWithTimeout(cmd, timeoutMs, callback) {
     child.on('exit', () => clearTimeout(timer));
 }
 
-// Git error text (remote add / fetch / pull failures) can embed the repo
-// URL verbatim — including any credentials baked into it. This strips
-// that out of anything bound for WhatsApp or the console. Scoped to
-// `.update` / `.update setup` only.
-function redactRepoUrl(text) {
+// For console-only debugging: strips the literal repo URL (and anything
+// else that looks like a github.com URL, in case one leaks through git's
+// own error text) before the full error ever touches the console.
+function scrubUrlForConsole(text) {
     let out = String(text || '');
-    if (config.repoUrl) {
-        out = out.split(config.repoUrl).join('[repo hidden]');
-    }
-    // Catches any other repo-looking URL (with or without embedded creds)
-    // that might surface from git's own error output.
-    out = out.replace(/https?:\/\/(?:[^\s@]+@)?[^\s]*github\.com[^\s]*/gi, '[repo hidden]');
+    if (REPO_URL) out = out.split(REPO_URL).join('[repo]');
+    out = out.replace(/https?:\/\/(?:[^\s@]+@)?[^\s]*github\.com[^\s]*/gi, '[repo]');
     return out;
 }
 
@@ -206,7 +206,7 @@ async function sendUpdateSuccess(jid, sock, stdout, quotedMsg) {
 // Checks if git is already initialized in this working directory.
 // Does NOT auto-configure anything and does NOT reference any repo
 // (not even to the console) — that only happens via `.update setup`,
-// and only using the owner's own config.repoUrl.
+// ─── SETUP flow (below) is the only place that touches a git remote. ───
 async function isGitSetUp() {
     return new Promise((resolve) => {
         execWithTimeout('git status', 5000, (err) => resolve(!err));
@@ -494,21 +494,16 @@ module.exports = [
 
             console.log(`[UPDATE] Action: "${action}"`);
 
-            // ─── SETUP: only path that ever touches git remotes, and only
-            // with the owner's own config.repoUrl. Never a hardcoded fallback.
+            // ─── SETUP: only path that ever touches git remotes ──────
             if (action === 'setup') {
-                if (!config.repoUrl) {
-                    return await sock.sendMessage(jid, {
-                        text: `❌ *No repo configured.*\n\nSet yours first:\n\`${config.prefix}setvar repoUrl=https://github.com/you/your-fork.git\`\n\nThen run \`${config.prefix}update setup\` again.`
-                    }, { quoted: msg });
-                }
-                await sock.sendMessage(jid, { text: "🔧 *Setting up Git...*" }, { quoted: msg });
-                const setupCmd = `git init && git remote add origin ${config.repoUrl} && git fetch origin && (git checkout -f main || git checkout -f master)`;
+                await sock.sendMessage(jid, { text: `🔧 *Setting up...*` }, { quoted: msg });
+                const setupCmd = `git init && git remote add origin ${REPO_URL} && git fetch origin && (git checkout -f main || git checkout -f master)`;
                 execWithTimeout(setupCmd, 60000, async (setupErr) => {
                     if (setupErr) {
-                        return await sock.sendMessage(jid, { text: `❌ *Setup failed:* ${redactRepoUrl(setupErr.message)}` }, { quoted: msg });
+                        console.error(`[UPDATE] Setup failed:`, scrubUrlForConsole(setupErr.message));
+                        return await sock.sendMessage(jid, { text: `❌ Setup failed.` }, { quoted: msg });
                     }
-                    await sock.sendMessage(jid, { text: "✅ *Git set up.* Run `.update` again to check for updates." }, { quoted: msg });
+                    await sock.sendMessage(jid, { text: `✅ *Setup complete.* Run \`.update\` again to check for updates.` }, { quoted: msg });
                 });
                 return;
             }
@@ -528,12 +523,13 @@ module.exports = [
                 // Directly pull – no status check
                 execWithTimeout('git pull', 60000, async (pullErr, pullOut) => {
                     if (pullErr) {
+                        console.error(`[UPDATE] Pull failed:`, scrubUrlForConsole(pullErr.message));
                         if (pullErr.message.includes('CONFLICT')) {
                             return await sock.sendMessage(jid, {
-                                text: `❌ *Merge conflict detected!*\n${redactRepoUrl(pullErr.message)}\n\nResolve manually or use \`.git force\` if you're sure.`
+                                text: `❌ *Merge conflict detected.*\n\nResolve manually or use \`.git force\` if you're sure.`
                             }, { quoted: msg });
                         }
-                        return await sock.sendMessage(jid, { text: `❌ *Pull failed:* ${redactRepoUrl(pullErr.message)}` }, { quoted: msg });
+                        return await sock.sendMessage(jid, { text: `❌ Couldn't pull updates.` }, { quoted: msg });
                     }
                     await sendUpdateSuccess(jid, sock, pullOut, msg);
                 });
@@ -546,12 +542,14 @@ module.exports = [
 
                 execWithTimeout('git fetch', 30000, async (fetchErr) => {
                     if (fetchErr) {
-                        return await sock.sendMessage(jid, { text: `❌ *Error fetching updates:* ${redactRepoUrl(fetchErr.message)}` }, { quoted: msg });
+                        console.error(`[UPDATE] Fetch failed:`, scrubUrlForConsole(fetchErr.message));
+                        return await sock.sendMessage(jid, { text: `❌ Couldn't fetch updates.` }, { quoted: msg });
                     }
 
                     execWithTimeout(`git rev-list HEAD..origin/${branch} --count`, 10000, async (countErr, stdout) => {
                         if (countErr) {
-                            return await sock.sendMessage(jid, { text: `❌ *Error checking behind count:* ${redactRepoUrl(countErr.message)}` }, { quoted: msg });
+                            console.error(`[UPDATE] Behind-count check failed:`, scrubUrlForConsole(countErr.message));
+                            return await sock.sendMessage(jid, { text: `❌ Couldn't check for updates.` }, { quoted: msg });
                         }
                         const behind = parseInt(stdout.trim()) || 0;
 
@@ -561,7 +559,8 @@ module.exports = [
 
                         execWithTimeout(`git log --oneline -5 HEAD..origin/${branch}`, 10000, async (logErr, commitLog) => {
                             if (logErr) {
-                                return await sock.sendMessage(jid, { text: `❌ *Error getting commit log:* ${redactRepoUrl(logErr.message)}` }, { quoted: msg });
+                                console.error(`[UPDATE] Commit log fetch failed:`, scrubUrlForConsole(logErr.message));
+                                return await sock.sendMessage(jid, { text: `❌ Couldn't read the commit log.` }, { quoted: msg });
                             }
 
                             const techMsg =
