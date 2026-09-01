@@ -381,6 +381,10 @@ _Swipe through the cards below to explore command categories._ 🔮`;
         const messageContent = {
             viewOnceMessage: {
                 message: {
+                    messageContextInfo: {
+                        deviceListMetadata: {},
+                        deviceListMetadataVersion: 2
+                    },
                     interactiveMessage: {
                         body: { text: headerText },
                         footer: { text: "Limitless System Menu 🪽" },
