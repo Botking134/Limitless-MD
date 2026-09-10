@@ -80,9 +80,18 @@ async function broadcast(sock, payload) {
 // just "episode aired" pings) from each outlet's public RSS feed, formatted
 // to match the "ANIME NEWS UPDATE" card style: title, "via <source>",
 // summary, then a Read More link. No API key needed — RSS is public.
+//
+// Honesty note: I can't reach the open internet from where I write/test this
+// code, so these URLs are my best-confidence picks (ANN's feed in particular
+// is a long-standing, well-known one; Anime Corner is WordPress, which
+// exposes /feed/ by default), not something I've hit and confirmed live from
+// here. Use `.news test` below to check straight from your own server —
+// that's real network access and will tell you immediately which of these
+// actually resolve for you, instead of us guessing back and forth.
 const NEWS_SOURCES = [
-    { name: 'MyAnimeList', url: 'https://myanimelist.net/rss/news.xml' },
-    { name: 'Anime Corner', url: 'https://animecorner.me/feed/' }
+    { name: 'Anime News Network', url: 'https://www.animenewsnetwork.com/all/rss.xml' },
+    { name: 'Anime Corner', url: 'https://animecorner.me/feed/' },
+    { name: 'MyAnimeList', url: 'https://myanimelist.net/rss/news.xml' }
 ];
 
 function decodeEntities(str) {
@@ -306,7 +315,7 @@ const newsToggleCommand = {
             settings[jid] = true;
             saveJSON(SETTINGS_FILE, settings);
             startNewsWatchers(sock);
-            return sock.sendMessage(jid, { text: "✅ *News alerts enabled.* You'll get anime news updates as they happen." }, { quoted: msg });
+            return sock.sendMessage(jid, { text: "✅ *News alerts enabled.* First run just sets a baseline (no backlog spam) — expect the first actual update within the next few minutes. Run *.news test* anytime to check the sources directly." }, { quoted: msg });
         }
 
         if (option === 'off' || option === 'disable' || option === '0') {
@@ -316,7 +325,24 @@ const newsToggleCommand = {
             return sock.sendMessage(jid, { text: "🛑 *News alerts disabled* for this group." }, { quoted: msg });
         }
 
-        return sock.sendMessage(jid, { text: "⚠️ Usage: *.news on* | *off* | *status*" }, { quoted: msg });
+        if (option === 'test' || option === 'debug') {
+            await sock.sendMessage(jid, { text: "🔍 Checking each news source directly, one moment…" }, { quoted: msg });
+            const lines = [`🔍 *NEWS SOURCE CHECK*`];
+            for (const source of NEWS_SOURCES) {
+                try {
+                    const items = await fetchRssNews(source);
+                    lines.push(`✅ *${source.name}* — ${items.length} item(s)` + (items[0] ? `\n   Latest: "${items[0].title}"` : ''));
+                } catch (e) {
+                    const status = e.response?.status;
+                    lines.push(`❌ *${source.name}* — ${status ? `HTTP ${status}` : e.message}`);
+                }
+            }
+            const seen = loadJSON(SEEN_FILE, defaultSeen());
+            lines.push(`\n_Baseline seeded: ${seen.seededAnime ? 'yes' : 'no — first tick after enabling only sets the baseline, next tick posts anything new'}_`);
+            return sock.sendMessage(jid, { text: lines.join('\n') }, { quoted: msg });
+        }
+
+        return sock.sendMessage(jid, { text: "⚠️ Usage: *.news on* | *off* | *status* | *test*" }, { quoted: msg });
     }
 };
 
