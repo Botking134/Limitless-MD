@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
+const BotContext = require('./helpers/BotContext');
 
 const VARS_PATH = path.join(__dirname, 'storage', 'vars.json');
 
@@ -83,12 +84,22 @@ function loadVars() {
         fs.writeFileSync(VARS_PATH, JSON.stringify(vars, null, 2));
     }
 
+    // Register this as the MAIN bot's live settings object. config.js's
+    // Proxy reads/writes into this exact object whenever no sub-bot context
+    // is active, keeping main-bot behavior identical to before.
+    BotContext.setMainVars(vars);
+
     return vars;
 }
 
 // ─── SAVE DYNAMIC VARS (reads from config, writes to vars.json) ──
 
 function saveDynamicVars() {
+    // A sub-bot's owner calling .setvar/.antilink/etc. must persist to that
+    // sub-bot's own vars.json, never to the main bot's storage/vars.json.
+    if (BotContext.getActiveBotId() !== BotContext.MAIN_ID) {
+        return BotContext.persistActive();
+    }
     try {
         const vars = {};
         for (const key of DYNAMIC_KEYS) {
