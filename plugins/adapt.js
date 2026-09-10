@@ -1,10 +1,12 @@
 // plugins/adapt.js
 
+const config = require('../config');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { exec } = require('child_process');
+const sharp = require('sharp');
 const { downloadContentFromMessage } = require('@itsliaaa/baileys');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 
@@ -87,31 +89,64 @@ async function downloadMedia(msg) {
     return { buffer, type: type === 'videoMessage' ? 'video' : 'image' };
 }
 
-// FFmpeg wrapper for local quality adjustments
-function processMedia(inputBuffer, type, mode) {
+// Pure-code image upscale/downscale — no ffmpeg binary needed for the image
+// case, just the `sharp` library (already a project dependency). This is
+// what adapt/adapt-low/adapt-mid/adapt-high actually run for images now;
+// ffmpeg is only still used below for video, since there's no equivalent
+// pure-JS video transcoder.
+async function processImage(inputBuffer, mode) {
+    const img = sharp(inputBuffer, { failOn: 'none' });
+    const metadata = await img.metadata();
+    const width = metadata.width || 800;
+
+    let targetWidth = width;
+    let sharpenSigma = 0;
+    let quality = 90;
+
+    if (mode === 'low') {
+        targetWidth = Math.max(32, Math.round(width / 2));
+        quality = 60;
+    } else if (mode === 'mid') {
+        targetWidth = Math.round(width * 1.5);
+        sharpenSigma = 1.0;
+        quality = 92;
+    } else if (mode === 'high') {
+        targetWidth = Math.round(width * 2);
+        sharpenSigma = 1.6;
+        quality = 95;
+    }
+
+    let pipeline = img.resize({ width: targetWidth, kernel: sharp.kernel.lanczos3 });
+    if (sharpenSigma > 0) pipeline = pipeline.sharpen({ sigma: sharpenSigma });
+    if (mode === 'high') pipeline = pipeline.modulate({ saturation: 1.1 }).linear(1.05, -8);
+
+    return pipeline.jpeg({ quality, mozjpeg: true }).toBuffer();
+}
+
+// FFmpeg wrapper — video only now (see processImage above for the image path).
+function processVideo(inputBuffer, mode) {
     return new Promise((resolve, reject) => {
-        const ext = type === 'video' ? 'mp4' : 'jpg';
-        const tempIn = path.join(__dirname, `../temp_in_${crypto.randomBytes(4).toString('hex')}.${ext}`);
-        const tempOut = path.join(__dirname, `../temp_out_${crypto.randomBytes(4).toString('hex')}.${ext}`);
-        
+        const tempIn = path.join(__dirname, `../temp_in_${crypto.randomBytes(4).toString('hex')}.mp4`);
+        const tempOut = path.join(__dirname, `../temp_out_${crypto.randomBytes(4).toString('hex')}.mp4`);
+
         fs.writeFileSync(tempIn, inputBuffer);
-        
+
         let vf = "";
         let extra = "";
 
         if (mode === 'low') {
             vf = "scale=iw/2:-2";
-            extra = type === 'video' ? "-b:v 200k -r 15" : "-q:v 31";
+            extra = "-b:v 200k -r 15";
         } else if (mode === 'mid') {
             vf = "scale=iw*1.5:-2:flags=lanczos,unsharp=5:5:1.0:5:5:0.0";
-            extra = type === 'video' ? "-b:v 2M" : "-q:v 2";
+            extra = "-b:v 2M";
         } else if (mode === 'high') {
             vf = "scale=iw*2:-2:flags=lanczos,unsharp=7:7:1.8:7:7:0.0,eq=contrast=1.05:saturation=1.1";
-            extra = type === 'video' ? "-b:v 6M -c:a copy" : "-q:v 1"; 
+            extra = "-b:v 6M -c:a copy";
         }
 
         const cmd = `ffmpeg -i "${tempIn}" -vf "${vf}" ${extra} -y "${tempOut}"`;
-        
+
         exec(cmd, (err) => {
             if (fs.existsSync(tempIn)) {
                 try { fs.unlinkSync(tempIn); } catch (_) {}
@@ -130,7 +165,46 @@ function processMedia(inputBuffer, type, mode) {
     });
 }
 
+async function processMedia(inputBuffer, type, mode) {
+    return type === 'video' ? processVideo(inputBuffer, mode) : processImage(inputBuffer, mode);
+}
+
 // ─── COMMANDS ─────────────────────────────────────────────────────
+
+// Vision/description step for `warp`, using the same Gemini SDK + API key
+// convention as plugins/converter.js. Tries the newest model first and only
+// drops down a tier when that one actually fails — "use Gemini 3.7/3.6/3.5,
+// only where necessary" — instead of picking one fixed model up front.
+const GEMINI_VISION_MODELS = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'];
+
+async function describeImageWithGemini(base64Img, mimeType, promptText) {
+    if (!config.geminiApiKey) throw new Error('Gemini API key is missing in config.');
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+
+    let lastErr;
+    for (const model of GEMINI_VISION_MODELS) {
+        try {
+            const response = await ai.models.generateContent({
+                model,
+                contents: [{
+                    role: 'user',
+                    parts: [
+                        { text: promptText },
+                        { inlineData: { mimeType, data: base64Img } }
+                    ]
+                }]
+            });
+            const text = response.text || response.output;
+            if (text) return text;
+            throw new Error('Empty response');
+        } catch (e) {
+            lastErr = e;
+            console.error(`⚠️ [WARP] Gemini vision failed on ${model}, trying next:`, e.message);
+        }
+    }
+    throw lastErr || new Error('All Gemini vision models failed.');
+}
 
 module.exports = [
     {
@@ -150,7 +224,7 @@ module.exports = [
                 await sock.sendMessage(jid, content, { quoted: msg });
             } catch (e) {
                 console.error("[Adapt Error]", e);
-                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media. Ensure FFmpeg is installed." }, { quoted: msg });
+                sock.sendMessage(jid, { text: "⚠️ Failed to adapt media." }, { quoted: msg });
             }
         }
     },
@@ -229,24 +303,12 @@ module.exports = [
                     ? `Describe this image in detail. Then, alter the description to fulfill this request: "${userPrompt}". Output ONLY the final detailed prompt for image generation.`
                     : `Describe this image in detail. Then, mutate the description into a surreal, highly corrupted, reality-warping visual. Output ONLY the final detailed prompt for image generation.`;
 
-                // STEP 1: Vision / Analysis using openai/gpt-5.6-luna
-                const visionRes = await axios.post('https://api.openai.com/v1/chat/completions', {
-                    model: "openai/gpt-5.6-luna",
-                    messages: [
-                        {
-                            role: "user",
-                            content: [
-                                { type: "text", text: visionSystemPrompt },
-                                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Img}` } }
-                            ]
-                        }
-                    ]
-                }, { 
-                    headers: { "Authorization": `Bearer ${apiKey}` },
-                    timeout: 120000 
-                });
-
-                const generatedPrompt = visionRes.data.choices[0].message.content;
+                // STEP 1: Vision / Analysis — Gemini (3.7 → 3.6 → 3.5 fallback).
+                // Image generation itself stays on the existing pipeline below;
+                // Gemini is only used where it's actually the established tool
+                // for the job (this codebase already uses it for text/vision
+                // elsewhere), not swapped in for the part that already works.
+                const generatedPrompt = await describeImageWithGemini(base64Img, 'image/jpeg', visionSystemPrompt);
 
                 // STEP 2: Image Synthesis using openai/gpt-5.6-luna
                 const generationRes = await axios.post('https://api.openai.com/v1/images/generations', {
