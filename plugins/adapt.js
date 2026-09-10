@@ -206,6 +206,37 @@ async function describeImageWithGemini(base64Img, mimeType, promptText) {
     throw lastErr || new Error('All Gemini vision models failed.');
 }
 
+// Image synthesis for `warp`, via Gemini's image-output models (same
+// "3.7 → 3.6 → 3.5" tiering as the vision step above). Returns a raw image
+// Buffer. This is what actually needed to change — the vision step alone
+// being on Gemini didn't matter to you since the OpenAI call was still the
+// one producing the image you actually see.
+const GEMINI_IMAGE_MODELS = ['gemini-3.7-flash-image', 'gemini-3.6-flash-image', 'gemini-3.5-flash-image'];
+
+async function generateImageWithGemini(prompt) {
+    if (!config.geminiApiKey) throw new Error('Gemini API key is missing in config.');
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+
+    let lastErr;
+    for (const model of GEMINI_IMAGE_MODELS) {
+        try {
+            const response = await ai.models.generateContent({
+                model,
+                contents: [{ role: 'user', parts: [{ text: prompt }] }]
+            });
+            const parts = response.candidates?.[0]?.content?.parts || [];
+            const imagePart = parts.find(p => p.inlineData?.data);
+            if (imagePart) return Buffer.from(imagePart.inlineData.data, 'base64');
+            throw new Error('No image data in response');
+        } catch (e) {
+            lastErr = e;
+            console.error(`⚠️ [WARP] Gemini image generation failed on ${model}, trying next:`, e.message);
+        }
+    }
+    throw lastErr || new Error('All Gemini image models failed.');
+}
+
 module.exports = [
     {
         name: 'adapt',
@@ -304,28 +335,33 @@ module.exports = [
                     : `Describe this image in detail. Then, mutate the description into a surreal, highly corrupted, reality-warping visual. Output ONLY the final detailed prompt for image generation.`;
 
                 // STEP 1: Vision / Analysis — Gemini (3.7 → 3.6 → 3.5 fallback).
-                // Image generation itself stays on the existing pipeline below;
-                // Gemini is only used where it's actually the established tool
-                // for the job (this codebase already uses it for text/vision
-                // elsewhere), not swapped in for the part that already works.
                 const generatedPrompt = await describeImageWithGemini(base64Img, 'image/jpeg', visionSystemPrompt);
 
-                // STEP 2: Image Synthesis using openai/gpt-5.6-luna
-                const generationRes = await axios.post('https://api.openai.com/v1/images/generations', {
-                    model: "openai/gpt-5.6-luna",
-                    prompt: generatedPrompt,
-                    n: 1,
-                    size: "1024x1024"
-                }, { 
-                    headers: { "Authorization": `Bearer ${apiKey}` },
-                    timeout: 120000 
-                });
-
-                const warpedImageUrl = generationRes.data.data[0].url;
+                // STEP 2: Image Synthesis — Gemini (3.7 → 3.6 → 3.5 fallback).
+                // Falls back to the old OpenAI-format endpoint only if every
+                // Gemini image model genuinely fails — "only where necessary"
+                // now actually applies to the step that produces what you see.
+                let warpedImageBuffer;
+                try {
+                    warpedImageBuffer = await generateImageWithGemini(generatedPrompt);
+                } catch (geminiErr) {
+                    console.error("[Warp] Gemini image generation unavailable, falling back to OpenAI:", geminiErr.message);
+                    const generationRes = await axios.post('https://api.openai.com/v1/images/generations', {
+                        model: "openai/gpt-5.6-luna",
+                        prompt: generatedPrompt,
+                        n: 1,
+                        size: "1024x1024"
+                    }, {
+                        headers: { "Authorization": `Bearer ${apiKey}` },
+                        timeout: 120000
+                    });
+                    const warpedImageUrl = generationRes.data.data[0].url;
+                    warpedImageBuffer = (await axios.get(warpedImageUrl, { responseType: 'arraybuffer' })).data;
+                }
 
                 // Send the generated result
                 await sock.sendMessage(jid, { 
-                    image: { url: warpedImageUrl }, 
+                    image: warpedImageBuffer, 
                     caption: `🌌 *Reality Warped*\n\n_Prompt:_ ${userPrompt || "Surreal Mutation"}` 
                 }, { quoted: msg });
 
