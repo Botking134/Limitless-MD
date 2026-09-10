@@ -164,47 +164,138 @@ function generateMemeSvg(topText, bottomText) {
     `);
 }
 
-// ─── SP: FETCH AN EXISTING PACK FROM STICKER.LY ──────────────────
-async function stickerlySearch(query) {
-    const url = `https://api.sticker.ly/v3.1/stickerPack/search/${encodeURIComponent(query)}?limit=20&offset=0`;
+// ─── STICKER.LY SEARCH WITH MODERN HEADERS ────────────────────────
+async function searchStickerly(query) {
+    const endpoints = [
+        `https://api.sticker.ly/v3.1/stickerPack/search?keyword=${encodeURIComponent(query)}&limit=25&offset=0`,
+        `http://api.sticker.ly/v3.1/stickerPack/search?keyword=${encodeURIComponent(query)}&limit=25&offset=0`,
+        `https://api.sticker.ly/v3.1/stickerPack/search/${encodeURIComponent(query)}?limit=25&offset=0`,
+        `http://api.sticker.ly/v3.1/stickerPack/search/${encodeURIComponent(query)}?limit=25&offset=0`
+    ];
 
-    let data;
-    try {
-        ({ data } = await axios.get(url, {
-            timeout: 15000,
-            headers: {
-                'content-type': 'application/json',
-                'package-name': 'com.snowcorp.stickerly.android',
-                'app-version-code': '186',
-                'manufacturer': 'Google',
-                'model': 'Pixel 5',
-                'os-version': '30',
-                'user-agent': 'okhttp/4.9.0'
-            }
-        }));
-    } catch (err) {
-        console.error(`⚠️ [SP] Sticker.ly request failed for "${query}":`, err.message);
-        return null;
-    }
-
-    const packs = data?.result?.stickerPacks || data?.stickerPacks || data?.data?.stickerPacks || [];
-    if (!packs.length) {
-        return null;
-    }
-
-    const pack = packs[0];
-    const stickerUrls = (pack.stickers || []).map(s =>
-        s?.resourceUrl || s?.imageFile?.contentUrl || s?.url || null
-    ).filter(Boolean);
-
-    if (!stickerUrls.length) return null;
-
-    return { 
-        name: pack.name || query, 
-        publisher: `stickers for ${pack.name || query}`,
-        trayImage: pack.trayImageFile?.contentUrl || stickerUrls[0],
-        urls: stickerUrls.slice(0, 30) 
+    const modernHeaders = {
+        'User-Agent': 'okhttp/4.12.0',
+        'package-name': 'com.snowcorp.stickerly.android',
+        'app-version-code': '1033700',
+        'manufacturer': 'Samsung',
+        'model': 'SM-G998B',
+        'os-version': '34',
+        'content-type': 'application/json'
     };
+
+    for (const url of endpoints) {
+        try {
+            const { data } = await axios.get(url, { headers: modernHeaders, timeout: 8000 });
+            const packs = data?.result?.stickerPacks || data?.stickerPacks || data?.data?.stickerPacks || [];
+            if (packs.length > 0) {
+                const pack = packs[0];
+                const stickerUrls = (pack.stickers || []).map(s =>
+                    s?.resourceUrl || s?.imageFile?.contentUrl || s?.url || null
+                ).filter(Boolean);
+
+                if (stickerUrls.length > 0) {
+                    return {
+                        name: pack.name || query,
+                        publisher: `stickers for ${pack.name || query}`,
+                        urls: stickerUrls.slice(0, 30)
+                    };
+                }
+            }
+        } catch (e) {
+            // continue to next endpoint
+        }
+    }
+    return null;
+}
+
+// ─── KLIPY STICKER SEARCH (FALLBACK PROVIDER) ─────────────────────
+async function searchKlipyStickers(query) {
+    try {
+        const url = `https://api.klipy.com/v2/search?q=${encodeURIComponent(query)}&key=${KLIPY_API_KEY}&limit=25&searchfilter=sticker`;
+        const { data } = await axios.get(url, { timeout: 8000 });
+        const items = data?.results || data?.data?.data || data?.data || [];
+        
+        const urls = items.map(item => {
+            return item?.media_formats?.webp?.url ||
+                   item?.media_formats?.png?.url ||
+                   item?.media_formats?.gif?.url ||
+                   item?.media_formats?.tinygif?.url ||
+                   item?.url || null;
+        }).filter(Boolean);
+
+        if (urls.length > 0) {
+            return {
+                name: query,
+                publisher: `stickers for ${query}`,
+                urls: urls.slice(0, 25)
+            };
+        }
+    } catch (e) {
+        console.error("⚠️ [SP] Klipy fallback failed:", e.message);
+    }
+    return null;
+}
+
+// ─── COMBINED ROBUST STICKER PACK FETCHER ──────────────────────────
+async function fetchStickerPack(query) {
+    // 1. Try Sticker.ly first
+    let pack = await searchStickerly(query);
+    if (pack && pack.urls.length) return pack;
+
+    // 2. Fallback to Klipy Sticker Search
+    pack = await searchKlipyStickers(query);
+    if (pack && pack.urls.length) return pack;
+
+    return null;
+}
+
+// ─── DISPATCH NATIVE STICKER PACK CARD ────────────────────────────
+async function sendNativeStickerPack(sock, jid, pack, quotedMsg) {
+    // Format 1: Direct sock.sendStickerPack helper in @itsliaaa/baileys
+    if (typeof sock.sendStickerPack === 'function') {
+        try {
+            return await sock.sendStickerPack(jid, {
+                name: pack.name,
+                publisher: pack.publisher,
+                stickers: pack.urls
+            }, { quoted: quotedMsg });
+        } catch (e1) {
+            try {
+                return await sock.sendStickerPack(jid, pack.urls, quotedMsg, {
+                    name: pack.name,
+                    publisher: pack.publisher
+                });
+            } catch (e2) {
+                console.warn("⚠️ [SP] sock.sendStickerPack failed, trying sendMessage:", e2.message);
+            }
+        }
+    }
+
+    // Format 2: Direct sendMessage payload
+    try {
+        return await sock.sendMessage(jid, {
+            stickerPack: {
+                name: pack.name,
+                publisher: pack.publisher,
+                stickers: pack.urls
+            }
+        }, { quoted: quotedMsg });
+    } catch (e3) {
+        // Format 3: Protobuf Relay Message
+        const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
+        const stickerPackPayload = {
+            stickerPackMessage: {
+                stickerPackId: `pack_${Date.now()}`,
+                name: pack.name,
+                publisher: pack.publisher,
+                stickers: pack.urls.map(url => ({
+                    url: typeof url === 'string' ? url : url.url
+                }))
+            }
+        };
+        const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(stickerPackPayload), { userJid: sock.user.id });
+        return await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+    }
 }
 
 // ─── SP2: KLIPY GIF FETCHER (RANDOMIZED) ──────────────────────────
@@ -251,70 +342,25 @@ async function handleSp(sock, msg, args) {
 
     // Step 1: Send the waiting status message
     const statusMsg = await sock.sendMessage(jid, {
-        text: `⏳ _please wait..._`
+        text: `⏳ _Fetching sticker pack, please wait..._`
     }, { quoted: msg });
 
     try {
-        const pack = await stickerlySearch(query);
+        const pack = await fetchStickerPack(query);
+
         if (!pack || !pack.urls.length) {
             try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
             return await sock.sendMessage(jid, { text: `❌ No sticker pack found for "${query}".` }, { quoted: msg });
         }
 
-        // Step 2: Try native Baileys sendStickerPack or stickerPack payload
-        let sent = false;
+        // Step 2: Send native WhatsApp Sticker Pack card
+        await sendNativeStickerPack(sock, jid, pack, msg);
 
-        // Method A: sock.sendStickerPack (built-in on @itsliaaa/baileys & starcore)
-        if (typeof sock.sendStickerPack === 'function') {
-            try {
-                await sock.sendStickerPack(jid, pack.urls, msg, {
-                    name: pack.name,
-                    publisher: pack.publisher,
-                    description: pack.publisher
-                });
-                sent = true;
-            } catch (err) {
-                console.warn("⚠️ [SP] sock.sendStickerPack failed, trying sendMessage fallback:", err.message);
-            }
-        }
-
-        // Method B: Direct stickerPack message object
-        if (!sent) {
-            try {
-                await sock.sendMessage(jid, {
-                    stickerPack: {
-                        name: pack.name,
-                        publisher: pack.publisher,
-                        stickers: pack.urls
-                    }
-                }, { quoted: msg });
-                sent = true;
-            } catch (err) {
-                console.warn("⚠️ [SP] sendMessage stickerPack failed, building protobuf payload:", err.message);
-            }
-        }
-
-        // Method C: Protobuf Relay fallback
-        if (!sent) {
-            const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
-            const stickerPackPayload = {
-                stickerPackMessage: {
-                    stickerPackId: `pack_${Date.now()}`,
-                    name: pack.name,
-                    publisher: pack.publisher,
-                    stickers: pack.urls.map(url => ({ url }))
-                }
-            };
-            const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(stickerPackPayload), { userJid: sock.user.id });
-            await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
-            sent = true;
-        }
-
-        // Delete the "Please wait..." message once the pack is dispatched
+        // Step 3: Remove the "Please wait" indicator
         try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
 
     } catch (err) {
-        console.error("❌ [SP] Failed to fetch/send sticker pack:", err.message);
+        console.error("❌ [SP] Failed to send sticker pack card:", err.message);
         try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
         await sock.sendMessage(jid, { text: `❌ Failed to fetch sticker pack: ${err.message}` }, { quoted: msg });
     }
@@ -605,7 +651,7 @@ module.exports = [
         }
     },
 
-    // 8. SP2 (Fetch 10 randomized GIFs from Klipy, convert to stickers, send one by one)
+    // 8. SP2 (Fetch 10 randomized GIFs from Klipy, convert, send one by one)
     {
         name: 'sp2',
         isPrefixless: false,
