@@ -15,6 +15,7 @@ const path = require('path');
 const QRCode = require('qrcode');
 const config = require('../config');
 const { normalizeToJid } = require('../stateManager');
+const BotContext = require('./BotContext');
 
 const SUBBOTS_DIR = path.join(__dirname, '../storage/sub_sessions');
 const REGISTRY_PATH = path.join(__dirname, '../storage/subbots.json');
@@ -88,6 +89,11 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
         markOnlineOnConnect: false
     });
 
+    // Tags this socket with its own bot id so every config.<setting> read/write
+    // it triggers (via Infinity.js) is scoped to this sub-bot's own settings
+    // object instead of bleeding into the main bot or other sub-bots.
+    sock.__botId = phoneNumber;
+
     const entry = { sock, ownerJid: requesterJid, status: 'pairing', connectedAt: null };
     global.subBotSockets.set(phoneNumber, entry);
 
@@ -136,6 +142,7 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
                 delete registry[phoneNumber];
                 saveRegistry(registry);
                 global.subBotSockets.delete(phoneNumber);
+                BotContext.forgetBot(phoneNumber);
                 return;
             }
 
@@ -176,6 +183,7 @@ async function removeSubBot(phoneNumber) {
     try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch (e) {}
 
     global.subBotSockets.delete(phoneNumber);
+    BotContext.forgetBot(phoneNumber);
     const registry = readRegistry();
     delete registry[phoneNumber];
     saveRegistry(registry);
