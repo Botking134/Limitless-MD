@@ -955,7 +955,7 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const parts = args?.trim().split(' ') || [];
-            let count = 1;
+            let count = 5;
             let query = parts.join(' ');
             const first = parts[0];
             if (first && !isNaN(first) && parseInt(first) > 0) {
@@ -972,7 +972,7 @@ module.exports = [
                 const images = data.result.slice(0, count);
                 for (const img of images) {
                     const buffer = await fetchBuffer(img.image);
-                    await sock.sendMessage(jid, { image: buffer, caption: img.caption || img.fullName || 'Pinterest' });
+                    await sock.sendMessage(jid, { image: buffer });
                 }
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
