@@ -1,0 +1,30 @@
+# ─── Dependencies ───────────────────────────────────────────────
+node_modules/
+
+# ─── Runtime settings & state (this is exactly what was clobbering
+# your .setvar changes on every `git pull` — these files are written
+# to constantly while the bot runs and must never be tracked/committed) ──
+storage/vars.json
+storage/state.json
+storage/news_settings.json
+storage/news_seen.json
+
+# ─── WhatsApp session credentials (main bot + every sub-bot) ───
+# Never commit these: they're both machine-specific runtime state AND
+# sensitive auth material — pulling would also crash/replace live sessions.
+storage/session_auth/
+storage/sub_sessions/
+
+# ─── Sub-bot per-bot settings (added for the sub-bot isolation fix) ──
+storage/sub_sessions/*/vars.json
+
+# ─── Temp files created during media processing (adapt.js etc.) ───
+temp_in_*
+temp_out_*
+
+# ─── Env / secrets ──────────────────────────────────────────────
+.env
+
+# ─── OS / editor cruft ──────────────────────────────────────────
+.DS_Store
+*.log
