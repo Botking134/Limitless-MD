@@ -11,6 +11,7 @@ const sharp = require('sharp');
 
 // ─── HARDCODED CREDENTIALS ────────────────────────────────────────
 const KLIPY_API_KEY = '7wvbG3l5iJ1h21e3beb2xebaZuglezPhnMIHiJ0ooZodo39pceCYOxTQtKGOYMw6';
+const PACK_NAME = 'Infinity ♾️';
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -164,11 +165,6 @@ function generateMemeSvg(topText, bottomText) {
 }
 
 // ─── SP: FETCH AN EXISTING PACK FROM STICKER.LY ──────────────────
-// Sticker.ly's search API is unofficial/undocumented — this is the
-// widely-used community-reverse-engineered endpoint. It requires the
-// same headers the Android app sends, or it 401s. Fails soft (returns
-// null) on any error so the command can report cleanly instead of
-// crashing.
 async function stickerlySearch(query) {
     const url = `https://api.sticker.ly/v3.1/stickerPack/search/${encodeURIComponent(query)}?limit=20&offset=0`;
 
@@ -193,7 +189,6 @@ async function stickerlySearch(query) {
 
     const packs = data?.result?.stickerPacks || data?.stickerPacks || data?.data?.stickerPacks || [];
     if (!packs.length) {
-        console.error(`⚠️ [SP] Sticker.ly returned no packs for "${query}". Raw response:`, JSON.stringify(data).slice(0, 500));
         return null;
     }
 
@@ -204,25 +199,25 @@ async function stickerlySearch(query) {
 
     if (!stickerUrls.length) return null;
 
-    return { name: pack.name || query, urls: stickerUrls.slice(0, 30) };
+    return { 
+        name: pack.name || query, 
+        publisher: `stickers for ${pack.name || query}`,
+        trayImage: pack.trayImageFile?.contentUrl || stickerUrls[0],
+        urls: stickerUrls.slice(0, 30) 
+    };
 }
 
-const PACK_NAME = 'Infinity ♾️';
-
-// ─── SP2: KLIPY GIF FETCHER ───────────────────────────────────────
+// ─── SP2: KLIPY GIF FETCHER (RANDOMIZED) ──────────────────────────
 async function klipySearch(query, { limit = 10 } = {}) {
-    // Klipy mirrors Tenor's v2 shape for GIFs at /v2/search.
-    const url = `https://api.klipy.com/v2/search?q=${encodeURIComponent(query)}&key=${KLIPY_API_KEY}&limit=${limit}`;
+    const poolLimit = Math.max(30, limit * 3);
+    const url = `https://api.klipy.com/v2/search?q=${encodeURIComponent(query)}&key=${KLIPY_API_KEY}&limit=${poolLimit}`;
 
     const { data } = await axios.get(url, { timeout: 15000 });
 
     const items = data?.results || data?.data?.data || data?.data || (Array.isArray(data) ? data : []);
-    if (!items.length) {
-        console.error(`⚠️ [SP2] Klipy returned no items for "${query}". Raw response:`, JSON.stringify(data).slice(0, 500));
-        return [];
-    }
+    if (!items.length) return [];
 
-    return items.map(item => {
+    const allUrls = items.map(item => {
         return item?.media_formats?.gif?.url ||
                item?.media_formats?.tinygif?.url ||
                item?.media_formats?.mediumgif?.url ||
@@ -233,51 +228,99 @@ async function klipySearch(query, { limit = 10 } = {}) {
                item?.url ||
                null;
     }).filter(Boolean);
+
+    // Fisher-Yates Shuffle for true randomness
+    for (let i = allUrls.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allUrls[i], allUrls[j]] = [allUrls[j], allUrls[i]];
+    }
+
+    return allUrls.slice(0, limit);
 }
 
-// ── .sp <query> — fetch a real pack from Sticker.ly and deliver it ──
+// ── .sp <query> — Send Native WhatsApp Sticker Pack Card ────────
 async function handleSp(sock, msg, args) {
     const jid = msg.key.remoteJid;
     const query = (args || '').trim();
 
     if (!query) {
         return await sock.sendMessage(jid, {
-            text: `❌ *Usage:* \`${config.prefix}sp <search term>\`\n*Example:* \`${config.prefix}sp Goku\``
+            text: `❌ *Usage:* \`${config.prefix}sp <search term>\`\n*Example:* \`${config.prefix}sp Mikey\``
         }, { quoted: msg });
     }
 
-    const pack = await stickerlySearch(query);
-    if (!pack) {
-        return await sock.sendMessage(jid, { text: `❌ No sticker pack found on Sticker.ly for "${query}".` }, { quoted: msg });
-    }
-
+    // Step 1: Send the waiting status message
     const statusMsg = await sock.sendMessage(jid, {
-        text: `📦 *Fetching "${pack.name}"* from Sticker.ly — ${pack.urls.length} sticker(s)...`
+        text: `⏳ _please wait..._`
     }, { quoted: msg });
 
-    let delivered = 0;
-    for (const url of pack.urls) {
-        try {
-            const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
-            const buffer = await convertLocal(Buffer.from(res.data), false, PACK_NAME, config.author || 'Limitless');
-            await sock.sendMessage(jid, { sticker: buffer });
-            delivered++;
-        } catch (err) {
-            console.error(`⚠️ [SP] Failed to convert one sticker from "${pack.name}":`, err.message);
+    try {
+        const pack = await stickerlySearch(query);
+        if (!pack || !pack.urls.length) {
+            try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+            return await sock.sendMessage(jid, { text: `❌ No sticker pack found for "${query}".` }, { quoted: msg });
         }
-        await new Promise(resolve => setTimeout(resolve, 1200));
+
+        // Step 2: Try native Baileys sendStickerPack or stickerPack payload
+        let sent = false;
+
+        // Method A: sock.sendStickerPack (built-in on @itsliaaa/baileys & starcore)
+        if (typeof sock.sendStickerPack === 'function') {
+            try {
+                await sock.sendStickerPack(jid, pack.urls, msg, {
+                    name: pack.name,
+                    publisher: pack.publisher,
+                    description: pack.publisher
+                });
+                sent = true;
+            } catch (err) {
+                console.warn("⚠️ [SP] sock.sendStickerPack failed, trying sendMessage fallback:", err.message);
+            }
+        }
+
+        // Method B: Direct stickerPack message object
+        if (!sent) {
+            try {
+                await sock.sendMessage(jid, {
+                    stickerPack: {
+                        name: pack.name,
+                        publisher: pack.publisher,
+                        stickers: pack.urls
+                    }
+                }, { quoted: msg });
+                sent = true;
+            } catch (err) {
+                console.warn("⚠️ [SP] sendMessage stickerPack failed, building protobuf payload:", err.message);
+            }
+        }
+
+        // Method C: Protobuf Relay fallback
+        if (!sent) {
+            const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
+            const stickerPackPayload = {
+                stickerPackMessage: {
+                    stickerPackId: `pack_${Date.now()}`,
+                    name: pack.name,
+                    publisher: pack.publisher,
+                    stickers: pack.urls.map(url => ({ url }))
+                }
+            };
+            const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(stickerPackPayload), { userJid: sock.user.id });
+            await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+            sent = true;
+        }
+
+        // Delete the "Please wait..." message once the pack is dispatched
+        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+
+    } catch (err) {
+        console.error("❌ [SP] Failed to fetch/send sticker pack:", err.message);
+        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+        await sock.sendMessage(jid, { text: `❌ Failed to fetch sticker pack: ${err.message}` }, { quoted: msg });
     }
-
-    try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
-
-    await sock.sendMessage(jid, {
-        text: delivered > 0
-            ? `✅ Delivered ${delivered}/${pack.urls.length} stickers from *"${pack.name}"*.`
-            : `❌ Couldn't convert any stickers from "${pack.name}".`
-    }, { quoted: msg });
 }
 
-// ── .sp2 <query> — fetch 10 GIFs from Klipy, convert, send one by one ──
+// ── .sp2 <query> — Fetch 10 randomized GIFs from Klipy, convert, send one by one ──
 async function handleSp2(sock, msg, args) {
     const jid = msg.key.remoteJid;
     const query = (args || '').trim();
@@ -474,7 +517,6 @@ module.exports = [
             } else if (input.toLowerCase().startsWith('bottom ')) {
                 bottomText = input.slice(7).trim();
             } else {
-                // DEFAULT IS BOTTOM TEXT
                 bottomText = input;
             }
 
@@ -487,17 +529,13 @@ module.exports = [
                 let buffer = Buffer.from([]);
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                // 1. Convert to 512x512 PNG using Sharp
                 const baseImage = await sharp(buffer).resize(512, 512, { fit: 'cover' }).png().toBuffer();
-
-                // 2. Generate and composite SVG Meme Text
                 const svgOverlay = generateMemeSvg(topText, bottomText);
                 const memedBuffer = await sharp(baseImage)
                     .composite([{ input: svgOverlay, top: 0, left: 0 }])
                     .png()
                     .toBuffer();
 
-                // 3. Format into WhatsApp WebP Sticker
                 const sticker = new Sticker(memedBuffer, {
                     pack: config.packName || 'Limitless',
                     author: config.author || 'Gojo',
@@ -538,7 +576,6 @@ module.exports = [
 
                 const statusMsg = await sock.sendMessage(jid, { text: "🔧 Repairing sticker pack CDN manifest..." }, { quoted: msg });
 
-                // Construct fresh sticker pack message payload
                 const repairedPayload = {
                     stickerPackMessage: {
                         name: packMsg.name || "Sticker Pack",
@@ -559,7 +596,7 @@ module.exports = [
         }
     },
 
-    // 7. SP (Fetch an existing pack from Sticker.ly)
+    // 7. SP (Fetch & Send Native WhatsApp Sticker Pack Card)
     {
         name: 'sp',
         isPrefixless: false,
@@ -568,7 +605,7 @@ module.exports = [
         }
     },
 
-    // 8. SP2 (Fetch 10 GIFs from Klipy, convert to stickers, send one by one)
+    // 8. SP2 (Fetch 10 randomized GIFs from Klipy, convert to stickers, send one by one)
     {
         name: 'sp2',
         isPrefixless: false,
@@ -619,7 +656,6 @@ module.exports = [
                         console.error(`⚠️ [UNPACK] Sticker ${delivered + 1} download failed:`, stickerErr.message);
                     }
 
-                    // Strict 2-second delay between dispatches
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 }
 
