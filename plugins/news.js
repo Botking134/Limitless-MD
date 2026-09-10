@@ -43,8 +43,16 @@ function isEnabled(val) {
     return val === true || val === 'on' || val === '1' || val === 1;
 }
 
+// ID scheme version — bump this whenever the shape of an item's `id` changes
+// (e.g. switching sources changes IDs from numeric AniList IDs to article
+// URLs). On a mismatch every current item would otherwise look "fresh" all
+// at once and flood every group — instead we silently reseed, exactly like
+// a first-ever run.
+const SCHEMA_VERSION = 2;
+
 function defaultSeen() {
     return {
+        schemaVersion: SCHEMA_VERSION,
         animeIds: [],
         sportsIds: { football: [], wwe: [] },
         seededAnime: false,
@@ -56,6 +64,16 @@ function defaultSeen() {
 // Keep the "seen" arrays from growing forever.
 function trimIds(arr, max = 300) {
     return arr.length > max ? arr.slice(arr.length - max) : arr;
+}
+
+function loadSeen() {
+    const seen = loadJSON(SEEN_FILE, defaultSeen());
+    if (seen.schemaVersion !== SCHEMA_VERSION) {
+        // ID format changed underneath this data — reseed instead of treating
+        // every item under the new scheme as newly "fresh".
+        return defaultSeen();
+    }
+    return seen;
 }
 
 async function getActiveGroups() {
@@ -122,7 +140,13 @@ function extractImage(itemXml) {
     const enclosure = itemXml.match(/<enclosure[^>]*url="([^"]+)"[^>]*type="image[^"]*"/i)
         || itemXml.match(/<media:(?:content|thumbnail)[^>]*url="([^"]+)"/i)
         || itemXml.match(/<img[^>]*src="([^"]+)"/i);
-    return enclosure ? enclosure[1] : null;
+    const url = enclosure ? enclosure[1] : null;
+    // Only accept a real absolute http(s) URL — RSS feeds sometimes give a
+    // protocol-relative ("//host/img.jpg") or relative path, which Baileys/
+    // WhatsApp can't fetch as-is. Passing that through was the "failed to
+    // attach images" you saw; better to just skip the image than send a
+    // request that's guaranteed to fail.
+    return url && /^https?:\/\//i.test(url) ? url : null;
 }
 
 async function fetchRssNews(source) {
@@ -155,7 +179,7 @@ async function checkAnimeUpdates(sock) {
     }
     if (!allItems.length) return;
 
-    const seen = loadJSON(SEEN_FILE, defaultSeen());
+    const seen = loadSeen();
     seen.animeIds = seen.animeIds || [];
 
     // First run ever: just record the current snapshot as the baseline, don't spam
@@ -187,12 +211,18 @@ async function checkAnimeUpdates(sock) {
                 await broadcast(sock, { text: caption });
             }
         } catch (e) {
-            console.error('⚠️ [NEWS/ANIME] Broadcast failed for', item.title, e.message);
+            // Image send failed (bad host, hotlink block, etc.) — don't just
+            // drop the item, still get the news out as text.
+            console.error('⚠️ [NEWS/ANIME] Image send failed for', item.title, '— retrying as text:', e.message);
+            try { await broadcast(sock, { text: caption }); } catch (e2) { /* give up on this item */ }
         }
-    }
 
-    seen.animeIds = trimIds([...seenSet, ...freshItems.map(s => s.id)]);
-    saveJSON(SEEN_FILE, seen);
+        // Mark this item seen immediately (not just at the end of the loop) —
+        // if the process restarts mid-batch, already-sent items won't resend.
+        seenSet.add(item.id);
+        seen.animeIds = trimIds([...seenSet]);
+        saveJSON(SEEN_FILE, seen);
+    }
 }
 
 // ─── FEATURE 2: SPORTS WATCHER (WWE + Football) — DISABLED FOR NOW ─
@@ -266,10 +296,18 @@ async function checkSportsUpdates(sock, leagueKey) {
 // ─── WATCHER LOOP ───────────────────────────────────────────────
 const POLL_INTERVAL_MS = 2 * 60 * 1000; // internal check cadence — not user-configurable, not a broadcast schedule
 let pollTimer = null;
+let isTicking = false; // guards against overlapping ticks (see note below)
 
 function startNewsWatchers(sock) {
     if (pollTimer) return; // already running, idempotent
     const tick = async () => {
+        // If a previous tick is still running (e.g. a big first-time batch
+        // taking a while to broadcast across many groups) and setInterval
+        // fires again before it finishes, an overlapping tick would read the
+        // same not-yet-saved "seen" state and re-broadcast the same items —
+        // this was the actual cause of news repeating non-stop.
+        if (isTicking) return;
+        isTicking = true;
         try {
             const activeGroups = await getActiveGroups();
             if (!activeGroups.length) return; // nobody has news on — skip the API calls entirely
@@ -277,6 +315,8 @@ function startNewsWatchers(sock) {
             // Sports (football/WWE) disabled for now — anime only. See note above.
         } catch (e) {
             console.error('❌ [NEWS] Watcher tick failed:', e.message);
+        } finally {
+            isTicking = false;
         }
     };
     tick(); // run once immediately (will just seed baselines on first-ever run)
@@ -337,7 +377,7 @@ const newsToggleCommand = {
                     lines.push(`❌ *${source.name}* — ${status ? `HTTP ${status}` : e.message}`);
                 }
             }
-            const seen = loadJSON(SEEN_FILE, defaultSeen());
+            const seen = loadSeen();
             lines.push(`\n_Baseline seeded: ${seen.seededAnime ? 'yes' : 'no — first tick after enabling only sets the baseline, next tick posts anything new'}_`);
             return sock.sendMessage(jid, { text: lines.join('\n') }, { quoted: msg });
         }
