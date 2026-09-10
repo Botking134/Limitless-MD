@@ -1,6 +1,7 @@
 // config.js
+const BotContext = require('./helpers/BotContext');
 
-module.exports = {
+const baseConfig = {
 
     // ================================================================
     // 🔐 1. USER VARIABLES
@@ -223,3 +224,35 @@ telegramBotToken: [
 ].join('')
 
 };
+
+// Snapshot the original values above for every "dynamic" key — the settings
+// a command can change at runtime — before the Proxy below starts routing
+// reads/writes elsewhere. This snapshot is what a brand-new sub-bot (no
+// vars.json of its own yet) starts from.
+const DYNAMIC_KEY_SET = new Set(BotContext.DYNAMIC_KEYS);
+const dynamicDefaults = {};
+for (const key of BotContext.DYNAMIC_KEYS) {
+    if (key in baseConfig) dynamicDefaults[key] = baseConfig[key];
+}
+BotContext.setDefaults(dynamicDefaults);
+
+// Every other module still does `const config = require('./config')` and
+// reads/writes `config.someKey` exactly as before. For dynamic keys, this
+// Proxy transparently redirects that read/write to whichever bot (main or
+// a specific sub-bot) is currently handling a message — see BotContext.js.
+module.exports = new Proxy(baseConfig, {
+    get(target, prop, receiver) {
+        if (typeof prop === 'string' && DYNAMIC_KEY_SET.has(prop)) {
+            const activeVars = BotContext.getActiveVars();
+            return prop in activeVars ? activeVars[prop] : target[prop];
+        }
+        return Reflect.get(target, prop, receiver);
+    },
+    set(target, prop, value) {
+        if (typeof prop === 'string' && DYNAMIC_KEY_SET.has(prop)) {
+            BotContext.getActiveVars()[prop] = value;
+            return true;
+        }
+        return Reflect.set(target, prop, value);
+    }
+});
