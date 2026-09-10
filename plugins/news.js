@@ -1,12 +1,13 @@
 // plugins/news.js
-// Two independent "spawn on update" watchers in one file:
-//   1. Anime — newly released episodes
-//   2. Sports — WWE and football (Premier League) results
+// "Spawn on update" watcher: anime newly-released episodes.
+// (The sports/WWE+football watcher was pulled out for now — anime-only until
+// that's revisited.)
 //
-// There's no fixed schedule to configure. Under the hood the bot checks each source
-// on a short internal cadence, but it only ever posts when it detects something that
-// genuinely wasn't there before (diffed against a "seen" cache) — so from the group's
-// point of view, updates just show up the moment they exist, not on a timer you set.
+// There's no fixed schedule to configure. Under the hood the bot checks the
+// source on a short internal cadence, but it only ever posts when it detects
+// something that genuinely wasn't there before (diffed against a "seen"
+// cache) — so from the group's point of view, updates just show up the
+// moment they exist, not on a timer you set.
 //
 // Toggle per group: .news on | .news off | .news status
 
@@ -74,75 +75,110 @@ async function broadcast(sock, payload) {
     }
 }
 
-// ─── FEATURE 1: ANIME EPISODE WATCHER ──────────────────────────
-// AniList's official GraphQL API — a legitimate anime tracking/metadata service
-// (not a streaming/piracy aggregator), so it isn't exposed to the legal takedowns
-// that killed the previous consumet/gogoanime source (which was returning HTTP 451,
-// "Unavailable For Legal Reasons"). No key required, free, and widely used/stable.
-const ANIME_API_URL = 'https://graphql.anilist.co';
-const ANIME_QUERY = `
-query ($perPage: Int) {
-  Page(page: 1, perPage: $perPage) {
-    airingSchedules(notYetAired: false, sort: TIME_DESC) {
-      id
-      episode
-      media {
-        title { romaji english }
-        coverImage { large }
-      }
-    }
-  }
-}`;
+// ─── FEATURE 1: ANIME NEWS WATCHER ──────────────────────────────
+// Pulls real anime NEWS articles (reveals, announcements, cast news — not
+// just "episode aired" pings) from each outlet's public RSS feed, formatted
+// to match the "ANIME NEWS UPDATE" card style: title, "via <source>",
+// summary, then a Read More link. No API key needed — RSS is public.
+const NEWS_SOURCES = [
+    { name: 'MyAnimeList', url: 'https://myanimelist.net/rss/news.xml' },
+    { name: 'Anime Corner', url: 'https://animecorner.me/feed/' }
+];
+
+function decodeEntities(str) {
+    return (str || '')
+        .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#0?39;/g, "'")
+        .replace(/&nbsp;/g, ' ')
+        .trim();
+}
+
+function stripHtml(str) {
+    // Unwrap CDATA/entities BEFORE stripping tags — doing it the other way
+    // around lets the tag-stripper eat the CDATA opener together with the
+    // first real HTML tag inside it, leaving a stray "]]>" behind.
+    return decodeEntities(str || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function extractTag(xml, tag) {
+    const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+    return match ? match[1] : '';
+}
+
+function extractImage(itemXml) {
+    const enclosure = itemXml.match(/<enclosure[^>]*url="([^"]+)"[^>]*type="image[^"]*"/i)
+        || itemXml.match(/<media:(?:content|thumbnail)[^>]*url="([^"]+)"/i)
+        || itemXml.match(/<img[^>]*src="([^"]+)"/i);
+    return enclosure ? enclosure[1] : null;
+}
+
+async function fetchRssNews(source) {
+    const { data: xml } = await axios.get(source.url, {
+        timeout: 12000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LimitlessMD-NewsBot/1.0)' }
+    });
+
+    const itemBlocks = xml.match(/<item[\s\S]*?<\/item>/gi) || [];
+    return itemBlocks.map(block => {
+        const title = decodeEntities(extractTag(block, 'title'));
+        const link = decodeEntities(extractTag(block, 'link')).trim();
+        const rawDescription = extractTag(block, 'description') || extractTag(block, 'content:encoded');
+        const summary = stripHtml(rawDescription).slice(0, 320);
+        const image = extractImage(block);
+        if (!title || !link) return null;
+        return { id: link, title, link, summary, image, source: source.name };
+    }).filter(Boolean);
+}
 
 async function checkAnimeUpdates(sock) {
-    let schedules;
-    try {
-        const { data } = await axios.post(ANIME_API_URL, {
-            query: ANIME_QUERY,
-            variables: { perPage: 20 }
-        }, { headers: { 'Content-Type': 'application/json' }, timeout: 12000 });
-
-        schedules = data?.data?.Page?.airingSchedules;
-        if (!Array.isArray(schedules) || !schedules.length) return;
-    } catch (e) {
-        console.error('⚠️ [NEWS/ANIME] Fetch failed:', e.message);
-        return;
+    let allItems = [];
+    for (const source of NEWS_SOURCES) {
+        try {
+            const items = await fetchRssNews(source);
+            allItems = allItems.concat(items);
+        } catch (e) {
+            console.error(`⚠️ [NEWS/ANIME] Fetch failed for ${source.name}:`, e.message);
+        }
     }
+    if (!allItems.length) return;
 
     const seen = loadJSON(SEEN_FILE, defaultSeen());
     seen.animeIds = seen.animeIds || [];
 
     // First run ever: just record the current snapshot as the baseline, don't spam
-    // every group with the entire recent-episodes backlog.
+    // every group with the entire recent-news backlog.
     if (!seen.seededAnime) {
-        seen.animeIds = trimIds(schedules.map(s => s.id));
+        seen.animeIds = trimIds(allItems.map(s => s.id));
         seen.seededAnime = true;
         saveJSON(SEEN_FILE, seen);
         return;
     }
 
     const seenSet = new Set(seen.animeIds);
-    const freshItems = schedules.filter(s => !seenSet.has(s.id));
+    const freshItems = allItems.filter(s => !seenSet.has(s.id));
     if (!freshItems.length) return;
 
-    // Oldest-first so the announcement order matches release order.
+    // Oldest-first so the announcement order matches publish order.
     for (const item of freshItems.reverse()) {
-        const title = item.media?.title?.english?.trim() || item.media?.title?.romaji?.trim() || 'Unknown Anime';
-        const episodeNum = item.episode ?? '?';
-        const image = item.media?.coverImage?.large;
         const caption =
-            `🎬 *NEW EPISODE ALERT!*\n━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `📺 *${title}*\n` +
-            `▶️ Episode ${episodeNum} just aired!`;
+            `📰 *ANIME NEWS UPDATE* 📰\n\n` +
+            `*${item.title}*\n` +
+            `_via ${item.source}_\n\n` +
+            `${item.summary}${item.summary.length >= 320 ? '…' : ''}\n\n` +
+            `🔗 *Read More*\n${item.link}`;
 
         try {
-            if (image) {
-                await broadcast(sock, { image: { url: image }, caption });
+            if (item.image) {
+                await broadcast(sock, { image: { url: item.image }, caption });
             } else {
                 await broadcast(sock, { text: caption });
             }
         } catch (e) {
-            console.error('⚠️ [NEWS/ANIME] Broadcast failed for', title, e.message);
+            console.error('⚠️ [NEWS/ANIME] Broadcast failed for', item.title, e.message);
         }
     }
 
@@ -150,7 +186,9 @@ async function checkAnimeUpdates(sock) {
     saveJSON(SEEN_FILE, seen);
 }
 
-// ─── FEATURE 2: SPORTS WATCHER (WWE + Football) ────────────────
+// ─── FEATURE 2: SPORTS WATCHER (WWE + Football) — DISABLED FOR NOW ─
+// Left in place (unused) rather than deleted, in case sports gets turned back
+// on later. Not called from the watcher loop below.
 // TheSportsDB free tier — no signup required, key "123".
 const SPORTS_KEY = '123';
 const LEAGUES = {
@@ -227,8 +265,7 @@ function startNewsWatchers(sock) {
             const activeGroups = await getActiveGroups();
             if (!activeGroups.length) return; // nobody has news on — skip the API calls entirely
             await checkAnimeUpdates(sock);
-            await checkSportsUpdates(sock, 'football');
-            await checkSportsUpdates(sock, 'wwe');
+            // Sports (football/WWE) disabled for now — anime only. See note above.
         } catch (e) {
             console.error('❌ [NEWS] Watcher tick failed:', e.message);
         }
@@ -260,7 +297,7 @@ const newsToggleCommand = {
             const status = isCurrentlyEnabled ? "🟢 Enabled" : "🔴 Disabled";
             return sock.sendMessage(jid, {
                 text: `📰 *News Alerts:* ${status}\n\n` +
-                      `Anime episode drops + WWE/Football results, posted the moment they're detected — no fixed schedule.`
+                      `Anime news updates, posted the moment they're detected — no fixed schedule.`
             }, { quoted: msg });
         }
 
@@ -269,7 +306,7 @@ const newsToggleCommand = {
             settings[jid] = true;
             saveJSON(SETTINGS_FILE, settings);
             startNewsWatchers(sock);
-            return sock.sendMessage(jid, { text: "✅ *News alerts enabled.* You'll get anime episode drops and WWE/Football updates as they happen." }, { quoted: msg });
+            return sock.sendMessage(jid, { text: "✅ *News alerts enabled.* You'll get anime news updates as they happen." }, { quoted: msg });
         }
 
         if (option === 'off' || option === 'disable' || option === '0') {
