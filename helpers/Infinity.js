@@ -118,7 +118,15 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                 try {
                     const emoji = config.statusemoji || '❄';
                     const statusSender = msg.key.participant || msg.key.remoteJid;
-                    await sock.sendMessage(statusSender, { react: { text: emoji, key: msg.key } });
+                    // Reacting to a status is a broadcast, not a DM: Baileys needs
+                    // the target left as 'status@broadcast' plus an explicit
+                    // statusJidList (poster + us) telling it who to deliver the
+                    // reaction to. Sending straight to statusSender (as before)
+                    // isn't a call this API accepts for status reactions.
+                    await sock.sendMessage('status@broadcast',
+                        { react: { text: emoji, key: msg.key } },
+                        { statusJidList: [statusSender, sock.user?.id].filter(Boolean) }
+                    );
                 } catch (e) {}
             }
             return;
