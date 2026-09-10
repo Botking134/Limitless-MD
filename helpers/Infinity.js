@@ -1,5 +1,6 @@
 // helpers/Infinity.js
 const config = require('../config');
+const BotContext = require('./BotContext');
 const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../plugins/devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
@@ -89,7 +90,16 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
 }
 
 // ─── MAIN MESSAGE DISPATCHER / ROUTER ───────────────────────────
+// Every incoming message — from the main bot's socket OR any sub-bot's
+// socket — comes through here. Wrapping the whole thing in runAsBot() scopes
+// every config.<setting> read/write during this message to whichever bot
+// (sock.__botId, tagged when the socket was created) it actually came from,
+// so a sub-bot owner's settings changes never leak onto the main bot.
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
+    return BotContext.runAsBot(sock.__botId, () => handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds));
+}
+
+async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
     try {
         const activePrefix = getActivePrefix();
         if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
