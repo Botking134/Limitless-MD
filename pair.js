@@ -282,6 +282,10 @@ async function startBot() {
         retryRequestDelayMs: 3000
     });
 
+    // Tags this socket as the main bot so config.<setting> reads/writes stay
+    // on the main bot's own settings object (see helpers/BotContext.js).
+    sock.__botId = require('./helpers/BotContext').MAIN_ID;
+
     activeSocketInstance = sock;
 
     // ─── UNBLOCKED SEND MESSAGE WRAPPER ───────────────────────────
