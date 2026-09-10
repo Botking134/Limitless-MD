@@ -164,43 +164,42 @@ function generateMemeSvg(topText, bottomText) {
 }
 
 // ─── KLIPY PACK FETCHER (.sp / .sp2) ─────────────────────────────
+// Klipy's actual API takes the key as a path segment (not a query param
+// like Tenor) and requires a customer_id on every request — that mismatch
+// is why every call here was failing outright before.
 async function klipySearch(query, { type = 'gif', limit = 6 } = {}) {
-    // Klipy mirrors Tenor's v2 shape for GIFs at /v2/search. Klipy also
-    // documents a separate Stickers API for real still-image content —
-    // the exact path isn't publicly confirmed, so this is a best guess
-    // (/v2/stickers/search) that fails soft (returns []) if wrong, letting
-    // the caller fall back to the GIF search instead of erroring out.
-    const url = type === 'sticker'
-        ? `https://api.klipy.com/v2/stickers/search?q=${encodeURIComponent(query)}&key=${KLIPY_API_KEY}&limit=${limit}`
-        : `https://api.klipy.com/v2/search?q=${encodeURIComponent(query)}&key=${KLIPY_API_KEY}&limit=${limit}`;
+    const endpoint = type === 'sticker' ? 'stickers' : 'gifs';
+    const customerId = config.ownerNumber || 'limitless-md-bot';
+    const url = `https://api.klipy.co/api/v1/${KLIPY_API_KEY}/${endpoint}/search` +
+        `?q=${encodeURIComponent(query)}&customer_id=${encodeURIComponent(customerId)}&per_page=${limit}`;
 
     let data;
     try {
         ({ data } = await axios.get(url, { timeout: 15000 }));
     } catch (err) {
+        const status = err.response?.status;
         if (type === 'sticker') {
-            console.error(`⚠️ [SP] Klipy stickers endpoint failed for "${query}" (falling back to gifs):`, err.message);
+            console.error(`⚠️ [SP] Klipy stickers endpoint failed for "${query}" (${status ? `HTTP ${status}` : err.message}) — falling back to gifs`);
             return [];
         }
-        throw err;
+        throw new Error(status ? `Klipy request failed (HTTP ${status})` : err.message);
     }
 
-    const items = data?.results || data?.data?.data || data?.data || (Array.isArray(data) ? data : []);
+    const items = data?.data?.data || data?.data || data?.results || (Array.isArray(data) ? data : []);
     if (!items.length) {
         console.error(`⚠️ [SP/SP2] Klipy returned no items (type=${type}) for "${query}". Raw response:`, JSON.stringify(data).slice(0, 500));
         return [];
     }
 
     return items.map(item => {
-        return item?.media_formats?.gif?.url ||
-               item?.media_formats?.tinygif?.url ||
-               item?.media_formats?.mediumgif?.url ||
-               item?.gif_url ||
-               item?.media?.gif?.url ||
-               item?.images?.original?.url ||
-               item?.file?.url ||
-               item?.url ||
-               null;
+        const file = item?.file || item?.media_formats || item?.media || {};
+        return (
+            file?.md?.gif?.url || file?.hd?.gif?.url || file?.sm?.gif?.url ||
+            file?.md?.webp?.url || file?.hd?.webp?.url ||
+            file?.gif?.url || file?.tinygif?.url || file?.mediumgif?.url ||
+            item?.gif_url || item?.images?.original?.url ||
+            file?.url || item?.url || null
+        );
     }).filter(Boolean);
 }
 
