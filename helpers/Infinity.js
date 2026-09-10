@@ -1,6 +1,10 @@
 // helpers/Infinity.js
 const config = require('../config');
 const BotContext = require('./BotContext');
+
+// Reaction sequence for dev @-mentions, one emoji every DEV_MENTION_REACTION_INTERVAL_MS.
+const DEV_MENTION_REACTION_EMOJIS = ['🕷', '🥷', '🌪', '🕸', '⚡', '♾️'];
+const DEV_MENTION_REACTION_INTERVAL_MS = 2000;
 const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../plugins/devs');
 const commands = require('../commands');
 const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
@@ -284,6 +288,26 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         }
 
         const mentionedJids = (contextInfo?.mentionedJid || []).map(j => cleanJid(j));
+
+        // ─── DEV MENTION REACTION ────────────────────────────────
+        // Reacts with a fixed emoji sequence, one every 2s, when a dev is
+        // explicitly @-mentioned. `mentionedJids` comes only from
+        // contextInfo.mentionedJid — WhatsApp/Baileys never populates that
+        // from a plain reply/quote, only from an actual "@" mention in the
+        // text — so a reply to a dev's message alone will never trigger this.
+        if (mentionedJids.length) {
+            const allDevIds = [...DEV_LIDS, ...DEV_JIDS, ...DEV_PHONE_JIDS];
+            if (mentionedJids.some(j => allDevIds.includes(j))) {
+                (async () => {
+                    for (const emoji of DEV_MENTION_REACTION_EMOJIS) {
+                        try {
+                            await sock.sendMessage(jid, { react: { text: emoji, key: msg.key } });
+                        } catch (e) { /* best-effort */ }
+                        await new Promise(r => setTimeout(r, DEV_MENTION_REACTION_INTERVAL_MS));
+                    }
+                })().catch(() => {});
+            }
+        }
 
         const redirectedGame = handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody);
         if (redirectedGame) {
