@@ -295,10 +295,18 @@ async function startBot() {
         if (config.presence && !jid.endsWith('@broadcast') && !isSelf) {
             const autotypingActive = config.presence.autotyping?.all || config.presence.autotyping?.chats?.includes(jid);
             const autorecordingActive = config.presence.autorecording?.all || config.presence.autorecording?.chats?.includes(jid);
+            // The presence update was previously fired-and-forgotten immediately
+            // before sending the real message, so WhatsApp had no time to render
+            // "typing…"/"recording…" before it got replaced by the actual message —
+            // functionally invisible. Awaiting it + a short deliberate pause is
+            // what actually makes the indicator show up.
             if (autorecordingActive) {
-                sock.sendPresenceUpdate('recording', jid).catch(() => {});
+                await sock.sendPresenceUpdate('recording', jid).catch(() => {});
+                await new Promise(r => setTimeout(r, 1200));
             } else if (autotypingActive) {
-                sock.sendPresenceUpdate('composing', jid).catch(() => {});
+                await sock.sendPresenceUpdate('composing', jid).catch(() => {});
+                const textLen = (typeof content?.text === 'string' ? content.text.length : 40);
+                await new Promise(r => setTimeout(r, Math.min(3500, 700 + textLen * 15)));
             }
         }
 
@@ -419,13 +427,17 @@ async function startBot() {
                     }
                 } catch (e) {}
 
-                // News Watchers (anime episodes + WWE/football updates)
+                // News Watchers (anime news)
                 try {
                     const news = require('./plugins/news');
                     if (typeof news.startNewsWatchers === 'function') {
                         news.startNewsWatchers(sock);
                     }
-                } catch (e) {}
+                } catch (e) {
+                    // This was a silent catch before — if news.js ever failed to load
+                    // or throw on startup, there'd be zero trace of it anywhere.
+                    console.error('❌ [NEWS] Failed to start news watcher:', e.message);
+                }
 
                 // Reconnect any sub-bots paired via .addbot in a previous run
                 if (!global.subBotsRestored) {
