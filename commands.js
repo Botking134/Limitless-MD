@@ -45,9 +45,17 @@ function getFilesRecursive(dir) {
 function register(cmd) {
     if (!cmd.name || typeof cmd.execute !== 'function') return;
 
-    const key = cmd.isPrefixless
-        ? cmd.name.toLowerCase()
-        : `${config.prefix}${cmd.name.toLowerCase()}`;
+    // Commands are always keyed by their bare name, never by
+    // `${prefix}${name}`. This table is a single shared module-level object
+    // used by the main bot AND every sub-bot socket — if the key baked in
+    // whichever prefix happened to be "active" at register()/reload() time,
+    // then one bot changing its prefix (which calls reload()) would silently
+    // re-key commands for every other bot too, since they all read from this
+    // same object. The dispatcher (helpers/Infinity.js) already strips
+    // whatever prefix the user actually typed and looks commands up by bare
+    // name, resolving the real prefix per-message via config.prefix (which
+    // IS correctly scoped per-bot) — so the key here never needs a prefix.
+    const key = cmd.name.toLowerCase();
 
     // Avoid overwriting core methods (like 'reload')
     if (key === 'reload') return;
@@ -97,7 +105,7 @@ function reloadCommands() {
         }
     }
 
-    console.log(`🔄 [LOADER] Recompiled all triggers under prefix: "${config.prefix}"`);
+    console.log(`🔄 [LOADER] Recompiled all triggers (prefix-independent; current prefix: "${config.prefix}")`);
 }
 
 // ─── INITIAL BOOT LOAD ──────────────────────────────────────────
