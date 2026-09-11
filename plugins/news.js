@@ -149,6 +149,40 @@ function extractImage(itemXml) {
     return url && /^https?:\/\//i.test(url) ? url : null;
 }
 
+async function fetchImageBuffer(url) {
+    // Some hosts (hotlink protection, bot-blocking) reject Baileys' own
+    // fetch of a bare image URL. Downloading it ourselves first — with the
+    // same User-Agent we use for RSS — and handing WhatsApp raw bytes
+    // instead of a URL is more reliable and also means we only fetch once
+    // even though the item gets broadcast to many groups.
+    const res = await axios.get(url, {
+        timeout: 15000,
+        responseType: 'arraybuffer',
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LimitlessMD-NewsBot/1.0)' }
+    });
+    return Buffer.from(res.data);
+}
+
+async function fetchOgImage(articleUrl) {
+    // Fallback for sources whose RSS entries carry no image at all — Anime
+    // News Network's feed is like this (no <enclosure>, no <media:*>, ever).
+    // We fetch the actual article page and pull its og:image meta tag
+    // instead. Only called for items that are actually new (see below),
+    // so this doesn't add a request per poll — just per genuinely fresh item.
+    try {
+        const { data: html } = await axios.get(articleUrl, {
+            timeout: 12000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LimitlessMD-NewsBot/1.0)' }
+        });
+        const match = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+            || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+        const url = match ? match[1] : null;
+        return url && /^https?:\/\//i.test(url) ? url : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 async function fetchRssNews(source) {
     const { data: xml } = await axios.get(source.url, {
         timeout: 12000,
@@ -197,6 +231,9 @@ async function checkAnimeUpdates(sock) {
 
     // Oldest-first so the announcement order matches publish order.
     for (const item of freshItems.reverse()) {
+        if (!item.image) {
+            item.image = await fetchOgImage(item.link);
+        }
         const caption =
             `📰 *ANIME NEWS UPDATE* 📰\n\n` +
             `*${item.title}*\n` +
@@ -204,16 +241,25 @@ async function checkAnimeUpdates(sock) {
             `${item.summary}${item.summary.length >= 320 ? '…' : ''}\n\n` +
             `🔗 *Read More*\n${item.link}`;
 
+        let imageBuffer = null;
+        if (item.image) {
+            try {
+                imageBuffer = await fetchImageBuffer(item.image);
+            } catch (e) {
+                console.error('⚠️ [NEWS/ANIME] Image download failed for', item.title, '— sending as text:', e.message);
+            }
+        }
+
         try {
-            if (item.image) {
-                await broadcast(sock, { image: { url: item.image }, caption });
+            if (imageBuffer) {
+                await broadcast(sock, { image: imageBuffer, caption });
             } else {
                 await broadcast(sock, { text: caption });
             }
         } catch (e) {
-            // Image send failed (bad host, hotlink block, etc.) — don't just
-            // drop the item, still get the news out as text.
-            console.error('⚠️ [NEWS/ANIME] Image send failed for', item.title, '— retrying as text:', e.message);
+            // Send failed for some other reason (bad group jid, etc.) — don't just
+            // drop the item, still try to get the news out as text.
+            console.error('⚠️ [NEWS/ANIME] Send failed for', item.title, '— retrying as text:', e.message);
             try { await broadcast(sock, { text: caption }); } catch (e2) { /* give up on this item */ }
         }
 
@@ -294,7 +340,7 @@ async function checkSportsUpdates(sock, leagueKey) {
 }
 
 // ─── WATCHER LOOP ───────────────────────────────────────────────
-const POLL_INTERVAL_MS = 2 * 60 * 1000; // internal check cadence — not user-configurable, not a broadcast schedule
+const POLL_INTERVAL_MS = 45 * 60 * 1000; // internal check cadence — not user-configurable, not a broadcast schedule
 let pollTimer = null;
 let isTicking = false; // guards against overlapping ticks (see note below)
 
