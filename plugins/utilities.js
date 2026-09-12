@@ -9,6 +9,26 @@ const FormData = require('form-data');
 // ─── NOTES PATH ──────────────────────────────────────────────────
 const notesPath = path.join(__dirname, '../storage/notes.json');
 
+// ─── ANIMATION LOCK ───────────────────────────────────────────────
+// ping and speed both fire a rapid burst of sendMessage/edit/react calls in
+// quick succession. If both get triggered close together in the same chat
+// (e.g. someone runs .ping then immediately "speed"), the two bursts run
+// concurrently and effectively double the request rate hitting the socket
+// in that same window — a spammy-looking pattern that risks the connection
+// getting flagged and force-closed, especially in a self-chat. This lock
+// makes a second animated command in the same chat wait its turn instead of
+// overlapping the first one.
+const animatingJids = new Set();
+async function withAnimationLock(jid, fn) {
+    if (animatingJids.has(jid)) return; // one's already running here — skip rather than stack
+    animatingJids.add(jid);
+    try {
+        await fn();
+    } finally {
+        animatingJids.delete(jid);
+    }
+}
+
 // ─── NOTES LOCAL STORAGE HELPERS ─────────────────────────────────
 
 function readNotes() {
@@ -211,6 +231,7 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
+            await withAnimationLock(jid, async () => {
             try {
                 const { delay } = await import('@itsliaaa/baileys');
                 const start = Date.now();
@@ -218,22 +239,18 @@ module.exports = [
                 const loadingMsg = await sock.sendMessage(jid, { text: "[□□□□□□]" }, { quoted: msg });
                 const frames = ["[□□□□□□]", "[■□□□□□]", "[■■□□□□]", "[■■■□□□]", "[■■■■□□]", "[■■■■■□]", "[■■■■■■]"];
 
-                for (let cycle = 0; cycle < 2; cycle++) {
-                    for (const frame of frames) {
-                        if (cycle > 0 && frame === "[□□□□□□]") continue;
-                        try {
-                            await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
-                        } catch (err) {
-                            return; // Break immediately if the user deleted the message during the loop
-                        }
-                        await delay(400);
+                // One full pass through the frames is enough to read as a
+                // loading animation — a second identical cycle only doubled
+                // the number of rapid edit calls without adding anything
+                // visible, which is the kind of burst that risks tripping
+                // WhatsApp's automation detection.
+                for (const frame of frames) {
+                    try {
+                        await sock.sendMessage(jid, { text: frame, edit: loadingMsg.key });
+                    } catch (err) {
+                        return; // Break immediately if the user deleted the message during the loop
                     }
-                    if (cycle === 0) {
-                        try {
-                            await sock.sendMessage(jid, { text: "[□□□□□□]", edit: loadingMsg.key });
-                        } catch (err) { return; }
-                        await delay(400);
-                    }
+                    await delay(400);
                 }
 
                 const networkPing = Date.now() - start;
@@ -244,6 +261,7 @@ module.exports = [
                     });
                 } catch (err) { /* ignore */ }
             } catch (error) { /* ignore */ }
+            });
         }
     },
 
@@ -584,6 +602,7 @@ module.exports = [
         isPrefixless: true,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
+            await withAnimationLock(jid, async () => {
             const { delay } = await import('@itsliaaa/baileys');
 
             const emojis = ["5⃣", "4⃣", "3⃣", "2⃣", "1⃣", "🪽"];
@@ -607,6 +626,7 @@ module.exports = [
                       `> *Internal:* \`${internalPing}ms\`\n` +
                       `> *Network:* \`${networkPing}ms\``,
                 edit: sent.key
+            });
             });
         }
     },
