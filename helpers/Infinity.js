@@ -420,10 +420,10 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                 args = spaceIndex === -1 ? '' : withoutPrefix.slice(spaceIndex + 1).trim();
             } else {
                 const targetLower = trimmedMessageBody.toLowerCase();
-                if (typeof commands === 'object' && !Array.isArray(commands) && commands[targetLower]) {
+                if (typeof commands === 'object' && !Array.isArray(commands) && commands[targetLower]?.isPrefixless) {
                     command = targetLower;
                     args = '';
-                } else if (Array.isArray(commands) && commands.some(c => c.name === targetLower)) {
+                } else if (Array.isArray(commands) && commands.some(c => c.name === targetLower && c.isPrefixless)) {
                     command = targetLower;
                     args = '';
                 }
