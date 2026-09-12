@@ -343,9 +343,21 @@ async function checkSportsUpdates(sock, leagueKey) {
 const POLL_INTERVAL_MS = 45 * 60 * 1000; // internal check cadence — not user-configurable, not a broadcast schedule
 let pollTimer = null;
 let isTicking = false; // guards against overlapping ticks (see note below)
+let currentSock = null; // always the most recently connected socket
 
 function startNewsWatchers(sock) {
-    if (pollTimer) return; // already running, idempotent
+    // This gets called on every connection 'open', including reconnects —
+    // not just the first-ever launch. Always refresh which socket we'll
+    // actually use to broadcast, even if the interval below is already
+    // running. Without this, the very first connection's socket got baked
+    // into the tick closure forever; once WhatsApp reconnected (which
+    // happens on its own periodically — nothing unusual), the interval kept
+    // firing on schedule but tried to send through a dead, disconnected
+    // socket. The check ran, items were still detected, but every send
+    // failed silently into the console — from the group's point of view
+    // news just stopped after the first item.
+    currentSock = sock;
+    if (pollTimer) return; // interval already running — currentSock refresh above is all we needed
     const tick = async () => {
         // If a previous tick is still running (e.g. a big first-time batch
         // taking a while to broadcast across many groups) and setInterval
@@ -357,7 +369,7 @@ function startNewsWatchers(sock) {
         try {
             const activeGroups = await getActiveGroups();
             if (!activeGroups.length) return; // nobody has news on — skip the API calls entirely
-            await checkAnimeUpdates(sock);
+            await checkAnimeUpdates(currentSock);
             // Sports (football/WWE) disabled for now — anime only. See note above.
         } catch (e) {
             console.error('❌ [NEWS] Watcher tick failed:', e.message);
