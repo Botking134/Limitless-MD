@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const { saveState, normalizeToJid } = require('../stateManager');
-const commandDescriptions = require('../helpers/commandDescriptions');
+const commandDescriptions = require('../helpers/CommandDescriptions');
 // NOTE: '../commands' is required lazily inside sendHelpList (below), not
 // here — commands.js requires every plugin file including this one at
 // startup, so a top-level require here would be circular and would hand
