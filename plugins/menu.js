@@ -4,6 +4,11 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const { saveState, normalizeToJid } = require('../stateManager');
+const commandDescriptions = require('../helpers/commandDescriptions');
+// NOTE: '../commands' is required lazily inside sendHelpList (below), not
+// here — commands.js requires every plugin file including this one at
+// startup, so a top-level require here would be circular and would hand
+// back an incomplete, still-being-built exports object.
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -313,6 +318,179 @@ ${menuText}`;
     }
 }
 
+// Shared list of categories so the picker and nothing else has to repeat it
+const menuCategories = [
+    { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
+    { name: "INTERACTIVE GAMES 🎮", desc: "Lobbies, turn-based puzzles, quizzes, and duels.", cmd: "menu_games" },
+    { name: "GROUP MANAGEMENT 🔥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
+    { name: "TOOLS ⚙️", desc: "Advanced Presence parameters & tracking tools.", cmd: "menu_tools" },
+    { name: "DOWNLOADER 📥", desc: "High-speed multi-platform downloaders.", cmd: "menu_download" },
+    { name: "FUN & ROLEPLAY 🎭", desc: "Monologues, animations, and interactive cards.", cmd: "menu_fun" },
+    { name: "OWNER & DEV 👑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
+    { name: "UTILITIES 🛠️", desc: "Converter tools & network latencies.", cmd: "menu_utilities" }
+];
+
+// Sends `text` plus exactly one "⬅️ Back to Menu" button that returns to the
+// category picker. Used by every submenu (menu_ai, menu_games, etc.) so
+// browsing categories never takes more than one tap to reverse.
+async function sendWithBackButton(sock, msg, text) {
+    const jid = msg.key.remoteJid;
+    try {
+        const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
+        const rawBotJid = sock.user?.id || sock.user?.jid || jid;
+        const cleanBotUserJid = rawBotJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+
+        const messageContent = {
+            viewOnceMessage: {
+                message: {
+                    messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+                    interactiveMessage: {
+                        body: { text },
+                        nativeFlowMessage: {
+                            buttons: [
+                                {
+                                    name: "quick_reply",
+                                    buttonParamsJson: JSON.stringify({ display_text: "⬅️ Back to Menu", id: "menu_main" })
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        };
+
+        const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(messageContent), { userJid: cleanBotUserJid });
+        await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+    } catch (e) {
+        // If the button fails to attach for some reason, still get the
+        // actual menu text out rather than losing it.
+        console.error('❌ [MENU] Back-button send failed, falling back to plain text:', e.message);
+        await sock.sendMessage(jid, { text }, { quoted: msg });
+    }
+}
+
+// The default, everyday menu: one message, one button that opens a native
+// list of all 8 categories. This replaced an earlier version that sent each
+// category as its own message — 8 rapid-fire messages in a row is exactly
+// the pattern that gets automated accounts flagged as spam, even though each
+// individual message was harmless. A single list message with several rows
+// is the standard, expected way to offer many options in WhatsApp bots.
+async function renderCategoryPicker(sock, msg) {
+    const jid = msg.key.remoteJid;
+    const uptime = formatUptime(process.uptime());
+
+    const headerText =
+`┌─────────────┐
+│ *Limitless-MD*
+└─────────────┘
+_Owner: ${config.ownerName}_
+_User: ${msg.pushName || 'User'}_
+_Uptime: ${uptime}_
+_Version: 1.0.0_
+════════════════════════
+> Throughout Heaven And Earth_
+┌───────────────────┐
+│ *I alone am the Honoured one* 
+└───────────────────┘
+
+_Tap below to browse command categories._ 🔮`;
+
+    let loadingMsg = null;
+
+    try {
+        const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
+
+        loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
+
+        const frames = [
+            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 400 },
+            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 400 },
+            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 400 },
+            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌌", delay: 500 }
+        ];
+
+        for (const frame of frames) {
+            await delay(frame.delay);
+            try { await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key }); } catch (editErr) {}
+        }
+
+        const rawBotJid = sock.user?.id || sock.user?.jid || jid;
+        const cleanBotUserJid = rawBotJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+
+        // Single header image up top — list rows themselves can't carry
+        // per-row images (that's a carousel-only capability, and bundling
+        // cards into a carousel is the unreliable part we're avoiding), but
+        // one banner image on the message as a whole is well-supported.
+        const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
+        const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
+        const imageBuffer = await fetchImageBuffer(randomImage);
+        let header = { hasMediaAttachment: false };
+        if (imageBuffer) {
+            try {
+                const media = await prepareWAMessageMedia({ image: imageBuffer }, { upload: sock.waUploadToServer });
+                header = { imageMessage: media.imageMessage, hasMediaAttachment: true };
+            } catch (imgErr) {
+                console.error('❌ [CATEGORY PICKER] Header image failed, sending without it:', imgErr.message);
+            }
+        }
+
+        const messageContent = {
+            viewOnceMessage: {
+                message: {
+                    messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+                    interactiveMessage: {
+                        header,
+                        body: { text: headerText },
+                        footer: { text: "Limitless System Menu 🪽" },
+                        nativeFlowMessage: {
+                            buttons: [
+                                {
+                                    name: "single_select",
+                                    buttonParamsJson: JSON.stringify({
+                                        title: "📂 View Categories",
+                                        sections: [
+                                            {
+                                                title: "Command Categories",
+                                                rows: menuCategories.map(cat => ({
+                                                    title: cat.name,
+                                                    description: cat.desc,
+                                                    id: cat.cmd
+                                                }))
+                                            }
+                                        ]
+                                    })
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        };
+
+        const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(messageContent), { userJid: cleanBotUserJid });
+        await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+
+        if (loadingMsg) {
+            try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
+        }
+
+    } catch (error) {
+        console.error("❌ [CATEGORY PICKER ERROR]:", error.message);
+        if (loadingMsg) {
+            try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
+        }
+        await renderMenu(sock, msg);
+    }
+}
+
+// The original per-category version — one image+button message per
+// category, sent in sequence. Kept available on request, even though it's
+// the version most likely to look spammy since it's 8 rapid messages in a
+// row. There's no way to fully eliminate that risk while still sending 8
+// separate messages — spacing them out (already does 500ms between each)
+// helps a little, but the real fix for the spam concern is the picker
+// below, not this one. Use sparingly / in your own chats rather than in
+// large groups if you're worried about it.
 async function renderSequentialCardMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -331,7 +509,7 @@ _Version: 1.0.0_
 │ *I alone am the Honoured one* 
 └───────────────────┘
 
-_Command categories below — same cards as .menu2, sent one by one so they actually show up on every device._ 🔮`;
+_Swipe through the cards below to explore command categories._ 🔮`;
 
     let loadingMsg = null;
 
@@ -357,32 +535,15 @@ _Command categories below — same cards as .menu2, sent one by one so they actu
 
         const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
 
-        const categories = [
-            { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
-            { name: "INTERACTIVE GAMES 🎮", desc: "Lobbies, turn-based puzzles, quizzes, and duels.", cmd: "menu_games" },
-            { name: "GROUP MANAGEMENT 🔥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
-            { name: "TOOLS ⚙️", desc: "Advanced Presence parameters & tracking tools.", cmd: "menu_tools" },
-            { name: "DOWNLOADER 📥", desc: "High-speed multi-platform downloaders.", cmd: "menu_download" },
-            { name: "FUN & ROLEPLAY 🎭", desc: "Monologues, animations, and interactive cards.", cmd: "menu_fun" },
-            { name: "OWNER & DEV 👑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
-            { name: "UTILITIES 🛠️", desc: "Converter tools & network latencies.", cmd: "menu_utilities" }
-        ];
-
-        // Sanitize bot user JID (strips device ID suffix :12@s.whatsapp.net)
         const rawBotJid = sock.user?.id || sock.user?.jid || jid;
         const cleanBotUserJid = rawBotJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
 
-        for (let i = 0; i < categories.length; i++) {
-            const cat = categories[i];
+        for (let i = 0; i < menuCategories.length; i++) {
+            const cat = menuCategories[i];
             const card = await createCard(
                 sock, cat.name, cat.desc, shuffledImages[i % shuffledImages.length], cat.cmd, "Explore Commands 🔮"
             );
 
-            // Single interactiveMessage, NOT wrapped in carouselMessage — this
-            // is the part that actually renders consistently. carouselMessage
-            // bundling several cards into one swipeable bubble is the piece
-            // WhatsApp clients inconsistently support; one card per message
-            // uses the same building blocks minus that unreliable wrapper.
             const messageContent = {
                 viewOnceMessage: {
                     message: {
@@ -401,9 +562,6 @@ _Command categories below — same cards as .menu2, sent one by one so they actu
                 const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(messageContent), { userJid: cleanBotUserJid });
                 await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
             } catch (cardErr) {
-                // If even the reliable single-card format fails for some
-                // reason, fall back to a plain image+caption for just this
-                // category rather than losing it silently.
                 console.error(`❌ [SEQ MENU] Card failed for ${cat.name}:`, cardErr.message);
                 const buffer = await fetchImageBuffer(shuffledImages[i % shuffledImages.length]);
                 if (buffer) {
@@ -413,7 +571,7 @@ _Command categories below — same cards as .menu2, sent one by one so they actu
                 }
             }
 
-            await delay(500); // gentle pacing between cards
+            await delay(500);
         }
 
     } catch (error) {
@@ -525,6 +683,51 @@ _Swipe through the cards below to explore command categories._ 🔮`;
 
 // ─── EXPORT COMMANDS ──────────────────────────────────────────────
 
+// Full alphabetical command list with descriptions. Requires '../commands'
+// lazily (see note near the top of this file) so the live, currently
+// registered set of commands is what gets listed — new commands show up
+// automatically without this needing to be hand-updated.
+async function sendHelpList(sock, msg) {
+    const jid = msg.key.remoteJid;
+    const commands = require('../commands');
+
+    const names = Object.keys(commands)
+        .filter(k => k !== 'reload')
+        .sort((a, b) => a.localeCompare(b));
+
+    const prefixVal = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+
+    const lines = names.map(name => {
+        const entry = commands[name];
+        const desc = commandDescriptions[name] || 'No description available yet.';
+        const showPrefix = entry?.isPrefixless ? '' : prefixVal;
+        return `▸ *${showPrefix}${name}* — ${desc}`;
+    });
+
+    const header = `📖 *ALL COMMANDS (${names.length})* — alphabetical\n_Prefix: [ ${prefixVal} ] — prefixless commands are shown without one_\n`;
+
+    // Chunk so this never becomes one unreadable wall of text, and so it
+    // stays well under any single-message size concerns regardless of how
+    // many commands get added later.
+    const CHUNK_SIZE = 4000;
+    let chunks = [];
+    let current = header;
+    for (const line of lines) {
+        if (current.length + line.length + 1 > CHUNK_SIZE) {
+            chunks.push(current);
+            current = '';
+        }
+        current += line + '\n';
+    }
+    if (current.trim().length) chunks.push(current);
+
+    for (let i = 0; i < chunks.length; i++) {
+        const suffix = chunks.length > 1 ? `\n_(${i + 1}/${chunks.length})_` : '';
+        await sock.sendMessage(jid, { text: chunks[i] + suffix }, i === 0 ? { quoted: msg } : {});
+        if (i < chunks.length - 1) await delay(400);
+    }
+}
+
 module.exports = [
     {
         name: 'menu',
@@ -548,14 +751,14 @@ module.exports = [
         name: 'menu2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderCarouselMenu(sock, msg);
+            await renderCategoryPicker(sock, msg);
         }
     },
     {
         name: 'list2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderCarouselMenu(sock, msg);
+            await renderCategoryPicker(sock, msg);
         }
     },
     {
@@ -570,6 +773,13 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             await renderSequentialCardMenu(sock, msg);
+        }
+    },
+    {
+        name: 'menu_main',
+        isPrefixless: true,
+        execute: async (sock, msg, args) => {
+            await renderCategoryPicker(sock, msg);
         }
     },
 
@@ -659,7 +869,7 @@ Here's your prefix though`;
         isPrefixless: true,
         execute: async (sock, msg) => {
             const text = `┌──────────────┐\n│ 🧠 AI & CHATBOT  \n└──────────────┘\n\n_┃ ⊱ .ai_\n_┃ ⊱ .groq_\n_┃ ⊱ .gojo_\n_┃ ⊱ .debug_\n_┃ ⊱ .summon_\n_┃ ⊱ .read_\n_┃ ⊱ .imagine_\n_┃ ⊱ .lizzy_\n_┃ ⊱ .aizen_\n_┃ ⊱ .say_`;
-            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+            await sendWithBackButton(sock, msg, text);
         }
     },
     {
@@ -667,7 +877,7 @@ Here's your prefix though`;
         isPrefixless: true,
         execute: async (sock, msg) => {
             const text = `┌────────┐\n│ 🎮 GAMES  \n└────────┘\n\n_┃ ⊱ .games_\n_┃ ⊱ .ttt_\n_┃ ⊱ .rps_\n_┃ ⊱ .guess_\n_┃ ⊱ .vault8_\n_┃ ⊱ .quiz_\n_┃ ⊱ .charade_\n_┃ ⊱ .anagram_\n_┃ ⊱ .wcg_\n_┃ ⊱ .millionaire_\n_┃ ⊱ .torf_\n_┃ ⊱ .pvp_\n_┃ ⊱ .escape_`;
-            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+            await sendWithBackButton(sock, msg, text);
         }
     },
     {
@@ -675,7 +885,7 @@ Here's your prefix though`;
         isPrefixless: true,
         execute: async (sock, msg) => {
             const text = `┌─────────┐\n│ 🔥 GROUP  \n└─────────┘\n\n_┃ ⊱ .mute_\n_┃ ⊱ .unmute_\n_┃ ⊱ .kick_\n_┃ ⊱ .promote_\n_┃ ⊱ .demote_\n_┃ ⊱ .tagall_\n_┃ ⊱ .tag_\n_┃ ⊱ .link_\n_┃ ⊱ .antilink_\n_┃ ⊱ .admins_\n_┃ ⊱ .antitag_\n_┃ ⊱ .antibot_\n_┃ ⊱ .warn_\n_┃ ⊱ .welcome_\n_┃ ⊱ .goodbye_\n_┃ ⊱ .poll_\n_┃ ⊱ .antigm_\n_┃ ⊱ .gclog_\n_┃ ⊱ .antispam_\n_┃ ⊱ .silence_\n_┃ ⊱ .gcalerts_\n_┃ ⊱ .antipromote_\n_┃ ⊱ .antidemote_\n_┃ ⊱ .overkill_\n_┃ ⊱ .antijoin_\n_┃ ⊱ .gfilter_`;
-            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+            await sendWithBackButton(sock, msg, text);
         }
     },
     {
@@ -683,7 +893,7 @@ Here's your prefix though`;
         isPrefixless: true,
         execute: async (sock, msg) => {
             const text = `┌────────┐\n│ ⚙️ TOOLS  \n└────────┘\n\n_┃ ⊱ .search_\n_┃ ⊱ .track_\n_┃ ⊱ .getpp_\n_┃ ⊱ .setname_\n_┃ ⊱ .save_\n_┃ ⊱ .tostatus_\n_┃ ⊱ .fw_\n_┃ ⊱ .presence_\n_┃ ⊱ .autotyping_\n_┃ ⊱ .autorecording_\n_┃ ⊱ .alwaysonline_\n_┃ ⊱ .autoread_\n_┃ ⊱ .antidelete_\n_┃ ⊱ .antiviewonce_\n_┃ ⊱ .antibug_\n_┃ ⊱ .clear_\n_┃ ⊱ .autoviewstatus_\n_┃ ⊱ .statusemoji_\n_┃ ⊱ .autoreactstatus_\n_┃ ⊱ .block_\n_┃ ⊱ .unblock_\n_┃ ⊱ .aza_\n_┃ ⊱ .time_\n_┃ ⊱ .weather_\n_┃ ⊱ .device_\n_┃ ⊱ .ss_\n_┃ ⊱ .calc_\n_┃ ⊱ .trt_\n_┃ ⊱ .spam_\n_┃ ⊱ .pfilter_\n_┃ ⊱ .filters_\n_┃ ⊱ .delfilter_`;
-            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+            await sendWithBackButton(sock, msg, text);
         }
     },
     {
@@ -691,7 +901,7 @@ Here's your prefix though`;
         isPrefixless: true,
         execute: async (sock, msg) => {
             const text = `┌───────────┐\n│ 📥  DOWNLOAD  \n└───────────┘\n\n_┃ ⊱ .play_\n_┃ ⊱ .yt_\n_┃ ⊱ .img_\n_┃ ⊱ .song_\n_┃ ⊱ .fb_\n_┃ ⊱ .tt_\n_┃ ⊱ .mediafire_\n_┃ ⊱ .apk_\n_┃ ⊱ .shazam_\n_┃ ⊱ .lyrics_\n_┃ ⊱ .gdrive_\n_┃ ⊱ .gitclone_\n_┃ ⊱ .pinterest_\n_┃ ⊱ .spotify_\n_┃ ⊱ .web_\n_┃ ⊱ .tgs_\n_┃ ⊱ .ig_`;
-            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+            await sendWithBackButton(sock, msg, text);
         }
     },
     {
@@ -699,7 +909,7 @@ Here's your prefix though`;
         isPrefixless: true,
         execute: async (sock, msg) => {
             const text = `┌──────────┐\n│ 🎭 FUN & RP  \n└──────────┘\n\n_┃ ⊱ .bankai_\n_┃ ⊱ .dom-exp_\n_┃ ⊱ .wyr_\n_┃ ⊱ .joke_\n_┃ ⊱ .insult_\n_┃ ⊱ .roast_\n_┃ ⊱ .ship_\n_┃ ⊱ .wed_\n_┃ ⊱ .propose_\n_┃ ⊱ .askout_\n_┃ ⊱ .hollow-purple_\n_┃ ⊱ .hack_\n_┃ ⊱ .arrest_\n_┃ ⊱ .liedetector_\n_┃ ⊱ .rizz_\n_┃ ⊱ .speech_\n_┃ ⊱ .slap_\n_┃ ⊱ .kill_\n_┃ ⊱ .kiss_\n_┃ ⊱ .hug_\n_┃ ⊱ .dance_\n_┃ ⊱ .aura_\n_┃ ⊱ .lol_`;
-            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+            await sendWithBackButton(sock, msg, text);
         }
     },
     {
@@ -707,7 +917,7 @@ Here's your prefix though`;
         isPrefixless: true,
         execute: async (sock, msg) => {
             const text = `┌─────────────┐\n│ 👑 OWNER & DEV  \n└─────────────┘\n\n_┃ ⊱ .prefix_\n_┃ ⊱ .diagnose_\n_┃ ⊱ .update_\n_┃ ⊱ .mode_\n_┃ ⊱ .setsudo_\n_┃ ⊱ .delsudo_\n_┃ ⊱ .addowner_\n_┃ ⊱ .delowner_\n_┃ ⊱ .restart_\n_┃ ⊱ .shutdown_\n_┃ ⊱ .ban_\n_┃ ⊱ .unban_\n_┃ ⊱ .afk_\n_┃ ⊱ .setvar_\n_┃ ⊱ .settings_\n_┃ ⊱ .antipm_\n_┃ ⊱ .reminder_`;
-            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+            await sendWithBackButton(sock, msg, text);
         }
     },
     {
@@ -715,7 +925,21 @@ Here's your prefix though`;
         isPrefixless: true,
         execute: async (sock, msg) => {
             const text = `┌───────────┐\n│ 🛠️ UTILITIES  \n└───────────┘\n\n_┃ ⊱ .ping_\n_┃ ⊱ .alive_\n_┃ ⊱ .delete_\n_┃ ⊱ .tdelete_\n_┃ ⊱ .autoreact_\n_┃ ⊱ .speed_\n_┃ ⊱ .sticker_\n_┃ ⊱ .crop_\n_┃ ⊱ .take_\n_┃ ⊱ .smeme_\n_┃ ⊱ .packname_\n_┃ ⊱ .fixpack_\n_┃ ⊱ .unpack_\n_┃ ⊱ .tourl_\n_┃ ⊱ .kamui_\n_┃ ⊱ .addnote_\n_┃ ⊱ .delnote_\n_┃ ⊱ .getnotes_\n_┃ ⊱ .toimg_\n_┃ ⊱ .tomp3_\n_┃ ⊱ .tomp4_\n_┃ ⊱ .binary_\n_┃ ⊱ .ocr_\n_┃ ⊱ .qr_\n_┃ ⊱ .readqr_\n_┃ ⊱ .qty_\n_┃ ⊱ .currency_`;
-            await sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg });
+            await sendWithBackButton(sock, msg, text);
+        }
+    },
+    {
+        name: 'help',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            await sendHelpList(sock, msg);
+        }
+    },
+    {
+        name: 'commands',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            await sendHelpList(sock, msg);
         }
     }
 ];
