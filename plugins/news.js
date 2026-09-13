@@ -238,8 +238,8 @@ async function checkAnimeUpdates(sock) {
             `📰 *ANIME NEWS UPDATE* 📰\n\n` +
             `*${item.title}*\n` +
             `_via ${item.source}_\n\n` +
-            `${item.summary}${item.summary.length >= 320 ? '…' : ''}\n\n` +
-            `🔗 *Read More*\n${item.link}`;
+            `🔗 *Read More*\n${item.link}\n\n` +
+            `${item.summary}${item.summary.length >= 320 ? '…' : ''}`;
 
         let imageBuffer = null;
         if (item.image) {
