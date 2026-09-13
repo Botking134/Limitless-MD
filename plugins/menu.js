@@ -313,6 +313,118 @@ ${menuText}`;
     }
 }
 
+async function renderSequentialCardMenu(sock, msg) {
+    const jid = msg.key.remoteJid;
+    const uptime = formatUptime(process.uptime());
+
+    const headerText =
+`┌─────────────┐
+│ *Limitless-MD*
+└─────────────┘
+_Owner: ${config.ownerName}_
+_User: ${msg.pushName || 'User'}_
+_Uptime: ${uptime}_
+_Version: 1.0.0_
+════════════════════════
+> Throughout Heaven And Earth_
+┌───────────────────┐
+│ *I alone am the Honoured one* 
+└───────────────────┘
+
+_Command categories below — same cards as .menu2, sent one by one so they actually show up on every device._ 🔮`;
+
+    let loadingMsg = null;
+
+    try {
+        const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
+
+        loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
+
+        const frames = [
+            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 400 },
+            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 400 },
+            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 400 },
+            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌌", delay: 500 }
+        ];
+
+        for (const frame of frames) {
+            await delay(frame.delay);
+            try { await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key }); } catch (editErr) {}
+        }
+
+        try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
+        await sock.sendMessage(jid, { text: headerText }, { quoted: msg });
+
+        const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
+
+        const categories = [
+            { name: "AI & CHATBOT 🧠", desc: "Interactive AI assistants & custom engines.", cmd: "menu_ai" },
+            { name: "INTERACTIVE GAMES 🎮", desc: "Lobbies, turn-based puzzles, quizzes, and duels.", cmd: "menu_games" },
+            { name: "GROUP MANAGEMENT 🔥", desc: "Group configurations & administrative controls.", cmd: "menu_group" },
+            { name: "TOOLS ⚙️", desc: "Advanced Presence parameters & tracking tools.", cmd: "menu_tools" },
+            { name: "DOWNLOADER 📥", desc: "High-speed multi-platform downloaders.", cmd: "menu_download" },
+            { name: "FUN & ROLEPLAY 🎭", desc: "Monologues, animations, and interactive cards.", cmd: "menu_fun" },
+            { name: "OWNER & DEV 👑", desc: "Private developer config & panel variables panel.", cmd: "menu_owner" },
+            { name: "UTILITIES 🛠️", desc: "Converter tools & network latencies.", cmd: "menu_utilities" }
+        ];
+
+        // Sanitize bot user JID (strips device ID suffix :12@s.whatsapp.net)
+        const rawBotJid = sock.user?.id || sock.user?.jid || jid;
+        const cleanBotUserJid = rawBotJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+
+        for (let i = 0; i < categories.length; i++) {
+            const cat = categories[i];
+            const card = await createCard(
+                sock, cat.name, cat.desc, shuffledImages[i % shuffledImages.length], cat.cmd, "Explore Commands 🔮"
+            );
+
+            // Single interactiveMessage, NOT wrapped in carouselMessage — this
+            // is the part that actually renders consistently. carouselMessage
+            // bundling several cards into one swipeable bubble is the piece
+            // WhatsApp clients inconsistently support; one card per message
+            // uses the same building blocks minus that unreliable wrapper.
+            const messageContent = {
+                viewOnceMessage: {
+                    message: {
+                        messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+                        interactiveMessage: {
+                            header: card.header,
+                            body: card.body,
+                            footer: card.footer,
+                            nativeFlowMessage: card.nativeFlowMessage
+                        }
+                    }
+                }
+            };
+
+            try {
+                const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(messageContent), { userJid: cleanBotUserJid });
+                await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+            } catch (cardErr) {
+                // If even the reliable single-card format fails for some
+                // reason, fall back to a plain image+caption for just this
+                // category rather than losing it silently.
+                console.error(`❌ [SEQ MENU] Card failed for ${cat.name}:`, cardErr.message);
+                const buffer = await fetchImageBuffer(shuffledImages[i % shuffledImages.length]);
+                if (buffer) {
+                    await sock.sendMessage(jid, { image: buffer, caption: `*${cat.name}*\n${cat.desc}` });
+                } else {
+                    await sock.sendMessage(jid, { text: `*${cat.name}*\n${cat.desc}` });
+                }
+            }
+
+            await delay(500); // gentle pacing between cards
+        }
+
+    } catch (error) {
+        console.error("❌ [SEQUENTIAL CARD MENU ERROR]:", error.message);
+        if (loadingMsg) {
+            try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
+        }
+        await renderMenu(sock, msg);
+    }
+}
+
 async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -444,6 +556,20 @@ module.exports = [
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             await renderCarouselMenu(sock, msg);
+        }
+    },
+    {
+        name: 'menu3',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            await renderSequentialCardMenu(sock, msg);
+        }
+    },
+    {
+        name: 'list3',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            await renderSequentialCardMenu(sock, msg);
         }
     },
 
