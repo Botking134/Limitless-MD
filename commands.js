@@ -63,6 +63,7 @@ function register(cmd) {
     // ─── STORE METADATA (Critical for Delta/Gojo) ──────────────
     commands[key] = {
         execute: cmd.execute,
+        isPrefixless: cmd.isPrefixless || false,
         metadata: {
             description: cmd.description || `${cmd.name} command`,
             category: cmd.category || 'tools',
