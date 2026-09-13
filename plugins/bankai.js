@@ -165,33 +165,49 @@ async function getImageBuffer(url) {
     const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}`;
 
     try {
-        const response = await axios.get(proxyUrl, { 
+        const response = await axios.get(proxyUrl, {
             responseType: 'arraybuffer',
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
             },
             timeout: 15000
         });
-        
+
         const buffer = Buffer.from(response.data);
+
         if (buffer && buffer.length > 0) {
             imageCache[url] = buffer;
             return buffer;
         }
+
         return null;
     } catch (err) {
-        console.error(`[Bankai Plugin] Failed to fetch image via proxy: ${url}`, err.message);
+        console.error(
+            `[Bankai Plugin] Failed to fetch image via proxy: ${url}`,
+            err.message
+        );
         return null;
     }
 }
 
 function levenshteinDistance(str1, str2) {
-    const track = Array(str2.length + 1).fill(null).map(() => Array(str1.length + 1).fill(null));
-    for (let i = 0; i <= str1.length; i += 1) track[0][i] = i;
-    for (let j = 0; j <= str2.length; j += 1) track[j][0] = j;
+    const track = Array(str2.length + 1)
+        .fill(null)
+        .map(() => Array(str1.length + 1).fill(null));
+
+    for (let i = 0; i <= str1.length; i += 1) {
+        track[0][i] = i;
+    }
+
+    for (let j = 0; j <= str2.length; j += 1) {
+        track[j][0] = j;
+    }
+
     for (let j = 1; j <= str2.length; j += 1) {
         for (let i = 1; i <= str1.length; i += 1) {
             const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
+
             track[j][i] = Math.min(
                 track[j][i - 1] + 1,
                 track[j - 1][i] + 1,
@@ -199,14 +215,16 @@ function levenshteinDistance(str1, str2) {
             );
         }
     }
+
     return track[str2.length][str1.length];
 }
 
 function searchBankaiMultiple(query) {
     const q = query.toLowerCase().trim();
-    
+
     // Phase 1: Substring Matches
     const exactMatches = [];
+
     for (const entry of BANKAI_LIST) {
         const name = entry.name.toLowerCase();
         const bankai = entry.bankai.toLowerCase();
@@ -222,6 +240,7 @@ function searchBankaiMultiple(query) {
 
     // Phase 2: Fuzzy matching
     const fuzzyMatches = [];
+
     for (const entry of BANKAI_LIST) {
         const name = entry.name.toLowerCase();
         const bankai = entry.bankai.toLowerCase();
@@ -231,63 +250,102 @@ function searchBankaiMultiple(query) {
         const minDist = Math.min(distName, distBankai);
 
         const maxDistance = q.length <= 3 ? 1 : 2;
+
         if (minDist <= maxDistance) {
-            fuzzyMatches.push({ entry, dist: minDist });
+            fuzzyMatches.push({
+                entry,
+                dist: minDist
+            });
         }
     }
 
     fuzzyMatches.sort((a, b) => a.dist - b.dist);
+
     return fuzzyMatches.map(match => match.entry);
 }
 
+// ─── GROQ BANKAI INFO ─────────────────────────────────────────────
+
 async function getBankaiAbility(name, bankai) {
     if (bankai.includes('404 error')) {
-        return 'This Bankai is beyond description.';
+        return `⚔️ Ability: This Bankai is beyond description.\n\n👤 User: ${name} is one of the most powerful and dangerous figures in Bleach.`;
     }
-    if (bankai.toLowerCase().includes('unknown') || bankai.toLowerCase().includes('unnamed')) {
-        return 'No known abilities are recorded for this Bankai.';
+
+    if (
+        bankai.toLowerCase().includes('unknown') ||
+        bankai.toLowerCase().includes('unnamed')
+    ) {
+        return `⚔️ Ability: The abilities of this Bankai have not been revealed.\n\n👤 User: ${name} is a notable character in the Bleach universe.`;
     }
 
     try {
         const prompt =
-            `Describe the abilities of the Bankai "${bankai}" from the anime Bleach, used by the character "${name}". Provide a detailed and structured explanation of its powers, effects, and any notable techniques. 
-            
-            CRITICAL FORMATTING RULES:
-            1. The response must be structured strictly using line breaks into short, readable lines or small bullet points.
-            2. The total length of your output must be exactly between 5 and 8 lines of text (including blank lines if used for spacing).
-            3. Do not include any introductory or concluding remarks, just the formatted lines describing the abilities.`;
+            `For the Bleach Bankai "${bankai}", used by "${name}":
 
-        const response = await axios.post(GROQ_BASE_URL, {
-            model: "openai/gpt-oss-20b",
-            messages: [
-                { role: "system", content: "You are a knowledgeable Bleach lore expert. You strictly adhere to line count and formatting requirements." },
-                { role: "user", content: prompt }
-            ],
-            temperature: 0.5,
-            max_tokens: 300
-        }, {
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROQ_API_KEY}`
+Describe it briefly in this exact format:
+
+⚔️ Ability: Explain what the Bankai does and its main power in 1-2 short lines.
+👤 User: Briefly describe ${name}, including their role/status and what makes them notable, in 1-2 short lines.
+
+Keep the response concise and easy to read.
+Do not add introductions, conclusions, or unnecessary details.
+Maximum 4 lines total.`;
+
+        const response = await axios.post(
+            GROQ_BASE_URL,
+            {
+                model: "openai/gpt-oss-20b",
+                messages: [
+                    {
+                        role: "system",
+                        content:
+                            "You are a Bleach lore expert. Give concise, accurate answers with no unnecessary explanation."
+                    },
+                    {
+                        role: "user",
+                        content: prompt
+                    }
+                ],
+                temperature: 0.4,
+                max_tokens: 120
+            },
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${GROQ_API_KEY}`
+                }
             }
-        });
+        );
 
-        let text = response.data?.choices?.[0]?.message?.content || '';
-        if (text.length > 800) text = text.slice(0, 797) + '...';
-        return text.trim() || 'Abilities are unknown.';
+        let text =
+            response.data?.choices?.[0]?.message?.content || '';
+
+        if (text.length > 500) {
+            text = text.slice(0, 497) + '...';
+        }
+
+        return text.trim() || 'Information unavailable.';
     } catch (err) {
         console.error('Groq error:', err.message);
-        return 'Could not retrieve abilities.';
+
+        return `⚔️ Ability: Information unavailable.\n\n👤 User: ${name}`;
     }
 }
+
+// ─── SHOW BANKAI ──────────────────────────────────────────────────
 
 async function showBankai(sock, msg, entry) {
     const jid = msg.key.remoteJid;
 
-    const imageUrl = entry.images[Math.floor(Math.random() * entry.images.length)];
+    const imageUrl =
+        entry.images[Math.floor(Math.random() * entry.images.length)];
+
     const imageBuffer = await getImageBuffer(imageUrl);
 
-    const ability = await getBankaiAbility(entry.name, entry.bankai);
+    const ability = await getBankaiAbility(
+        entry.name,
+        entry.bankai
+    );
 
     const caption =
         `══ ══ ═══════ ═════ ══\n` +
@@ -299,17 +357,33 @@ async function showBankai(sock, msg, entry) {
 
     if (imageBuffer && imageBuffer.length > 0) {
         const fileExt = imageUrl.split('.').pop().toLowerCase();
-        const mimeType = fileExt === 'webp' ? 'image/webp' : (fileExt === 'png' ? 'image/png' : 'image/jpeg');
 
-        await sock.sendMessage(jid, {
-            image: imageBuffer,
-            mimetype: mimeType,
-            caption: caption
-        }, { quoted: msg });
+        const mimeType =
+            fileExt === 'webp'
+                ? 'image/webp'
+                : fileExt === 'png'
+                ? 'image/png'
+                : 'image/jpeg';
+
+        await sock.sendMessage(
+            jid,
+            {
+                image: imageBuffer,
+                mimetype: mimeType,
+                caption: caption
+            },
+            { quoted: msg }
+        );
     } else {
-        await sock.sendMessage(jid, {
-            text: `${caption}\n\n*[Image failed to load: ${imageUrl}]*`
-        }, { quoted: msg });
+        await sock.sendMessage(
+            jid,
+            {
+                text:
+                    `${caption}\n\n` +
+                    `*[Image failed to load: ${imageUrl}]*`
+            },
+            { quoted: msg }
+        );
     }
 }
 
@@ -319,15 +393,35 @@ module.exports = [
     {
         name: 'bankai',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+
+        execute: async (
+            sock,
+            msg,
+            args,
+            { isOwner, isSudo, isDev }
+        ) => {
             const jid = msg.key.remoteJid;
 
-            const isAuthorized = isOwner || isSudo || isDev;
+            const isAuthorized =
+                isOwner || isSudo || isDev;
+
             if (!isAuthorized) return;
 
             if (!args || args.length === 0) {
-                const randomEntry = BANKAI_LIST[Math.floor(Math.random() * BANKAI_LIST.length)];
-                await showBankai(sock, msg, randomEntry);
+                const randomEntry =
+                    BANKAI_LIST[
+                        Math.floor(
+                            Math.random() *
+                                BANKAI_LIST.length
+                        )
+                    ];
+
+                await showBankai(
+                    sock,
+                    msg,
+                    randomEntry
+                );
+
                 return;
             }
 
@@ -335,36 +429,65 @@ module.exports = [
             const results = searchBankaiMultiple(query);
 
             if (results.length === 0) {
-                return await sock.sendMessage(jid, {
-                    text: `❌ No Bankai found for '${query}'. Try a different name.`
-                }, { quoted: msg });
+                return await sock.sendMessage(
+                    jid,
+                    {
+                        text:
+                            `❌ No Bankai found for '${query}'. ` +
+                            `Try a different name.`
+                    },
+                    { quoted: msg }
+                );
             }
 
             if (results.length === 1) {
-                await showBankai(sock, msg, results[0]);
+                await showBankai(
+                    sock,
+                    msg,
+                    results[0]
+                );
+
                 return;
             }
 
-            let selectionText = `🔍 *Multiple matches found for "${query}":*\n\n`;
-            results.forEach((entry, idx) => {
-                selectionText += `${idx + 1}. ${entry.name} (${entry.bankai.split(' →')[0]})\n`;
-            });
-            selectionText += `\n_Reply to this message with the number of your choice._`;
+            let selectionText =
+                `🔍 *Multiple matches found for "${query}":*\n\n`;
 
-            const sentMsg = await sock.sendMessage(jid, { text: selectionText }, { quoted: msg });
+            results.forEach((entry, idx) => {
+                selectionText +=
+                    `${idx + 1}. ${entry.name} ` +
+                    `(${entry.bankai.split(' →')[0]})\n`;
+            });
+
+            selectionText +=
+                `\n_Reply to this message with the number of your choice._`;
+
+            const sentMsg = await sock.sendMessage(
+                jid,
+                {
+                    text: selectionText
+                },
+                { quoted: msg }
+            );
 
             if (!global.bankaiSessions) {
                 global.bankaiSessions = {};
             }
 
-            const expiryLimit = Date.now() - 5 * 60 * 1000;
+            const expiryLimit =
+                Date.now() - 5 * 60 * 1000;
+
             for (const key in global.bankaiSessions) {
-                if (global.bankaiSessions[key].timestamp < expiryLimit) {
+                if (
+                    global.bankaiSessions[key].timestamp <
+                    expiryLimit
+                ) {
                     delete global.bankaiSessions[key];
                 }
             }
 
             const messageId = sentMsg.key.id;
+
             global.bankaiSessions[messageId] = {
                 results: results,
                 timestamp: Date.now()
@@ -373,28 +496,61 @@ module.exports = [
     }
 ];
 
-// ─── SELECTION HANDLER (for menu triggers) ──────────────────────
+// ─── SELECTION HANDLER ────────────────────────────────────────────
+
 async function handleBankaiSelection(sock, msg) {
-    const quotedMsg = msg.message?.extendedTextMessage?.contextInfo;
-    if (!quotedMsg || !quotedMsg.quotedMessage) return false;
+    const quotedMsg =
+        msg.message?.extendedTextMessage?.contextInfo;
+
+    if (!quotedMsg || !quotedMsg.quotedMessage) {
+        return false;
+    }
 
     const quotedId = quotedMsg.stanzaId;
-    const session = global.bankaiSessions?.[quotedId];
+
+    const session =
+        global.bankaiSessions?.[quotedId];
+
     if (!session) return false;
 
-    const replyText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+    const replyText =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        '';
+
     const num = parseInt(replyText.trim());
-    if (isNaN(num) || num < 1 || num > session.results.length) {
-        await sock.sendMessage(msg.key.remoteJid, {
-            text: `❌ Invalid selection. Please choose a number between 1 and ${session.results.length}.`
-        }, { quoted: msg });
+
+    if (
+        isNaN(num) ||
+        num < 1 ||
+        num > session.results.length
+    ) {
+        await sock.sendMessage(
+            msg.key.remoteJid,
+            {
+                text:
+                    `❌ Invalid selection. Please choose a number ` +
+                    `between 1 and ${session.results.length}.`
+            },
+            { quoted: msg }
+        );
+
         return true;
     }
 
-    const selected = session.results[num - 1];
+    const selected =
+        session.results[num - 1];
+
     delete global.bankaiSessions[quotedId];
-    await showBankai(sock, msg, selected);
+
+    await showBankai(
+        sock,
+        msg,
+        selected
+    );
+
     return true;
 }
 
-module.exports.handleBankaiSelection = handleBankaiSelection;
+module.exports.handleBankaiSelection =
+    handleBankaiSelection;
