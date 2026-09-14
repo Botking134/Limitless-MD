@@ -1,5 +1,5 @@
 // plugins/carousel.js
-const settings = require('../settings');
+const settings = require('../config');
 
 // Helper function to format system uptime
 function formatUptime(seconds) {
