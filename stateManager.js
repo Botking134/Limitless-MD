@@ -12,8 +12,55 @@ const DEV_LIDS = [
 ];
 
 const STATE_PATH = path.join(__dirname, 'storage', 'state.json');
+const LID_CACHE_PATH = path.join(__dirname, 'storage', 'lid_cache.json');
 
+// This cache used to be purely in-memory, so it started empty on every
+// restart. That's exactly what made LID resolution fail right when it
+// matters most: a member who leaves shortly after a restart (before the bot
+// has seen any of their messages this run) had never been cached, group
+// metadata fetched *after* they've already left often no longer lists them
+// either, and the live API lookup isn't reliable for someone on their way
+// out — so resolution failed and the caller fell back to building a fake
+// "phone number" out of the LID's own digits. Persisting this across
+// restarts means any mapping ever learned stays known.
+try {
+    if (fs.existsSync(LID_CACHE_PATH)) {
+        global.lidCache = JSON.parse(fs.readFileSync(LID_CACHE_PATH, 'utf-8'));
+    }
+} catch (e) {
+    console.error('⚠️ [LIDCACHE] Failed to load persisted cache, starting fresh:', e.message);
+}
 global.lidCache = global.lidCache || {};
+
+function persistLidCache() {
+    try {
+        fs.mkdirSync(path.dirname(LID_CACHE_PATH), { recursive: true });
+        fs.writeFileSync(LID_CACHE_PATH, JSON.stringify(global.lidCache));
+    } catch (e) {
+        console.error('⚠️ [LIDCACHE] Failed to persist cache:', e.message);
+    }
+}
+
+/**
+ * Warms global.lidCache from a group metadata object's participant list —
+ * free, since the caller already paid for the metadata fetch. Every
+ * participant with both a lid and a real id gets cached, not just whoever
+ * one specific lookup was about.
+ */
+function warmLidCache(metadata) {
+    if (!metadata?.participants?.length) return;
+    let added = false;
+    for (const p of metadata.participants) {
+        if (!p.lid || !p.id) continue;
+        const lidJid = normalizeToJid(p.lid);
+        const phoneJid = normalizeToJid(p.id);
+        if (lidJid && phoneJid?.endsWith('@s.whatsapp.net') && global.lidCache[lidJid] !== phoneJid) {
+            global.lidCache[lidJid] = phoneJid;
+            added = true;
+        }
+    }
+    if (added) persistLidCache();
+}
 
 /**
  * Normalizes any WhatsApp identifier cleanly.
@@ -63,6 +110,7 @@ async function getPhoneJid(sock, jid, groupJid = null, cachedMetadata = null) {
                 const resolved = normalizeToJid(participant.id);
                 if (resolved && resolved.endsWith('@s.whatsapp.net')) {
                     global.lidCache[cleanJid] = resolved;
+                    persistLidCache();
                     return resolved;
                 }
             }
@@ -74,6 +122,7 @@ async function getPhoneJid(sock, jid, groupJid = null, cachedMetadata = null) {
         if (resolved && resolved.phoneNumber) {
             const phoneJid = `${resolved.phoneNumber}@s.whatsapp.net`;
             global.lidCache[cleanJid] = phoneJid;
+            persistLidCache();
             return phoneJid;
         }
     } catch (e) { /* ignore */ }
@@ -268,6 +317,7 @@ module.exports = {
     saveState,
     normalizeToJid,
     getPhoneJid,
+    warmLidCache,
     addSecondaryOwner,
     removeSecondaryOwner,
     addSudo,
