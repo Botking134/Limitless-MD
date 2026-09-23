@@ -387,7 +387,9 @@ async function searchStickerly(query) {
                     };
                 }
             }
-        } catch {}
+        } catch (err) {
+            console.error(`⚠️ [STICKERLY] "${query}" via ${url.split('?')[0]} failed:`, err.response?.status || err.code || err.message);
+        }
     }
     return null;
 }
@@ -415,17 +417,31 @@ async function searchStickify(query) {
                 };
             }
         }
-    } catch {}
+    } catch (err) {
+        console.error(`⚠️ [STICKIFY] "${query}" failed:`, err.response?.status || err.code || err.message);
+    }
     return null;
 }
 
 // ─── COMBINED EXACT-METADATA PACK FETCHER ─────────────────────────
+// Tries the literal query first (exact pack titles like "Naruto stickers
+// bread4life" match this), then widens to more search-friendly phrasing
+// for generic single-word queries (e.g. "goku" -> "goku stickers") since
+// Sticker.ly/Stickify's search is picky about exact title-ish phrasing.
 async function fetchStickerPack(query) {
-    let pack = await searchStickerly(query);
-    if (pack && pack.urls.length) return pack;
+    const variants = [...new Set([
+        query,
+        `${query} stickers`,
+        `${query} sticker pack`
+    ].map(v => v.trim()))];
 
-    pack = await searchStickify(query);
-    if (pack && pack.urls.length) return pack;
+    for (const variant of variants) {
+        let pack = await searchStickerly(variant);
+        if (pack && pack.urls.length) return pack;
+
+        pack = await searchStickify(variant);
+        if (pack && pack.urls.length) return pack;
+    }
 
     return null;
 }
