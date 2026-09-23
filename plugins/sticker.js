@@ -387,10 +387,21 @@ async function searchStickerly(query) {
                     };
                 }
                 console.error(`⚠️ [STICKERLY] "${query}" matched a pack but 0 sticker URLs parsed — pack keys: ${Object.keys(pack).join(',')}, sticker[0] keys: ${Object.keys(pack.stickers?.[0] || {}).join(',')}`);
+            } else if (data?.error) {
+                // API is actively rejecting us (soft block / rate limit / bad
+                // auth), not just "no matches". Surface the real message and
+                // stop hitting it further this call — retrying variants
+                // against an active block just makes it worse.
+                console.error(`⚠️ [STICKERLY] "${query}" API error response:`, JSON.stringify(data.error));
+                const blockedErr = new Error('STICKERLY_BLOCKED');
+                blockedErr.stickerlyBlocked = true;
+                blockedErr.raw = data.error;
+                throw blockedErr;
             } else {
                 console.error(`⚠️ [STICKERLY] "${query}" got 0 packs — top-level response keys: ${Object.keys(data || {}).join(',')}`);
             }
         } catch (err) {
+            if (err.stickerlyBlocked) throw err;
             console.error(`⚠️ [STICKERLY] "${query}" via ${url.split('?')[0]} failed:`, err.response?.status || err.code || err.message);
         }
     }
@@ -439,11 +450,23 @@ async function fetchStickerPack(query) {
     ].map(v => v.trim()))];
 
     for (const variant of variants) {
-        let pack = await searchStickerly(variant);
-        if (pack && pack.urls.length) return pack;
+        try {
+            const pack = await searchStickerly(variant);
+            if (pack && pack.urls.length) return pack;
+        } catch (err) {
+            if (err.stickerlyBlocked) {
+                // Don't burn more requests against an active block/rate-limit —
+                // that only makes it worse. Bubble up so the caller can tell
+                // the user this isn't a "no results" situation.
+                const e = new Error('Sticker.ly is rejecting requests right now');
+                e.stickerlyBlocked = true;
+                e.raw = err.raw;
+                throw e;
+            }
+        }
 
-        pack = await searchStickify(variant);
-        if (pack && pack.urls.length) return pack;
+        const pack2 = await searchStickify(variant);
+        if (pack2 && pack2.urls.length) return pack2;
     }
 
     return null;
@@ -508,6 +531,9 @@ async function handleSp(sock, msg, args) {
         try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
 
     } catch (err) {
+        if (err.stickerlyBlocked) {
+            console.error(`⚠️ [SP] Sticker.ly block confirmed for "${query}":`, JSON.stringify(err.raw));
+        }
         try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
         await sock.sendMessage(jid, { text: `❌ Failed to fetch sticker pack: ${err.message}` }, { quoted: msg });
     }
