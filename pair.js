@@ -7,7 +7,7 @@ const config = require('./config');
 const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('./plugins/devs');
 const { handleDeletion } = require('./helpers/log');
 const { handleIncomingMessage } = require('./helpers/Infinity');
-const { normalizeToJid, getPhoneJid, loadState } = require('./stateManager');
+const { normalizeToJid, getPhoneJid, loadState, warmLidCache } = require('./stateManager');
 const ActivityManager = require('./helpers/ActivityManager');
 const { generateMemberCard, buildCaption } = require('./helpers/WelcomeCardManager');
 
@@ -567,6 +567,15 @@ async function startBot() {
             try {
                 metadata = await sock.groupMetadata(jid);
                 groupName = metadata?.subject || 'Group';
+                // Free win: this metadata already lists every current member's lid+id
+                // pair. Caching all of them now (not just whoever this one event is
+                // about) means a future leave/remove for any of them can resolve
+                // instantly from cache instead of hitting the exact race condition
+                // that breaks resolution on the way out — WhatsApp can already have
+                // dropped a leaving member from the roster by the time this handler
+                // runs, so metadata fetched *at* that moment often can't help them
+                // specifically, but everyone else here right now still can be.
+                warmLidCache(metadata);
             } catch (e) {
                 console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Failed to fetch metadata for ${jid}:`, e.message);
             }
@@ -576,6 +585,7 @@ async function startBot() {
 
             let rawActor = resolveParticipantIdentifier(anu.author);
             let actorJid = '';
+            let actorResolved = true;
             if (rawActor) {
                 actorJid = await getPhoneJid(sock, rawActor, jid, metadata);
                 if (!actorJid || actorJid.endsWith('@lid')) {
@@ -589,6 +599,7 @@ async function startBot() {
                     // killing the socket (reason 500) instead of delivering the welcome/
                     // goodbye card.
                     actorJid = rawActor.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                    actorResolved = false;
                     console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve actor LID ${rawActor} to a real phone JID in ${jid}.`);
                 }
             }
@@ -604,15 +615,24 @@ async function startBot() {
                 if (!rawTarget) continue;
 
                 let targetJid = await getPhoneJid(sock, rawTarget, jid, metadata);
+                let targetResolved = true;
                 if (!targetJid || targetJid.endsWith('@lid')) {
                     // Same fix as the actor lookup above — an unresolved @lid JID must not
                     // reach sendMessage()/mentions, since that's what was triggering the
-                    // reason-500 disconnects on join/exit.
+                    // reason-500 disconnects on join/exit. But building a fake "phone number"
+                    // out of the LID's own digits and @-mentioning it is its own bug: those
+                    // digits aren't a real phone number, so the mention can land on a
+                    // completely unrelated, uninvolved WhatsApp account. When resolution
+                    // genuinely fails, targetResolved goes false and every message below
+                    // switches to a plain, non-mentioning label instead of a fabricated one.
                     targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                    targetResolved = false;
                     console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve target LID ${rawTarget} to a real phone JID in ${jid}.`);
                 }
 
                 const phoneNumber = targetJid.split('@')[0];
+                const targetLabel = targetResolved ? `@${phoneNumber}` : 'a member (ID unresolved)';
+                const targetMentions = targetResolved ? [targetJid] : [];
 
                 const eventSignature = `${jid}_${targetJid}_${action}`;
                 if (isDuplicateEvent(eventSignature)) continue;
@@ -625,8 +645,8 @@ async function startBot() {
                         try {
                             await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
                             await sock.sendMessage(jid, { 
-                                text: `🔒 *Anti-Join Protection active!* Expelled @${phoneNumber}.`,
-                                mentions: [targetJid]
+                                text: `🔒 *Anti-Join Protection active!* Expelled ${targetLabel}.`,
+                                mentions: targetMentions
                             });
                             continue;
                         } catch (e) {}
@@ -659,7 +679,7 @@ async function startBot() {
                         // second send is attempted on a socket that may already be dead,
                         // which is what was silently swallowing both messages before.
                         try {
-                            await sock.sendMessage(jid, { text: caption, mentions: [targetJid] });
+                            await sock.sendMessage(jid, { text: caption, mentions: targetMentions });
                         } catch (textErr) {
                             console.error('⚠️ [WELCOME TEXT] Failed to send:', textErr.message);
                         }
@@ -668,11 +688,11 @@ async function startBot() {
                             const cardImage = await generateMemberCard(sock, {
                                 type: 'welcome',
                                 targetJid,
-                                displayName: `@${phoneNumber}`,
+                                displayName: targetLabel,
                                 groupName,
                                 memberCount
                             });
-                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: [targetJid] });
+                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: targetMentions });
                         } catch (cardErr) {
                             console.error('⚠️ [WELCOME CARD] Image follow-up failed (text already sent):', cardErr.message);
                         }
@@ -694,7 +714,7 @@ async function startBot() {
                         // Same reasoning as the welcome path above: text first and always,
                         // image as a decoupled best-effort follow-up.
                         try {
-                            await sock.sendMessage(jid, { text: caption, mentions: [targetJid] });
+                            await sock.sendMessage(jid, { text: caption, mentions: targetMentions });
                         } catch (textErr) {
                             console.error('⚠️ [GOODBYE TEXT] Failed to send:', textErr.message);
                         }
@@ -703,11 +723,11 @@ async function startBot() {
                             const cardImage = await generateMemberCard(sock, {
                                 type: 'goodbye',
                                 targetJid,
-                                displayName: `@${phoneNumber}`,
+                                displayName: targetLabel,
                                 groupName,
                                 memberCount
                             });
-                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: [targetJid] });
+                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: targetMentions });
                         } catch (cardErr) {
                             console.error('⚠️ [GOODBYE CARD] Image follow-up failed (text already sent):', cardErr.message);
                         }
@@ -736,10 +756,13 @@ async function startBot() {
                                     try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
                                 }
 
-                                const mentionList = actorJid && actorJid !== targetJid ? [targetJid, actorJid] : [targetJid];
-                                const actorLine = actorJid && actorJid !== targetJid ? ` @${actorJid.split('@')[0]} (the promoter) was also demoted.` : '';
+                                const includeActor = actorJid && actorJid !== targetJid;
+                                const mentionList = includeActor && actorResolved ? [...targetMentions, actorJid] : targetMentions;
+                                const actorLine = includeActor
+                                    ? (actorResolved ? ` @${actorJid.split('@')[0]} (the promoter) was also demoted.` : ` The promoter (ID unresolved) was also demoted.`)
+                                    : '';
                                 await sock.sendMessage(jid, {
-                                    text: `🛡️ *Anti-Promote Protection!* Unauthorized promotion of @${phoneNumber} was reverted.${actorLine}`,
+                                    text: `🛡️ *Anti-Promote Protection!* Unauthorized promotion of ${targetLabel} was reverted.${actorLine}`,
                                     mentions: mentionList
                                 });
                             } catch (e) { console.error('❌ [ANTIPROMOTE REVERT ERROR]:', e.message); }
@@ -750,8 +773,8 @@ async function startBot() {
                         const isPromoteOn = isEnabled(data.promote?.[jid]) || isEnabled(config.promote?.[jid]);
                         if (isPromoteOn) {
                             await sock.sendMessage(jid, {
-                                text: `👑 *PROMOTION ALERT!*\n\n🎉 @${phoneNumber} promoted to Admin in *${groupName}*!`,
-                                mentions: [targetJid]
+                                text: `👑 *PROMOTION ALERT!*\n\n🎉 ${targetLabel} promoted to Admin in *${groupName}*!`,
+                                mentions: targetMentions
                             });
                         }
                     }
@@ -776,10 +799,13 @@ async function startBot() {
                                     try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
                                 }
 
-                                const mentionList = actorJid && actorJid !== targetJid ? [targetJid, actorJid] : [targetJid];
-                                const actorLine = actorJid && actorJid !== targetJid ? ` @${actorJid.split('@')[0]} (the demoter) was also demoted.` : '';
+                                const includeActor = actorJid && actorJid !== targetJid;
+                                const mentionList = includeActor && actorResolved ? [...targetMentions, actorJid] : targetMentions;
+                                const actorLine = includeActor
+                                    ? (actorResolved ? ` @${actorJid.split('@')[0]} (the demoter) was also demoted.` : ` The demoter (ID unresolved) was also demoted.`)
+                                    : '';
                                 await sock.sendMessage(jid, {
-                                    text: `🛡️ *Anti-Demote Protection!* Unauthorized demotion of @${phoneNumber} was reverted.${actorLine}`,
+                                    text: `🛡️ *Anti-Demote Protection!* Unauthorized demotion of ${targetLabel} was reverted.${actorLine}`,
                                     mentions: mentionList
                                 });
                             } catch (e) { console.error('❌ [ANTIDEMOTE REVERT ERROR]:', e.message); }
@@ -790,8 +816,8 @@ async function startBot() {
                         const isDemoteOn = isEnabled(data.demote?.[jid]) || isEnabled(config.demote?.[jid]);
                         if (isDemoteOn) {
                             await sock.sendMessage(jid, {
-                                text: `🛡️ *DEMOTION ALERT!*\n\n👋 @${phoneNumber} demoted to Member in *${groupName}*.`,
-                                mentions: [targetJid]
+                                text: `🛡️ *DEMOTION ALERT!*\n\n👋 ${targetLabel} demoted to Member in *${groupName}*.`,
+                                mentions: targetMentions
                             });
                         }
                     }
