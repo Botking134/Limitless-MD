@@ -71,6 +71,44 @@ async function isVideoBuffer(buffer) {
     }
 }
 
+// ─── DOWNLOAD A STICKER OBJECT FROM A RECEIVED stickerPackMessage ──
+// Real WhatsApp sticker-pack entries (native packs, or packs we built
+// ourselves via the fork's `stickers:` API) are encrypted media refs
+// and must go through downloadContentFromMessage. The plain-`.url`
+// branch is kept only as a defensive fallback for any legacy/odd shape.
+async function downloadPackSticker(stickerObj, downloadContentFromMessage) {
+    const directUrl = typeof stickerObj === 'string'
+        ? stickerObj
+        : (stickerObj?.url || stickerObj?.data?.url);
+
+    if (directUrl && directUrl.startsWith('http')) {
+        const res = await axios.get(directUrl, { responseType: 'arraybuffer', timeout: 10000 });
+        return Buffer.from(res.data);
+    }
+
+    const stream = await downloadContentFromMessage(stickerObj, 'sticker');
+    let buffer = Buffer.from([]);
+    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+    return buffer;
+}
+
+// ─── NATIVE STICKER PACK SENDER ────────────────────────────────────
+// Uses the @itsliaaa/baileys fork's built-in Sticker Pack message
+// (`stickers: [{ data: <Buffer|{url}> }], name, publisher, cover`).
+// The fork uploads/encrypts each item to WhatsApp's media server
+// internally — no manual proto-building or media upload code needed.
+async function sendStickerPackNative(sock, jid, { name, publisher, stickers, cover }, quotedMsg) {
+    if (!stickers || !stickers.length) {
+        throw new Error('No stickers to send');
+    }
+    return await sock.sendMessage(jid, {
+        cover: cover || stickers[0],
+        stickers: stickers.map(s => ({ data: s })),
+        name: name || DEFAULT_PACK,
+        publisher: publisher || DEFAULT_AUTHOR
+    }, { quoted: quotedMsg });
+}
+
 // ─── ADAPTIVE VIDEO/GIF TO WEBP CONVERTER (<900KB & UP TO 15s) ───
 async function convertVideoAdaptive(buffer, isCropped = false, pack = DEFAULT_PACK, author = DEFAULT_AUTHOR) {
     const tempId = crypto.randomBytes(6).toString('hex');
@@ -392,50 +430,6 @@ async function fetchStickerPack(query) {
     return null;
 }
 
-// ─── DISPATCH NATIVE STICKER PACK CARD ────────────────────────────
-async function sendNativeStickerPack(sock, jid, pack, quotedMsg) {
-    if (typeof sock.sendStickerPack === 'function') {
-        try {
-            return await sock.sendStickerPack(jid, {
-                name: pack.name,
-                publisher: pack.publisher,
-                stickers: pack.urls
-            }, { quoted: quotedMsg });
-        } catch {
-            try {
-                return await sock.sendStickerPack(jid, pack.urls, quotedMsg, {
-                    name: pack.name,
-                    publisher: pack.publisher
-                });
-            } catch {}
-        }
-    }
-
-    try {
-        return await sock.sendMessage(jid, {
-            stickerPack: {
-                name: pack.name,
-                publisher: pack.publisher,
-                stickers: pack.urls
-            }
-        }, { quoted: quotedMsg });
-    } catch {
-        const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
-        const stickerPackPayload = {
-            stickerPackMessage: {
-                stickerPackId: `pack_${Date.now()}`,
-                name: pack.name,
-                publisher: pack.publisher,
-                stickers: pack.urls.map(url => ({
-                    url: typeof url === 'string' ? url : url.url
-                }))
-            }
-        };
-        const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(stickerPackPayload), { userJid: sock.user.id });
-        return await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
-    }
-}
-
 // ─── KLIPY GIF FETCHER ────────────────────────────────────────────
 async function klipySearch(query, { limit = 5 } = {}) {
     const poolLimit = Math.max(30, limit * 3);
@@ -485,7 +479,13 @@ async function handleSp(sock, msg, args) {
             return await sock.sendMessage(jid, { text: `❌ No sticker pack found for "${query}".` }, { quoted: msg });
         }
 
-        await sendNativeStickerPack(sock, jid, pack, msg);
+        await sendStickerPackNative(sock, jid, {
+            name: pack.name,
+            publisher: pack.publisher,
+            stickers: pack.urls.map(u => ({ url: u })),
+            cover: { url: pack.urls[0] }
+        }, msg);
+
         try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
 
     } catch (err) {
@@ -642,22 +642,41 @@ module.exports = [
                 newAuthor = parts[1] ? toEmpireFont(parts[1].trim()) : DEFAULT_AUTHOR;
             }
 
-            // DUAL CAPABILITY: If replied to a pack card, re-brand that card directly!
+            // DUAL CAPABILITY: If replied to a pack card, rebuild it with new branding.
+            // NOTE (unchanged from before): this path has no isOwner/isDev gate —
+            // anyone can rebrand a pack card they reply to. Flagging again in case
+            // that's not intentional; say the word and I'll lock it down.
             if (packMsg) {
+                const statusMsg = await sock.sendMessage(jid, { text: "🎨 _Rebranding sticker pack..._" }, { quoted: msg });
                 try {
-                    const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
-                    const rebrandedPayload = {
-                        stickerPackMessage: {
-                            stickerPackId: `pack_${Date.now()}`,
-                            name: newPack,
-                            publisher: newAuthor,
-                            stickers: packMsg.stickers || []
+                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                    const stickers = packMsg.stickers || [];
+                    const buffers = [];
+
+                    for (const stickerObj of stickers) {
+                        try {
+                            const buffer = await downloadPackSticker(stickerObj, downloadContentFromMessage);
+                            if (buffer && buffer.length > 0) buffers.push(buffer);
+                        } catch (e) {
+                            console.error('⚠️ [PACKNAME] Sticker fetch failed:', e.message);
                         }
-                    };
-                    const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(rebrandedPayload), { userJid: sock.user.id });
-                    await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+                    }
+
+                    if (!buffers.length) {
+                        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
+                        return await sock.sendMessage(jid, { text: "❌ Couldn't read any stickers from that pack card." }, { quoted: msg });
+                    }
+
+                    await sendStickerPackNative(sock, jid, {
+                        name: newPack,
+                        publisher: newAuthor,
+                        stickers: buffers
+                    }, msg);
+
+                    try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
                     return await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } });
                 } catch (e) {
+                    try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
                     return await sock.sendMessage(jid, { text: `❌ Failed to rebrand pack card: ${e.message}` }, { quoted: msg });
                 }
             }
@@ -751,7 +770,11 @@ module.exports = [
         }
     },
 
-    // 6. FIXPACK (Fixes Blank Tiles & WhatsApp EXIF Rejection)
+    // 6. FIXPACK (Actually repairs blank tiles & EXIF rejection by
+    // re-downloading every sticker, re-encoding it cleanly, and
+    // resending the whole pack fresh via the native stickers API —
+    // this re-uploads and re-encrypts each tile, unlike the old
+    // no-op version which relayed the exact same broken pack.)
     {
         name: 'fixpack',
         isPrefixless: false,
@@ -771,50 +794,45 @@ module.exports = [
             const statusMsg = await sock.sendMessage(jid, { text: "🔧 _Repairing sticker pack buffers & EXIF metadata..._" }, { quoted: msg });
 
             try {
-                const { generateWAMessageFromContent, proto, downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
 
-                const fixedUrls = [];
+                const fixedBuffers = [];
                 for (const stickerObj of packMsg.stickers) {
                     try {
-                        let buffer = null;
-                        const directUrl = typeof stickerObj === 'string' ? stickerObj : stickerObj?.url;
-
-                        if (directUrl && directUrl.startsWith('http')) {
-                            const res = await axios.get(directUrl, { responseType: 'arraybuffer', timeout: 10000 });
-                            buffer = Buffer.from(res.data);
-                        } else {
-                            const stream = await downloadContentFromMessage(stickerObj, 'sticker');
-                            buffer = Buffer.from([]);
-                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                        }
-
+                        const buffer = await downloadPackSticker(stickerObj, downloadContentFromMessage);
                         if (buffer && buffer.length > 0) {
-                            // Standardize via Sharp & inject valid EXIF
-                            const cleanWebp = await sharp(buffer).resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 50 }).toBuffer();
-                            const st = new Sticker(cleanWebp, {
-                                pack: packMsg.name || DEFAULT_PACK,
-                                author: packMsg.publisher || DEFAULT_AUTHOR,
-                                type: StickerTypes.FULL
-                            });
-                            // Keep viable stickers
-                            fixedUrls.push(directUrl || stickerObj);
+                            // Standardize via Sharp: fixes size mismatches, missing
+                            // alpha channel, and malformed webp headers that cause
+                            // blank tiles / EXIF rejection on WhatsApp's client.
+                            const cleanWebp = await sharp(buffer)
+                                .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                                .webp({ quality: 70 })
+                                .toBuffer();
+                            fixedBuffers.push(cleanWebp);
                         }
-                    } catch {}
+                    } catch (e) {
+                        console.error('⚠️ [FIXPACK] Sticker repair failed:', e.message);
+                    }
                 }
 
-                const repairedPayload = {
-                    stickerPackMessage: {
-                        stickerPackId: `pack_${Date.now()}`,
-                        name: packMsg.name || DEFAULT_PACK,
-                        publisher: packMsg.publisher || DEFAULT_AUTHOR,
-                        stickers: packMsg.stickers
-                    }
-                };
+                if (!fixedBuffers.length) {
+                    try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
+                    return await sock.sendMessage(jid, { text: "❌ Couldn't repair any stickers — all downloads/conversions failed." }, { quoted: msg });
+                }
 
-                const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(repairedPayload), { userJid: sock.user.id });
-                await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+                await sendStickerPackNative(sock, jid, {
+                    name: packMsg.name || DEFAULT_PACK,
+                    publisher: packMsg.publisher || DEFAULT_AUTHOR,
+                    stickers: fixedBuffers
+                }, msg);
 
                 try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
+
+                if (fixedBuffers.length < packMsg.stickers.length) {
+                    await sock.sendMessage(jid, {
+                        text: `⚠️ Repaired ${fixedBuffers.length}/${packMsg.stickers.length} stickers — the rest failed to download and were dropped.`
+                    }, { quoted: msg });
+                }
 
             } catch (err) {
                 try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch {}
@@ -871,18 +889,7 @@ module.exports = [
                 let delivered = 0;
                 for (const stickerObj of stickers) {
                     try {
-                        let buffer = null;
-                        const directUrl = typeof stickerObj === 'string' ? stickerObj : stickerObj?.url;
-
-                        if (directUrl && directUrl.startsWith('http')) {
-                            const res = await axios.get(directUrl, { responseType: 'arraybuffer', timeout: 10000 });
-                            buffer = Buffer.from(res.data);
-                        } else {
-                            const stream = await downloadContentFromMessage(stickerObj, 'sticker');
-                            buffer = Buffer.from([]);
-                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                        }
-
+                        const buffer = await downloadPackSticker(stickerObj, downloadContentFromMessage);
                         if (buffer && buffer.length > 0) {
                             await sock.sendMessage(jid, { sticker: buffer });
                             delivered++;
