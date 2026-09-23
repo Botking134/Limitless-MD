@@ -221,6 +221,27 @@ async function describeImageWithGemini(base64Img, mimeType, promptText) {
     throw lastErr || new Error('All Gemini vision models failed.');
 }
 
+// Vision fallback when every Gemini vision model is unavailable (e.g. a
+// 503 demand spike). Pollinations exposes a free, no-key, OpenAI-compatible
+// chat endpoint that accepts an image_url content block, so this uses the
+// same "describe + mutate" prompt as the Gemini path above.
+async function describeImageWithPollinations(base64Img, mimeType, promptText) {
+    const response = await axios.post('https://gen.pollinations.ai/v1/chat/completions', {
+        model: 'openai',
+        messages: [{
+            role: 'user',
+            content: [
+                { type: 'text', text: promptText },
+                { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Img}` } }
+            ]
+        }]
+    }, { timeout: 60000 });
+
+    const text = response.data?.choices?.[0]?.message?.content;
+    if (!text) throw new Error('Empty response from Pollinations vision');
+    return text;
+}
+
 // Image synthesis for `warp`, via Gemini's actual image-output models.
 // NOTE: the flash *text* models (3.7/3.6/3.5-flash) don't have "-image"
 // variants — that was the bug causing every attempt here to fail and fall
@@ -356,8 +377,16 @@ module.exports = [
                     ? `Describe this image in detail. Then, alter the description to fulfill this request: "${userPrompt}". Output ONLY the final detailed prompt for image generation.`
                     : `Describe this image in detail. Then, mutate the description into a surreal, highly corrupted, reality-warping visual. Output ONLY the final detailed prompt for image generation.`;
 
-                // STEP 1: Vision / Analysis — Gemini (3.7 → 3.6 → 3.5 fallback).
-                const generatedPrompt = await describeImageWithGemini(base64Img, 'image/jpeg', visionSystemPrompt);
+                // STEP 1: Vision / Analysis — Gemini (3.7 → 3.6 → 3.5), falling
+                // back to Pollinations' free vision endpoint if all three are
+                // unavailable (e.g. a 503 demand spike on Google's side).
+                let generatedPrompt;
+                try {
+                    generatedPrompt = await describeImageWithGemini(base64Img, 'image/jpeg', visionSystemPrompt);
+                } catch (visionErr) {
+                    console.error("[Warp] Gemini vision unavailable, falling back to Pollinations:", visionErr.message);
+                    generatedPrompt = await describeImageWithPollinations(base64Img, 'image/jpeg', visionSystemPrompt);
+                }
 
                 // STEP 2: Image Synthesis — Gemini Nano Banana 2 first
                 // (gemini-3.1-flash-image → gemini-3.1-flash-lite-image).
