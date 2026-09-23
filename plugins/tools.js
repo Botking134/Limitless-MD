@@ -316,7 +316,16 @@ module.exports = [
                     ? "❌ This group has no active profile picture set."
                     : "❌ No public profile picture found.\n\n_Note: This user may have hidden their profile photo in WhatsApp Privacy Settings._";
 
-                await sock.sendMessage(jid, { text: errorText, edit: statusMsg.key });
+                // This edit call itself was throwing "Connection Closed" with no
+                // surrounding try/catch, so a socket hiccup while just trying to
+                // report the original error escaped this function uncaught instead
+                // of being logged as a normal "[COMMAND] Failed to execute getpp" —
+                // it looked like getpp itself was crashing the bot.
+                try {
+                    await sock.sendMessage(jid, { text: errorText, edit: statusMsg.key });
+                } catch (reportErr) {
+                    console.error('⚠️ [GETPP] Failed to report error (connection likely mid-reconnect):', reportErr.message);
+                }
             }
         }
     },
