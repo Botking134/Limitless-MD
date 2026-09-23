@@ -386,6 +386,9 @@ async function searchStickerly(query) {
                         urls: stickerUrls.slice(0, 30)
                     };
                 }
+                console.error(`⚠️ [STICKERLY] "${query}" matched a pack but 0 sticker URLs parsed — pack keys: ${Object.keys(pack).join(',')}, sticker[0] keys: ${Object.keys(pack.stickers?.[0] || {}).join(',')}`);
+            } else {
+                console.error(`⚠️ [STICKERLY] "${query}" got 0 packs — top-level response keys: ${Object.keys(data || {}).join(',')}`);
             }
         } catch (err) {
             console.error(`⚠️ [STICKERLY] "${query}" via ${url.split('?')[0]} failed:`, err.response?.status || err.code || err.message);
