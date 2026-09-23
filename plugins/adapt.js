@@ -18,7 +18,18 @@ try {
 } catch (e) {
     console.error('⚠️ [ADAPT] sharp failed to load — image adapt/warp will fall back to ffmpeg:', e.message);
 }
-const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+
+// @itsliaaa/baileys ships as an ES module — require() of it throws
+// "not supported" in CommonJS. That throw used to happen at the top of
+// this file, which took the whole plugin down (every adapt/warp command
+// vanished, not just media downloading). Load it lazily via dynamic
+// import() instead, cached so we only pay the import cost once.
+let _baileysPromise = null;
+function getBaileys() {
+    if (!_baileysPromise) _baileysPromise = import('@itsliaaa/baileys');
+    return _baileysPromise;
+}
+
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 
 /* 
@@ -92,6 +103,7 @@ async function downloadMedia(msg) {
     const type = Object.keys(raw).find(k => k.endsWith('Message') && k !== 'extendedTextMessage');
     if (!type || (!raw[type].url && !raw[type].directPath)) return null;
 
+    const { downloadContentFromMessage } = await getBaileys();
     const stream = await downloadContentFromMessage(raw[type], type.replace('Message', ''));
     let buffer = Buffer.from([]);
     for await (const chunk of stream) {
