@@ -116,12 +116,22 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             if (config.autoviewstatus === 'on') {
                 try {
                     await sock.readMessages([msg.key]);
-                } catch (e) {}
+                } catch (e) {
+                    console.error('⚠️ [AUTOVIEWSTATUS] readMessages failed:', e.message);
+                }
             }
             if (config.autoreactstatus === 'on') {
                 try {
                     const emoji = config.statusemoji || '❄';
-                    const statusSender = msg.key.participant || msg.key.remoteJid;
+                    let statusSender = msg.key.participant || msg.key.remoteJid;
+                    // The status poster can come through as an @lid JID rather than
+                    // a phone JID (same LID rollout we've been resolving everywhere
+                    // else this session) — resolve it first, since there's a real
+                    // chance WhatsApp's react API only accepts a phone JID here.
+                    if (statusSender?.endsWith('@lid')) {
+                        try { statusSender = await getPhoneJid(sock, statusSender, null); } catch (e) {}
+                    }
+                    const botJid = normalizeToJid(sock.user?.id || '');
                     // Reacting to a status is a broadcast, not a DM: Baileys needs
                     // the target left as 'status@broadcast' plus an explicit
                     // statusJidList (poster + us) telling it who to deliver the
@@ -129,9 +139,11 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                     // isn't a call this API accepts for status reactions.
                     await sock.sendMessage('status@broadcast',
                         { react: { text: emoji, key: msg.key } },
-                        { statusJidList: [statusSender, sock.user?.id].filter(Boolean) }
+                        { statusJidList: [statusSender, botJid].filter(Boolean) }
                     );
-                } catch (e) {}
+                } catch (e) {
+                    console.error('⚠️ [AUTOREACTSTATUS] React failed:', e.message);
+                }
             }
             return;
         }
@@ -420,10 +432,10 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                 args = spaceIndex === -1 ? '' : withoutPrefix.slice(spaceIndex + 1).trim();
             } else {
                 const targetLower = trimmedMessageBody.toLowerCase();
-                if (typeof commands === 'object' && !Array.isArray(commands) && commands[targetLower]?.isPrefixless) {
+                if (typeof commands === 'object' && !Array.isArray(commands) && commands[targetLower]) {
                     command = targetLower;
                     args = '';
-                } else if (Array.isArray(commands) && commands.some(c => c.name === targetLower && c.isPrefixless)) {
+                } else if (Array.isArray(commands) && commands.some(c => c.name === targetLower)) {
                     command = targetLower;
                     args = '';
                 }
