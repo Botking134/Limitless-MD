@@ -351,23 +351,46 @@ function generateMemeSvg(topText, bottomText) {
 }
 
 // ─── SEARCH STICKER.LY (ACCURATE TITLE & CREATOR) ──────────────────
+// ─── ROTATING DEVICE FINGERPRINTS (sticker.ly spoof headers) ──────
+// A single hardcoded device identity is an easy target for fingerprint-based
+// blocking. Rotating between a small pool of plausible Android devices means
+// one flagged fingerprint doesn't take down every request going forward.
+const STICKERLY_DEVICE_PROFILES = [
+    { manufacturer: 'Samsung', model: 'SM-G998B', osVersion: '34', appVersionCode: '1033700' },
+    { manufacturer: 'Samsung', model: 'SM-S918B', osVersion: '35', appVersionCode: '1034100' },
+    { manufacturer: 'Google', model: 'Pixel 8 Pro', osVersion: '35', appVersionCode: '1033700' },
+    { manufacturer: 'Xiaomi', model: '2201116SG', osVersion: '34', appVersionCode: '1032900' },
+    { manufacturer: 'OnePlus', model: 'CPH2581', osVersion: '34', appVersionCode: '1034100' }
+];
+
+function getStickerlyHeaders() {
+    const p = STICKERLY_DEVICE_PROFILES[Math.floor(Math.random() * STICKERLY_DEVICE_PROFILES.length)];
+    return {
+        'User-Agent': 'okhttp/4.12.0',
+        'package-name': 'com.snowcorp.stickerly.android',
+        'app-version-code': p.appVersionCode,
+        'manufacturer': p.manufacturer,
+        'model': p.model,
+        'os-version': p.osVersion,
+        'content-type': 'application/json'
+    };
+}
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function searchStickerly(query) {
     const endpoints = [
         `https://api.sticker.ly/v3.1/stickerPack/search?keyword=${encodeURIComponent(query)}&limit=25&offset=0`,
         `https://api.sticker.ly/v3.1/stickerPack/search/${encodeURIComponent(query)}?limit=25&offset=0`
     ];
 
-    const headers = {
-        'User-Agent': 'okhttp/4.12.0',
-        'package-name': 'com.snowcorp.stickerly.android',
-        'app-version-code': '1033700',
-        'manufacturer': 'Samsung',
-        'model': 'SM-G998B',
-        'os-version': '34',
-        'content-type': 'application/json'
-    };
+    // Same rotated identity for both endpoint attempts within this one call —
+    // consistent per-call, but a fresh pick on the next call/variant.
+    const headers = getStickerlyHeaders();
 
-    for (const url of endpoints) {
+    for (let i = 0; i < endpoints.length; i++) {
+        const url = endpoints[i];
+        if (i > 0) await delay(400 + Math.floor(Math.random() * 300));
         try {
             const { data } = await axios.get(url, { headers, timeout: 8000 });
             const packs = data?.result?.stickerPacks || data?.stickerPacks || data?.data?.stickerPacks || [];
@@ -449,7 +472,12 @@ async function fetchStickerPack(query) {
         `${query} sticker pack`
     ].map(v => v.trim()))];
 
-    for (const variant of variants) {
+    for (let i = 0; i < variants.length; i++) {
+        const variant = variants[i];
+        // Growing delay between widened variants (0ms, ~900ms, ~1.8s) so a
+        // multi-variant search doesn't look like a burst to sticker.ly.
+        if (i > 0) await delay(800 + Math.floor(Math.random() * 400));
+
         try {
             const pack = await searchStickerly(variant);
             if (pack && pack.urls.length) return pack;
