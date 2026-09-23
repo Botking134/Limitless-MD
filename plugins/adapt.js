@@ -32,27 +32,6 @@ function getBaileys() {
 
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 
-/* 
-======================================================================
-🔐 API KEY RECONSTRUCTION
-======================================================================
-*/
-const OBFUSCATED_KEY_CHUNKS = [
-    "sk-proj-",
-    "W-LjDtcjGcYSrI", 
-    "tO5cfDMGa0qRxaf6ynPOpx",
-    "6tvcJIHCXLnNK3UcKPRxUi", 
-    "-aDsT0m8HXLDo1DmT3BlbkF",
-    "JXxl7dmMKOATFWQDyOq7Sum", 
-    "9s17rupcS8Z7hsa81iKcuE8",
-    "SSC8tUNYomep0rgeMjeQzX", 
-    "BxWbokA"
-];
-
-function getOpenAIKey() {
-    return OBFUSCATED_KEY_CHUNKS.join('');
-}
-
 // ─── STICKER ASSETS ───────────────────────────────────────────────
 const MAHORAGA_1 = "https://tenor.com/view/mahoraga-gif-12969334221298264530";
 const MAHORAGA_2 = "https://tenor.com/view/mahoraga-gif-3784514205632293942";
@@ -242,12 +221,15 @@ async function describeImageWithGemini(base64Img, mimeType, promptText) {
     throw lastErr || new Error('All Gemini vision models failed.');
 }
 
-// Image synthesis for `warp`, via Gemini's image-output models (same
-// "3.7 → 3.6 → 3.5" tiering as the vision step above). Returns a raw image
-// Buffer. This is what actually needed to change — the vision step alone
-// being on Gemini didn't matter to you since the OpenAI call was still the
-// one producing the image you actually see.
-const GEMINI_IMAGE_MODELS = ['gemini-3.7-flash-image', 'gemini-3.6-flash-image', 'gemini-3.5-flash-image'];
+// Image synthesis for `warp`, via Gemini's actual image-output models.
+// NOTE: the flash *text* models (3.7/3.6/3.5-flash) don't have "-image"
+// variants — that was the bug causing every attempt here to fail and fall
+// through to the OpenAI proxy. The real image family is "Nano Banana",
+// named separately: gemini-3.1-flash-image (Nano Banana 2, free tier) and
+// gemini-3.1-flash-lite-image (Nano Banana 2 Lite, free tier, faster).
+// gemini-3-pro-image (Nano Banana Pro) is deliberately left out — no free
+// tier, so it'd just burn quota/fail auth for no benefit here.
+const GEMINI_IMAGE_MODELS = ['gemini-3.1-flash-image', 'gemini-3.1-flash-lite-image'];
 
 async function generateImageWithGemini(prompt) {
     if (!config.geminiApiKey) throw new Error('Gemini API key is missing in config.');
@@ -359,8 +341,6 @@ module.exports = [
         name: 'warp',
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const apiKey = getOpenAIKey();
-            if (!apiKey) return sock.sendMessage(jid, { text: "❌ Missing or invalid API Key." }, { quoted: msg });
 
             const media = await downloadMedia(msg);
             if (!media || media.type !== 'image') return sock.sendMessage(jid, { text: "Reply to an **image** to warp reality." }, { quoted: msg });
@@ -379,26 +359,19 @@ module.exports = [
                 // STEP 1: Vision / Analysis — Gemini (3.7 → 3.6 → 3.5 fallback).
                 const generatedPrompt = await describeImageWithGemini(base64Img, 'image/jpeg', visionSystemPrompt);
 
-                // STEP 2: Image Synthesis — Gemini (3.7 → 3.6 → 3.5 fallback).
-                // Falls back to the old OpenAI-format endpoint only if every
-                // Gemini image model genuinely fails — "only where necessary"
-                // now actually applies to the step that produces what you see.
+                // STEP 2: Image Synthesis — Gemini Nano Banana 2 first
+                // (gemini-3.1-flash-image → gemini-3.1-flash-lite-image).
+                // Falls back to Pollinations.ai — free, no API key, no
+                // quota — only if both Gemini image models genuinely fail
+                // (e.g. a 503 demand spike on Google's side).
                 let warpedImageBuffer;
                 try {
                     warpedImageBuffer = await generateImageWithGemini(generatedPrompt);
                 } catch (geminiErr) {
-                    console.error("[Warp] Gemini image generation unavailable, falling back to OpenAI:", geminiErr.message);
-                    const generationRes = await axios.post('https://api.openai.com/v1/images/generations', {
-                        model: "openai/gpt-5.6-luna",
-                        prompt: generatedPrompt,
-                        n: 1,
-                        size: "1024x1024"
-                    }, {
-                        headers: { "Authorization": `Bearer ${apiKey}` },
-                        timeout: 120000
-                    });
-                    const warpedImageUrl = generationRes.data.data[0].url;
-                    warpedImageBuffer = (await axios.get(warpedImageUrl, { responseType: 'arraybuffer' })).data;
+                    console.error("[Warp] Gemini image generation unavailable, falling back to Pollinations:", geminiErr.message);
+                    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(generatedPrompt)}?width=1024&height=1024&nologo=true`;
+                    const pollinationsRes = await axios.get(pollinationsUrl, { responseType: 'arraybuffer', timeout: 60000 });
+                    warpedImageBuffer = Buffer.from(pollinationsRes.data);
                 }
 
                 // Send the generated result
