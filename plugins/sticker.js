@@ -351,81 +351,86 @@ function generateMemeSvg(topText, bottomText) {
 }
 
 // ─── SEARCH STICKER.LY (ACCURATE TITLE & CREATOR) ──────────────────
-// ─── ROTATING DEVICE FINGERPRINTS (sticker.ly spoof headers) ──────
-// A single hardcoded device identity is an easy target for fingerprint-based
-// blocking. Rotating between a small pool of plausible Android devices means
-// one flagged fingerprint doesn't take down every request going forward.
-const STICKERLY_DEVICE_PROFILES = [
-    { manufacturer: 'Samsung', model: 'SM-G998B', osVersion: '34', appVersionCode: '1033700' },
-    { manufacturer: 'Samsung', model: 'SM-S918B', osVersion: '35', appVersionCode: '1034100' },
-    { manufacturer: 'Google', model: 'Pixel 8 Pro', osVersion: '35', appVersionCode: '1033700' },
-    { manufacturer: 'Xiaomi', model: '2201116SG', osVersion: '34', appVersionCode: '1032900' },
-    { manufacturer: 'OnePlus', model: 'CPH2581', osVersion: '34', appVersionCode: '1034100' }
-];
-
-function getStickerlyHeaders() {
-    const p = STICKERLY_DEVICE_PROFILES[Math.floor(Math.random() * STICKERLY_DEVICE_PROFILES.length)];
-    return {
-        'User-Agent': 'okhttp/4.12.0',
-        'package-name': 'com.snowcorp.stickerly.android',
-        'app-version-code': p.appVersionCode,
-        'manufacturer': p.manufacturer,
-        'model': p.model,
-        'os-version': p.osVersion,
-        'content-type': 'application/json'
-    };
-}
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
+// NOTE: distinguishes a genuine block/rate-limit response (403/429, or an
+// error message that actually says so) from a bare transient 500, which
+// Sticker.ly's backend throws for all sorts of unrelated reasons. Only the
+// former sets `stickerlyBlocked`. A transient error gets one short-backoff
+// retry against the same endpoint before moving on, instead of being
+// treated as proof of a block.
 async function searchStickerly(query) {
     const endpoints = [
         `https://api.sticker.ly/v3.1/stickerPack/search?keyword=${encodeURIComponent(query)}&limit=25&offset=0`,
         `https://api.sticker.ly/v3.1/stickerPack/search/${encodeURIComponent(query)}?limit=25&offset=0`
     ];
 
-    // Same rotated identity for both endpoint attempts within this one call —
-    // consistent per-call, but a fresh pick on the next call/variant.
-    const headers = getStickerlyHeaders();
+    const headers = {
+        'User-Agent': 'okhttp/4.12.0',
+        'package-name': 'com.snowcorp.stickerly.android',
+        'app-version-code': '1033700',
+        'manufacturer': 'Samsung',
+        'model': 'SM-G998B',
+        'os-version': '34',
+        'content-type': 'application/json'
+    };
 
-    for (let i = 0; i < endpoints.length; i++) {
-        const url = endpoints[i];
-        if (i > 0) await delay(400 + Math.floor(Math.random() * 300));
-        try {
-            const { data } = await axios.get(url, { headers, timeout: 8000 });
-            const packs = data?.result?.stickerPacks || data?.stickerPacks || data?.data?.stickerPacks || [];
-            if (packs.length > 0) {
-                const pack = packs[0];
-                const stickerUrls = (pack.stickers || []).map(s =>
-                    s?.resourceUrl || s?.imageFile?.contentUrl || s?.url || null
-                ).filter(Boolean);
+    for (let e = 0; e < endpoints.length; e++) {
+        const url = endpoints[e];
 
-                if (stickerUrls.length > 0) {
-                    // Exact name and creator as fetched
-                    const exactAuthor = pack.user?.name || pack.authorName || pack.userName || pack.user?.nickname || 'Sticker.ly';
-                    return {
-                        name: pack.name || query,
-                        publisher: exactAuthor,
-                        urls: stickerUrls.slice(0, 30)
-                    };
+        // Space out hits to the second endpoint variant rather than firing
+        // both back-to-back.
+        if (e > 0) await new Promise(r => setTimeout(r, 600));
+
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const { data } = await axios.get(url, { headers, timeout: 8000 });
+                const packs = data?.result?.stickerPacks || data?.stickerPacks || data?.data?.stickerPacks || [];
+
+                if (packs.length > 0) {
+                    const pack = packs[0];
+                    const stickerUrls = (pack.stickers || []).map(s =>
+                        s?.resourceUrl || s?.imageFile?.contentUrl || s?.url || null
+                    ).filter(Boolean);
+
+                    if (stickerUrls.length > 0) {
+                        const exactAuthor = pack.user?.name || pack.authorName || pack.userName || pack.user?.nickname || 'Sticker.ly';
+                        return {
+                            name: pack.name || query,
+                            publisher: exactAuthor,
+                            urls: stickerUrls.slice(0, 30)
+                        };
+                    }
+                    console.error(`⚠️ [STICKERLY] "${query}" matched a pack but 0 sticker URLs parsed — pack keys: ${Object.keys(pack).join(',')}, sticker[0] keys: ${Object.keys(pack.stickers?.[0] || {}).join(',')}`);
+                    break; // got a real response, just nothing usable — no point retrying this endpoint
+                } else if (data?.error) {
+                    const errCode = String(data.error.errorCode ?? '');
+                    const errMsg = String(data.error.errorMessage ?? '').toLowerCase();
+                    const isRealBlock = ['403', '429'].includes(errCode) ||
+                        /rate.?limit|forbidden|blocked|too many|unauthor/.test(errMsg);
+
+                    if (isRealBlock) {
+                        console.error(`⚠️ [STICKERLY] "${query}" API error response (block/rate-limit):`, JSON.stringify(data.error));
+                        const blockedErr = new Error('STICKERLY_BLOCKED');
+                        blockedErr.stickerlyBlocked = true;
+                        blockedErr.raw = data.error;
+                        throw blockedErr;
+                    }
+
+                    // Generic/transient server error (e.g. bare 500 internalError).
+                    // Retry once after a short backoff before giving up on this
+                    // endpoint — this is NOT treated as a block.
+                    console.error(`⚠️ [STICKERLY] "${query}" transient error, attempt ${attempt + 1}/2:`, JSON.stringify(data.error));
+                    if (attempt === 0) {
+                        await new Promise(r => setTimeout(r, 900));
+                        continue;
+                    }
+                } else {
+                    console.error(`⚠️ [STICKERLY] "${query}" got 0 packs — top-level response keys: ${Object.keys(data || {}).join(',')}`);
                 }
-                console.error(`⚠️ [STICKERLY] "${query}" matched a pack but 0 sticker URLs parsed — pack keys: ${Object.keys(pack).join(',')}, sticker[0] keys: ${Object.keys(pack.stickers?.[0] || {}).join(',')}`);
-            } else if (data?.error) {
-                // API is actively rejecting us (soft block / rate limit / bad
-                // auth), not just "no matches". Surface the real message and
-                // stop hitting it further this call — retrying variants
-                // against an active block just makes it worse.
-                console.error(`⚠️ [STICKERLY] "${query}" API error response:`, JSON.stringify(data.error));
-                const blockedErr = new Error('STICKERLY_BLOCKED');
-                blockedErr.stickerlyBlocked = true;
-                blockedErr.raw = data.error;
-                throw blockedErr;
-            } else {
-                console.error(`⚠️ [STICKERLY] "${query}" got 0 packs — top-level response keys: ${Object.keys(data || {}).join(',')}`);
+            } catch (err) {
+                if (err.stickerlyBlocked) throw err;
+                console.error(`⚠️ [STICKERLY] "${query}" via ${url.split('?')[0]} failed:`, err.response?.status || err.code || err.message);
             }
-        } catch (err) {
-            if (err.stickerlyBlocked) throw err;
-            console.error(`⚠️ [STICKERLY] "${query}" via ${url.split('?')[0]} failed:`, err.response?.status || err.code || err.message);
+            break; // no retriable condition hit (or retry already used) — move to next endpoint
         }
     }
     return null;
@@ -461,41 +466,34 @@ async function searchStickify(query) {
 }
 
 // ─── COMBINED EXACT-METADATA PACK FETCHER ─────────────────────────
-// Tries the literal query first (exact pack titles like "Naruto stickers
-// bread4life" match this), then widens to more search-friendly phrasing
-// for generic single-word queries (e.g. "goku" -> "goku stickers") since
-// Sticker.ly/Stickify's search is picky about exact title-ish phrasing.
+// Uses the literal query only — auto-widening to "<query> stickers" /
+// "<query> sticker pack" has been dropped for now so we're not tripling
+// request volume against Sticker.ly while we're unsure whether tonight's
+// errors were transient server-side 500s or an actual block. A short
+// delay is added before falling back to Stickify so the two providers
+// aren't hit back-to-back either.
 async function fetchStickerPack(query) {
-    const variants = [...new Set([
-        query,
-        `${query} stickers`,
-        `${query} sticker pack`
-    ].map(v => v.trim()))];
+    const trimmed = query.trim();
 
-    for (let i = 0; i < variants.length; i++) {
-        const variant = variants[i];
-        // Growing delay between widened variants (0ms, ~900ms, ~1.8s) so a
-        // multi-variant search doesn't look like a burst to sticker.ly.
-        if (i > 0) await delay(800 + Math.floor(Math.random() * 400));
-
-        try {
-            const pack = await searchStickerly(variant);
-            if (pack && pack.urls.length) return pack;
-        } catch (err) {
-            if (err.stickerlyBlocked) {
-                // Don't burn more requests against an active block/rate-limit —
-                // that only makes it worse. Bubble up so the caller can tell
-                // the user this isn't a "no results" situation.
-                const e = new Error('Sticker.ly is rejecting requests right now');
-                e.stickerlyBlocked = true;
-                e.raw = err.raw;
-                throw e;
-            }
+    try {
+        const pack = await searchStickerly(trimmed);
+        if (pack && pack.urls.length) return pack;
+    } catch (err) {
+        if (err.stickerlyBlocked) {
+            // Don't burn more requests against an active block/rate-limit —
+            // that only makes it worse. Bubble up so the caller can tell
+            // the user this isn't a "no results" situation.
+            const e = new Error('Sticker.ly is rejecting requests right now');
+            e.stickerlyBlocked = true;
+            e.raw = err.raw;
+            throw e;
         }
-
-        const pack2 = await searchStickify(variant);
-        if (pack2 && pack2.urls.length) return pack2;
     }
+
+    await new Promise(r => setTimeout(r, 700));
+
+    const pack2 = await searchStickify(trimmed);
+    if (pack2 && pack2.urls.length) return pack2;
 
     return null;
 }
