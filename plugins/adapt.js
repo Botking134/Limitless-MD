@@ -6,7 +6,18 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { exec } = require('child_process');
-const sharp = require('sharp');
+// sharp failed to load once on a live deployment with an ES-module require
+// error and took the entire plugin file down with it — every command here
+// (warp, adapt, adapt-low/mid/high) disappeared, not just image resizing.
+// Never let a single optional dependency crash the whole plugin again:
+// require it defensively, and processImage() below falls back to the old
+// ffmpeg path if sharp isn't actually usable on this host.
+let sharp = null;
+try {
+    sharp = require('sharp');
+} catch (e) {
+    console.error('⚠️ [ADAPT] sharp failed to load — image adapt/warp will fall back to ffmpeg:', e.message);
+}
 const { downloadContentFromMessage } = require('@itsliaaa/baileys');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 
@@ -89,12 +100,12 @@ async function downloadMedia(msg) {
     return { buffer, type: type === 'videoMessage' ? 'video' : 'image' };
 }
 
-// Pure-code image upscale/downscale — no ffmpeg binary needed for the image
-// case, just the `sharp` library (already a project dependency). This is
-// what adapt/adapt-low/adapt-mid/adapt-high actually run for images now;
-// ffmpeg is only still used below for video, since there's no equivalent
-// pure-JS video transcoder.
-async function processImage(inputBuffer, mode) {
+// Pure-code image upscale/downscale via sharp — no ffmpeg binary needed for
+// images. Falls back to the ffmpeg path below if sharp isn't usable on this
+// host (it failed to load once in production and took the whole plugin
+// down — see the require() above — so this fallback is load-bearing, not
+// just a nicety).
+async function processImageWithSharp(inputBuffer, mode) {
     const img = sharp(inputBuffer, { failOn: 'none' });
     const metadata = await img.metadata();
     const width = metadata.width || 800;
@@ -123,11 +134,24 @@ async function processImage(inputBuffer, mode) {
     return pipeline.jpeg({ quality, mozjpeg: true }).toBuffer();
 }
 
-// FFmpeg wrapper — video only now (see processImage above for the image path).
-function processVideo(inputBuffer, mode) {
+async function processImage(inputBuffer, mode) {
+    if (sharp) {
+        try {
+            return await processImageWithSharp(inputBuffer, mode);
+        } catch (e) {
+            console.error('⚠️ [ADAPT] sharp processing failed, falling back to ffmpeg:', e.message);
+        }
+    }
+    return processWithFfmpeg(inputBuffer, 'image', mode);
+}
+
+// FFmpeg wrapper — video always, and the fallback path for images when
+// sharp isn't available.
+function processWithFfmpeg(inputBuffer, type, mode) {
     return new Promise((resolve, reject) => {
-        const tempIn = path.join(__dirname, `../temp_in_${crypto.randomBytes(4).toString('hex')}.mp4`);
-        const tempOut = path.join(__dirname, `../temp_out_${crypto.randomBytes(4).toString('hex')}.mp4`);
+        const ext = type === 'video' ? 'mp4' : 'jpg';
+        const tempIn = path.join(__dirname, `../temp_in_${crypto.randomBytes(4).toString('hex')}.${ext}`);
+        const tempOut = path.join(__dirname, `../temp_out_${crypto.randomBytes(4).toString('hex')}.${ext}`);
 
         fs.writeFileSync(tempIn, inputBuffer);
 
@@ -136,13 +160,13 @@ function processVideo(inputBuffer, mode) {
 
         if (mode === 'low') {
             vf = "scale=iw/2:-2";
-            extra = "-b:v 200k -r 15";
+            extra = type === 'video' ? "-b:v 200k -r 15" : "-q:v 31";
         } else if (mode === 'mid') {
             vf = "scale=iw*1.5:-2:flags=lanczos,unsharp=5:5:1.0:5:5:0.0";
-            extra = "-b:v 2M";
+            extra = type === 'video' ? "-b:v 2M" : "-q:v 2";
         } else if (mode === 'high') {
             vf = "scale=iw*2:-2:flags=lanczos,unsharp=7:7:1.8:7:7:0.0,eq=contrast=1.05:saturation=1.1";
-            extra = "-b:v 6M -c:a copy";
+            extra = type === 'video' ? "-b:v 6M -c:a copy" : "-q:v 1";
         }
 
         const cmd = `ffmpeg -i "${tempIn}" -vf "${vf}" ${extra} -y "${tempOut}"`;
@@ -166,7 +190,7 @@ function processVideo(inputBuffer, mode) {
 }
 
 async function processMedia(inputBuffer, type, mode) {
-    return type === 'video' ? processVideo(inputBuffer, mode) : processImage(inputBuffer, mode);
+    return type === 'video' ? processWithFfmpeg(inputBuffer, 'video', mode) : processImage(inputBuffer, mode);
 }
 
 // ─── COMMANDS ─────────────────────────────────────────────────────
@@ -223,7 +247,13 @@ async function generateImageWithGemini(prompt) {
         try {
             const response = await ai.models.generateContent({
                 model,
-                contents: [{ role: 'user', parts: [{ text: prompt }] }]
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                // This was the actual reason every attempt fell straight through
+                // to OpenAI: without explicitly asking for IMAGE output, Gemini's
+                // image models can just return text (a description) instead of
+                // image bytes, which our "no image data in response" check then
+                // correctly (but pointlessly) treated as a failure every time.
+                config: { responseModalities: ['TEXT', 'IMAGE'] }
             });
             const parts = response.candidates?.[0]?.content?.parts || [];
             const imagePart = parts.find(p => p.inlineData?.data);
