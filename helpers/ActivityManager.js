@@ -69,20 +69,34 @@ function readLevels() {
 }
 
 let saveTimeout = null;
+function flushSync() {
+    if (!cache) return;
+    try {
+        const dir = path.dirname(LEVELS_PATH);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(LEVELS_PATH, JSON.stringify(cache, null, 2), 'utf-8');
+    } catch (e) {
+        console.error('⚠️ [ACTIVITY] Failed to flush levels.json on exit:', e.message);
+    }
+}
 function saveLevels(data) {
     cache = data; // keep the in-memory copy authoritative immediately
     if (saveTimeout) return;
     saveTimeout = setTimeout(() => {
-        try {
-            const dir = path.dirname(LEVELS_PATH);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(LEVELS_PATH, JSON.stringify(cache, null, 2), 'utf-8');
-        } catch (e) {
-            console.error('⚠️ [ACTIVITY] Failed to save levels.json:', e.message);
-        }
+        flushSync();
         saveTimeout = null;
     }, 4000);
 }
+// The debounce above trades a little write frequency for durability, but
+// only if the process actually lives 4s past the last message — during
+// active development the bot gets restarted constantly, and every one of
+// those restarts was silently discarding any counts recorded in that
+// window before they ever reached disk (reproduced directly: 3 recorded
+// messages + an immediate process.exit() → levels.json never even got
+// created). Flushing synchronously on the way out closes that gap for any
+// normal shutdown (process.exit(), SIGINT/SIGTERM, natural exit) — it can't
+// help against a hard SIGKILL, but nothing running in-process can.
+process.on('exit', flushSync);
 
 function getGroup(data, jid) {
     data.groups = data.groups || {};
