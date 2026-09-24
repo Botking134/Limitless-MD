@@ -43,6 +43,23 @@ try {
 const config = require('./config');
 const { loadVars, syncVarsToConfig } = require('./vars');
 const { loadState } = require('./stateManager');
+
+// ─── LOAD PERSISTENT STATE (must happen before anything scans/registers
+// commands) ────────────────────────────────────────────────────────────
+// commands.js builds every command's registry key from config.prefix at the
+// moment it's first required — e.g. "!antispam" — and that key is baked in
+// for the whole process (only a manual .reload rebuilds it). Previously
+// require('./server') below (which pulls in commands.js) ran BEFORE this,
+// so every command was registered under config.js's hardcoded default
+// prefix ("/") instead of whatever you'd actually saved via .setvar — the
+// live parser was checking incoming messages against your real saved
+// prefix while the registry underneath it was keyed on a different one
+// entirely. Loading vars/state first means config.prefix is already correct
+// by the time anything requires commands.js.
+const vars = loadVars();            // ← auto-syncs config.js ↔ vars.json
+syncVarsToConfig(vars);             // ← Overrides config with vars.json values
+loadState();                        // ← Load permission lists from state.json → merge into config
+
 const { DEV_JIDS } = require('./plugins/devs');
 const { startBot } = require('./pair');
 const { createServer } = require('./server');
@@ -64,15 +81,6 @@ function pushLog(level, args) {
 console.log = (...a) => { pushLog('INFO', a); origLog(...a); };
 console.warn = (...a) => { pushLog('WARN', a); origWarn(...a); };
 console.error = (...a) => { pushLog('ERROR', a); origError(...a); };
-
-// ─── LOAD PERSISTENT STATE ──────────────────────────────────────
-
-// 1. Load vars.json (bidirectional sync – compares timestamps)
-const vars = loadVars();            // ← NEW: auto-syncs config.js ↔ vars.json
-syncVarsToConfig(vars);             // ← Overrides config with vars.json values
-
-// 2. Load permission lists from state.json → merge into config
-loadState();
 
 // ─── IGNITION ──────────────────────────────────────────────────
 
