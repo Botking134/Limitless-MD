@@ -305,8 +305,25 @@ async function handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, 
 
                 if (global.spamDeletedCount[spamDeleteKey] >= 10) {
                     global.spamDeletedCount[spamDeleteKey] = 0;
-                    const alertText = `🚨 *SPAM ATTACK DETECTED* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumber} rate-limit violated! Admins, use \`${config.prefix}kick @${senderNumber}\` to remove them.`;
-                    await sock.sendMessage(jid, { text: alertText, mentions: [resolvedSender] });
+                    const alertText = `🚨 *SPAM ATTACK DETECTED* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumber} rate-limit violated! Admins, choose an action below or use \`${config.prefix}kick @${senderNumber}\` manually.`;
+                    const alertMessage = {
+                        text: alertText,
+                        mentions: [resolvedSender],
+                        buttons: [
+                            { buttonId: `${config.prefix}delspam ${senderNumber}`, buttonText: { displayText: '🧹 Delete Spam' }, type: 1 },
+                            { buttonId: `${config.prefix}warn ${senderNumber}`, buttonText: { displayText: '⚠️ Warn' }, type: 1 },
+                            { buttonId: `${config.prefix}kick ${senderNumber}`, buttonText: { displayText: '👢 Kick' }, type: 1 }
+                        ],
+                        headerType: 1
+                    };
+                    try {
+                        await sock.sendMessage(jid, alertMessage);
+                    } catch (btnErr) {
+                        // Fall back to a plain-text alert if buttons aren't supported
+                        // in this chat/client (mirrors the pattern used elsewhere,
+                        // e.g. group_basic.js's gmode panel).
+                        await sock.sendMessage(jid, { text: alertText, mentions: [resolvedSender] });
+                    }
                 }
             } catch (e) { /* ignore */ }
             return true;
