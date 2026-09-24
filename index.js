@@ -3,6 +3,30 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// ─── SILENCE LIBSIGNAL'S RAW SESSION DEBUG DUMPS ───────────────────
+// Both the main bot's and every sub-bot's makeWASocket() already pass a
+// pino logger at level 'silent' — but this dump ("Closing session:
+// SessionEntry { ... }", full of raw key Buffers) is still showing up, which
+// means it isn't coming through that pino logger at all. It's the
+// libsignal-node dependency Baileys uses for the Signal protocol calling
+// console.log directly on every session close/replace — something that
+// happens constantly while a sub-bot is pairing (fresh sessions get
+// renegotiated over and over), which is exactly why it was only showing up
+// on sub-bot connect and not on the already-stable main bot connection.
+// Dumping that much data to stdout on every single one of those events is
+// also real, unnecessary CPU/I/O overhead, not just log noise. This can't be
+// fixed inside node_modules (npm install wipes any edit there), so it's
+// filtered at the console level instead — anything else still logs normally.
+const NOISY_LOG_PATTERNS = [/^Closing session:/, /^Opening session:/, /^SessionEntry/];
+for (const method of ['log', 'info', 'debug']) {
+    const original = console[method].bind(console);
+    console[method] = (...args) => {
+        const first = args[0];
+        if (typeof first === 'string' && NOISY_LOG_PATTERNS.some(p => p.test(first))) return;
+        original(...args);
+    };
+}
+
 // ─── REDIRECT TEMPORARY DIRECTORY ──────────────────────────────────
 // Forces all temporary processes (like stickers or ffmpeg conversions)
 // to utilize your main 6GB disk space, preventing virtual /tmp partition ENOSPC errors.
