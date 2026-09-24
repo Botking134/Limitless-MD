@@ -289,12 +289,24 @@ module.exports = [
 
             const statusMsg = await sock.sendMessage(jid, { text: "Extracting profile picture... 📷" }, { quoted: msg });
 
+            // sock.profilePictureUrl() has no built-in timeout. If the connection
+            // is even mildly degraded (not fully disconnected, just slow/stuck) it
+            // can hang indefinitely with no error and no reply — the "Extracting
+            // profile picture..." message just sits there forever. That silent
+            // hang, not a crash, is the likely explanation for getpp appearing to
+            // do nothing at all. 20s is generous for a normal profilePictureUrl
+            // call but still short enough that the command actually resolves.
+            const withTimeout = (promise, ms) => Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for WhatsApp')), ms))
+            ]);
+
             try {
                 let profileUrl;
                 try {
-                    profileUrl = await sock.profilePictureUrl(targetJid, 'image');
+                    profileUrl = await withTimeout(sock.profilePictureUrl(targetJid, 'image'), 20000);
                 } catch (err) {
-                    profileUrl = await sock.profilePictureUrl(targetJid, 'preview');
+                    profileUrl = await withTimeout(sock.profilePictureUrl(targetJid, 'preview'), 20000);
                 }
 
                 if (!profileUrl) throw new Error("No URL returned");
