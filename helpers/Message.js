@@ -20,6 +20,34 @@ function cleanJid(jid) {
     return raw.split('@')[0].split(':')[0] + '@' + (raw.includes('@g.us') ? 'g.us' : (raw.includes('@lid') ? 'lid' : 's.whatsapp.net'));
 }
 
+// Message types that represent the sender genuinely posting content, even
+// when there's no text/caption for extractBodyAndTrim to pick up (e.g. a
+// bare sticker, a captionless photo, a voice note). Used so activity/rank
+// tracking doesn't silently ignore anyone who mostly sends media instead of
+// typing. Deliberately excludes reactionMessage (reacting isn't posting) and
+// protocolMessage (edits/deletes/revokes aren't new content) and poll VOTES
+// (pollUpdateMessage — a vote, not a poll being posted).
+const TRACKABLE_MEDIA_KEYS = [
+    'stickerMessage',
+    'imageMessage',
+    'videoMessage',
+    'audioMessage',
+    'documentMessage',
+    'contactMessage',
+    'contactsArrayMessage',
+    'locationMessage',
+    'liveLocationMessage',
+    'listMessage',
+    'pollCreationMessage',
+    'pollCreationMessageV2',
+    'pollCreationMessageV3'
+];
+
+function hasTrackableMediaContent(rawMsg) {
+    if (!rawMsg) return false;
+    return TRACKABLE_MEDIA_KEYS.some(key => !!rawMsg[key]);
+}
+
 function extractBodyAndTrim(msg) {
     const rawMsg = getRawMessage(msg.message) || msg.message;
     let body = rawMsg?.conversation ||
@@ -59,5 +87,6 @@ function extractBodyAndTrim(msg) {
 module.exports = {
     getRawMessage,
     cleanJid,
-    extractBodyAndTrim
+    extractBodyAndTrim,
+    hasTrackableMediaContent
 };
