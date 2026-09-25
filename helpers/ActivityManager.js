@@ -169,7 +169,18 @@ function recordGroupMessage(jid, memberJid) {
 
 // ─── QUERIES (rank / leaderboard) ───────────────────────────────────
 
-function getRank(jid, memberJid) {
+/**
+ * @param {string} jid Group JID.
+ * @param {string} memberJid Member to look up.
+ * @param {number|null} totalGroupMembers Optional real group member count (e.g.
+ *   from groupMetadata.participants.length). When given, it's used as the
+ *   ranking denominator instead of "members who've ever had a tracked
+ *   message" — so the number shown actually matches the group's real size.
+ *   Falls back to the old tracked-only count when omitted, and never lets
+ *   the denominator dip below whatever `position` needs (e.g. if someone
+ *   who left the group is still in the records).
+ */
+function getRank(jid, memberJid, totalGroupMembers = null) {
     const data = readLevels();
     const group = getGroup(data, jid);
     const record = group.members[memberJid] || { messages: 0 };
@@ -178,15 +189,30 @@ function getRank(jid, memberJid) {
 
     const ranked = Object.entries(group.members)
         .sort((a, b) => (b[1].messages || 0) - (a[1].messages || 0));
-    const position = ranked.findIndex(([id]) => id === memberJid);
+    const foundIndex = ranked.findIndex(([id]) => id === memberJid);
+
+    // If this member has no tracked-message record at all, they aren't in
+    // `ranked` — but they still occupy a real (last) place in the group's
+    // standings. Counting them into the denominator too keeps position and
+    // total consistent (previously this could show e.g. "#89 of 88": a
+    // member ranked past the end of a list that didn't include them).
+    const position = foundIndex >= 0 ? foundIndex + 1 : ranked.length + 1;
+    let totalTracked = foundIndex >= 0 ? ranked.length : ranked.length + 1;
+
+    if (typeof totalGroupMembers === 'number' && totalGroupMembers > 0) {
+        // Real group size should be the denominator when we have it, but
+        // never let it undercut `position` (e.g. stale participant counts,
+        // or members who left but are still in the tracked records).
+        totalTracked = Math.max(totalTracked, totalGroupMembers);
+    }
 
     return {
         messages: record.messages || 0,
         tier,
         nextTier,
         remaining: nextTier ? Math.max(0, nextTier.req - record.messages) : 0,
-        position: position >= 0 ? position + 1 : ranked.length + 1,
-        totalTracked: ranked.length
+        position,
+        totalTracked
     };
 }
 
