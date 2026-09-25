@@ -11,7 +11,7 @@ const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
 const { handleViewOnce } = require('./log');
 
 // Sub-module imports
-const { getRawMessage, cleanJid, extractBodyAndTrim } = require('./Message');
+const { getRawMessage, cleanJid, extractBodyAndTrim, hasTrackableMediaContent } = require('./Message');
 const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation, handleNoteSession } = require('./SessionManager');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
@@ -280,7 +280,14 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
 
         // ─── LEVEL/RANK TRACKING (persisted, powers .rank / .leaderboard / .levelup) ───
-        if (isGroup && trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix) && !msg.key.fromMe) {
+        // Counts either a real text/caption body (not a prefixed command) OR
+        // genuine media content with no caption (sticker, photo, voice note,
+        // document, etc.) — previously only text/captions counted, so anyone
+        // who mostly sent stickers or voice notes never accrued any rank
+        // progress at all.
+        const isTrackableText = trimmedMessageBody && !trimmedMessageBody.startsWith(activePrefix);
+        const isTrackableMedia = !trimmedMessageBody && hasTrackableMediaContent(rawMsg);
+        if (isGroup && (isTrackableText || isTrackableMedia) && !msg.key.fromMe) {
             try {
                 const canonicalSenderJid = senderPhoneJid || senderJid;
                 const levelResult = ActivityManager.recordGroupMessage(jid, canonicalSenderJid);
