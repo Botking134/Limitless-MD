@@ -517,17 +517,38 @@ async function startBot() {
             if (reason === DisconnectReason.loggedOut || reason === DisconnectReason.forbidden) {
                 console.log('❌ [SESSION] Logged out. Cleaning storage...');
                 try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch (e) {}
-                process.exit(1);
+                global.reconnectAttempts = 0;
+                global.isReconnecting = false;
+                global.pairingStatus.status = 'stopped';
+                global.pairingStatus.registered = false;
+                global.pairingStatus.user = null;
+                global.pairingStatus.qrRaw = null;
+                global.pairingStatus.qrImage = null;
+                global.pairingStatus.errorMessage = 'Session was logged out (or the number was blocked). Storage cleared — re-pair from the console when ready.';
+                global.pairingStatus.lastUpdate = Date.now();
+                return; // deliberately not exiting: keep the process (and web console) alive
             }
 
             if (reason === DisconnectReason.connectionReplaced) {
-                console.log('❌ [SOCKET] Connection replaced. Terminating...');
-                process.exit(1);
+                console.log('❌ [SOCKET] Connection replaced. Stopping (will not auto-reconnect)...');
+                global.reconnectAttempts = 0;
+                global.isReconnecting = false;
+                global.pairingStatus.status = 'stopped';
+                global.pairingStatus.registered = false;
+                global.pairingStatus.errorMessage = 'Connection was replaced — this session got opened elsewhere (another running instance, or the linked device was reopened). Not auto-reconnecting to avoid a connection fight; restart manually via the console once you\'ve confirmed nothing else is using this session.';
+                global.pairingStatus.lastUpdate = Date.now();
+                return; // deliberately not exiting: keep the process (and web console) alive
             }
 
             if (global.reconnectAttempts >= 5) {
-                console.error('❌ [SYSTEM] Max reconnect attempts reached. Exiting...');
-                process.exit(1);
+                console.error('❌ [SYSTEM] Max reconnect attempts reached. Stopping (will not auto-reconnect further)...');
+                global.reconnectAttempts = 0;
+                global.isReconnecting = false;
+                global.pairingStatus.status = 'stopped';
+                global.pairingStatus.registered = false;
+                global.pairingStatus.errorMessage = 'Gave up after 5 failed reconnect attempts. Not retrying further automatically — restart manually via the console once the underlying issue is resolved.';
+                global.pairingStatus.lastUpdate = Date.now();
+                return; // deliberately not exiting: keep the process (and web console) alive
             }
 
             if (global.isReconnecting) return;
