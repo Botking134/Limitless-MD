@@ -246,9 +246,10 @@ async function startBot() {
 (You can also use the Web UI on port 3000 to scan QR or generate code)
 `);
         try {
-            const promptPromise = question('Select option (1 or 2, or press Enter for QR): ');
-            const timeoutPromise = new Promise(r => setTimeout(() => r('timeout'), 8000));
-            const choice = await Promise.race([promptPromise, timeoutPromise]);
+            // Waits indefinitely for input now — no timeout race, so it will
+            // never silently fall through to QR mode just because you took
+            // longer than a few seconds to answer.
+            const choice = await question('Select option (1 or 2, or press Enter for QR): ');
 
             if (choice === '1') {
                 pairingMode = true;
@@ -258,7 +259,7 @@ async function startBot() {
                 if (targetNumber) {
                     console.log(`\n⏳ Requesting pairing code for ${targetNumber}...\n`);
                 }
-            } else if (choice === '2' || choice === '' || choice === 'timeout') {
+            } else {
                 pairingMode = false;
                 console.log('\n📱 QR mode active. Waiting for QR...\n');
             }
@@ -870,15 +871,24 @@ async function startBot() {
     });
 
     sock.ev.on('messages.upsert', async (chatUpdate) => {
-        if (chatUpdate.messages && chatUpdate.messages[0]) {
-            const m = chatUpdate.messages[0];
+        // Process every message in the batch, not just the first. A single
+        // upsert event can carry several messages at once — most commonly
+        // right after a reconnect, when WhatsApp delivers a catch-up batch —
+        // and only ever looking at chatUpdate.messages[0] silently dropped
+        // every other message in that batch: no processing, no command
+        // execution, no response, ever. Each is still handled one at a time
+        // (sequential await, not parallel) to match the existing single-
+        // message assumptions elsewhere in the pipeline and avoid concurrent
+        // writes to the same on-disk state files.
+        const incoming = Array.isArray(chatUpdate.messages) ? chatUpdate.messages : [];
+        for (const m of incoming) {
             if (m.key && m.key.id && m.message) {
                 global.messageStore[m.key.id] = m;
                 const storeKeys = Object.keys(global.messageStore);
                 if (storeKeys.length > 2000) delete global.messageStore[storeKeys[0]];
             }
+            await handleIncomingMessage(sock, { messages: [m] }, botSentMessageIds);
         }
-        await handleIncomingMessage(sock, chatUpdate, botSentMessageIds);
     });
 }
 
