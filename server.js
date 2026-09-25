@@ -1,6 +1,7 @@
 // server.js - Express Dashboard & API for Limitless WhatsApp Bot
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 const config = require('./config');
 const { getVar, setVar, DYNAMIC_KEYS } = require('./vars');
 const { loadState, saveState } = require('./stateManager');
@@ -13,6 +14,65 @@ function createServer() {
 
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
+
+    // ─── CONSOLE AUTH ───────────────────────────────────────────────
+    // This dashboard binds to 0.0.0.0, meaning on most hosts (Replit,
+    // Railway, a VPS, etc.) it's reachable from the public internet. Every
+    // route here used to be completely open — including /api/session/clear
+    // (wipes the WhatsApp session, forcing a full re-pair) and
+    // /api/pair/restart (force-restarts the connection) — so anyone who
+    // found the URL could trigger a "random" disconnect at will. This adds
+    // a simple password gate + cookie session in front of everything except
+    // the health check.
+    const CONSOLE_PASSWORD = process.env.CONSOLE_PASSWORD || (() => {
+        const generated = crypto.randomBytes(9).toString('hex');
+        console.log(`\n⚠️  [WEB CONSOLE] No CONSOLE_PASSWORD env var set — generated a one-time password for this run:`);
+        console.log(`    ${generated}`);
+        console.log(`    Set CONSOLE_PASSWORD in your environment to keep this password stable across restarts.\n`);
+        return generated;
+    })();
+
+    // In-memory only: sessions reset when the process restarts (fine — no
+    // extra dependency needed, and being logged back out on restart is a
+    // reasonable trade-off for a self-hosted single-operator console).
+    const validSessions = new Set();
+
+    function parseCookies(req) {
+        const header = req.headers.cookie;
+        const out = {};
+        if (!header) return out;
+        header.split(';').forEach(pair => {
+            const idx = pair.indexOf('=');
+            if (idx === -1) return;
+            out[pair.slice(0, idx).trim()] = decodeURIComponent(pair.slice(idx + 1).trim());
+        });
+        return out;
+    }
+
+    function requireAuth(req, res, next) {
+        if (req.path === '/api/health' || req.path === '/api/login') return next();
+        const cookies = parseCookies(req);
+        const sid = cookies.consoleAuth;
+        if (sid && validSessions.has(sid)) return next();
+        if (req.path.startsWith('/api/')) {
+            return res.status(401).json({ success: false, error: 'Not authenticated. Please log in at the console.' });
+        }
+        return res.send(getLoginHtml());
+    }
+    app.use(requireAuth);
+
+    app.post('/api/login', (req, res) => {
+        const provided = Buffer.from(String((req.body || {}).password || ''));
+        const expected = Buffer.from(CONSOLE_PASSWORD);
+        const valid = provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+        if (!valid) {
+            return res.status(401).json({ success: false, error: 'Incorrect password.' });
+        }
+        const sessionId = crypto.randomBytes(24).toString('hex');
+        validSessions.add(sessionId);
+        res.setHeader('Set-Cookie', `consoleAuth=${sessionId}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 7}`);
+        res.json({ success: true });
+    });
 
     // ─── API ROUTES ───────────────────────────────────────────────
 
@@ -188,6 +248,50 @@ function createServer() {
     });
 
     return server;
+}
+
+function getLoginHtml() {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Limitless Console — Sign in</title>
+<style>
+    body { font-family: system-ui, sans-serif; background:#0f0f14; color:#eee; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+    form { background:#1a1a22; padding:2rem; border-radius:12px; width:280px; box-shadow:0 4px 24px rgba(0,0,0,.4); }
+    h1 { font-size:1.1rem; margin:0 0 1rem; }
+    input { width:100%; padding:.6rem; margin-bottom:.75rem; border-radius:6px; border:1px solid #333; background:#0f0f14; color:#eee; box-sizing:border-box; }
+    button { width:100%; padding:.6rem; border:none; border-radius:6px; background:#6c5ce7; color:#fff; font-weight:600; cursor:pointer; }
+    #err { color:#ff6b6b; font-size:.85rem; min-height:1.2em; margin-bottom:.5rem; }
+</style>
+</head>
+<body>
+<form id="loginForm">
+    <h1>🔒 Limitless Console</h1>
+    <div id="err"></div>
+    <input type="password" id="pw" placeholder="Console password" autofocus>
+    <button type="submit">Sign in</button>
+</form>
+<script>
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const password = document.getElementById('pw').value;
+    const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+    if (data.success) {
+        location.reload();
+    } else {
+        document.getElementById('err').textContent = data.error || 'Login failed.';
+    }
+});
+</script>
+</body>
+</html>`;
 }
 
 function getDashboardHtml() {
