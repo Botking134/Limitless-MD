@@ -247,7 +247,13 @@ const advancedGroupCommands = [
                 if (resolved) targetJid = resolved;
             }
 
-            const stats = ActivityManager.getRank(jid, targetJid);
+            let totalGroupMembers = null;
+            try {
+                const groupMetadata = await sock.groupMetadata(jid);
+                totalGroupMembers = groupMetadata?.participants?.length || null;
+            } catch (e) { /* fall back to tracked-only denominator */ }
+
+            const stats = ActivityManager.getRank(jid, targetJid, totalGroupMembers);
             const targetNumber = targetJid.split('@')[0];
 
             const bar = stats.nextTier
