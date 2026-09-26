@@ -439,10 +439,15 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                 args = spaceIndex === -1 ? '' : withoutPrefix.slice(spaceIndex + 1).trim();
             } else {
                 const targetLower = trimmedMessageBody.toLowerCase();
-                if (typeof commands === 'object' && !Array.isArray(commands) && commands[targetLower]) {
+                // Bug: this branch matched on the command merely existing,
+                // never checking isPrefixless — meaning every command worked
+                // with no prefix at all regardless of what each plugin
+                // declared. Now only a command explicitly marked
+                // isPrefixless: true is allowed to fire bare like this.
+                if (typeof commands === 'object' && !Array.isArray(commands) && commands[targetLower]?.isPrefixless) {
                     command = targetLower;
                     args = '';
-                } else if (Array.isArray(commands) && commands.some(c => c.name === targetLower)) {
+                } else if (Array.isArray(commands) && commands.some(c => c.name === targetLower && c.isPrefixless)) {
                     command = targetLower;
                     args = '';
                 }
