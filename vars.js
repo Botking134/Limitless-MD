@@ -35,7 +35,17 @@ const DYNAMIC_KEYS = [
     'welcome',
     'goodbye',
     'gcalerts',
-    'presence'
+    'presence',
+    // Status view/react + its emoji were missing here, meaning setVar()
+    // silently rejected them (falling back to only the in-memory config.x =
+    // ... assignment each command also did) and none of the three survived
+    // a bot restart — after any restart they reset to undefined/off, which
+    // is why autoreactstatus could come back on (re-toggled) while
+    // statusemoji quietly fell back to the hardcoded '❄' default instead of
+    // whatever emoji had been set before.
+    'autoviewstatus',
+    'autoreactstatus',
+    'statusemoji'
 ];
 
 // ─── LOAD VARS (BIDIRECTIONAL SYNC) ─────────────────────────────
