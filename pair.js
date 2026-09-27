@@ -246,10 +246,9 @@ async function startBot() {
 (You can also use the Web UI on port 3000 to scan QR or generate code)
 `);
         try {
-            // Waits indefinitely for input now — no timeout race, so it will
-            // never silently fall through to QR mode just because you took
-            // longer than a few seconds to answer.
-            const choice = await question('Select option (1 or 2, or press Enter for QR): ');
+            const promptPromise = question('Select option (1 or 2, or press Enter for QR): ');
+            const timeoutPromise = new Promise(r => setTimeout(() => r('timeout'), 8000));
+            const choice = await Promise.race([promptPromise, timeoutPromise]);
 
             if (choice === '1') {
                 pairingMode = true;
@@ -259,7 +258,7 @@ async function startBot() {
                 if (targetNumber) {
                     console.log(`\n⏳ Requesting pairing code for ${targetNumber}...\n`);
                 }
-            } else {
+            } else if (choice === '2' || choice === '' || choice === 'timeout') {
                 pairingMode = false;
                 console.log('\n📱 QR mode active. Waiting for QR...\n');
             }
@@ -671,7 +670,21 @@ async function startBot() {
                                 mentions: targetMentions
                             });
                             continue;
-                        } catch (e) {}
+                        } catch (e) {
+                            // Was a silent empty catch — a failed kick (e.g. bad
+                            // target JID from a metadata fetch that failed during
+                            // a reconnect, or the bot lacking admin) looked
+                            // identical to antijoin doing nothing at all, with
+                            // zero trace anywhere. Falls through to the normal
+                            // welcome flow below rather than staying silent.
+                            console.error(`⚠️ [ANTIJOIN] Failed to expel ${targetJid} in ${jid}:`, e.message);
+                            try {
+                                await sock.sendMessage(jid, {
+                                    text: `⚠️ *Anti-Join Protection triggered but failed to expel* ${targetLabel} — I likely need to be a group admin here, or couldn't resolve their identity in time.`,
+                                    mentions: targetMentions
+                                });
+                            } catch (e2) {}
+                        }
                     }
 
                     // Baseline for "activity since joining" is captured regardless of
