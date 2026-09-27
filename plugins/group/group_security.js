@@ -505,7 +505,27 @@ const securityCommands = [
                     "The next time you speak without permission, it'll cost you your head.",
                     "Stand proud. You're strong... but you are still beneath me.",
                     "Are you prepared to die for that mistake?",
-                    "If you value your life, keep your head on the ground."
+                    "If you value your life, keep your head on the ground.",
+                    "Worthless. Utterly worthless.",
+                    "You mistake my patience for weakness. Don't.",
+                    "Kneel, before I make you.",
+                    "This is your one mercy. There won't be a second.",
+                    "Amusing. For a corpse, you talk a lot.",
+                    "I've torn apart stronger tongues than yours.",
+                    "Careful. Even boredom has a limit.",
+                    "You call that defiance? How cute.",
+                    "A thousand years and still I meet fools like you.",
+                    "Test me again, and I'll enjoy what comes next.",
+                    "Do you understand what you just did? No? Then let me show you.",
+                    "Bind yourself in silence, or I'll do it for you.",
+                    "Your insolence is noted. It will not go unanswered.",
+                    "I grow tired of repeating myself to lesser beings.",
+                    "That mouth of yours is asking to be shut permanently.",
+                    "Strength is the only apology I accept. You have none.",
+                    "One more slip, and I'll show you what dismemberment feels like.",
+                    "You stand before a King. Act like it, or kneel like it.",
+                    "Consider this your final, undeserved chance.",
+                    "I've seen curses with more sense than you."
                 ];
                 reason = sukunaQuotes[Math.floor(Math.random() * sukunaQuotes.length)];
             }
@@ -533,26 +553,31 @@ const securityCommands = [
             const threshold = Number(config.warnThreshold) || 5;
 
             if (count >= threshold) {
-                let kickTargets = [targetJid];
+                // Previously this always announced success and reset the
+                // counter regardless of whether groupParticipantsUpdate
+                // actually succeeded — so a failed kick (e.g. bot isn't a
+                // group admin) looked identical to a successful one, except
+                // the person stayed in the group and the counter silently
+                // reset to 0, making the whole feature look permanently
+                // broken with no visible cause. Also now uses the same
+                // direct target JID the working .kick command uses, instead
+                // of the extra group-metadata/LID remap this had before.
+                let kickSucceeded = true;
                 try {
-                    const meta = await sock.groupMetadata(jid);
-                    const cleanT = cleanJid(targetJid);
-                    const match = meta.participants?.find(p => cleanJid(p.id) === cleanT || (p.lid && cleanJid(p.lid) === cleanT));
-                    if (match && match.id) {
-                        kickTargets = [match.id];
-                    }
-                } catch (e) {}
-
-                try {
-                    await sock.groupParticipantsUpdate(jid, kickTargets, "remove");
+                    await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
                 } catch (err) {
+                    kickSucceeded = false;
                     console.error("❌ [WARN KICK ERROR]:", err.message);
                 }
 
-                // Domain Expansion kick message
-                const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${targetNumber}. Warnings exceeded (${count}/${threshold}).`;
-                await sock.sendMessage(jid, { text: kickText, mentions: [targetJid] });
-                config.warns[warnKey] = 0;
+                if (kickSucceeded) {
+                    const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${targetNumber}. Warnings exceeded (${count}/${threshold}).`;
+                    await sock.sendMessage(jid, { text: kickText, mentions: [targetJid] });
+                    config.warns[warnKey] = 0;
+                } else {
+                    const failText = `⚠️ *Kick Failed:* @${targetNumber} hit the warning threshold (${count}/${threshold}), but I couldn't remove them — I likely need to be a group admin here. Warning count has been kept, not reset.`;
+                    await sock.sendMessage(jid, { text: failText, mentions: [targetJid] });
+                }
             } else {
                 // Customized Warning response
                 const warningText = `            ☯ *Warning!!!!* ☯\n\n` +
