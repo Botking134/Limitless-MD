@@ -81,6 +81,16 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
             resolvedSender = resolved;
         }
     }
+    // For the actual @mention shown in the group, use the original,
+    // unconverted JID rather than resolvedSender. Mentioning someone via
+    // their raw @lid JID lets the WhatsApp client resolve it to their
+    // display name; forcing it to a phone-number JID first (what
+    // resolvedSender does) is why antilink/antitag/antibot/etc. mentions
+    // showed a bare number while addowner — which never does this
+    // conversion — showed a username. resolvedSender is kept for kicking
+    // and warn-count keys, where a stable phone-number identity matters
+    // more than mention rendering.
+    const mentionJid = normalizeToJid(senderJid);
 
     // Attempt message deletion safely
     try {
@@ -104,7 +114,7 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
     if (effectivePolicy === 'delete') {
         try {
             const deleteMsgText = `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`;
-            await sock.sendMessage(jid, { text: deleteMsgText, mentions: [resolvedSender] });
+            await sock.sendMessage(jid, { text: deleteMsgText, mentions: [mentionJid] });
         } catch (e) { /* ignore */ }
     } else if (effectivePolicy === 'warn') {
         try {
@@ -122,11 +132,11 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
                     console.error("❌ [SECURITY KICK ERROR]:", kErr.message);
                 }
                 const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${senderNumber}. Warnings exceeded (${count}/${threshold}) for violating ${violationReason} rules.`;
-                await sock.sendMessage(jid, { text: kickText, mentions: [resolvedSender] });
+                await sock.sendMessage(jid, { text: kickText, mentions: [mentionJid] });
                 config.warns[warnKey] = 0;
             } else {
                 const warningText = getThematicWarning(violationReason, senderNumber, count, threshold);
-                await sock.sendMessage(jid, { text: warningText, mentions: [resolvedSender] });
+                await sock.sendMessage(jid, { text: warningText, mentions: [mentionJid] });
             }
             saveState();
         } catch (e) {
@@ -137,7 +147,7 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
             const kickTargets = await getKickTargets(resolvedSender);
             await sock.groupParticipantsUpdate(jid, kickTargets, "remove");
             const directKickText = `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`;
-            await sock.sendMessage(jid, { text: directKickText, mentions: [resolvedSender] });
+            await sock.sendMessage(jid, { text: directKickText, mentions: [mentionJid] });
         } catch (e) {
             console.error("❌ [KICK POLICY ERROR]:", e.message);
         }
@@ -239,13 +249,10 @@ async function handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, i
     const isImmune = isAuthorized || isDev || isAdmin;
     if (isImmune) return false;
 
-    let resolvedSender = normalizeToJid(senderJid);
-    if (resolvedSender.endsWith('@lid')) {
-        const resolved = await getPhoneJid(sock, resolvedSender, jid);
-        if (resolved && resolved.endsWith('@s.whatsapp.net')) {
-            resolvedSender = resolved;
-        }
-    }
+    // Kept as the original, unconverted JID (not resolved to a phone-number
+    // JID) so the @mention below shows the person's display name via
+    // WhatsApp's own @lid resolution, instead of a bare number.
+    const mentionJid = normalizeToJid(senderJid);
 
     const now = Date.now();
     global.spamTracker = global.spamTracker || {};
@@ -257,7 +264,7 @@ async function handleAntibugSpamLimit(sock, msg, senderJid, senderNumber, jid, i
         try {
             await sock.sendMessage(jid, {
                 text: `🚨 *ANTIBUG BAN HAMMER* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumber} has been blocked for spamming/flooding the system.`,
-                mentions: [resolvedSender]
+                mentions: [mentionJid]
             }, { quoted: msg });
             
             await sock.updateBlockStatus(senderJid, 'block');
@@ -278,13 +285,9 @@ async function handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, 
     const isImmune = isAuthorized || isDev || isAdmin;
     if (isImmune) return false;
 
-    let resolvedSender = normalizeToJid(senderJid);
-    if (resolvedSender.endsWith('@lid')) {
-        const resolved = await getPhoneJid(sock, resolvedSender, jid);
-        if (resolved && resolved.endsWith('@s.whatsapp.net')) {
-            resolvedSender = resolved;
-        }
-    }
+    // Same reasoning as handleAntibugSpamLimit above: left unconverted so
+    // the @mention resolves to a display name instead of a bare number.
+    const mentionJid = normalizeToJid(senderJid);
 
     const antispamConfig = config.antispam?.[jid];
     if (antispamConfig && antispamConfig.status === 'on') {
@@ -308,7 +311,7 @@ async function handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, 
                     const alertText = `🚨 *SPAM ATTACK DETECTED* 🚨\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n@${senderNumber} rate-limit violated! Admins, choose an action below or use \`${config.prefix}kick @${senderNumber}\` manually.`;
                     const alertMessage = {
                         text: alertText,
-                        mentions: [resolvedSender],
+                        mentions: [mentionJid],
                         buttons: [
                             { buttonId: `${config.prefix}delspam ${senderNumber}`, buttonText: { displayText: '🧹 Delete Spam' }, type: 1 },
                             { buttonId: `${config.prefix}warn ${senderNumber}`, buttonText: { displayText: '⚠️ Warn' }, type: 1 },
@@ -322,7 +325,7 @@ async function handleAntispamRateLimit(sock, msg, senderJid, senderNumber, jid, 
                         // Fall back to a plain-text alert if buttons aren't supported
                         // in this chat/client (mirrors the pattern used elsewhere,
                         // e.g. group_basic.js's gmode panel).
-                        await sock.sendMessage(jid, { text: alertText, mentions: [resolvedSender] });
+                        await sock.sendMessage(jid, { text: alertText, mentions: [mentionJid] });
                     }
                 }
             } catch (e) { /* ignore */ }
