@@ -7,46 +7,16 @@ const BotContext = require('./helpers/BotContext');
 const VARS_PATH = path.join(__dirname, 'storage', 'vars.json');
 
 // ─── LIST OF DYNAMIC KEYS (persisted in vars.json) ────────────
-const DYNAMIC_KEYS = [
-    'prefix',
-    'vvs',
-    'packName',
-    'author',
-    'menuImage',
-    'warnThreshold',
-    'presenceMode',
-    'isPublic',
-    'autoReact',
-    'antipm',
-    'lizzyChats',
-    'chatbotChats',
-    'fridayChats',
-    'gojoSleepChats',
-    'gojoGlobalSleep',
-    'antilink',
-    'antitag',
-    'antibot',
-    'antispam',
-    'antigm',
-    'antigcstatus',
-    'antipromote',
-    'antidemote',
-    'stickerCommands',
-    'welcome',
-    'goodbye',
-    'gcalerts',
-    'presence',
-    // Status view/react + its emoji were missing here, meaning setVar()
-    // silently rejected them (falling back to only the in-memory config.x =
-    // ... assignment each command also did) and none of the three survived
-    // a bot restart — after any restart they reset to undefined/off, which
-    // is why autoreactstatus could come back on (re-toggled) while
-    // statusemoji quietly fell back to the hardcoded '❄' default instead of
-    // whatever emoji had been set before.
-    'autoviewstatus',
-    'autoreactstatus',
-    'statusemoji'
-];
+// Single source of truth lives in helpers/BotContext.js (it also decides which
+// settings get scoped per sub-bot). This file used to keep its OWN copy of the
+// list, and the two drifted apart: ten settings (antiviewonce, antidelete,
+// antibot-adjacent antibug, antigay, afk, gojoChats, aliveMediaUrl,
+// aliveMessage, gayList, urielGlobalActive) plus the status view/react
+// settings were scoped per bot but missing here, so the MAIN bot never saved
+// them to vars.json and they reset on every restart, while sub-bots (which
+// save their whole settings object) kept them. Sharing one list stops that
+// from happening again.
+const DYNAMIC_KEYS = BotContext.DYNAMIC_KEYS;
 
 // ─── LOAD VARS (BIDIRECTIONAL SYNC) ─────────────────────────────
 
