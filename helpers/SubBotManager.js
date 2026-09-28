@@ -158,10 +158,44 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
     sock.ev.on('messages.upsert', async (chatUpdate) => {
         try {
             const { handleIncomingMessage } = require('./Infinity');
+            const { cacheIncomingMessage } = require('../pair');
             global.subBotSentIds = global.subBotSentIds || new Set();
-            await handleIncomingMessage(sock, chatUpdate, global.subBotSentIds);
+            // Same fix as the main bot's handler in pair.js: process every
+            // message in the batch, not just the first, or catch-up batches
+            // after a reconnect silently drop everything past index 0.
+            const incoming = Array.isArray(chatUpdate.messages) ? chatUpdate.messages : [];
+            for (const m of incoming) {
+                // Sub-bots never filled the shared message store, so
+                // deletion recovery (antidelete) had nothing to restore.
+                cacheIncomingMessage(m);
+                await handleIncomingMessage(sock, { messages: [m] }, global.subBotSentIds);
+            }
         } catch (e) {
             console.error(`⚠️ [SUBBOT ${phoneNumber}] Message handling error:`, e.message);
+        }
+    });
+
+    // Sub-bots used to register only the three listeners above, so group
+    // alerts (join/leave/promote/demote), antijoin, welcome/goodbye cards,
+    // antipromote/antidemote and deletion handling silently never ran for
+    // them. Lazy-required like Infinity above to avoid a circular import
+    // (pair.js -> plugins -> this file). Each dispatcher scopes settings to
+    // this bot and makes sure only one bot acts per group event.
+    sock.ev.on('group-participants.update', async (anu) => {
+        try {
+            const { dispatchGroupParticipantsUpdate } = require('../pair');
+            await dispatchGroupParticipantsUpdate(sock, anu);
+        } catch (e) {
+            console.error(`⚠️ [SUBBOT ${phoneNumber}] Participant-update error:`, e.message);
+        }
+    });
+
+    sock.ev.on('messages.update', async (updates) => {
+        try {
+            const { handleMessagesUpdate } = require('../pair');
+            await handleMessagesUpdate(sock, updates);
+        } catch (e) {
+            console.error(`⚠️ [SUBBOT ${phoneNumber}] Message-update error:`, e.message);
         }
     });
 
