@@ -9,6 +9,7 @@ const { handleDeletion } = require('./helpers/log');
 const { handleIncomingMessage } = require('./helpers/Infinity');
 const { normalizeToJid, getPhoneJid, loadState, warmLidCache } = require('./stateManager');
 const ActivityManager = require('./helpers/ActivityManager');
+const BotContext = require('./helpers/BotContext');
 const { generateMemberCard, buildCaption } = require('./helpers/WelcomeCardManager');
 
 // ─── INITIALIZE STATE ON BOOT ──────────────────────────────────
@@ -206,6 +207,446 @@ async function restartBot() {
 
 function getActiveSocket() {
     return activeSocketInstance;
+}
+
+// ─── SHARED HANDLERS (main bot + sub-bots) ────────────────────────
+// These used to be inline closures inside startBot(), so only the main
+// socket ever had them — sub-bots (helpers/SubBotManager.js) never got
+// join/leave/promote/demote alerts, antijoin, welcome/goodbye cards, or
+// deletion handling, even with those settings switched on. Lifted to
+// module scope so any socket can use them.
+// ─── USERNAME-RENDERING MENTIONS (gcalerts) ───────────────────────
+// WhatsApp shows a member's display name for an @mention only when the
+// mentioned JID is their @lid form (that's why .addowner shows usernames);
+// mentioning the phone-number JID shows a bare number. The alert handler
+// resolves everything to phone JIDs for its logic (kicks, dedupe, join
+// tracking), so this finds the matching @lid purely for the mention. The
+// text token (@digits) must use the same digits as the mentioned JID or
+// WhatsApp won't turn it into a pill.
+function findParticipantLid(raw, entry, phoneJid, metadata) {
+    const asLid = (v) => {
+        if (!v || typeof v !== 'string') return '';
+        const n = normalizeToJid(v);
+        return n && n.endsWith('@lid') ? n : '';
+    };
+    if (asLid(raw)) return asLid(raw);
+    if (entry && typeof entry === 'object' && asLid(entry.lid)) return asLid(entry.lid);
+    const match = metadata?.participants?.find(x => {
+        const id = x?.id ? normalizeToJid(x.id) : '';
+        const ph = x?.phoneNumber ? normalizeToJid(x.phoneNumber) : '';
+        return id === phoneJid || ph === phoneJid;
+    });
+    if (match) {
+        if (asLid(match.lid)) return asLid(match.lid);
+        if (asLid(match.id)) return asLid(match.id);
+    }
+    for (const [lid, phone] of Object.entries(global.lidCache || {})) {
+        if (phone === phoneJid && lid.endsWith('@lid')) return lid;
+    }
+    return '';
+}
+
+// build(usePill) returns the message content. Tries the username-rendering
+// (@lid) version first; if that send throws, retries once with the plain
+// phone-number version so an alert is never lost over how it's mentioned.
+async function sendPillAlert(sock, jid, build, hasPill) {
+    try {
+        return await sock.sendMessage(jid, build(!!hasPill));
+    } catch (e) {
+        if (!hasPill) throw e;
+        console.error('⚠️ [GCALERTS] @lid mention send failed, retrying with phone-number mention:', e.message);
+        return await sock.sendMessage(jid, build(false));
+    }
+}
+
+async function handleGroupParticipantsUpdate(sock, anu) {
+        try {
+            if (!anu || !anu.id || !anu.participants || !anu.participants.length) return;
+
+            const jid = normalizeToJid(anu.id);
+            const participants = anu.participants;
+            const action = anu.action;
+
+            const alertsPath = path.join(__dirname, 'storage', 'gcalerts.json');
+            let data = { welcome: {}, goodbye: {}, promote: {}, demote: {}, customWelcome: {}, customGoodbye: {}, antijoin: {}, antipromote: {}, antidemote: {}, overkill: {} };
+            try {
+                if (fs.existsSync(alertsPath)) data = JSON.parse(fs.readFileSync(alertsPath, 'utf-8'));
+            } catch (e) {
+                console.error('⚠️ [GROUP-PARTICIPANTS.UPDATE] gcalerts.json is corrupt/unreadable, falling back to defaults:', e.message);
+            }
+
+            let groupName = 'Group';
+            let metadata = null;
+            try {
+                metadata = await sock.groupMetadata(jid);
+                groupName = metadata?.subject || 'Group';
+                // Free win: this metadata already lists every current member's lid+id
+                // pair. Caching all of them now (not just whoever this one event is
+                // about) means a future leave/remove for any of them can resolve
+                // instantly from cache instead of hitting the exact race condition
+                // that breaks resolution on the way out — WhatsApp can already have
+                // dropped a leaving member from the roster by the time this handler
+                // runs, so metadata fetched *at* that moment often can't help them
+                // specifically, but everyone else here right now still can be.
+                warmLidCache(metadata);
+            } catch (e) {
+                console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Failed to fetch metadata for ${jid}:`, e.message);
+            }
+
+            const botJid = normalizeToJid(sock.user?.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
+            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+
+            let rawActor = resolveParticipantIdentifier(anu.author);
+            let actorJid = '';
+            let actorResolved = true;
+            if (rawActor) {
+                actorJid = await getPhoneJid(sock, rawActor, jid, metadata);
+                if (!actorJid || actorJid.endsWith('@lid')) {
+                    // Absolute last resort — same old behavior, but now only reached if
+                    // getPhoneJid's local-metadata AND live API lookup both genuinely failed.
+                    // NOTE: getPhoneJid's own last line returns the raw @lid JID rather than
+                    // '' on failure, so the old `if (!actorJid)` check here never actually
+                    // fired — an unresolved @lid JID was slipping straight through into
+                    // sendMessage()/mentions below. WhatsApp's servers appear to reject a
+                    // stanza that mentions a non-@s.whatsapp.net JID, which is what was
+                    // killing the socket (reason 500) instead of delivering the welcome/
+                    // goodbye card.
+                    actorJid = rawActor.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                    actorResolved = false;
+                    console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve actor LID ${rawActor} to a real phone JID in ${jid}.`);
+                }
+            }
+
+            const isActorBot = actorJid === botJid || (botLid && rawActor.includes(botLid.split('@')[0]));
+            const isActorDev = DEV_LIDS.some(d => rawActor.includes(d.split('@')[0])) || DEV_JIDS.includes(actorJid) || DEV_PHONE_JIDS.includes(actorJid);
+            const isActorOwner = actorJid === config.ownerJid || (config.ownerLid && rawActor.includes(config.ownerLid.split('@')[0])) || (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(actorJid));
+            const isActorSudo = Array.isArray(config.sudos) && config.sudos.includes(actorJid);
+            const isActorAuthorized = isActorBot || isActorDev || isActorOwner || isActorSudo;
+
+            for (const num of participants) {
+                let rawTarget = resolveParticipantIdentifier(num);
+                if (!rawTarget) continue;
+
+                let targetJid = await getPhoneJid(sock, rawTarget, jid, metadata);
+                let targetResolved = true;
+                if (!targetJid || targetJid.endsWith('@lid')) {
+                    // Same fix as the actor lookup above — an unresolved @lid JID must not
+                    // reach sendMessage()/mentions, since that's what was triggering the
+                    // reason-500 disconnects on join/exit. But building a fake "phone number"
+                    // out of the LID's own digits and @-mentioning it is its own bug: those
+                    // digits aren't a real phone number, so the mention can land on a
+                    // completely unrelated, uninvolved WhatsApp account. When resolution
+                    // genuinely fails, targetResolved goes false and every message below
+                    // switches to a plain, non-mentioning label instead of a fabricated one.
+                    targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                    targetResolved = false;
+                    console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve target LID ${rawTarget} to a real phone JID in ${jid}.`);
+                }
+
+                const phoneNumber = targetJid.split('@')[0];
+                const targetLabel = targetResolved ? `@${phoneNumber}` : 'a member (ID unresolved)';
+                const targetMentions = targetResolved ? [targetJid] : [];
+
+                // Username-rendering identity for the @mention (see findParticipantLid).
+                const pillLid = targetResolved ? findParticipantLid(rawTarget, num, targetJid, metadata) : '';
+                const hasPill = !!pillLid;
+                const pillDigits = hasPill ? pillLid.split('@')[0] : phoneNumber;
+                const pillLabel = hasPill ? `@${pillDigits}` : targetLabel;
+                const pillMentions = targetResolved ? [pillLid || targetJid] : [];
+                const actorLid = (actorResolved && actorJid) ? findParticipantLid(rawActor, null, actorJid, metadata) : '';
+
+                const eventSignature = `${jid}_${targetJid}_${action}`;
+                if (isDuplicateEvent(eventSignature)) continue;
+
+                try {
+
+                if (action === 'add') {
+                    const isAntijoinOn = isEnabled(data.antijoin?.[jid]) || isEnabled(config.antijoin?.[jid]);
+                    if (isAntijoinOn && !isActorAuthorized) {
+                        try {
+                            await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
+                            await sendPillAlert(sock, jid, (p) => ({
+                                text: `🔒 *Anti-Join Protection active!* Expelled ${p ? pillLabel : targetLabel}.`,
+                                mentions: p ? pillMentions : targetMentions
+                            }), hasPill);
+                            continue;
+                        } catch (e) {
+                            // Was a silent empty catch — a failed kick (e.g. bad
+                            // target JID from a metadata fetch that failed during
+                            // a reconnect, or the bot lacking admin) looked
+                            // identical to antijoin doing nothing at all, with
+                            // zero trace anywhere. Falls through to the normal
+                            // welcome flow below rather than staying silent.
+                            console.error(`⚠️ [ANTIJOIN] Failed to expel ${targetJid} in ${jid}:`, e.message);
+                            try {
+                                await sendPillAlert(sock, jid, (p) => ({
+                                    text: `⚠️ *Anti-Join Protection triggered but failed to expel* ${p ? pillLabel : targetLabel} — I likely need to be a group admin here, or couldn't resolve their identity in time.`,
+                                    mentions: p ? pillMentions : targetMentions
+                                }), hasPill);
+                            } catch (e2) {}
+                        }
+                    }
+
+                    // Baseline for "activity since joining" is captured regardless of
+                    // whether the welcome card is enabled, so .rank/goodbye stats stay accurate.
+                    try { ActivityManager.registerJoin(jid, targetJid); } catch (e) {}
+
+                    const isWelcomeOn = isEnabled(data.welcome?.[jid]) || isEnabled(config.welcome?.[jid]);
+                    if (isWelcomeOn) {
+                        const memberCount = metadata?.participants?.length || 0;
+                        const buildWelcome = (p) => buildCaption({
+                            type: 'welcome',
+                            phoneNumber: p ? pillDigits : phoneNumber,
+                            groupName,
+                            memberCount,
+                            customMessage: data.customWelcome?.[jid] || null
+                        });
+
+                        // Text goes out first and unconditionally — this is the same
+                        // lightweight shape as every other alert in this file (antijoin,
+                        // antipromote, promote) and is what actually needs to land. The
+                        // image card is a nice-to-have sent as a decoupled follow-up:
+                        // building it involves a full sharp render plus a fresh WhatsApp
+                        // media-upload round-trip, which is a much bigger ask of the
+                        // socket than a text mention and appears to be what was tripping
+                        // WhatsApp's flood protection (reason 500) during join/exit
+                        // bursts. If the image fails now, it just logs and stops — no
+                        // second send is attempted on a socket that may already be dead,
+                        // which is what was silently swallowing both messages before.
+                        try {
+                            await sendPillAlert(sock, jid, (p) => ({ text: buildWelcome(p), mentions: p ? pillMentions : targetMentions }), hasPill);
+                        } catch (textErr) {
+                            console.error('⚠️ [WELCOME TEXT] Failed to send:', textErr.message);
+                        }
+
+                        try {
+                            const cardImage = await generateMemberCard(sock, {
+                                type: 'welcome',
+                                targetJid,
+                                displayName: targetLabel,
+                                groupName,
+                                memberCount
+                            });
+                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: targetMentions });
+                        } catch (cardErr) {
+                            console.error('⚠️ [WELCOME CARD] Image follow-up failed (text already sent):', cardErr.message);
+                        }
+                    }
+                } else if (action === 'remove') {
+                    const isGoodbyeOn = isEnabled(data.goodbye?.[jid]) || isEnabled(config.goodbye?.[jid]);
+                    if (isGoodbyeOn) {
+                        const memberCount = metadata?.participants?.length || 0;
+                        const { activityPercent } = ActivityManager.getLeaveStats(jid, targetJid);
+                        const buildGoodbye = (p) => buildCaption({
+                            type: 'goodbye',
+                            phoneNumber: p ? pillDigits : phoneNumber,
+                            groupName,
+                            memberCount,
+                            activityPercent,
+                            customMessage: data.customGoodbye?.[jid] || null
+                        });
+
+                        // Same reasoning as the welcome path above: text first and always,
+                        // image as a decoupled best-effort follow-up.
+                        try {
+                            await sendPillAlert(sock, jid, (p) => ({ text: buildGoodbye(p), mentions: p ? pillMentions : targetMentions }), hasPill);
+                        } catch (textErr) {
+                            console.error('⚠️ [GOODBYE TEXT] Failed to send:', textErr.message);
+                        }
+
+                        try {
+                            const cardImage = await generateMemberCard(sock, {
+                                type: 'goodbye',
+                                targetJid,
+                                displayName: targetLabel,
+                                groupName,
+                                memberCount
+                            });
+                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: targetMentions });
+                        } catch (cardErr) {
+                            console.error('⚠️ [GOODBYE CARD] Image follow-up failed (text already sent):', cardErr.message);
+                        }
+                    }
+                } else if (action === 'promote') {
+                    let handledByProtection = false;
+                    if (!isActorAuthorized) {
+                        const antipromoteMode = data.antipromote?.[jid] || 'off';
+                        const overkillArmed = isEnabled(data.overkill?.[jid]);
+                        if (antipromoteMode === 'overkill' || overkillArmed) {
+                            handledByProtection = true;
+                            try {
+                                const { triggerEmergencyPurge } = require('./plugins/gcalerts');
+                                await triggerEmergencyPurge(sock, jid, actorJid || targetJid);
+                            } catch (e) { console.error('❌ [OVERKILL PURGE ERROR]:', e.message); }
+                        } else if (antipromoteMode === 'on') {
+                            handledByProtection = true;
+                            try {
+                                // Demote both the person who got promoted AND whoever promoted them
+                                // without authorization — punishing only the victim would leave the
+                                // rogue admin free to just promote someone else again. Separate calls
+                                // so one failing (e.g. actor is the group's real creator, who can't
+                                // be demoted) doesn't block the other from going through.
+                                await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
+                                if (actorJid && actorJid !== targetJid) {
+                                    try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
+                                }
+
+                                const includeActor = actorJid && actorJid !== targetJid;
+                                const buildProt = (p) => {
+                                    const aTok = ((p && actorLid) ? actorLid : (actorJid || '')).split('@')[0];
+                                    const aMention = (p && actorLid) ? actorLid : actorJid;
+                                    const base = p ? pillMentions : targetMentions;
+                                    const list = includeActor && actorResolved ? [...base, aMention] : base;
+                                    const line = includeActor
+                                        ? (actorResolved ? ` @${aTok} (the promoter) was also demoted.` : ` The promoter (ID unresolved) was also demoted.`)
+                                        : '';
+                                    return {
+                                        text: `🛡️ *Anti-Promote Protection!* Unauthorized promotion of ${p ? pillLabel : targetLabel} was reverted.${line}`,
+                                        mentions: list
+                                    };
+                                };
+                                await sendPillAlert(sock, jid, buildProt, hasPill || !!actorLid);
+                            } catch (e) { console.error('❌ [ANTIPROMOTE REVERT ERROR]:', e.message); }
+                        }
+                    }
+
+                    if (!handledByProtection) {
+                        const isPromoteOn = isEnabled(data.promote?.[jid]) || isEnabled(config.promote?.[jid]);
+                        if (isPromoteOn) {
+                            await sendPillAlert(sock, jid, (p) => ({
+                                text: `👑 *PROMOTION ALERT!*
+
+🎉 ${p ? pillLabel : targetLabel} promoted to Admin in *${groupName}*!`,
+                                mentions: p ? pillMentions : targetMentions
+                            }), hasPill);
+                        }
+                    }
+                } else if (action === 'demote') {
+                    let handledByProtection = false;
+                    if (!isActorAuthorized) {
+                        const antidemoteMode = data.antidemote?.[jid] || 'off';
+                        const overkillArmed = isEnabled(data.overkill?.[jid]);
+                        if (antidemoteMode === 'overkill' || overkillArmed) {
+                            handledByProtection = true;
+                            try {
+                                const { triggerEmergencyPurge } = require('./plugins/gcalerts');
+                                await triggerEmergencyPurge(sock, jid, actorJid || targetJid);
+                            } catch (e) { console.error('❌ [OVERKILL PURGE ERROR]:', e.message); }
+                        } else if (antidemoteMode === 'on') {
+                            handledByProtection = true;
+                            try {
+                                // Restore the demoted victim's admin status AND demote whoever
+                                // demoted them without authorization.
+                                await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
+                                if (actorJid && actorJid !== targetJid) {
+                                    try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
+                                }
+
+                                const includeActor = actorJid && actorJid !== targetJid;
+                                const buildProt = (p) => {
+                                    const aTok = ((p && actorLid) ? actorLid : (actorJid || '')).split('@')[0];
+                                    const aMention = (p && actorLid) ? actorLid : actorJid;
+                                    const base = p ? pillMentions : targetMentions;
+                                    const list = includeActor && actorResolved ? [...base, aMention] : base;
+                                    const line = includeActor
+                                        ? (actorResolved ? ` @${aTok} (the demoter) was also demoted.` : ` The demoter (ID unresolved) was also demoted.`)
+                                        : '';
+                                    return {
+                                        text: `🛡️ *Anti-Demote Protection!* Unauthorized demotion of ${p ? pillLabel : targetLabel} was reverted.${line}`,
+                                        mentions: list
+                                    };
+                                };
+                                await sendPillAlert(sock, jid, buildProt, hasPill || !!actorLid);
+                            } catch (e) { console.error('❌ [ANTIDEMOTE REVERT ERROR]:', e.message); }
+                        }
+                    }
+
+                    if (!handledByProtection) {
+                        const isDemoteOn = isEnabled(data.demote?.[jid]) || isEnabled(config.demote?.[jid]);
+                        if (isDemoteOn) {
+                            await sendPillAlert(sock, jid, (p) => ({
+                                text: `🛡️ *DEMOTION ALERT!*
+
+👋 ${p ? pillLabel : targetLabel} demoted to Member in *${groupName}*.`,
+                                mentions: p ? pillMentions : targetMentions
+                            }), hasPill);
+                        }
+                    }
+                }
+
+                } catch (participantErr) {
+                    console.error(`❌ [GROUP-PARTICIPANTS.UPDATE] Failed processing ${targetJid} (${action}) in ${jid}:`, participantErr.message, '\n', participantErr.stack);
+                }
+            }
+        } catch (e) {
+            console.error('❌ [GROUP-PARTICIPANTS.UPDATE] Handler crashed:', e.message, '\n', e.stack);
+        }
+}
+
+// Only ONE bot should act on a given group's participant events. If the main
+// bot and a sub-bot (or several sub-bots) share a group they all receive the
+// same event, and without this every one of them would send its own welcome
+// card / alert and race to kick the same person for antijoin.
+// Rule: the main bot always wins. Sub-bots wait a staggered moment, then only
+// act if no OTHER bot has recently acted for that group (a short lease).
+const gpuLeases = new Map(); // groupJid -> { botId, at }
+const GPU_LEASE_MS = 60 * 1000;
+
+async function dispatchGroupParticipantsUpdate(sock, anu) {
+    const botId = sock.__botId || BotContext.MAIN_ID;
+    const groupKey = normalizeToJid(anu?.id || '');
+
+    if (botId !== BotContext.MAIN_ID) {
+        const order = [...(global.subBotSockets?.keys() || [])].indexOf(botId);
+        await new Promise(r => setTimeout(r, 1500 * (Math.max(order, 0) + 1)));
+        const lease = gpuLeases.get(groupKey);
+        if (lease && lease.botId !== botId && Date.now() - lease.at < GPU_LEASE_MS) return;
+    }
+
+    gpuLeases.set(groupKey, { botId, at: Date.now() });
+    // runAsBot scopes every config.<setting> read (welcome, goodbye, antipromote,
+    // ...) to THIS bot's own settings, since this handler runs outside the
+    // per-message context Infinity.js normally sets up.
+    return BotContext.runAsBot(botId, () => handleGroupParticipantsUpdate(sock, anu));
+}
+
+// Deleted-message handling (antidelete). Same one-bot-per-event rule, keyed by
+// the deleted message's id.
+const deletionClaims = new Map(); // messageId -> botId
+
+async function handleMessagesUpdate(sock, updates) {
+    try {
+        const botId = sock.__botId || BotContext.MAIN_ID;
+        for (const update of updates) {
+            if (update?.update?.message !== null) continue;
+            const deletedMsgId = update.key.id;
+            const jid = update.key.remoteJid;
+            if (!(global.messageStore && global.messageStore[deletedMsgId])) continue;
+
+            if (botId !== BotContext.MAIN_ID) {
+                const order = [...(global.subBotSockets?.keys() || [])].indexOf(botId);
+                await new Promise(r => setTimeout(r, 1500 * (Math.max(order, 0) + 1)));
+            }
+            const claimedBy = deletionClaims.get(deletedMsgId);
+            if (claimedBy && claimedBy !== botId) continue;
+            deletionClaims.set(deletedMsgId, botId);
+            if (deletionClaims.size > 500) deletionClaims.delete(deletionClaims.keys().next().value);
+
+            const originalMsg = global.messageStore[deletedMsgId];
+            const revoker = update.key.participant || update.key.remoteJid || '';
+            await BotContext.runAsBot(botId, () => handleDeletion(sock, originalMsg, jid, revoker));
+        }
+    } catch (e) {}
+}
+
+// Keeps recent messages so deletions can be recovered. Sub-bots need this too —
+// previously only the main bot's upsert handler filled global.messageStore.
+function cacheIncomingMessage(m) {
+    if (!(m && m.key && m.key.id && m.message)) return;
+    global.messageStore = global.messageStore || {};
+    global.messageStore[m.key.id] = m;
+    const storeKeys = Object.keys(global.messageStore);
+    if (storeKeys.length > 2000) delete global.messageStore[storeKeys[0]];
 }
 
 async function startBot() {
@@ -567,321 +1008,9 @@ async function startBot() {
     });
 
     // ─── GROUP PARTICIPANTS UPDATE ───
-    sock.ev.on('group-participants.update', async (anu) => {
-        try {
-            if (!anu || !anu.id || !anu.participants || !anu.participants.length) return;
+    sock.ev.on('group-participants.update', (anu) => dispatchGroupParticipantsUpdate(sock, anu));
 
-            const jid = normalizeToJid(anu.id);
-            const participants = anu.participants;
-            const action = anu.action;
-
-            const alertsPath = path.join(__dirname, 'storage', 'gcalerts.json');
-            let data = { welcome: {}, goodbye: {}, promote: {}, demote: {}, customWelcome: {}, customGoodbye: {}, antijoin: {}, antipromote: {}, antidemote: {}, overkill: {} };
-            try {
-                if (fs.existsSync(alertsPath)) data = JSON.parse(fs.readFileSync(alertsPath, 'utf-8'));
-            } catch (e) {
-                console.error('⚠️ [GROUP-PARTICIPANTS.UPDATE] gcalerts.json is corrupt/unreadable, falling back to defaults:', e.message);
-            }
-
-            let groupName = 'Group';
-            let metadata = null;
-            try {
-                metadata = await sock.groupMetadata(jid);
-                groupName = metadata?.subject || 'Group';
-                // Free win: this metadata already lists every current member's lid+id
-                // pair. Caching all of them now (not just whoever this one event is
-                // about) means a future leave/remove for any of them can resolve
-                // instantly from cache instead of hitting the exact race condition
-                // that breaks resolution on the way out — WhatsApp can already have
-                // dropped a leaving member from the roster by the time this handler
-                // runs, so metadata fetched *at* that moment often can't help them
-                // specifically, but everyone else here right now still can be.
-                warmLidCache(metadata);
-            } catch (e) {
-                console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Failed to fetch metadata for ${jid}:`, e.message);
-            }
-
-            const botJid = normalizeToJid(sock.user?.id || '').split(':')[0].split('@')[0] + '@s.whatsapp.net';
-            const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
-
-            let rawActor = resolveParticipantIdentifier(anu.author);
-            let actorJid = '';
-            let actorResolved = true;
-            if (rawActor) {
-                actorJid = await getPhoneJid(sock, rawActor, jid, metadata);
-                if (!actorJid || actorJid.endsWith('@lid')) {
-                    // Absolute last resort — same old behavior, but now only reached if
-                    // getPhoneJid's local-metadata AND live API lookup both genuinely failed.
-                    // NOTE: getPhoneJid's own last line returns the raw @lid JID rather than
-                    // '' on failure, so the old `if (!actorJid)` check here never actually
-                    // fired — an unresolved @lid JID was slipping straight through into
-                    // sendMessage()/mentions below. WhatsApp's servers appear to reject a
-                    // stanza that mentions a non-@s.whatsapp.net JID, which is what was
-                    // killing the socket (reason 500) instead of delivering the welcome/
-                    // goodbye card.
-                    actorJid = rawActor.split(':')[0].split('@')[0] + '@s.whatsapp.net';
-                    actorResolved = false;
-                    console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve actor LID ${rawActor} to a real phone JID in ${jid}.`);
-                }
-            }
-
-            const isActorBot = actorJid === botJid || (botLid && rawActor.includes(botLid.split('@')[0]));
-            const isActorDev = DEV_LIDS.some(d => rawActor.includes(d.split('@')[0])) || DEV_JIDS.includes(actorJid) || DEV_PHONE_JIDS.includes(actorJid);
-            const isActorOwner = actorJid === config.ownerJid || (config.ownerLid && rawActor.includes(config.ownerLid.split('@')[0])) || (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(actorJid));
-            const isActorSudo = Array.isArray(config.sudos) && config.sudos.includes(actorJid);
-            const isActorAuthorized = isActorBot || isActorDev || isActorOwner || isActorSudo;
-
-            for (const num of participants) {
-                let rawTarget = resolveParticipantIdentifier(num);
-                if (!rawTarget) continue;
-
-                let targetJid = await getPhoneJid(sock, rawTarget, jid, metadata);
-                let targetResolved = true;
-                if (!targetJid || targetJid.endsWith('@lid')) {
-                    // Same fix as the actor lookup above — an unresolved @lid JID must not
-                    // reach sendMessage()/mentions, since that's what was triggering the
-                    // reason-500 disconnects on join/exit. But building a fake "phone number"
-                    // out of the LID's own digits and @-mentioning it is its own bug: those
-                    // digits aren't a real phone number, so the mention can land on a
-                    // completely unrelated, uninvolved WhatsApp account. When resolution
-                    // genuinely fails, targetResolved goes false and every message below
-                    // switches to a plain, non-mentioning label instead of a fabricated one.
-                    targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
-                    targetResolved = false;
-                    console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve target LID ${rawTarget} to a real phone JID in ${jid}.`);
-                }
-
-                const phoneNumber = targetJid.split('@')[0];
-                const targetLabel = targetResolved ? `@${phoneNumber}` : 'a member (ID unresolved)';
-                const targetMentions = targetResolved ? [targetJid] : [];
-
-                const eventSignature = `${jid}_${targetJid}_${action}`;
-                if (isDuplicateEvent(eventSignature)) continue;
-
-                try {
-
-                if (action === 'add') {
-                    const isAntijoinOn = isEnabled(data.antijoin?.[jid]) || isEnabled(config.antijoin?.[jid]);
-                    if (isAntijoinOn && !isActorAuthorized) {
-                        try {
-                            await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
-                            await sock.sendMessage(jid, { 
-                                text: `🔒 *Anti-Join Protection active!* Expelled ${targetLabel}.`,
-                                mentions: targetMentions
-                            });
-                            continue;
-                        } catch (e) {
-                            // Was a silent empty catch — a failed kick (e.g. bad
-                            // target JID from a metadata fetch that failed during
-                            // a reconnect, or the bot lacking admin) looked
-                            // identical to antijoin doing nothing at all, with
-                            // zero trace anywhere. Falls through to the normal
-                            // welcome flow below rather than staying silent.
-                            console.error(`⚠️ [ANTIJOIN] Failed to expel ${targetJid} in ${jid}:`, e.message);
-                            try {
-                                await sock.sendMessage(jid, {
-                                    text: `⚠️ *Anti-Join Protection triggered but failed to expel* ${targetLabel} — I likely need to be a group admin here, or couldn't resolve their identity in time.`,
-                                    mentions: targetMentions
-                                });
-                            } catch (e2) {}
-                        }
-                    }
-
-                    // Baseline for "activity since joining" is captured regardless of
-                    // whether the welcome card is enabled, so .rank/goodbye stats stay accurate.
-                    try { ActivityManager.registerJoin(jid, targetJid); } catch (e) {}
-
-                    const isWelcomeOn = isEnabled(data.welcome?.[jid]) || isEnabled(config.welcome?.[jid]);
-                    if (isWelcomeOn) {
-                        const memberCount = metadata?.participants?.length || 0;
-                        const caption = buildCaption({
-                            type: 'welcome',
-                            phoneNumber,
-                            groupName,
-                            memberCount,
-                            customMessage: data.customWelcome?.[jid] || null
-                        });
-
-                        // Text goes out first and unconditionally — this is the same
-                        // lightweight shape as every other alert in this file (antijoin,
-                        // antipromote, promote) and is what actually needs to land. The
-                        // image card is a nice-to-have sent as a decoupled follow-up:
-                        // building it involves a full sharp render plus a fresh WhatsApp
-                        // media-upload round-trip, which is a much bigger ask of the
-                        // socket than a text mention and appears to be what was tripping
-                        // WhatsApp's flood protection (reason 500) during join/exit
-                        // bursts. If the image fails now, it just logs and stops — no
-                        // second send is attempted on a socket that may already be dead,
-                        // which is what was silently swallowing both messages before.
-                        try {
-                            await sock.sendMessage(jid, { text: caption, mentions: targetMentions });
-                        } catch (textErr) {
-                            console.error('⚠️ [WELCOME TEXT] Failed to send:', textErr.message);
-                        }
-
-                        try {
-                            const cardImage = await generateMemberCard(sock, {
-                                type: 'welcome',
-                                targetJid,
-                                displayName: targetLabel,
-                                groupName,
-                                memberCount
-                            });
-                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: targetMentions });
-                        } catch (cardErr) {
-                            console.error('⚠️ [WELCOME CARD] Image follow-up failed (text already sent):', cardErr.message);
-                        }
-                    }
-                } else if (action === 'remove') {
-                    const isGoodbyeOn = isEnabled(data.goodbye?.[jid]) || isEnabled(config.goodbye?.[jid]);
-                    if (isGoodbyeOn) {
-                        const memberCount = metadata?.participants?.length || 0;
-                        const { activityPercent } = ActivityManager.getLeaveStats(jid, targetJid);
-                        const caption = buildCaption({
-                            type: 'goodbye',
-                            phoneNumber,
-                            groupName,
-                            memberCount,
-                            activityPercent,
-                            customMessage: data.customGoodbye?.[jid] || null
-                        });
-
-                        // Same reasoning as the welcome path above: text first and always,
-                        // image as a decoupled best-effort follow-up.
-                        try {
-                            await sock.sendMessage(jid, { text: caption, mentions: targetMentions });
-                        } catch (textErr) {
-                            console.error('⚠️ [GOODBYE TEXT] Failed to send:', textErr.message);
-                        }
-
-                        try {
-                            const cardImage = await generateMemberCard(sock, {
-                                type: 'goodbye',
-                                targetJid,
-                                displayName: targetLabel,
-                                groupName,
-                                memberCount
-                            });
-                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: targetMentions });
-                        } catch (cardErr) {
-                            console.error('⚠️ [GOODBYE CARD] Image follow-up failed (text already sent):', cardErr.message);
-                        }
-                    }
-                } else if (action === 'promote') {
-                    let handledByProtection = false;
-                    if (!isActorAuthorized) {
-                        const antipromoteMode = data.antipromote?.[jid] || 'off';
-                        const overkillArmed = isEnabled(data.overkill?.[jid]);
-                        if (antipromoteMode === 'overkill' || overkillArmed) {
-                            handledByProtection = true;
-                            try {
-                                const { triggerEmergencyPurge } = require('./plugins/gcalerts');
-                                await triggerEmergencyPurge(sock, jid, actorJid || targetJid);
-                            } catch (e) { console.error('❌ [OVERKILL PURGE ERROR]:', e.message); }
-                        } else if (antipromoteMode === 'on') {
-                            handledByProtection = true;
-                            try {
-                                // Demote both the person who got promoted AND whoever promoted them
-                                // without authorization — punishing only the victim would leave the
-                                // rogue admin free to just promote someone else again. Separate calls
-                                // so one failing (e.g. actor is the group's real creator, who can't
-                                // be demoted) doesn't block the other from going through.
-                                await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
-                                if (actorJid && actorJid !== targetJid) {
-                                    try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
-                                }
-
-                                const includeActor = actorJid && actorJid !== targetJid;
-                                const mentionList = includeActor && actorResolved ? [...targetMentions, actorJid] : targetMentions;
-                                const actorLine = includeActor
-                                    ? (actorResolved ? ` @${actorJid.split('@')[0]} (the promoter) was also demoted.` : ` The promoter (ID unresolved) was also demoted.`)
-                                    : '';
-                                await sock.sendMessage(jid, {
-                                    text: `🛡️ *Anti-Promote Protection!* Unauthorized promotion of ${targetLabel} was reverted.${actorLine}`,
-                                    mentions: mentionList
-                                });
-                            } catch (e) { console.error('❌ [ANTIPROMOTE REVERT ERROR]:', e.message); }
-                        }
-                    }
-
-                    if (!handledByProtection) {
-                        const isPromoteOn = isEnabled(data.promote?.[jid]) || isEnabled(config.promote?.[jid]);
-                        if (isPromoteOn) {
-                            await sock.sendMessage(jid, {
-                                text: `👑 *PROMOTION ALERT!*\n\n🎉 ${targetLabel} promoted to Admin in *${groupName}*!`,
-                                mentions: targetMentions
-                            });
-                        }
-                    }
-                } else if (action === 'demote') {
-                    let handledByProtection = false;
-                    if (!isActorAuthorized) {
-                        const antidemoteMode = data.antidemote?.[jid] || 'off';
-                        const overkillArmed = isEnabled(data.overkill?.[jid]);
-                        if (antidemoteMode === 'overkill' || overkillArmed) {
-                            handledByProtection = true;
-                            try {
-                                const { triggerEmergencyPurge } = require('./plugins/gcalerts');
-                                await triggerEmergencyPurge(sock, jid, actorJid || targetJid);
-                            } catch (e) { console.error('❌ [OVERKILL PURGE ERROR]:', e.message); }
-                        } else if (antidemoteMode === 'on') {
-                            handledByProtection = true;
-                            try {
-                                // Restore the demoted victim's admin status AND demote whoever
-                                // demoted them without authorization.
-                                await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
-                                if (actorJid && actorJid !== targetJid) {
-                                    try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
-                                }
-
-                                const includeActor = actorJid && actorJid !== targetJid;
-                                const mentionList = includeActor && actorResolved ? [...targetMentions, actorJid] : targetMentions;
-                                const actorLine = includeActor
-                                    ? (actorResolved ? ` @${actorJid.split('@')[0]} (the demoter) was also demoted.` : ` The demoter (ID unresolved) was also demoted.`)
-                                    : '';
-                                await sock.sendMessage(jid, {
-                                    text: `🛡️ *Anti-Demote Protection!* Unauthorized demotion of ${targetLabel} was reverted.${actorLine}`,
-                                    mentions: mentionList
-                                });
-                            } catch (e) { console.error('❌ [ANTIDEMOTE REVERT ERROR]:', e.message); }
-                        }
-                    }
-
-                    if (!handledByProtection) {
-                        const isDemoteOn = isEnabled(data.demote?.[jid]) || isEnabled(config.demote?.[jid]);
-                        if (isDemoteOn) {
-                            await sock.sendMessage(jid, {
-                                text: `🛡️ *DEMOTION ALERT!*\n\n👋 ${targetLabel} demoted to Member in *${groupName}*.`,
-                                mentions: targetMentions
-                            });
-                        }
-                    }
-                }
-
-                } catch (participantErr) {
-                    console.error(`❌ [GROUP-PARTICIPANTS.UPDATE] Failed processing ${targetJid} (${action}) in ${jid}:`, participantErr.message, '\n', participantErr.stack);
-                }
-            }
-        } catch (e) {
-            console.error('❌ [GROUP-PARTICIPANTS.UPDATE] Handler crashed:', e.message, '\n', e.stack);
-        }
-    });
-
-    sock.ev.on('messages.update', async (updates) => {
-        try {
-            for (const update of updates) {
-                if (update.update.message === null) {
-                    const deletedMsgId = update.key.id;
-                    const jid = update.key.remoteJid;
-                    if (global.messageStore && global.messageStore[deletedMsgId]) {
-                        const originalMsg = global.messageStore[deletedMsgId];
-                        const revoker = update.key.participant || update.key.remoteJid || '';
-                        await handleDeletion(sock, originalMsg, jid, revoker);
-                    }
-                }
-            }
-        } catch (e) {}
-    });
+    sock.ev.on('messages.update', (updates) => handleMessagesUpdate(sock, updates));
 
     sock.ev.on('messages.upsert', async (chatUpdate) => {
         // Process every message in the batch, not just the first. A single
@@ -911,5 +1040,8 @@ module.exports = {
     getPairingStatus,
     restartBot,
     clearAuthSession,
-    getActiveSocket
+    getActiveSocket,
+    dispatchGroupParticipantsUpdate,
+    handleMessagesUpdate,
+    cacheIncomingMessage
 };
