@@ -17,6 +17,7 @@ const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handle
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 const { recordMessage } = require('./SummaryManager');
 const ActivityManager = require('./ActivityManager');
+const Sharingan = require('./SharinganManager');
 
 // Custom Message Filter Manager
 let handleFilterInterceptor;
@@ -278,6 +279,25 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                          (senderPhoneJid && Array.isArray(config.banned) && config.banned.includes(senderPhoneJid));
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
+
+        // ─── SHARINGAN ───────────────────────────────────────────────
+        // Past the line above, a fromMe message is one the owner really sent
+        // (the bot's own sends were dropped). It resets the AFK quiet-timer.
+        if (msg.key.fromMe) {
+            try { Sharingan.noteOwnerActivity(sock, msg.key.id); } catch (e) {}
+        }
+        // While the AFK assistant is live it answers DMs from anyone who isn't
+        // owner/sudo. Prefixed commands pass through untouched so a public bot
+        // still works in DMs.
+        if (!isGroup && !msg.key.fromMe && !isAuthorized) {
+            const handledByAfk = Sharingan.handleIncomingDM(sock, msg, {
+                senderJid: senderPhoneJid || senderJid,
+                text: trimmedMessageBody,
+                isCommand: !!trimmedMessageBody && trimmedMessageBody.startsWith(activePrefix),
+                hasContent: !!trimmedMessageBody || hasTrackableMediaContent(rawMsg)
+            });
+            if (handledByAfk) return;
+        }
 
         // ─── LEVEL/RANK TRACKING (persisted, powers .rank / .leaderboard / .levelup) ───
         // Counts either a real text/caption body (not a prefixed command) OR
