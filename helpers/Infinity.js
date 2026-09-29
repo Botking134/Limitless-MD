@@ -122,28 +122,46 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                 }
             }
             if (config.autoreactstatus === 'on') {
+                // ❤️ is WhatsApp's own built-in default status-react (the one you
+                // get from the app's quick-tap react), so it's guaranteed to be
+                // accepted — used as both the fallback default and the retry
+                // target if a custom emoji fails, in case WhatsApp is rejecting
+                // that specific emoji rather than the react call itself failing
+                // for an unrelated (e.g. connection) reason.
+                const WHATSAPP_DEFAULT_REACT = '❤️';
+                const primaryEmoji = config.statusemoji || WHATSAPP_DEFAULT_REACT;
+                let statusSender = msg.key.participant || msg.key.remoteJid;
+                // The status poster can come through as an @lid JID rather than
+                // a phone JID (same LID rollout we've been resolving everywhere
+                // else this session) — resolve it first, since there's a real
+                // chance WhatsApp's react API only accepts a phone JID here.
+                if (statusSender?.endsWith('@lid')) {
+                    try { statusSender = await getPhoneJid(sock, statusSender, null); } catch (e) {}
+                }
+                const botJid = normalizeToJid(sock.user?.id || '');
+                const statusJidList = [statusSender, botJid].filter(Boolean);
+
+                const attemptReact = (emoji) => sock.sendMessage('status@broadcast',
+                    { react: { text: emoji, key: msg.key } },
+                    { statusJidList }
+                );
+
                 try {
-                    const emoji = config.statusemoji || '❄';
-                    let statusSender = msg.key.participant || msg.key.remoteJid;
-                    // The status poster can come through as an @lid JID rather than
-                    // a phone JID (same LID rollout we've been resolving everywhere
-                    // else this session) — resolve it first, since there's a real
-                    // chance WhatsApp's react API only accepts a phone JID here.
-                    if (statusSender?.endsWith('@lid')) {
-                        try { statusSender = await getPhoneJid(sock, statusSender, null); } catch (e) {}
-                    }
-                    const botJid = normalizeToJid(sock.user?.id || '');
                     // Reacting to a status is a broadcast, not a DM: Baileys needs
                     // the target left as 'status@broadcast' plus an explicit
                     // statusJidList (poster + us) telling it who to deliver the
                     // reaction to. Sending straight to statusSender (as before)
                     // isn't a call this API accepts for status reactions.
-                    await sock.sendMessage('status@broadcast',
-                        { react: { text: emoji, key: msg.key } },
-                        { statusJidList: [statusSender, botJid].filter(Boolean) }
-                    );
+                    await attemptReact(primaryEmoji);
                 } catch (e) {
-                    console.error('⚠️ [AUTOREACTSTATUS] React failed:', e.message);
+                    console.error(`⚠️ [AUTOREACTSTATUS] React with "${primaryEmoji}" failed:`, e.message);
+                    if (primaryEmoji !== WHATSAPP_DEFAULT_REACT) {
+                        try {
+                            await attemptReact(WHATSAPP_DEFAULT_REACT);
+                        } catch (e2) {
+                            console.error('⚠️ [AUTOREACTSTATUS] Fallback ❤️ react also failed:', e2.message);
+                        }
+                    }
                 }
             }
             return;
