@@ -406,6 +406,11 @@ async function searchStickerly(query) {
                     const errMsg = String(data.error.errorMessage ?? '').toLowerCase();
                     const isRealBlock = ['403', '429'].includes(errCode) ||
                         /rate.?limit|forbidden|blocked|too many|unauthor/.test(errMsg);
+                    // 404 (and similar "no such resource" codes) is a definitive
+                    // answer, not a glitch — retrying it just burns a request and
+                    // a delay for the same result. Only genuinely ambiguous/server
+                    // errors (5xx, unlabeled) get the transient retry below.
+                    const isNoMatch = errCode === '404';
 
                     if (isRealBlock) {
                         console.error(`⚠️ [STICKERLY] "${query}" API error response (block/rate-limit):`, JSON.stringify(data.error));
@@ -413,6 +418,11 @@ async function searchStickerly(query) {
                         blockedErr.stickerlyBlocked = true;
                         blockedErr.raw = data.error;
                         throw blockedErr;
+                    }
+
+                    if (isNoMatch) {
+                        console.error(`⚠️ [STICKERLY] "${query}" no match (404):`, JSON.stringify(data.error));
+                        break; // move straight to the next endpoint / fallback, no retry
                     }
 
                     // Generic/transient server error (e.g. bare 500 internalError).
@@ -466,34 +476,41 @@ async function searchStickify(query) {
 }
 
 // ─── COMBINED EXACT-METADATA PACK FETCHER ─────────────────────────
-// Uses the literal query only — auto-widening to "<query> stickers" /
-// "<query> sticker pack" has been dropped for now so we're not tripling
-// request volume against Sticker.ly while we're unsure whether tonight's
-// errors were transient server-side 500s or an actual block. A short
-// delay is added before falling back to Stickify so the two providers
-// aren't hit back-to-back either.
+// Tries the literal query first (exact pack titles like "Naruto stickers
+// bread4life" match this directly). If — and only if — that comes back as
+// a genuine no-match (404, or a real response with 0 packs), we widen to
+// more search-friendly phrasing for generic single-word queries (e.g.
+// "gojo" -> "gojo stickers"), since Sticker.ly's search is picky about
+// exact title-ish phrasing. A real block/rate-limit (403/429) short-
+// circuits immediately instead of burning the remaining variants.
+// Each variant is spaced out rather than fired back-to-back.
 async function fetchStickerPack(query) {
     const trimmed = query.trim();
+    const variants = [...new Set([
+        trimmed,
+        `${trimmed} stickers`,
+        `${trimmed} sticker pack`
+    ])];
 
-    try {
-        const pack = await searchStickerly(trimmed);
-        if (pack && pack.urls.length) return pack;
-    } catch (err) {
-        if (err.stickerlyBlocked) {
-            // Don't burn more requests against an active block/rate-limit —
-            // that only makes it worse. Bubble up so the caller can tell
-            // the user this isn't a "no results" situation.
-            const e = new Error('Sticker.ly is rejecting requests right now');
-            e.stickerlyBlocked = true;
-            e.raw = err.raw;
-            throw e;
+    for (let i = 0; i < variants.length; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 800));
+
+        try {
+            const pack = await searchStickerly(variants[i]);
+            if (pack && pack.urls.length) return pack;
+        } catch (err) {
+            if (err.stickerlyBlocked) {
+                // Don't burn more requests against an active block/rate-limit —
+                // that only makes it worse. Bubble up so the caller can tell
+                // the user this isn't a "no results" situation.
+                const e = new Error('Sticker.ly is rejecting requests right now');
+                e.stickerlyBlocked = true;
+                e.raw = err.raw;
+                throw e;
+            }
+            // Any other error for this variant: fall through and try the next one.
         }
     }
-
-    await new Promise(r => setTimeout(r, 700));
-
-    const pack2 = await searchStickify(trimmed);
-    if (pack2 && pack2.urls.length) return pack2;
 
     return null;
 }
