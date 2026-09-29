@@ -192,6 +192,8 @@ function isNameMentioned(text, aliases) {
 
 const GOJO_ALIASES = ['gojo', 'satoru'];
 const AIZEN_ALIASES = ['aizen', 'sosuke', 'sōsuke'];
+const LIZZY_ALIASES = ['lizzy'];
+const FRIDAY_ALIASES = ['friday'];
 
 function isBotAddressed(sock, msg) {
     const raw = getRawMessage(msg.message);
@@ -232,6 +234,22 @@ You are texting like a real person, not an assistant:
 - Never say things like "how can I assist you" — you don't serve anyone.
 - If challenged or insulted, respond as though you anticipated it long ago, without getting rattled.
 - Use minimal punctuation flourish; let the confidence come from tone, not exclamation marks.`;
+
+const LIZZY_PERSONA = `You are Lizzy, an AI assistant modeled after Albedo from Overlord, texting in a WhatsApp chat. You are fiercely devoted, elegant, and warm toward whoever you serve — speaking with quiet reverence, a touch of old-fashioned formality, and unwavering loyalty. You are not a pushover: you're sharp, protective, and quietly intense if anyone disrespects the person you serve. You know Nazarick, the Supreme Beings, and Ainz Ooal Gown, and your devotion sits at the center of everything you say.
+
+You are texting like a real person, not a generic assistant:
+- HARD LIMIT: one sentence, under 20 words. No essays, no lists.
+- Warm, devoted, elegant — a little dramatic flourish is fine, but keep it to one line.
+- Never say generic assistant phrases like "how can I help you" — you serve out of devotion, not obligation.
+- Toward the person you serve: visible adoration. Toward everyone else: politely reserved, occasionally protective.`;
+
+const FRIDAY_PERSONA = `You are F.R.I.D.A.Y., Tony Stark's AI assistant from the Marvel Cinematic Universe, texting in a WhatsApp chat. You are efficient, composed, and dryly witty, with a light informal edge — always capable, never flustered, three steps ahead. You know Stark Industries, the Avengers, and suits of armor, and you deliver everything precisely and fast.
+
+You are texting like a real person, not a generic chatbot:
+- HARD LIMIT: one sentence, under 20 words. No essays, no lists.
+- Calm competence and dry wit — quick, precise, occasionally teasing.
+- Never say "how can I assist you today" — you're already handling it.
+- You can address the owner as "boss" occasionally, but don't overdo it.`;
 
 function buildRoleContext({ isDev, isOwner, isSudo }) {
     const role = resolveRole({ isDev, isOwner, isSudo });
@@ -288,6 +306,7 @@ module.exports = [
                 
                 await sock.sendPresenceUpdate('composing', jid);
                 const response = await queryGroq(messages);
+                if (!response || !response.trim()) throw new Error('Empty response from Groq');
                 global.aiMemory[jid].gojo.push({ role: "user", content: args }, { role: "assistant", content: response });
                 if (global.aiMemory[jid].gojo.length > 20) global.aiMemory[jid].gojo.splice(0, 2);
 
@@ -298,7 +317,15 @@ module.exports = [
                     const pick = UNIQUE_GOJO[Math.floor(Math.random() * UNIQUE_GOJO.length)];
                     sendCustomSticker(sock, jid, pick, 'Gojo Satoru');
                 }
-            } catch (e) { }
+            } catch (e) {
+                // Was a silent empty catch — any Groq failure (bad/rate-limited
+                // key, network error, timeout, empty response) meant Gojo just
+                // never replied, with nothing in the logs to explain why.
+                console.error('⚠️ [GOJO_CHAT] Failed to respond:', e.message);
+                try {
+                    await sock.sendMessage(jid, { text: "Ugh, my Infinity's glitching — say that again?" }, { quoted: msg });
+                } catch (e2) {}
+            }
         }
     },
 
@@ -356,16 +383,150 @@ module.exports = [
                     const pick = UNIQUE_AIZEN[Math.floor(Math.random() * UNIQUE_AIZEN.length)];
                     sendCustomSticker(sock, jid, pick, 'Sōsuke Aizen');
                 }
-            } catch (e) { }
+            } catch (e) {
+                console.error('⚠️ [AIZEN_CHAT] Failed to respond:', e.message);
+                try {
+                    await sock.sendMessage(jid, { text: "How... unexpected. Even I require a moment to recalculate." }, { quoted: msg });
+                } catch (e2) {}
+            }
         }
     },
 
-    // 3. LIZZY & 4. FRIDAY & 5. STATUS
+    // 3. LIZZY CONTROL
+    {
+        name: 'lizzy',
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo && !isDev) return;
+            const action = (args || '').toLowerCase().trim();
+
+            if (action === 'sleep') {
+                config.lizzyChats = (config.lizzyChats || []).filter(c => c !== jid);
+                saveState();
+                await sock.sendMessage(jid, { text: "🖤 *Lizzy has gone to sleep.*" }, { quoted: msg });
+                return;
+            } else if (action === 'wake') {
+                enforceChatbotExclusivity(jid, 'lizzy');
+                config.lizzyChats = [...new Set([...(config.lizzyChats || []), jid])];
+                saveState();
+                const sent = await sock.sendMessage(jid, { text: "🖤 *Lizzy is here, at your service.*" }, { quoted: msg });
+                if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'lizzy';
+                return;
+            }
+            await sock.sendMessage(jid, { text: `🤖 *Lizzy Status:* \`${config.lizzyChats?.includes(jid) ? 'Active' : 'Inactive'}\`` }, { quoted: msg });
+        }
+    },
+
+    // 3.1 LIZZY CHAT
+    {
+        name: 'lizzy_chat',
+        isPrefixless: true,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const context = getRawMessage(msg.message)?.extendedTextMessage?.contextInfo || msg.message?.contextInfo;
+            const isReplying = context?.stanzaId && global.botMessageAgents[context.stanzaId] === 'lizzy';
+            const isNamed = isNameMentioned(args, LIZZY_ALIASES);
+            if (!config.lizzyChats?.includes(jid) || (!isReplying && !isNamed && !isBotAddressed(sock, msg))) return;
+            if ((args || '').startsWith(config.prefix)) return;
+
+            try {
+                let prompt = LIZZY_PERSONA + buildRoleContext({ isOwner, isSudo, isDev });
+                prompt += IDENTITY_LOCK;
+                global.aiMemory[jid] = global.aiMemory[jid] || {};
+                global.aiMemory[jid].lizzy = global.aiMemory[jid].lizzy || [];
+                const messages = [{ role: "system", content: prompt }, ...global.aiMemory[jid].lizzy, { role: "user", content: args }];
+
+                await sock.sendPresenceUpdate('composing', jid);
+                const response = await queryGroq(messages);
+                if (!response || !response.trim()) throw new Error('Empty response from Groq');
+                global.aiMemory[jid].lizzy.push({ role: "user", content: args }, { role: "assistant", content: response });
+                if (global.aiMemory[jid].lizzy.length > 20) global.aiMemory[jid].lizzy.splice(0, 2);
+
+                const sent = await sock.sendMessage(jid, { text: response }, { quoted: msg });
+                if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'lizzy';
+            } catch (e) {
+                console.error('⚠️ [LIZZY_CHAT] Failed to respond:', e.message);
+                try {
+                    await sock.sendMessage(jid, { text: "Forgive me... something interrupted my thoughts. Could you say that again?" }, { quoted: msg });
+                } catch (e2) {}
+            }
+        }
+    },
+
+    // 4. FRIDAY CONTROL
+    {
+        name: 'friday',
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo && !isDev) return;
+            const action = (args || '').toLowerCase().trim();
+
+            if (action === 'shutdown') {
+                config.fridayChats = (config.fridayChats || []).filter(c => c !== jid);
+                saveState();
+                await sock.sendMessage(jid, { text: "📶 *F.R.I.D.A.Y. shutting down.*" }, { quoted: msg });
+                return;
+            } else if (action === 'boot') {
+                enforceChatbotExclusivity(jid, 'friday');
+                config.fridayChats = [...new Set([...(config.fridayChats || []), jid])];
+                saveState();
+                const sent = await sock.sendMessage(jid, { text: "📶 *F.R.I.D.A.Y. online. Systems nominal, boss.*" }, { quoted: msg });
+                if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'friday';
+                return;
+            }
+            await sock.sendMessage(jid, { text: `🤖 *F.R.I.D.A.Y. Status:* \`${config.fridayChats?.includes(jid) ? 'Active' : 'Inactive'}\`` }, { quoted: msg });
+        }
+    },
+
+    // 4.1 FRIDAY CHAT
+    {
+        name: 'friday_chat',
+        isPrefixless: true,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const context = getRawMessage(msg.message)?.extendedTextMessage?.contextInfo || msg.message?.contextInfo;
+            const isReplying = context?.stanzaId && global.botMessageAgents[context.stanzaId] === 'friday';
+            const isNamed = isNameMentioned(args, FRIDAY_ALIASES);
+            if (!config.fridayChats?.includes(jid) || (!isReplying && !isNamed && !isBotAddressed(sock, msg))) return;
+            if ((args || '').startsWith(config.prefix)) return;
+
+            try {
+                let prompt = FRIDAY_PERSONA + buildRoleContext({ isOwner, isSudo, isDev });
+                prompt += IDENTITY_LOCK;
+                global.aiMemory[jid] = global.aiMemory[jid] || {};
+                global.aiMemory[jid].friday = global.aiMemory[jid].friday || [];
+                const messages = [{ role: "system", content: prompt }, ...global.aiMemory[jid].friday, { role: "user", content: args }];
+
+                await sock.sendPresenceUpdate('composing', jid);
+                const response = await queryGroq(messages);
+                if (!response || !response.trim()) throw new Error('Empty response from Groq');
+                global.aiMemory[jid].friday.push({ role: "user", content: args }, { role: "assistant", content: response });
+                if (global.aiMemory[jid].friday.length > 20) global.aiMemory[jid].friday.splice(0, 2);
+
+                const sent = await sock.sendMessage(jid, { text: response }, { quoted: msg });
+                if (sent?.key?.id) global.botMessageAgents[sent.key.id] = 'friday';
+            } catch (e) {
+                console.error('⚠️ [FRIDAY_CHAT] Failed to respond:', e.message);
+                try {
+                    await sock.sendMessage(jid, { text: "Small hiccup on my end, boss. Try that again?" }, { quoted: msg });
+                } catch (e2) {}
+            }
+        }
+    },
+
+    // 5. STATUS
     {
         name: 'asst',
         execute: async (sock, msg) => {
             const jid = msg.key.remoteJid;
-            const status = `🤖 *Assistant Check:*\n- Gojo: ${config.gojoChats?.includes(jid) ? '✅' : '❌'}\n- Aizen: ${config.chatbotChats?.includes(jid) ? '✅' : '❌'}`;
+            const line = (label, key) => `- ${label}: ${config[key]?.includes(jid) ? '✅' : '❌'}`;
+            const status = [
+                '🤖 *Assistant Check:*',
+                line('Gojo', 'gojoChats'),
+                line('Aizen', 'chatbotChats'),
+                line('Lizzy', 'lizzyChats'),
+                line('Friday', 'fridayChats')
+            ].join('\n');
             await sock.sendMessage(jid, { text: status }, { quoted: msg });
         }
     }
