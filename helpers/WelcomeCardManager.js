@@ -27,18 +27,36 @@ const AVATAR_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const avatarCache = new Map(); // jid -> { buffer, expiresAt }
 
 async function fetchAvatarBuffer(sock, jid) {
+    // Was a single silent catch around everything, so a blank circle gave zero
+    // way to tell "they've restricted who sees their picture" (expected, not
+    // fixable) apart from "we're querying the wrong JID" or a genuine bug.
+    let url;
     try {
-        let url;
+        url = await sock.profilePictureUrl(jid, 'image');
+    } catch (e) {
         try {
-            url = await sock.profilePictureUrl(jid, 'image');
-        } catch (e) {
             url = await sock.profilePictureUrl(jid, 'preview');
+        } catch (e2) {
+            // WhatsApp throws here specifically when the person's privacy
+            // setting hides their picture from us (or they have none set) —
+            // this is the expected, unfixable case, so it's logged at a
+            // lower severity than an actual failure below.
+            console.error(`ℹ️ [WELCOME CARD] No profile picture available for ${jid} (privacy setting or none set): ${e2.message}`);
+            return null;
         }
-        if (!url) return null;
+    }
+    if (!url) {
+        console.error(`ℹ️ [WELCOME CARD] profilePictureUrl returned empty for ${jid}`);
+        return null;
+    }
 
+    try {
         const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 10000 });
         return Buffer.from(res.data);
     } catch (e) {
+        // Unlike the privacy case above, we DID get a URL — this is a real
+        // failure (network, expired URL, etc.), worth knowing about.
+        console.error(`⚠️ [WELCOME CARD] Got a picture URL for ${jid} but failed to download it:`, e.message);
         return null;
     }
 }
@@ -84,6 +102,11 @@ async function buildCircularAvatar(sock, jid) {
 async function generateMemberCard(sock, { type, targetJid, displayName, groupName, memberCount }) {
     const theme = THEMES[type] || THEMES.welcome;
     const avatarBuffer = await buildCircularAvatar(sock, targetJid);
+    // displayName arrives as e.g. "~Infinity (@2347059...)" or "~Infinity (ID
+    // unresolved)" — the parenthetical is useful in the caption/mention text
+    // but redundant and cluttered baked directly into the graphic, so it's
+    // stripped here specifically for the image's name line only.
+    const imageName = String(displayName || '').replace(/\s*\([^)]*\)\s*$/, '').trim() || displayName;
 
     const bgSvg = Buffer.from(`
         <svg width="${WIDTH}" height="${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
@@ -113,7 +136,7 @@ async function generateMemberCard(sock, { type, targetJid, displayName, groupNam
                 .count { font-family: Arial, sans-serif; font-size: 26px; fill: #b8bfd1; }
             </style>
             <text x="${avatarX + AVATAR_SIZE + 60}" y="220" class="label">${theme.label}</text>
-            <text x="${avatarX + AVATAR_SIZE + 60}" y="290" class="name">${escapeXml(displayName)}</text>
+            <text x="${avatarX + AVATAR_SIZE + 60}" y="290" class="name">${escapeXml(imageName)}</text>
             <text x="${avatarX + AVATAR_SIZE + 60}" y="335" class="group">${escapeXml(groupName)}</text>
             <text x="${avatarX + AVATAR_SIZE + 60}" y="378" class="count">Members now: ${memberCount}</text>
         </svg>
