@@ -184,55 +184,6 @@ async function handleViewOnce(sock, msg) {
             return;
         }
 
-        // 2. Check if this is a reply to a ViewOnce (VVS feature)
-        const contextInfo = rawMsg?.contextInfo ||
-                            rawMsg?.extendedTextMessage?.contextInfo ||
-                            rawMsg?.imageMessage?.contextInfo ||
-                            rawMsg?.videoMessage?.contextInfo;
-        if (!contextInfo) return;
-
-        const quotedMsg = contextInfo.quotedMessage;
-        if (!quotedMsg) return;
-
-        const rawQuoted = getRawMessage(quotedMsg);
-        const quotedViewOnce = rawQuoted?.viewOnceMessageV2?.message ||
-                               rawQuoted?.viewOnceMessage?.message ||
-                               rawQuoted?.viewOnceMessageV2Extension?.message;
-        if (!quotedViewOnce) return;
-
-        const viewOnceMediaQuoted = quotedViewOnce.imageMessage ||
-                                    quotedViewOnce.videoMessage ||
-                                    quotedViewOnce.audioMessage;
-        if (!viewOnceMediaQuoted) return;
-
-        const replyText = rawMsg.conversation || rawMsg.extendedTextMessage?.text || '';
-        const vvsTrigger = config.vvs || 'wow';
-
-        if (replyText.trim().toLowerCase() !== vvsTrigger.toLowerCase()) return;
-
-        const ownerJid = config.ownerJid || config.ownerLid;
-        if (!ownerJid) return;
-
-        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-        const mediaType = quotedViewOnce.imageMessage ? 'image' :
-                          (quotedViewOnce.videoMessage ? 'video' : 'audio');
-
-        const stream = await downloadContentFromMessage(viewOnceMediaQuoted, mediaType);
-        let buffer = Buffer.from([]);
-        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-        const caption = viewOnceMediaQuoted.caption || '🔮 *ViewOnce Decrypted*';
-
-        await sock.sendMessage(ownerJid, {
-            [mediaType]: buffer,
-            mimetype: viewOnceMediaQuoted.mimetype || 'application/octet-stream',
-            caption: caption
-        });
-
-        try {
-            await sock.sendMessage(jid, { delete: msg.key });
-        } catch (e) { /* ignore */ }
-
     } catch (err) {
         console.error('❌ [VIEWONCE] handleViewOnce failed:', err.message);
     }
