@@ -7,7 +7,7 @@ const config = require('./config');
 const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('./plugins/devs');
 const { handleDeletion } = require('./helpers/log');
 const { handleIncomingMessage } = require('./helpers/Infinity');
-const { normalizeToJid, getPhoneJid, loadState, warmLidCache } = require('./stateManager');
+const { normalizeToJid, getPhoneJid, loadState, warmLidCache, getPushName } = require('./stateManager');
 const ActivityManager = require('./helpers/ActivityManager');
 const BotContext = require('./helpers/BotContext');
 const { generateMemberCard, buildCaption } = require('./helpers/WelcomeCardManager');
@@ -328,8 +328,30 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                 if (!rawTarget) continue;
 
                 let targetJid = await getPhoneJid(sock, rawTarget, jid, metadata);
-                let targetResolved = true;
-                if (!targetJid || targetJid.endsWith('@lid')) {
+                let targetResolved = !!targetJid && !targetJid.endsWith('@lid');
+
+                // A brand-new join can fire before WhatsApp's own backend has made
+                // that member's LID queryable yet — getPhoneJid's single attempt
+                // (cached metadata, then one live findUserId call) genuinely can't
+                // do anything about that; it needs a moment, not a smarter lookup.
+                // Only worth the delay for 'add': for remove/promote/demote the
+                // member already existed in the group before this event, so a
+                // fresh-join race doesn't apply the same way.
+                if (!targetResolved && action === 'add') {
+                    for (const waitMs of [1500, 3000]) {
+                        await new Promise(r => setTimeout(r, waitMs));
+                        let freshMetadata = null;
+                        try { freshMetadata = await sock.groupMetadata(jid); } catch (e) { /* keep the stale one below */ }
+                        targetJid = await getPhoneJid(sock, rawTarget, jid, freshMetadata || metadata);
+                        targetResolved = !!targetJid && !targetJid.endsWith('@lid');
+                        if (targetResolved) {
+                            if (freshMetadata) { metadata = freshMetadata; warmLidCache(freshMetadata); }
+                            break;
+                        }
+                    }
+                }
+
+                if (!targetResolved) {
                     // Same fix as the actor lookup above — an unresolved @lid JID must not
                     // reach sendMessage()/mentions, since that's what was triggering the
                     // reason-500 disconnects on join/exit. But building a fake "phone number"
@@ -339,12 +361,21 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                     // genuinely fails, targetResolved goes false and every message below
                     // switches to a plain, non-mentioning label instead of a fabricated one.
                     targetJid = rawTarget.split(':')[0].split('@')[0] + '@s.whatsapp.net';
-                    targetResolved = false;
-                    console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve target LID ${rawTarget} to a real phone JID in ${jid}.`);
+                    console.error(`⚠️ [GROUP-PARTICIPANTS.UPDATE] Could not resolve target LID ${rawTarget} to a real phone JID in ${jid}${action === 'add' ? ' (retried twice with delay, still unresolved)' : ''}.`);
                 }
 
                 const phoneNumber = targetJid.split('@')[0];
-                const targetLabel = targetResolved ? `@${phoneNumber}` : 'a member (ID unresolved)';
+                // A pushName only ever gets learned from a message someone has
+                // actually sent (see stateManager.js's pushname cache) — a brand
+                // new join with zero prior interaction genuinely has nothing to
+                // look up here regardless. But a returning member (rejoining, or
+                // someone the bot has seen speak in another group before) often
+                // does have one cached, even on a run where resolution itself
+                // fails — this is a separate, better source than targetResolved.
+                const cachedName = getPushName(rawTarget) || (targetResolved ? getPushName(targetJid) : '');
+                const targetLabel = targetResolved
+                    ? (cachedName ? `~${cachedName} (@${phoneNumber})` : `@${phoneNumber}`)
+                    : (cachedName ? `~${cachedName} (ID unresolved)` : 'a member (ID unresolved)');
                 const targetMentions = targetResolved ? [targetJid] : [];
 
                 // Username-rendering identity for the @mention (see findParticipantLid).
