@@ -433,23 +433,12 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                             customMessage: data.customWelcome?.[jid] || null
                         });
 
-                        // Text goes out first and unconditionally — this is the same
-                        // lightweight shape as every other alert in this file (antijoin,
-                        // antipromote, promote) and is what actually needs to land. The
-                        // image card is a nice-to-have sent as a decoupled follow-up:
-                        // building it involves a full sharp render plus a fresh WhatsApp
-                        // media-upload round-trip, which is a much bigger ask of the
-                        // socket than a text mention and appears to be what was tripping
-                        // WhatsApp's flood protection (reason 500) during join/exit
-                        // bursts. If the image fails now, it just logs and stops — no
-                        // second send is attempted on a socket that may already be dead,
-                        // which is what was silently swallowing both messages before.
-                        try {
-                            await sendPillAlert(sock, jid, (p) => ({ text: buildWelcome(p), mentions: p ? pillMentions : targetMentions }), hasPill);
-                        } catch (textErr) {
-                            console.error('⚠️ [WELCOME TEXT] Failed to send:', textErr.message);
-                        }
-
+                        // One image, captioned with the welcome text — was two separate
+                        // sends (a text message, then a bare uncaptioned image right
+                        // after), which is why joins were showing up as two different
+                        // bubbles instead of one card. Image generation still happens
+                        // before the send attempt(s), so a pill-mention retry (see
+                        // sendPillAlert) doesn't re-render the graphic twice.
                         try {
                             const cardImage = await generateMemberCard(sock, {
                                 type: 'welcome',
@@ -458,9 +447,14 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                                 groupName,
                                 memberCount
                             });
-                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: targetMentions });
+                            await sendPillAlert(sock, jid, (p) => ({
+                                image: cardImage,
+                                mimetype: 'image/jpeg',
+                                caption: buildWelcome(p),
+                                mentions: p ? pillMentions : targetMentions
+                            }), hasPill);
                         } catch (cardErr) {
-                            console.error('⚠️ [WELCOME CARD] Image follow-up failed (text already sent):', cardErr.message);
+                            console.error('⚠️ [WELCOME CARD] Failed to send:', cardErr.message);
                         }
                     }
                 } else if (action === 'remove') {
@@ -477,14 +471,8 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                             customMessage: data.customGoodbye?.[jid] || null
                         });
 
-                        // Same reasoning as the welcome path above: text first and always,
-                        // image as a decoupled best-effort follow-up.
-                        try {
-                            await sendPillAlert(sock, jid, (p) => ({ text: buildGoodbye(p), mentions: p ? pillMentions : targetMentions }), hasPill);
-                        } catch (textErr) {
-                            console.error('⚠️ [GOODBYE TEXT] Failed to send:', textErr.message);
-                        }
-
+                        // Same merge as the welcome path above: one captioned image
+                        // instead of a separate text message plus a bare image.
                         try {
                             const cardImage = await generateMemberCard(sock, {
                                 type: 'goodbye',
@@ -493,9 +481,14 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                                 groupName,
                                 memberCount
                             });
-                            await sock.sendMessage(jid, { image: cardImage, mimetype: 'image/jpeg', mentions: targetMentions });
+                            await sendPillAlert(sock, jid, (p) => ({
+                                image: cardImage,
+                                mimetype: 'image/jpeg',
+                                caption: buildGoodbye(p),
+                                mentions: p ? pillMentions : targetMentions
+                            }), hasPill);
                         } catch (cardErr) {
-                            console.error('⚠️ [GOODBYE CARD] Image follow-up failed (text already sent):', cardErr.message);
+                            console.error('⚠️ [GOODBYE CARD] Failed to send:', cardErr.message);
                         }
                     }
                 } else if (action === 'promote') {
