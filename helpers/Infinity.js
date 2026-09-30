@@ -7,7 +7,7 @@ const DEV_MENTION_REACTION_EMOJIS = ['🕷', '🥷', '🌪', '🕸', '⚡', '♾
 const DEV_MENTION_REACTION_INTERVAL_MS = 2000;
 const { DEV_LIDS, DEV_JIDS, DEV_PHONE_JIDS } = require('../plugins/devs');
 const commands = require('../commands');
-const { getPhoneJid, normalizeToJid, saveState } = require('../stateManager');
+const { getPhoneJid, normalizeToJid, saveState, recordPushName } = require('../stateManager');
 const { handleViewOnce } = require('./log');
 
 // Sub-module imports
@@ -172,6 +172,16 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         const senderNumber = senderJid.split('@')[0];
         const isGroup = jid.endsWith('@g.us');
         const cleanChatJid = cleanJid(jid);
+
+        // A display name only ever arrives attached to a message like this —
+        // it's never independently queryable. Recording it here means later
+        // actions that only have a bare JID (addowner/setsudo on a reply,
+        // a join event with no message history yet) can show a name instead
+        // of a raw number. Cheap: in-memory update + debounced disk flush,
+        // never a live lookup, so this adds no latency to the hot path.
+        if (msg.pushName && !msg.key.fromMe) {
+            try { recordPushName(senderJid, msg.pushName); } catch (e) {}
+        }
 
         const { rawMsg, body, trimmedMessageBody, lowerMessage } = extractBodyAndTrim(msg);
 
