@@ -13,6 +13,7 @@ const DEV_LIDS = [
 
 const STATE_PATH = path.join(__dirname, 'storage', 'state.json');
 const LID_CACHE_PATH = path.join(__dirname, 'storage', 'lid_cache.json');
+const PUSHNAME_CACHE_PATH = path.join(__dirname, 'storage', 'pushname_cache.json');
 
 // This cache used to be purely in-memory, so it started empty on every
 // restart. That's exactly what made LID resolution fail right when it
@@ -39,6 +40,77 @@ function persistLidCache() {
     } catch (e) {
         console.error('⚠️ [LIDCACHE] Failed to persist cache:', e.message);
     }
+}
+
+// ─── PUSHNAME CACHE ────────────────────────────────────────────────
+// A person's display name is never independently queryable from WhatsApp —
+// it only ever arrives attached to a message they've sent (msg.pushName).
+// Once seen, it's remembered here so later actions that only have a bare
+// JID (a reply target for .addowner/.setsudo, a join event with no message
+// history yet, a warn/kick label) can show a name instead of a raw number
+// or "ID unresolved", the same way a real WhatsApp client would for anyone
+// you've seen chat before.
+//
+// Written on every qualifying message, so — unlike lidCache above, which
+// only writes on a cache miss — this needs a debounced disk flush rather
+// than a sync write per message; that would otherwise block the entire
+// event loop on every single message in a busy chat.
+try {
+    if (fs.existsSync(PUSHNAME_CACHE_PATH)) {
+        global.pushNameCache = JSON.parse(fs.readFileSync(PUSHNAME_CACHE_PATH, 'utf-8'));
+    }
+} catch (e) {
+    console.error('⚠️ [PUSHNAME] Failed to load persisted cache, starting fresh:', e.message);
+}
+global.pushNameCache = global.pushNameCache || {};
+
+let pushNameSaveTimer = null;
+function flushPushNameCache() {
+    if (pushNameSaveTimer) { clearTimeout(pushNameSaveTimer); pushNameSaveTimer = null; }
+    try {
+        fs.mkdirSync(path.dirname(PUSHNAME_CACHE_PATH), { recursive: true });
+        fs.writeFileSync(PUSHNAME_CACHE_PATH, JSON.stringify(global.pushNameCache));
+    } catch (e) {
+        console.error('⚠️ [PUSHNAME] Failed to persist cache:', e.message);
+    }
+}
+function schedulePushNameSave() {
+    if (pushNameSaveTimer) return;
+    pushNameSaveTimer = setTimeout(flushPushNameCache, 4000);
+    if (pushNameSaveTimer.unref) pushNameSaveTimer.unref();
+}
+// Sync flush on exit: an async write can't be relied on to finish before the
+// process actually exits, so this last save has to be the blocking kind.
+process.on('exit', flushPushNameCache);
+
+/**
+ * Records a display name against every JID form we might later look it up
+ * by (both whatever raw JID it arrived on — @lid or @s.whatsapp.net — and
+ * its phone-number form, if resolvable from what's already cached). Cheap
+ * and synchronous: never triggers a live lookup, only checks global.lidCache.
+ */
+function recordPushName(jid, pushName) {
+    const name = String(pushName || '').trim();
+    if (!name) return;
+    const clean = normalizeToJid(jid);
+    if (!clean || clean.endsWith('@g.us')) return;
+
+    let changed = false;
+    if (global.pushNameCache[clean] !== name) { global.pushNameCache[clean] = name; changed = true; }
+
+    // Also store under the phone-number form when we already know it, so a
+    // lookup later by whichever JID type someone happens to have on hand
+    // still hits — without making this function async to resolve it fresh.
+    const alt = clean.endsWith('@lid') ? global.lidCache[clean] : null;
+    if (alt && global.pushNameCache[alt] !== name) { global.pushNameCache[alt] = name; changed = true; }
+
+    if (changed) schedulePushNameSave();
+}
+
+/** Cache-only lookup — never triggers a live API call. Returns '' if unknown. */
+function getPushName(jid) {
+    const clean = normalizeToJid(jid);
+    return (clean && global.pushNameCache[clean]) || '';
 }
 
 /**
@@ -323,5 +395,7 @@ module.exports = {
     addSudo,
     removeSudo,
     addBan,
-    removeBan
+    removeBan,
+    recordPushName,
+    getPushName
 };
