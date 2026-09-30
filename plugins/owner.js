@@ -8,9 +8,22 @@ const {
     addSudo,
     removeSudo,
     addBan,
-    removeBan
+    removeBan,
+    getPushName
 } = require('../stateManager');
 const { setVar, loadVars, syncVarsToConfig, DEFAULT_VARS } = require('../vars');
+
+// A cached pushName is the only way to show a real name here at all — see
+// stateManager.js's pushname cache. Falls back to the bare number when
+// nothing's been recorded yet (e.g. this person has never sent a message
+// the bot has seen). The mention itself is unaffected either way — WhatsApp
+// still independently decides whether @<number> renders as a pill based on
+// the JID type passed to `mentions`, same as before this existed.
+function labelFor(targetJid) {
+    const num = targetJid.split('@')[0];
+    const name = getPushName(targetJid);
+    return name ? `~${name} (@${num})` : `@${num}`;
+}
 const { exec } = require('child_process');
 const fs = require('fs');
 
@@ -638,12 +651,12 @@ module.exports = [
             const added = addSudo(targetJid);
             if (added) {
                 await sock.sendMessage(jid, {
-                    text: `👑 Added @${targetJid.split('@')[0]} to the sudo list.\n_They can now use the bot in Private mode._`,
+                    text: `👑 Added ${labelFor(targetJid)} to the sudo list.\n_They can now use the bot in Private mode._`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is already a sudo user.`,
+                    text: `⚠️ ${labelFor(targetJid)} is already a sudo user.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             }
@@ -666,12 +679,12 @@ module.exports = [
             const removed = removeSudo(targetJid);
             if (removed) {
                 await sock.sendMessage(jid, {
-                    text: `👋 Removed @${targetJid.split('@')[0]} from the sudo list.`,
+                    text: `👋 Removed ${labelFor(targetJid)} from the sudo list.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is not in the sudo list.`,
+                    text: `⚠️ ${labelFor(targetJid)} is not in the sudo list.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             }
@@ -704,12 +717,12 @@ module.exports = [
             const added = addSecondaryOwner(targetJid);
             if (added) {
                 await sock.sendMessage(jid, {
-                    text: `👑 Added @${targetJid.split('@')[0]} as a secondary owner.\n_They now possess full system administrative capabilities._`,
+                    text: `👑 Added ${labelFor(targetJid)} as a secondary owner.\n_They now possess full system administrative capabilities._`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is already a secondary owner.`,
+                    text: `⚠️ ${labelFor(targetJid)} is already a secondary owner.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             }
@@ -736,12 +749,12 @@ module.exports = [
             const removed = removeSecondaryOwner(targetJid);
             if (removed) {
                 await sock.sendMessage(jid, {
-                    text: `👋 Removed @${targetJid.split('@')[0]} from the secondary owners list.`,
+                    text: `👋 Removed ${labelFor(targetJid)} from the secondary owners list.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is not a registered secondary owner.`,
+                    text: `⚠️ ${labelFor(targetJid)} is not a registered secondary owner.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             }
@@ -792,12 +805,12 @@ module.exports = [
             const added = addBan(targetJid);
             if (added) {
                 await sock.sendMessage(jid, {
-                    text: `🚫 Blacklisted @${targetJid.split('@')[0]}.\n_They can no longer interact with any Satoru Gojo systems._`,
+                    text: `🚫 Blacklisted ${labelFor(targetJid)}.\n_They can no longer interact with any Satoru Gojo systems._`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is already blacklisted.`,
+                    text: `⚠️ ${labelFor(targetJid)} is already blacklisted.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             }
@@ -820,12 +833,12 @@ module.exports = [
             const removed = removeBan(targetJid);
             if (removed) {
                 await sock.sendMessage(jid, {
-                    text: `✅ Restored access for @${targetJid.split('@')[0]}.`,
+                    text: `✅ Restored access for ${labelFor(targetJid)}.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             } else {
                 await sock.sendMessage(jid, {
-                    text: `⚠️ @${targetJid.split('@')[0]} is not on the blacklist.`,
+                    text: `⚠️ ${labelFor(targetJid)} is not on the blacklist.`,
                     mentions: [targetJid]
                 }, { quoted: msg });
             }
@@ -900,7 +913,6 @@ module.exports = [
                 groq_api_key: "groqApiKey",
                 gemini_api_key: "geminiApiKey",
                 prefix: "prefix",
-                vvs: "vvs",
                 pack_name: "packName",
                 author: "author",
                 menu_image: "menuImage",
@@ -934,7 +946,7 @@ module.exports = [
             }
 
             // ─── SET THE VARIABLE ────────────────────────────────
-            const dynamicKeys = ['prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode'];
+            const dynamicKeys = ['prefix', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode'];
             if (dynamicKeys.includes(mappedKey)) {
                 const success = setVar(mappedKey, finalValue);
                 if (!success) {
@@ -991,7 +1003,6 @@ module.exports = [
                 `📱 *Owner Number:* \`${config.ownerNumber}\`\n\n` +
                 `📦 *Sticker Pack:* \`${config.packName}\`\n` +
                 `🎨 *Sticker Author:* \`${config.author}\`\n` +
-                `🔮 *VVS Trigger:* \`${config.vvs || 'kamui'}\`\n` +
                 `⚠️ *Warn Threshold:* \`${config.warnThreshold || 5}\`\n\n` +
                 `👥 *Secondary Owners:* ${ownersList}\n` +
                 `🛡️ *Sudos:* ${sudoList}\n` +
