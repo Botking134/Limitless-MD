@@ -26,10 +26,12 @@ function escapeXml(str) {
 const AVATAR_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const avatarCache = new Map(); // jid -> { buffer, expiresAt }
 
-async function fetchAvatarBuffer(sock, jid) {
+async function fetchAvatarBuffer(sock, jid, logTag = 'WELCOME CARD') {
     // Was a single silent catch around everything, so a blank circle gave zero
     // way to tell "they've restricted who sees their picture" (expected, not
     // fixable) apart from "we're querying the wrong JID" or a genuine bug.
+    // logTag was also hardcoded to always say WELCOME even for a goodbye
+    // card's avatar fetch — now passed through from the actual card type.
     let url;
     try {
         url = await sock.profilePictureUrl(jid, 'image');
@@ -41,12 +43,12 @@ async function fetchAvatarBuffer(sock, jid) {
             // setting hides their picture from us (or they have none set) —
             // this is the expected, unfixable case, so it's logged at a
             // lower severity than an actual failure below.
-            console.error(`ℹ️ [WELCOME CARD] No profile picture available for ${jid} (privacy setting or none set): ${e2.message}`);
+            console.error(`ℹ️ [${logTag}] No profile picture available for ${jid} (privacy setting or none set): ${e2.message}`);
             return null;
         }
     }
     if (!url) {
-        console.error(`ℹ️ [WELCOME CARD] profilePictureUrl returned empty for ${jid}`);
+        console.error(`ℹ️ [${logTag}] profilePictureUrl returned empty for ${jid}`);
         return null;
     }
 
@@ -56,7 +58,7 @@ async function fetchAvatarBuffer(sock, jid) {
     } catch (e) {
         // Unlike the privacy case above, we DID get a URL — this is a real
         // failure (network, expired URL, etc.), worth knowing about.
-        console.error(`⚠️ [WELCOME CARD] Got a picture URL for ${jid} but failed to download it:`, e.message);
+        console.error(`⚠️ [${logTag}] Got a picture URL for ${jid} but failed to download it:`, e.message);
         return null;
     }
 }
@@ -73,13 +75,13 @@ function defaultAvatarSvg() {
     `);
 }
 
-async function buildCircularAvatar(sock, jid) {
+async function buildCircularAvatar(sock, jid, logTag) {
     const cached = avatarCache.get(jid);
     let raw;
     if (cached && cached.expiresAt > Date.now()) {
         raw = cached.buffer;
     } else {
-        raw = (await fetchAvatarBuffer(sock, jid)) || (await sharp(defaultAvatarSvg()).png().toBuffer());
+        raw = (await fetchAvatarBuffer(sock, jid, logTag)) || (await sharp(defaultAvatarSvg()).png().toBuffer());
         avatarCache.set(jid, { buffer: raw, expiresAt: Date.now() + AVATAR_CACHE_TTL_MS });
     }
 
@@ -101,7 +103,7 @@ async function buildCircularAvatar(sock, jid) {
  */
 async function generateMemberCard(sock, { type, targetJid, displayName, groupName, memberCount }) {
     const theme = THEMES[type] || THEMES.welcome;
-    const avatarBuffer = await buildCircularAvatar(sock, targetJid);
+    const avatarBuffer = await buildCircularAvatar(sock, targetJid, theme.label + ' CARD');
     // displayName arrives as e.g. "~Infinity (@2347059...)" or "~Infinity (ID
     // unresolved)" — the parenthetical is useful in the caption/mention text
     // but redundant and cluttered baked directly into the graphic, so it's
