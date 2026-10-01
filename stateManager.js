@@ -192,10 +192,20 @@ async function getPhoneJid(sock, jid, groupJid = null, cachedMetadata = null) {
     try {
         const resolved = await sock.findUserId(cleanJid);
         if (resolved && resolved.phoneNumber) {
-            const phoneJid = `${resolved.phoneNumber}@s.whatsapp.net`;
-            global.lidCache[cleanJid] = phoneJid;
-            persistLidCache();
-            return phoneJid;
+            // Was a blind template-literal concatenation — if this fork's
+            // findUserId() ever returns phoneNumber already as a full JID
+            // (not a bare digit string), that produced a double-suffixed
+            // "...@s.whatsapp.net@s.whatsapp.net" garbage JID, which then
+            // broke everything downstream that tried to use it (profile
+            // picture lookups, sendMessage, etc). normalizeToJid handles
+            // both shapes safely — it passes an already-qualified JID
+            // through untouched instead of re-appending the domain.
+            const phoneJid = normalizeToJid(resolved.phoneNumber);
+            if (phoneJid && phoneJid.endsWith('@s.whatsapp.net')) {
+                global.lidCache[cleanJid] = phoneJid;
+                persistLidCache();
+                return phoneJid;
+            }
         }
     } catch (e) { /* ignore */ }
 
