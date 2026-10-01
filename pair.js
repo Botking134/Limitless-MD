@@ -259,6 +259,48 @@ async function sendPillAlert(sock, jid, build, hasPill) {
     }
 }
 
+/**
+ * Welcome/goodbye used to be two independent sends (text, then a separate
+ * bare image) — merging them into one atomic image+caption send fixed the
+ * "two bubbles for one join" bug, but introduced a new failure mode: a
+ * connection hiccup during a join/leave burst (the exact window these
+ * events fire in) now loses the ENTIRE notification instead of just the
+ * image half. This adds back resilience without reverting to two always-
+ * separate messages: retry once after the socket's typical ~4s reconnect
+ * window, and if that still fails, fall back to a text-only notice so the
+ * join/leave is never silently lost — only its picture is.
+ */
+async function sendCardWithFallback(sock, jid, { cardImage, buildCaption, pillMentions, plainMentions, hasPill, logTag }) {
+    const buildImage = (p) => ({
+        image: cardImage,
+        mimetype: 'image/jpeg',
+        caption: buildCaption(p),
+        mentions: p ? pillMentions : plainMentions
+    });
+
+    try {
+        await sendPillAlert(sock, jid, buildImage, hasPill);
+        return;
+    } catch (e) {
+        console.error(`⚠️ [${logTag}] Send failed, retrying once after the reconnect window:`, e.message);
+    }
+
+    await new Promise(r => setTimeout(r, 4500));
+
+    try {
+        await sendPillAlert(sock, jid, buildImage, hasPill);
+        return;
+    } catch (e) {
+        console.error(`⚠️ [${logTag}] Retry also failed, falling back to text-only:`, e.message);
+    }
+
+    try {
+        await sendPillAlert(sock, jid, (p) => ({ text: buildCaption(p), mentions: p ? pillMentions : plainMentions }), hasPill);
+    } catch (e) {
+        console.error(`⚠️ [${logTag}] Text-only fallback also failed — notification lost:`, e.message);
+    }
+}
+
 async function handleGroupParticipantsUpdate(sock, anu) {
         try {
             if (!anu || !anu.id || !anu.participants || !anu.participants.length) return;
@@ -436,9 +478,9 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                         // One image, captioned with the welcome text — was two separate
                         // sends (a text message, then a bare uncaptioned image right
                         // after), which is why joins were showing up as two different
-                        // bubbles instead of one card. Image generation still happens
-                        // before the send attempt(s), so a pill-mention retry (see
-                        // sendPillAlert) doesn't re-render the graphic twice.
+                        // bubbles instead of one card. Image generation happens once,
+                        // up front — sendCardWithFallback's retry reuses the same
+                        // buffer rather than re-rendering the graphic.
                         try {
                             const cardImage = await generateMemberCard(sock, {
                                 type: 'welcome',
@@ -447,14 +489,16 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                                 groupName,
                                 memberCount
                             });
-                            await sendPillAlert(sock, jid, (p) => ({
-                                image: cardImage,
-                                mimetype: 'image/jpeg',
-                                caption: buildWelcome(p),
-                                mentions: p ? pillMentions : targetMentions
-                            }), hasPill);
+                            await sendCardWithFallback(sock, jid, {
+                                cardImage,
+                                buildCaption: buildWelcome,
+                                pillMentions,
+                                plainMentions: targetMentions,
+                                hasPill,
+                                logTag: 'WELCOME CARD'
+                            });
                         } catch (cardErr) {
-                            console.error('⚠️ [WELCOME CARD] Failed to send:', cardErr.message);
+                            console.error('⚠️ [WELCOME CARD] Failed to generate:', cardErr.message);
                         }
                     }
                 } else if (action === 'remove') {
@@ -471,8 +515,7 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                             customMessage: data.customGoodbye?.[jid] || null
                         });
 
-                        // Same merge as the welcome path above: one captioned image
-                        // instead of a separate text message plus a bare image.
+                        // Same merge + fallback as the welcome path above.
                         try {
                             const cardImage = await generateMemberCard(sock, {
                                 type: 'goodbye',
@@ -481,14 +524,16 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                                 groupName,
                                 memberCount
                             });
-                            await sendPillAlert(sock, jid, (p) => ({
-                                image: cardImage,
-                                mimetype: 'image/jpeg',
-                                caption: buildGoodbye(p),
-                                mentions: p ? pillMentions : targetMentions
-                            }), hasPill);
+                            await sendCardWithFallback(sock, jid, {
+                                cardImage,
+                                buildCaption: buildGoodbye,
+                                pillMentions,
+                                plainMentions: targetMentions,
+                                hasPill,
+                                logTag: 'GOODBYE CARD'
+                            });
                         } catch (cardErr) {
-                            console.error('⚠️ [GOODBYE CARD] Failed to send:', cardErr.message);
+                            console.error('⚠️ [GOODBYE CARD] Failed to generate:', cardErr.message);
                         }
                     }
                 } else if (action === 'promote') {
