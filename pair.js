@@ -437,7 +437,13 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                     const isAntijoinOn = isEnabled(data.antijoin?.[jid]) || isEnabled(config.antijoin?.[jid]);
                     if (isAntijoinOn && !isActorAuthorized) {
                         try {
-                            await sock.groupParticipantsUpdate(jid, [targetJid], "remove");
+                            // Must use the raw, unresolved identifier here — not the
+                            // phone-resolved targetJid, which gets fabricated from the
+                            // LID's own digits whenever resolution fails. A fabricated
+                            // JID is never an actual group member, so WhatsApp rejects
+                            // the removal with internal-server-error. rawTarget is the
+                            // real identifier WhatsApp gave us for this participant.
+                            await sock.groupParticipantsUpdate(jid, [rawTarget], "remove");
                             await sendPillAlert(sock, jid, (p) => ({
                                 text: `🔒 *Anti-Join Protection active!* Expelled ${p ? pillLabel : targetLabel}.`,
                                 mentions: p ? pillMentions : targetMentions
@@ -555,9 +561,12 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                                 // rogue admin free to just promote someone else again. Separate calls
                                 // so one failing (e.g. actor is the group's real creator, who can't
                                 // be demoted) doesn't block the other from going through.
-                                await sock.groupParticipantsUpdate(jid, [targetJid], "demote");
-                                if (actorJid && actorJid !== targetJid) {
-                                    try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
+                                // Same raw-identifier requirement as antijoin above:
+                                // the actual API call must use rawTarget/rawActor, never
+                                // the phone-resolved (possibly fabricated) targetJid/actorJid.
+                                await sock.groupParticipantsUpdate(jid, [rawTarget], "demote");
+                                if (rawActor && rawActor !== rawTarget) {
+                                    try { await sock.groupParticipantsUpdate(jid, [rawActor], "demote"); } catch (e) {}
                                 }
 
                                 const includeActor = actorJid && actorJid !== targetJid;
@@ -606,9 +615,12 @@ async function handleGroupParticipantsUpdate(sock, anu) {
                             try {
                                 // Restore the demoted victim's admin status AND demote whoever
                                 // demoted them without authorization.
-                                await sock.groupParticipantsUpdate(jid, [targetJid], "promote");
-                                if (actorJid && actorJid !== targetJid) {
-                                    try { await sock.groupParticipantsUpdate(jid, [actorJid], "demote"); } catch (e) {}
+                                // Raw identifiers for the same reason as the antijoin and
+                                // antipromote reverts above — targetJid/actorJid can be a
+                                // fabricated, non-member JID when resolution failed.
+                                await sock.groupParticipantsUpdate(jid, [rawTarget], "promote");
+                                if (rawActor && rawActor !== rawTarget) {
+                                    try { await sock.groupParticipantsUpdate(jid, [rawActor], "demote"); } catch (e) {}
                                 }
 
                                 const includeActor = actorJid && actorJid !== targetJid;
