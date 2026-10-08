@@ -33,6 +33,19 @@ function registerSession(sessionType, promptId, data) {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Some download tokens (e.g. the savenow.to links /play's upstream hands back)
+// are short-lived or single-use and can go stale by the time we fetch them.
+// A dead link doesn't throw — it comes back as a 403/404 page that's only a
+// few dozen bytes, which fetchBuffer happily returns as a "valid" buffer.
+// Without this check that tiny error page gets shipped to WhatsApp as if it
+// were the actual song (the "1.0 kB audio" bug).
+function isLikelyAudio(buffer) {
+    if (!buffer || buffer.length < 20000) return false; // real songs are reliably >20KB
+    const mime = (buffer.mimeType || '').toLowerCase();
+    if (mime && !mime.startsWith('audio') && mime !== 'application/octet-stream') return false;
+    return true;
+}
+
 // Upgraded fetchBuffer with User-Agent spoofing and direct Content-Type extraction
 async function fetchBuffer(url) {
     if (!url) throw new Error('No URL provided');
@@ -89,12 +102,47 @@ async function downloadMedia(apiUrl, params = {}, method = 'GET') {
             url: apiUrl,
             params: method === 'GET' ? params : undefined,
             data: method === 'POST' ? params : undefined,
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json' },
+            // Was unset, so a hung upstream (e.g. /play going unresponsive)
+            // left every command that calls this — song, play, tiktok, ig, fb,
+            // spotify, pinterest, mediafire, gdrive, lyrics, img, xvid, apk,
+            // web, shazam, obf — stuck on "⏳ ..." forever with no error ever
+            // shown to the user. Now it fails fast with a clear message instead.
+            timeout: 20000
         });
         return response.data;
     } catch (err) {
-        throw new Error(`API error: ${err.response?.status || err.message}`);
+        const isTimeout = err.code === 'ECONNABORTED' || /timeout/i.test(err.message);
+        const status = err.response?.status;
+        const reason = isTimeout
+            ? 'the API took too long to respond (it may be down or overloaded)'
+            : (status ? `HTTP ${status}` : err.message);
+        const wrapped = new Error(`API error: ${reason}`);
+        // Flagged so callers can retry a flaky upstream (5xx / timeout) instead
+        // of surfacing a one-off blip straight to the user — a 4xx (bad input,
+        // not found) is a real answer and retrying it would just waste time.
+        wrapped.isTransient = isTimeout || (status >= 500);
+        throw wrapped;
     }
+}
+
+// Retries apiFn only on a transient (5xx/timeout) failure, per downloadMedia's
+// isTransient flag. Several of these community API endpoints (TikTok's
+// secondary endpoint in particular) intermittently 500 on an otherwise-valid
+// request, so one retry turns an occasional blip into a working result
+// instead of an error straight to the user.
+async function withRetry(apiFn, retries = 2, delayMs = 1000) {
+    let lastErr;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            return await apiFn();
+        } catch (err) {
+            lastErr = err;
+            if (!err.isTransient || attempt === retries) throw err;
+            await delay(delayMs);
+        }
+    }
+    throw lastErr;
 }
 
 // Deep recursive scanner to catch shifting API response keys automatically
@@ -166,13 +214,37 @@ async function handleSongReply(sock, msg, session, userReply) {
     if (isNaN(num) || num < 1 || num > session.results.length) {
         return await sock.sendMessage(jid, { text: `❌ Invalid selection. Please choose a number between 1 and ${session.results.length}.` });
     }
-    const song = session.results[num - 1];
-    const downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
+    let song = session.results[num - 1];
+    let downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
     if (!downloadUrl) {
         return await sock.sendMessage(jid, { text: "❌ This song has no download link." });
     }
     try {
-        const audioBuffer = await fetchBuffer(downloadUrl);
+        // The link was fetched whenever the user originally ran .song — by the
+        // time they reply with their pick, it can easily have gone stale. Same
+        // validate-and-retry-with-a-fresh-search as .play, using the saved query.
+        let audioBuffer;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                const buf = await fetchBuffer(downloadUrl);
+                if (isLikelyAudio(buf)) { audioBuffer = buf; break; }
+            } catch (e) { /* fall through to retry */ }
+
+            if (attempt < 3 && session.query) {
+                await delay(1200);
+                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query: session.query, limit: 1 });
+                if (data?.result) {
+                    song = data.result;
+                    downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
+                }
+            } else if (attempt < 3) {
+                await delay(1200);
+            }
+        }
+        if (!audioBuffer) {
+            return await sock.sendMessage(jid, { text: "❌ The song link kept coming back invalid or expired after 3 tries. Try `.song` again." });
+        }
+
         let thumbnailBuffer = null;
         if (song.thumbnail) {
             try { thumbnailBuffer = await fetchBuffer(song.thumbnail); } catch (e) {}
@@ -408,23 +480,27 @@ module.exports = [
             const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching TikTok video..." }, { quoted: msg });
 
             try {
-                // Primary: tiktokv4
+                // Primary: tiktokv4 (in practice this one almost always comes
+                // back with empty results — kept first in case that changes,
+                // but the secondary endpoint below is the one doing real work)
                 let endpoint = `https://apis.davidcyril.name.ng/download/tiktokv4?url=${encodeURIComponent(url)}`;
-                let data = await downloadMedia(endpoint);
+                let data = await withRetry(() => downloadMedia(endpoint));
 
                 let res = data?.results || data?.result || data;
-                let downloadUrl = res?.nowatermark || 
-                                  res?.noWatermark || 
-                                  res?.video || 
-                                  res?.play || 
-                                  res?.download_url || 
+                let downloadUrl = res?.nowatermark ||
+                                  res?.noWatermark ||
+                                  res?.video ||
+                                  res?.play ||
+                                  res?.download_url ||
                                   (Array.isArray(res?.downloads) ? res.downloads[0]?.url : null) ||
                                   extractDownloadUrl(data);
 
-                // Fallback: Secondary TikTok Endpoint if primary returned no link
+                // Fallback: Secondary TikTok Endpoint if primary returned no link.
+                // This one intermittently 500s on an otherwise-good request, so
+                // it gets the retry treatment too rather than failing on one blip.
                 if (!downloadUrl) {
                     endpoint = `https://apis.davidcyril.name.ng/download/tiktok?url=${encodeURIComponent(url)}`;
-                    data = await downloadMedia(endpoint);
+                    data = await withRetry(() => downloadMedia(endpoint));
                     res = data?.results || data?.result || data;
                     downloadUrl = res?.video || res?.nowatermark || extractDownloadUrl(data);
                 }
@@ -733,7 +809,7 @@ module.exports = [
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
                 
                 // Registered via safe session helper, pointing to the handleSongReply function above
-                registerSession('song', prompt.key.id, { results: [song], handle: handleSongReply });
+                registerSession('song', prompt.key.id, { results: [song], handle: handleSongReply, query });
             } catch (err) {
                 await sock.sendMessage(jid, { text: `❌ Search failed: ${err.message}` });
             }
@@ -751,13 +827,26 @@ module.exports = [
             
             await sock.sendMessage(jid, { text: "⏳ Fetching song..." }, { quoted: msg });
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 1 });
-                if (!data?.result) return await sock.sendMessage(jid, { text: "❌ No song found." });
-                const song = data.result;
-                const downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
-                if (!downloadUrl) throw new Error('No download link');
-                
-                const audioBuffer = await fetchBuffer(downloadUrl);
+                let song, downloadUrl, audioBuffer;
+                // Up to 3 attempts: each one re-searches from scratch to get a
+                // fresh download token, since a stale one fails as a tiny error
+                // page rather than a clean error (see isLikelyAudio above).
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 1 });
+                    if (!data?.result) return await sock.sendMessage(jid, { text: "❌ No song found." });
+                    song = data.result;
+                    downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
+                    if (!downloadUrl) throw new Error('No download link');
+
+                    try {
+                        const buf = await fetchBuffer(downloadUrl);
+                        if (isLikelyAudio(buf)) { audioBuffer = buf; break; }
+                    } catch (e) { /* fall through to retry */ }
+
+                    if (attempt < 3) await delay(1200);
+                }
+                if (!audioBuffer) throw new Error('The song link kept coming back invalid or expired after 3 tries. Try again in a moment.');
+
                 let thumbBuffer = null;
                 if (song.thumbnail) {
                     try { 
