@@ -1015,6 +1015,87 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Unpacking failed: ${err.message}` }, { quoted: msg });
             }
         }
+    },
+
+    // 7. TOGIF (Video -> animated GIF)
+    {
+        name: 'togif',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            const rawContent = getRawMessage(quoted || msg.message);
+
+            if (!rawContent?.videoMessage) {
+                return await sock.sendMessage(jid, { text: "❌ Please reply to a video to convert it to a GIF." }, { quoted: msg });
+            }
+
+            // WhatsApp's own duration cap for an uploaded video is well above
+            // this, but a long clip makes for a huge, choppy GIF — same 10s
+            // cap converter.js's tomp4 uses for the inverse conversion.
+            const MAX_SECONDS = 10;
+
+            const statusMsg = await sock.sendMessage(jid, { text: "⏳ Converting video to GIF..." }, { quoted: msg });
+
+            const tmpInput = path.join(__dirname, `../tmp_togif_in_${Date.now()}.mp4`);
+            const tmpPalette = path.join(__dirname, `../tmp_togif_palette_${Date.now()}.png`);
+            const tmpOutput = path.join(__dirname, `../tmp_togif_out_${Date.now()}.gif`);
+            const cleanup = () => {
+                for (const f of [tmpInput, tmpPalette, tmpOutput]) {
+                    try { fs.unlinkSync(f); } catch (e) {}
+                }
+            };
+
+            try {
+                await (async () => {
+                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                    const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                    fs.writeFileSync(tmpInput, buffer);
+                })();
+
+                // A plain `ffmpeg -i in.mp4 out.gif` produces a washed-out,
+                // banded GIF because ffmpeg's default palette is generic. The
+                // standard fix is a two-pass palette: generate a palette suited
+                // to this specific clip, then use it to render the GIF —
+                // noticeably better color quality for roughly the same effort.
+                const vf = `fps=12,scale=400:-1:flags=lanczos`;
+                const paletteCmd = `ffmpeg -i "${tmpInput}" -t ${MAX_SECONDS} -vf "${vf},palettegen" -y "${tmpPalette}"`;
+
+                await new Promise((resolve, reject) => {
+                    exec(paletteCmd, (err) => err ? reject(err) : resolve());
+                });
+
+                const gifCmd = `ffmpeg -i "${tmpInput}" -i "${tmpPalette}" -t ${MAX_SECONDS} -filter_complex "${vf}[x];[x][1:v]paletteuse" -y "${tmpOutput}"`;
+
+                await new Promise((resolve, reject) => {
+                    exec(gifCmd, (err) => err ? reject(err) : resolve());
+                });
+
+                const gifBuffer = fs.readFileSync(tmpOutput);
+
+                // WhatsApp has no native "send a .gif" message type — an actual
+                // animated GIF only plays in-app when sent as a video flagged
+                // gifPlayback. Sending the real .gif bytes this way (rather than
+                // re-encoding to mp4) keeps it a genuine, forwardable GIF file.
+                await sock.sendMessage(jid, {
+                    video: gifBuffer,
+                    gifPlayback: true,
+                    mimetype: 'image/gif',
+                    caption: "🎞️ Converted to GIF!"
+                }, { quoted: msg });
+
+                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                cleanup();
+            } catch (error) {
+                console.error('❌ [TOGIF] Failed:', error.message);
+                cleanup();
+                await sock.sendMessage(jid, { text: `❌ GIF conversion failed: ${error.message}`, edit: statusMsg.key });
+            }
+        }
     }
 ];
 
