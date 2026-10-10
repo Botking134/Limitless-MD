@@ -349,84 +349,12 @@ module.exports = [
 
 
 
-    // 2. SETPP (Update Bot or Group Profile Picture)
-    {
-        name: 'setpp',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
-            const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            const cleanArgs = args ? args.toLowerCase().trim() : '';
+    // setpp used to be duplicated here AND in plugins/tools.js (two
+    // commands sharing the same name — whichever loaded last silently won).
+    // Recreated from scratch, split into separate setpp / setpp-gc commands,
+    // consolidated into tools.js alongside getpp/getpp-gc and the other
+    // set* commands so there's one canonical home and no more collision.
 
-            const targetGroup = isGroup && (cleanArgs === 'gc' || cleanArgs === 'group');
-
-            // Permission Checks
-            if (targetGroup) {
-                const isAuthorized = isOwner || isSudo || isDev || isAdmin;
-                if (!isAuthorized) {
-                    return await sock.sendMessage(jid, { text: "❌ Only group administrators or bot owners can change the group picture." }, { quoted: msg });
-                }
-            } else {
-                const isAuthorized = isOwner || isDev;
-                if (!isAuthorized) {
-                    return await sock.sendMessage(jid, { text: "❌ Only bot owners or developers can change the bot's profile picture." }, { quoted: msg });
-                }
-            }
-
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo ||
-                                rawMsg?.extendedTextMessage?.contextInfo ||
-                                rawMsg?.imageMessage?.contextInfo ||
-                                rawMsg?.videoMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
-
-            if (!quoted) {
-                return await sock.sendMessage(jid, { 
-                    text: `❌ Please reply directly to an image.\n\n*Usage:*\n• Reply to image with \`${config.prefix}setpp\` (updates bot picture)\n• Reply to image with \`${config.prefix}setpp gc\` (updates group picture)` 
-                }, { quoted: msg });
-            }
-
-            const rawContent = getRawMessage(quoted);
-            const imageMessage = rawContent?.imageMessage;
-            if (!imageMessage) {
-                return await sock.sendMessage(jid, { text: "❌ The replied message is not a valid static image." }, { quoted: msg });
-            }
-
-            const statusText = targetGroup ? "Updating group profile picture... ⚙️" : "Updating bot profile picture... ⚙️";
-            const statusMsg = await sock.sendMessage(jid, { text: statusText }, { quoted: msg });
-
-            try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const stream = await downloadContentFromMessage(imageMessage, 'image');
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-
-                const targetJid = targetGroup ? jid : normalizeToJid(sock.user.id);
-                await sock.updateProfilePicture(targetJid, buffer);
-                
-                const successText = targetGroup 
-                    ? "✅ Group profile picture updated successfully!" 
-                    : "✅ Bot profile picture updated successfully!";
-                
-                await sock.sendMessage(jid, { text: successText, edit: statusMsg.key });
-            } catch (error) {
-                console.error("❌ [SETPP FAILED]:", error.message);
-                await sock.sendMessage(jid, { text: `❌ Profile picture update failed: ${error.message}`, edit: statusMsg.key });
-            }
-        }
-    },
-
-    // Aliases
-    
-    {
-        name: 'setgpp',
-        isPrefixless: false,
-        execute: async (sock, msg, args, opts) => {
-            const cmd = module.exports.find(c => c.name === 'setpp');
-            if (cmd) await cmd.execute(sock, msg, 'gc', opts);
-        }
-    },
-        
 
     // ─── DIAGNOSE ────────────────────────────────────────────────
     {
