@@ -869,7 +869,18 @@ module.exports = [
 
                 const buttonMessage = {
                     text: text,
-                    buttons: [{ buttonId: `${config.prefix}jail_ans ${targetNum}`, buttonText: { displayText: 'Send to Jail ⛓️' }, type: 1 }],
+                    buttons: [{
+                        // Pass the FULL jid (with its real @lid or
+                        // @s.whatsapp.net suffix), not just the bare digits.
+                        // jail_ans used to reconstruct `${digits}@s.whatsapp.net`,
+                        // which fabricates a JID that was never the real user
+                        // whenever the target was actually an @lid — that's why
+                        // profilePictureUrl kept failing and jail_ans fell back
+                        // to the blank placeholder image.
+                        buttonId: `${config.prefix}jail_ans ${targetJid}`,
+                        buttonText: { displayText: 'Send to Jail ⛓️' },
+                        type: 1
+                    }],
                     headerType: 1,
                     mentions: [targetJid, senderJid]
                 };
@@ -886,15 +897,31 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!args) return;
 
-            const targetNum = args.trim().split(' ')[0].split('@')[0];
-            const targetJid = targetNum + '@s.whatsapp.net';
+            // The full jid (with its real @lid or @s.whatsapp.net suffix) now
+            // arrives intact from the arrest button — no more reconstructing
+            // it from bare digits, which used to fabricate a non-existent JID
+            // for any target whose real identifier was an @lid.
+            const mentionJid = args.trim().split(' ')[0];
+            const targetNum = mentionJid.split('@')[0].split(':')[0];
+
+            // profilePictureUrl needs a resolvable identifier; an @lid works
+            // for some accounts but not reliably, so resolve to the phone JID
+            // when possible and fall back to the raw jid if that fails — same
+            // pattern used in getpp/info.
+            let lookupJid = mentionJid;
+            if (mentionJid.endsWith('@lid')) {
+                try {
+                    const resolved = await getPhoneJid(sock, mentionJid, jid);
+                    if (resolved) lookupJid = resolved;
+                } catch (e) { /* ignore, fall back to raw jid */ }
+            }
 
             try {
-                const craftingMsg = await sock.sendMessage(jid, { text: `Forging iron bars for target @${targetNum}... ⚙️`, mentions: [targetJid] }, { quoted: msg });
+                const craftingMsg = await sock.sendMessage(jid, { text: `Forging iron bars for target @${targetNum}... ⚙️`, mentions: [mentionJid] }, { quoted: msg });
 
                 let profileUrl;
                 try {
-                    profileUrl = await sock.profilePictureUrl(targetJid, 'image');
+                    profileUrl = await sock.profilePictureUrl(lookupJid, 'image');
                 } catch (err) {
                     profileUrl = "https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png";
                 }
@@ -924,9 +951,9 @@ module.exports = [
 
                 try { await sock.sendMessage(jid, { delete: craftingMsg.key }); } catch (e) { /* ignore */ }
 
-                await sock.sendMessage(jid, { image: processedBuffer, caption: `⛓️ *Target @${targetNum} locked up inside jail!*`, mentions: [targetJid] }, { quoted: msg });
+                await sock.sendMessage(jid, { image: processedBuffer, caption: `⛓️ *Target @${targetNum} locked up inside jail!*`, mentions: [mentionJid] }, { quoted: msg });
             } catch (err) {
-                await sock.sendMessage(jid, { text: `⛓️ *Target @${targetNum} is locked up!*`, mentions: [targetJid] }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `⛓️ *Target @${targetNum} is locked up!*`, mentions: [mentionJid] }, { quoted: msg });
             }
         }
     },
@@ -1129,9 +1156,11 @@ module.exports = [
                                 rawMsg?.audioMessage?.contextInfo ||
                                 rawMsg?.documentMessage?.contextInfo;
 
-            let targetJid = contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '';
+            // Mentions only need the raw, unconverted jid — forcing it to
+            // @s.whatsapp.net fabricates a non-existent JID whenever the real
+            // one was @lid, which breaks the @mention rendering.
+            const targetJid = normalizeToJid(contextInfo?.participant || msg.key.participant || msg.key.remoteJid || '');
             const targetNum = targetJid.split('@')[0].split(':')[0];
-            targetJid = targetNum + '@s.whatsapp.net';
 
             const loadingMsg = await sock.sendMessage(jid, { text: `Analyzing biometric patterns...`, mentions: [targetJid] }, { quoted: msg });
             await delay(1500);
