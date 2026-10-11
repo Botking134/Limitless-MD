@@ -881,23 +881,29 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner && !isSudo) return;
 
-            const frames = [
-                toSans("That's what it is to be human. I have to overcome those limits."),
-                toSans("The being that I want to be would not evaporate in a nuclear explosion."),
-                toSans("Once upon a time, there was a man who wished to withstand a nuclear bomb."),
-                toSans("The man built his muscles, honed his mind, perfected his skill. However, there were yet heights he could not attain."),
-                toSans("But I couldn't allow myself to give up. So after years upon years of training, I arrived at a single solution."),
-                toSans("If I don't want to be vaporized in a nuclear explosion... I must become nuclear myself."),
-                toSans("Compromise is not an option. Let the true meaning of Almighty be carved into your soul. This is my almighty power..."),
-                toSans("I... Am... Atomic.") + "\n☢️☢️☢️"
+            const lines = [
+                "That's what it is to be human. I have to overcome those limits.",
+                "The being that I want to be would not evaporate in a nuclear explosion.",
+                "Once upon a time, there was a man who wished to withstand a nuclear bomb.",
+                "The man built his muscles, honed his mind, perfected his skill. However, there were yet heights he could not attain.",
+                "But I couldn't allow myself to give up. So after years upon years of training, I arrived at a single solution.",
+                "If I don't want to be vaporized in a nuclear explosion... I must become nuclear myself.",
+                "Compromise is not an option. Let the true meaning of Almighty be carved into your soul. This is my almighty power...",
+                "I... Am... Atomic."
             ];
+            const frames = lines.map((l, i) => toSans(l) + (i === lines.length - 1 ? "\n☢️☢️☢️" : ""));
+
+            // Flat 1.5s per line
+            const LINE_DELAY = 1500;
 
             try {
                 let sentMsg = await sock.sendMessage(jid, { text: frames[0] }, { quoted: msg });
                 for (let i = 1; i < frames.length; i++) {
-                    await delay(3000);
+                    await delay(LINE_DELAY);
                     await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
                 }
+                // Let the final frame land before the GIF
+                await delay(LINE_DELAY);
 
                 // Random finisher GIF (no caption)
                 await sendRandomGif(sock, jid, ATOMIC_GIFS);
