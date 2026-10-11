@@ -88,6 +88,163 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("Catbox and qu.ax upload hosts failed.");
 }
 
+// Shared gate for commands that change something about the GROUP itself
+// (picture, subject, description) rather than the bot's own identity.
+// Requires the sender be owner/sudo/dev OR an actual group admin, and
+// requires the bot itself be a group admin, since WhatsApp rejects these
+// updates otherwise — reported as a clear error instead of a raw API failure.
+async function requireGroupAdmin(sock, msg, jid, isOwner, isSudo, isDev) {
+    if (!jid.endsWith('@g.us')) {
+        await sock.sendMessage(jid, { text: "❌ This command only works in a group." }, { quoted: msg });
+        return false;
+    }
+
+    if (isDev || isOwner || isSudo) {
+        // Still need the bot to be admin for the update call to succeed,
+        // checked below regardless of sender's own standing.
+    } else {
+        const senderJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        const metadata = await sock.groupMetadata(jid);
+        const senderParticipant = metadata.participants.find(p => normalizeToJid(p.id) === senderJid || (p.lid && normalizeToJid(p.lid) === senderJid));
+        const isSenderAdmin = senderParticipant?.admin === 'admin' || senderParticipant?.admin === 'superadmin';
+        if (!isSenderAdmin) {
+            await sock.sendMessage(jid, { text: "❌ Only group admins can use this." }, { quoted: msg });
+            return false;
+        }
+    }
+
+    const metadata = await sock.groupMetadata(jid);
+    const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
+    const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : (config.botLid || '');
+    const botParticipant = metadata.participants.find(p => {
+        const pId = normalizeToJid(p.id);
+        const pLid = p.lid ? normalizeToJid(p.lid) : '';
+        return (botJid && (pId === botJid || pLid === botJid)) || (botLid && (pId === botLid || pLid === botLid));
+    });
+    const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
+    if (!isBotAdmin) {
+        await sock.sendMessage(jid, { text: "❌ I need to be an admin in this group to do that." }, { quoted: msg });
+        return false;
+    }
+
+    return true;
+}
+
+// A hung Baileys call (updateProfilePicture/updateProfileName/etc.) with no
+// built-in timeout leaves the command silent forever — same failure mode
+// fixed in getpp/smeme earlier. Every new command below wraps its API call
+// with this rather than repeating the pattern.
+const withTimeout = (promise, ms = 20000) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for WhatsApp')), ms))
+]);
+
+// Shared by getpp and getpp-gc. forceGroup=true skips straight to the
+// group's own picture; otherwise resolves a target from a reply, mention,
+// or digits, with the full LID-translation chain (group participant list
+// first, then the standalone getPhoneJid fallback) before ever calling
+// profilePictureUrl — a fabricated/unresolved JID is the #1 reason this
+// used to come back empty even when the person clearly had a picture set.
+async function resolveAndSendPp(sock, msg, jid, args, forceGroup) {
+    const isGroup = jid.endsWith('@g.us');
+    let targetJid = '';
+
+    if (forceGroup) {
+        targetJid = jid;
+    } else {
+        const rawMsg = getRawMessage(msg.message);
+        const contextInfo = rawMsg?.contextInfo ||
+                            rawMsg?.extendedTextMessage?.contextInfo ||
+                            rawMsg?.imageMessage?.contextInfo ||
+                            rawMsg?.videoMessage?.contextInfo ||
+                            rawMsg?.stickerMessage?.contextInfo ||
+                            rawMsg?.audioMessage?.contextInfo ||
+                            rawMsg?.documentMessage?.contextInfo;
+        const mentions = contextInfo?.mentionedJid || [];
+
+        if (contextInfo?.participant) {
+            targetJid = normalizeToJid(contextInfo.participant);
+        } else if (mentions.length > 0) {
+            targetJid = normalizeToJid(mentions[0]);
+        } else if (args) {
+            const cleanDigits = args.replace(/[^0-9]/g, '');
+            if (cleanDigits.length >= 7) {
+                targetJid = `${cleanDigits}@s.whatsapp.net`;
+            }
+        }
+
+        if (!targetJid) {
+            targetJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
+        }
+    }
+
+    if (!targetJid) {
+        return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention a user, or type a number." }, { quoted: msg });
+    }
+
+    if (isGroup && targetJid !== jid) {
+        try {
+            const groupMetadata = await sock.groupMetadata(jid);
+            const cleanTarget = targetJid.split('@')[0].split(':')[0];
+            const participant = groupMetadata.participants.find(p => {
+                const pId = p.id ? p.id.split('@')[0].split(':')[0] : '';
+                const pLid = p.lid ? p.lid.split('@')[0].split(':')[0] : '';
+                return pId === cleanTarget || pLid === cleanTarget;
+            });
+            if (participant && participant.id) {
+                targetJid = normalizeToJid(participant.id);
+            }
+        } catch (e) { /* ignore metadata fallback */ }
+    }
+
+    if (targetJid.endsWith('@lid')) {
+        try {
+            const resolved = await getPhoneJid(sock, targetJid, jid);
+            if (resolved && resolved.endsWith('@s.whatsapp.net')) {
+                targetJid = resolved;
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    const statusMsg = await sock.sendMessage(jid, { text: "Extracting profile picture... 📷" }, { quoted: msg });
+
+    try {
+        let profileUrl;
+        try {
+            profileUrl = await withTimeout(sock.profilePictureUrl(targetJid, 'image'));
+        } catch (err) {
+            profileUrl = await withTimeout(sock.profilePictureUrl(targetJid, 'preview'));
+        }
+        if (!profileUrl) throw new Error("No URL returned");
+
+        const targetNumber = targetJid.split('@')[0];
+        const captionText = targetJid === jid ? "📷 *Group profile picture extracted!*" : `📷 *Profile picture extracted for:* @${targetNumber}`;
+
+        await sock.sendMessage(jid, {
+            image: { url: profileUrl },
+            caption: captionText,
+            mentions: targetJid !== jid ? [targetJid] : []
+        }, { quoted: msg });
+
+        try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
+
+    } catch (e) {
+        const isTargetGroup = targetJid.endsWith('@g.us');
+        const errorText = isTargetGroup
+            ? "❌ This group has no active profile picture set."
+            : "❌ No public profile picture found.\n\n_Note: This user may have hidden their profile photo in WhatsApp Privacy Settings._";
+
+        // Reporting the error can itself throw (e.g. "Connection Closed" mid
+        // reconnect) — wrapped so that doesn't escape uncaught and look like
+        // the command crashing rather than a normal, logged failure.
+        try {
+            await sock.sendMessage(jid, { text: errorText, edit: statusMsg.key });
+        } catch (reportErr) {
+            console.error('⚠️ [GETPP] Failed to report error (connection likely mid-reconnect):', reportErr.message);
+        }
+    }
+}
+
 async function queryGroq(messages, model = "openai/gpt-oss-20b") {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set in config or .env");
@@ -107,7 +264,7 @@ async function queryGroq(messages, model = "openai/gpt-oss-20b") {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
-    // 1. SETPP (Bot Profile Picture - Fixed Media Pulling)
+    // 1. SETPP (Bot's own profile picture — owner/dev only)
     {
         name: 'setpp',
         isPrefixless: false,
@@ -130,6 +287,8 @@ module.exports = [
             const imageMessage = rawContent?.imageMessage;
             if (!imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
 
+            const statusMsg = await sock.sendMessage(jid, { text: "⏳ Updating bot profile picture..." }, { quoted: msg });
+
             try {
                 const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
                 const stream = await downloadContentFromMessage(imageMessage, 'image');
@@ -137,10 +296,46 @@ module.exports = [
                 for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
                 const botJid = normalizeToJid(sock.user.id);
-                await sock.updateProfilePicture(botJid, buffer);
-                await sock.sendMessage(jid, { text: "✅ Bot profile picture has been updated!" }, { quoted: msg });
+                await withTimeout(sock.updateProfilePicture(botJid, buffer));
+                await sock.sendMessage(jid, { text: "✅ Bot profile picture has been updated!", edit: statusMsg.key });
             } catch (error) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}` }, { quoted: msg });
+                console.error('❌ [SETPP] Failed:', error.message);
+                await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}`, edit: statusMsg.key });
+            }
+        }
+    },
+
+    // 1b. SETPP-GC (Group profile picture — group admin or owner/sudo/dev)
+    {
+        name: 'setpp-gc',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const authorized = await requireGroupAdmin(sock, msg, jid, isOwner, isSudo, isDev);
+            if (!authorized) return;
+
+            const rawMsg = getRawMessage(msg.message);
+            const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
+
+            const rawContent = getRawMessage(quoted);
+            const imageMessage = rawContent?.imageMessage;
+            if (!imageMessage) return await sock.sendMessage(jid, { text: "❌ Please reply to an image." }, { quoted: msg });
+
+            const statusMsg = await sock.sendMessage(jid, { text: "⏳ Updating group profile picture..." }, { quoted: msg });
+
+            try {
+                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                const stream = await downloadContentFromMessage(imageMessage, 'image');
+                let buffer = Buffer.from([]);
+                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+                await withTimeout(sock.updateProfilePicture(jid, buffer));
+                await sock.sendMessage(jid, { text: "✅ Group profile picture has been updated!", edit: statusMsg.key });
+            } catch (error) {
+                console.error('❌ [SETPP-GC] Failed:', error.message);
+                await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}`, edit: statusMsg.key });
             }
         }
     },
@@ -212,7 +407,7 @@ module.exports = [
         }
     },
 
-    // 3. GETPP (User or Group Profile Picture - Bulletproof LID & Group Resolver)
+    // 3. GETPP (User or Group Profile Picture — Bulletproof LID & Group Resolver)
     {
         name: 'getpp',
         isPrefixless: false,
@@ -220,125 +415,21 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             const cleanArgs = args ? args.toLowerCase().trim() : '';
-            
-            let targetJid = '';
+            const wantsGroup = isGroup && (cleanArgs === 'gc' || cleanArgs === 'group');
+            await resolveAndSendPp(sock, msg, jid, args, wantsGroup);
+        }
+    },
 
-            // 1. Target Group Profile Picture (.getpp gc / .getpp group)
-            if (isGroup && (cleanArgs === 'gc' || cleanArgs === 'group')) {
-                targetJid = jid;
-            } else {
-                // 2. Resolve target user from Reply, Mention, or Digits
-                const rawMsg = getRawMessage(msg.message);
-                const contextInfo = rawMsg?.contextInfo ||
-                                    rawMsg?.extendedTextMessage?.contextInfo ||
-                                    rawMsg?.imageMessage?.contextInfo ||
-                                    rawMsg?.videoMessage?.contextInfo ||
-                                    rawMsg?.stickerMessage?.contextInfo ||
-                                    rawMsg?.audioMessage?.contextInfo ||
-                                    rawMsg?.documentMessage?.contextInfo;
-
-                const mentions = contextInfo?.mentionedJid || [];
-
-                if (contextInfo?.participant) {
-                    targetJid = normalizeToJid(contextInfo.participant);
-                } else if (mentions.length > 0) {
-                    targetJid = normalizeToJid(mentions[0]);
-                } else if (args) {
-                    const cleanDigits = args.replace(/[^0-9]/g, '');
-                    if (cleanDigits.length >= 7) {
-                        targetJid = `${cleanDigits}@s.whatsapp.net`;
-                    }
-                }
-
-                // Default to command sender if no target specified
-                if (!targetJid) {
-                    targetJid = normalizeToJid(msg.key.participant || msg.key.remoteJid || '');
-                }
+    // 3b. GETPP-GC (Group profile picture, as a standalone command)
+    {
+        name: 'getpp-gc',
+        isPrefixless: false,
+        execute: async (sock, msg, args) => {
+            const jid = msg.key.remoteJid;
+            if (!jid.endsWith('@g.us')) {
+                return await sock.sendMessage(jid, { text: "❌ This command only works in a group." }, { quoted: msg });
             }
-
-            if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention a user, or type a number." }, { quoted: msg });
-            }
-
-            // 3. Guaranteed Group Participants LID-to-Phone Translator
-            if (isGroup && targetJid !== jid) {
-                try {
-                    const groupMetadata = await sock.groupMetadata(jid);
-                    const cleanTarget = targetJid.split('@')[0].split(':')[0];
-                    const participant = groupMetadata.participants.find(p => {
-                        const pId = p.id ? p.id.split('@')[0].split(':')[0] : '';
-                        const pLid = p.lid ? p.lid.split('@')[0].split(':')[0] : '';
-                        return pId === cleanTarget || pLid === cleanTarget;
-                    });
-
-                    if (participant && participant.id) {
-                        targetJid = normalizeToJid(participant.id);
-                    }
-                } catch (e) { /* ignore metadata fallback */ }
-            }
-
-            // Secondary LID fallback if not in group
-            if (targetJid.endsWith('@lid')) {
-                try {
-                    const resolved = await getPhoneJid(sock, targetJid, jid);
-                    if (resolved && resolved.endsWith('@s.whatsapp.net')) {
-                        targetJid = resolved;
-                    }
-                } catch (e) { /* ignore */ }
-            }
-
-            const statusMsg = await sock.sendMessage(jid, { text: "Extracting profile picture... 📷" }, { quoted: msg });
-
-            // sock.profilePictureUrl() has no built-in timeout. If the connection
-            // is even mildly degraded (not fully disconnected, just slow/stuck) it
-            // can hang indefinitely with no error and no reply — the "Extracting
-            // profile picture..." message just sits there forever. That silent
-            // hang, not a crash, is the likely explanation for getpp appearing to
-            // do nothing at all. 20s is generous for a normal profilePictureUrl
-            // call but still short enough that the command actually resolves.
-            const withTimeout = (promise, ms) => Promise.race([
-                promise,
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for WhatsApp')), ms))
-            ]);
-
-            try {
-                let profileUrl;
-                try {
-                    profileUrl = await withTimeout(sock.profilePictureUrl(targetJid, 'image'), 20000);
-                } catch (err) {
-                    profileUrl = await withTimeout(sock.profilePictureUrl(targetJid, 'preview'), 20000);
-                }
-
-                if (!profileUrl) throw new Error("No URL returned");
-
-                const targetNumber = targetJid.split('@')[0];
-                const captionText = targetJid === jid ? "📷 *Group profile picture extracted!*" : `📷 *Profile picture extracted for:* @${targetNumber}`;
-
-                await sock.sendMessage(jid, { 
-                    image: { url: profileUrl }, 
-                    caption: captionText,
-                    mentions: targetJid !== jid ? [targetJid] : []
-                }, { quoted: msg });
-
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
-
-            } catch (e) {
-                const isTargetGroup = targetJid.endsWith('@g.us');
-                const errorText = isTargetGroup
-                    ? "❌ This group has no active profile picture set."
-                    : "❌ No public profile picture found.\n\n_Note: This user may have hidden their profile photo in WhatsApp Privacy Settings._";
-
-                // This edit call itself was throwing "Connection Closed" with no
-                // surrounding try/catch, so a socket hiccup while just trying to
-                // report the original error escaped this function uncaught instead
-                // of being logged as a normal "[COMMAND] Failed to execute getpp" —
-                // it looked like getpp itself was crashing the bot.
-                try {
-                    await sock.sendMessage(jid, { text: errorText, edit: statusMsg.key });
-                } catch (reportErr) {
-                    console.error('⚠️ [GETPP] Failed to report error (connection likely mid-reconnect):', reportErr.message);
-                }
-            }
+            await resolveAndSendPp(sock, msg, jid, args, true);
         }
     },
 
@@ -578,22 +669,99 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         }
     }, 
 
-    // 4. SETNAME (Bot display name)
+    // 4. SETNAME (Bot's own display name — owner/dev only)
     {
         name: 'setname',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
-            if (!args) return await sock.sendMessage(jid, { text: "❌ Provide name." }, { quoted: msg });
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Provide a name." }, { quoted: msg });
 
             try {
-                await sock.updateProfileName(args);
+                await withTimeout(sock.updateProfileName(args));
                 config.botName = args;
                 saveState();
                 await sock.sendMessage(jid, { text: `✅ Display name set to: *${args}*` }, { quoted: msg });
             } catch (error) {
-                await sock.sendMessage(jid, { text: "❌ Failed." }, { quoted: msg });
+                console.error('❌ [SETNAME] Failed:', error.message);
+                await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 4b. SETNAME-GC (Group subject/name — group admin or owner/sudo/dev)
+    {
+        name: 'setname-gc',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const authorized = await requireGroupAdmin(sock, msg, jid, isOwner, isSudo, isDev);
+            if (!authorized) return;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Provide a new group name." }, { quoted: msg });
+
+            // WhatsApp silently truncates a subject over 25 characters rather
+            // than erroring, which looks like the command "half-worked" — so
+            // this is caught and reported up front instead.
+            if (args.length > 25) {
+                return await sock.sendMessage(jid, { text: `❌ Group names can be at most 25 characters (yours is ${args.length}).` }, { quoted: msg });
+            }
+
+            try {
+                await withTimeout(sock.groupUpdateSubject(jid, args));
+                await sock.sendMessage(jid, { text: `✅ Group name set to: *${args}*` }, { quoted: msg });
+            } catch (error) {
+                console.error('❌ [SETNAME-GC] Failed:', error.message);
+                await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 4c. SETBIO (Bot's own About/status text — owner/dev only)
+    {
+        name: 'setbio',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Provide the new bio text." }, { quoted: msg });
+
+            // WhatsApp's own About field caps at 139 characters.
+            if (args.length > 139) {
+                return await sock.sendMessage(jid, { text: `❌ Bio can be at most 139 characters (yours is ${args.length}).` }, { quoted: msg });
+            }
+
+            try {
+                await withTimeout(sock.updateProfileStatus(args));
+                await sock.sendMessage(jid, { text: `✅ Bio set to: *${args}*` }, { quoted: msg });
+            } catch (error) {
+                console.error('❌ [SETBIO] Failed:', error.message);
+                await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}` }, { quoted: msg });
+            }
+        }
+    },
+
+    // 4d. SETDESC (Group description — group admin or owner/sudo/dev)
+    {
+        name: 'setdesc',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            const jid = msg.key.remoteJid;
+            const authorized = await requireGroupAdmin(sock, msg, jid, isOwner, isSudo, isDev);
+            if (!authorized) return;
+            if (!args) return await sock.sendMessage(jid, { text: "❌ Provide the new group description." }, { quoted: msg });
+
+            // WhatsApp's group description caps at 512 characters.
+            if (args.length > 512) {
+                return await sock.sendMessage(jid, { text: `❌ Description can be at most 512 characters (yours is ${args.length}).` }, { quoted: msg });
+            }
+
+            try {
+                await withTimeout(sock.groupUpdateDescription(jid, args));
+                await sock.sendMessage(jid, { text: "✅ Group description updated!" }, { quoted: msg });
+            } catch (error) {
+                console.error('❌ [SETDESC] Failed:', error.message);
+                await sock.sendMessage(jid, { text: `❌ Failed: ${error.message}` }, { quoted: msg });
             }
         }
     },
