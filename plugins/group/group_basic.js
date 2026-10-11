@@ -131,6 +131,75 @@ async function verifyPermissions(sock, msg, jid, isOwner, isDev = false, isSudo 
     return true;
 }
 
+// Shared by .approve and .reject. No args → process every pending request.
+// A number arg (e.g. ".approve 200") caps how many get processed, oldest
+// request first, so a huge backlog can be worked through in controlled
+// batches instead of one all-or-nothing call. Sent in chunks of 20 with a
+// short pause between — groupRequestParticipantsUpdate accepts an array,
+// but a single call for a very large backlog is more likely to be rate
+// limited or time out than several smaller ones.
+const JOIN_REQUEST_BATCH_SIZE = 20;
+const JOIN_REQUEST_BATCH_DELAY_MS = 1500;
+
+async function handleJoinRequests(sock, msg, args, action, isOwner, isSudo, isDev) {
+    const jid = msg.key.remoteJid;
+    const isGroup = jid.endsWith('@g.us');
+    if (!isGroup) return;
+
+    const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, action);
+    if (!isAuthorized) return;
+
+    try {
+        const pending = await sock.groupRequestParticipantsList(jid);
+        if (!pending || pending.length === 0) {
+            return await sock.sendMessage(jid, { text: "ℹ️ There are no pending join requests right now." }, { quoted: msg });
+        }
+
+        let limit = pending.length;
+        const trimmedArgs = (args || '').trim();
+        if (trimmedArgs) {
+            const n = parseInt(trimmedArgs, 10);
+            if (!isNaN(n) && n > 0) limit = Math.min(n, pending.length);
+        }
+
+        const targets = pending.slice(0, limit).map(r => r.jid).filter(Boolean);
+        if (targets.length === 0) {
+            return await sock.sendMessage(jid, { text: "ℹ️ There are no pending join requests right now." }, { quoted: msg });
+        }
+
+        const statusMsg = await sock.sendMessage(jid, {
+            text: `⏳ ${action === 'approve' ? 'Approving' : 'Rejecting'} ${targets.length} of ${pending.length} pending request${pending.length === 1 ? '' : 's'}...`
+        }, { quoted: msg });
+
+        let done = 0, failed = 0;
+        for (let i = 0; i < targets.length; i += JOIN_REQUEST_BATCH_SIZE) {
+            const batch = targets.slice(i, i + JOIN_REQUEST_BATCH_SIZE);
+            try {
+                const results = await sock.groupRequestParticipantsUpdate(jid, batch, action);
+                const batchFailed = Array.isArray(results) ? results.filter(r => r.status !== '200').length : 0;
+                done += batch.length - batchFailed;
+                failed += batchFailed;
+            } catch (e) {
+                console.error(`❌ [${action.toUpperCase()}] Batch failed:`, e.message);
+                failed += batch.length;
+            }
+            if (i + JOIN_REQUEST_BATCH_SIZE < targets.length) {
+                await new Promise(r => setTimeout(r, JOIN_REQUEST_BATCH_DELAY_MS));
+            }
+        }
+
+        const verb = action === 'approve' ? 'Approved' : 'Rejected';
+        const summary = failed > 0
+            ? `✅ ${verb} ${done} request${done === 1 ? '' : 's'} (${failed} failed).`
+            : `✅ ${verb} ${done} request${done === 1 ? '' : 's'}.`;
+        await sock.sendMessage(jid, { text: summary, edit: statusMsg.key });
+
+    } catch (e) {
+        console.error(`❌ [${action.toUpperCase()}] Failed:`, e.message);
+        await sock.sendMessage(jid, { text: `❌ Failed: ${e.message}\n\n_This requires the group's membership approval setting to be on, and the bot to be an admin._` }, { quoted: msg });
+    }
+}
+
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
@@ -323,6 +392,22 @@ module.exports = [
 
             await sock.groupParticipantsUpdate(jid, [target], "demote");
             await sock.sendMessage(jid, { text: `👋 Demoted admin back to standard member.`, mentions: [target] }, { quoted: msg });
+        }
+    },
+
+    // 5b. APPROVE / REJECT (Membership-approval pending requests)
+    {
+        name: 'approve',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            await handleJoinRequests(sock, msg, args, 'approve', isOwner, isSudo, isDev);
+        }
+    },
+    {
+        name: 'reject',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
+            await handleJoinRequests(sock, msg, args, 'reject', isOwner, isSudo, isDev);
         }
     },
 
