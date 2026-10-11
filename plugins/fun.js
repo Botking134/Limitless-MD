@@ -893,17 +893,18 @@ module.exports = [
             ];
             const frames = lines.map((l, i) => toSans(l) + (i === lines.length - 1 ? "\n☢️☢️☢️" : ""));
 
-            // Flat 1.5s per line
-            const LINE_DELAY = 1500;
+            // How long each frame stays on screen (ms), in frame order.
+            // The last value is how long the final frame stays up before the GIF.
+            const durations = [3000, 3000, 2500, 4000, 4000, 4000, 5000, 3000];
 
             try {
                 let sentMsg = await sock.sendMessage(jid, { text: frames[0] }, { quoted: msg });
                 for (let i = 1; i < frames.length; i++) {
-                    await delay(LINE_DELAY);
+                    await delay(durations[i - 1]);
                     await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
                 }
-                // Let the final frame land before the GIF
-                await delay(LINE_DELAY);
+                // Final frame stays up, then the GIF
+                await delay(durations[frames.length - 1]);
 
                 // Random finisher GIF (no caption)
                 await sendRandomGif(sock, jid, ATOMIC_GIFS);
