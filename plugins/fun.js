@@ -3,9 +3,27 @@ const config = require('../config');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const { getPhoneJid, normalizeToJid } = require('../stateManager');
 
-// ─── PURPLE_ANS GIFS (Issue 6) ──────────────────────────────────
-const PURPLE_100_GIF = "https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExMXgwdG55YjMyeGtsbThnOGczY2k5bTczYjFzbXBocndiemZzYjJxNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/1Nzq2od8Zz3aQYqfFi/giphy.mp4";
-const PURPLE_200_GIF = "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExMGlyODhydzVqM2FxNnJmMDY1ZXQyZDR0YnhiaTh6ZHlwZHRwYmR0MyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/0wxRYPhdD7n3W7NQ1R/giphy.mp4";
+// ─── FINISHER GIF POOLS (picked at random) ──────────────────────
+// Tenor "/view/" links are web pages, not media files. They are resolved
+// to a direct .mp4 at runtime by resolveTenor() below.
+
+const PURPLE_100_GIFS = [
+    "https://tenor.com/view/gojo-satoru-gif-949319236308169219",
+    "https://tenor.com/view/nokiamurasaki-gif-12906935930435930250",
+    "https://tenor.com/view/gojo-satoru-gojo-ohio-gif-27179630"
+];
+
+const PURPLE_200_GIFS = [
+    "https://tenor.com/view/jujutsu-kaisen-ninjaristic-gojo-hollow-purple-nuke-gif-5930621233389374429",
+    "https://tenor.com/view/notl-200-hollow-purple-gojo-satoru-hollow-purple-gif-10276497360447801798",
+    "https://tenor.com/view/gojo-gojo-satoru-hollow-purple-sukuna-mahoraga-gif-13503454303453550028",
+    "https://media0.giphy.com/media/v1.Y2lkPTZjMDliOTUydG95eGpkOGQ0d2EyczBrM2F2ZXA5cGk0dDVhbngzNHEwdHY0dHU0ayZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/f9Gi1ER3c0Rfv4pVhI/giphy.mp4"
+];
+
+const ATOMIC_GIFS = [
+    "https://media0.giphy.com/media/v1.Y2lkPTZjMDliOTUyc3hudWUyN3p5a3VhcTZqMnppbzA4emNqeDVyOGxpa2tiZmNtMDI2cCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/PzMHYQJnuKbenMrXu9/giphy.mp4",
+    "https://media3.giphy.com/media/v1.Y2lkPTZjMDliOTUyNXZybTA1aGk3cDQxeGNlZGN1Nng3YXZwcTk1cjNzM3Q2ZzhjdHJoMCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/tqUAPnPsgLhHiZucqU/giphy.mp4"
+];
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -100,6 +118,72 @@ function toSans(text) {
         }
         return char;
     }).join('');
+}
+
+// ─── TENOR RESOLVER ───────────────────────────────────────────────
+// Turns a tenor.com/view/... page link into a direct .mp4 URL by reading
+// the page's og:video meta tag (with a raw media.tenor.com regex fallback).
+// Results are cached so each link is only fetched once per process.
+
+const tenorCache = new Map();
+
+async function resolveTenor(url) {
+    if (tenorCache.has(url)) return tenorCache.get(url);
+
+    try {
+        const res = await fetch(url, {
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml"
+            }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const html = await res.text();
+
+        let direct = null;
+
+        // og:video (property before content, or content before property)
+        const m1 = html.match(/<meta[^>]+property=["']og:video["'][^>]+content=["']([^"']+)["']/i);
+        const m2 = html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video["']/i);
+        if (m1) direct = m1[1];
+        else if (m2) direct = m2[1];
+
+        // Fallback: any raw .mp4 on media.tenor.com
+        if (!direct) {
+            const m3 = html.match(/https:\/\/media\.tenor\.com\/[^"'\s\\]+\.mp4/i);
+            if (m3) direct = m3[0];
+        }
+
+        if (direct) {
+            direct = direct.replace(/&amp;/g, '&');
+            tenorCache.set(url, direct);
+            return direct;
+        }
+    } catch (e) { /* fall through */ }
+
+    return null;
+}
+
+// Picks GIFs from `pool` in random order and sends the first one that works.
+// No caption. If one fails (Tenor markup change, dead link), tries the next.
+async function sendRandomGif(sock, jid, pool) {
+    const order = [...pool].sort(() => Math.random() - 0.5);
+
+    for (const entry of order) {
+        try {
+            let mediaUrl = entry;
+            if (entry.includes('tenor.com/')) {
+                mediaUrl = await resolveTenor(entry);
+                if (!mediaUrl) continue;
+            }
+            await sock.sendMessage(jid, {
+                video: { url: mediaUrl },
+                gifPlayback: true
+            });
+            return true;
+        } catch (e) { /* try next */ }
+    }
+    return false;
 }
 
 async function queryGroq(messages, model = "openai/gpt-oss-20b") {
@@ -741,7 +825,7 @@ module.exports = [
         }
     },
 
-    // ─── 15. PURPLE_ANS (Issue 6) ───────────────────────────────
+    // ─── 15. PURPLE_ANS ─────────────────────────────────────────
     {
         name: 'purple_ans',
         isPrefixless: false,
@@ -766,12 +850,8 @@ module.exports = [
                     await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
                 }
 
-                // ─── Send 100% follow‑up GIF (Issue 6) ──────────
-                await sock.sendMessage(jid, {
-                    video: { url: PURPLE_100_GIF },
-                    gifPlayback: true,
-                    caption: "100% Hollow Purple"
-                });
+                // Random follow-up GIF (no caption)
+                await sendRandomGif(sock, jid, PURPLE_100_GIFS);
             } else if (selection === '200') {
                 const frames = [
                     toSans("Maximum output!!!") + "\n      " + toSans("Blue!!!🔵"),
@@ -787,13 +867,41 @@ module.exports = [
                     await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
                 }
 
-                // ─── Send 200% follow‑up GIF (Issue 6) ──────────
-                await sock.sendMessage(jid, {
-                    video: { url: PURPLE_200_GIF },
-                    gifPlayback: true,
-                    caption: "200% Hollow Purple"
-                });
+                // Random follow-up GIF (no caption)
+                await sendRandomGif(sock, jid, PURPLE_200_GIFS);
             }
+        }
+    },
+
+    // ─── 15b. ATOMIC ────────────────────────────────────────────
+    {
+        name: 'atomic',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isSudo) return;
+
+            const frames = [
+                toSans("That's what it is to be human. I have to overcome those limits."),
+                toSans("The being that I want to be would not evaporate in a nuclear explosion."),
+                toSans("Once upon a time, there was a man who wished to withstand a nuclear bomb."),
+                toSans("The man built his muscles, honed his mind, perfected his skill. However, there were yet heights he could not attain."),
+                toSans("But I couldn't allow myself to give up. So after years upon years of training, I arrived at a single solution."),
+                toSans("If I don't want to be vaporized in a nuclear explosion... I must become nuclear myself."),
+                toSans("Compromise is not an option. Let the true meaning of Almighty be carved into your soul. This is my almighty power..."),
+                toSans("I... Am... Atomic.") + "\n☢️☢️☢️"
+            ];
+
+            try {
+                let sentMsg = await sock.sendMessage(jid, { text: frames[0] }, { quoted: msg });
+                for (let i = 1; i < frames.length; i++) {
+                    await delay(3000);
+                    await sock.sendMessage(jid, { text: frames[i], edit: sentMsg.key });
+                }
+
+                // Random finisher GIF (no caption)
+                await sendRandomGif(sock, jid, ATOMIC_GIFS);
+            } catch (err) { /* ignore */ }
         }
     },
 
