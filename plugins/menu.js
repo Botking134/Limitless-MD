@@ -154,12 +154,19 @@ _┃ ⊱ antidemote_
 _┃ ⊱ overkill_
 _┃ ⊱ antijoin_
 _┃ ⊱ gfilter_
+_┃ ⊱ approve_
+_┃ ⊱ reject_
 
 _❖ ── [ TOOLS ] ── ❖_
 _┃ ⊱ search_ (AI Command Finder)
 _┃ ⊱ track_
 _┃ ⊱ getpp_
+_┃ ⊱ getpp-gc_
+_┃ ⊱ setpp-gc_
 _┃ ⊱ setname_
+_┃ ⊱ setname-gc_
+_┃ ⊱ setbio_
+_┃ ⊱ setdesc_
 _┃ ⊱ save_
 _┃ ⊱ tostatus_
 _┃ ⊱ fw_
@@ -884,7 +891,7 @@ Here's your prefix though`;
         name: 'menu_group',
         isPrefixless: true,
         execute: async (sock, msg) => {
-            const text = `┌─────────┐\n│ 🔥 GROUP  \n└─────────┘\n\n_┃ ⊱ .mute_\n_┃ ⊱ .unmute_\n_┃ ⊱ .kick_\n_┃ ⊱ .promote_\n_┃ ⊱ .demote_\n_┃ ⊱ .tagall_\n_┃ ⊱ .tag_\n_┃ ⊱ .link_\n_┃ ⊱ .antilink_\n_┃ ⊱ .admins_\n_┃ ⊱ .antitag_\n_┃ ⊱ .antibot_\n_┃ ⊱ .warn_\n_┃ ⊱ .welcome_\n_┃ ⊱ .goodbye_\n_┃ ⊱ .poll_\n_┃ ⊱ .antigm_\n_┃ ⊱ .gclog_\n_┃ ⊱ .antispam_\n_┃ ⊱ .silence_\n_┃ ⊱ .gcalerts_\n_┃ ⊱ .antipromote_\n_┃ ⊱ .antidemote_\n_┃ ⊱ .overkill_\n_┃ ⊱ .antijoin_\n_┃ ⊱ .gfilter_`;
+            const text = `┌─────────┐\n│ 🔥 GROUP  \n└─────────┘\n\n_┃ ⊱ .mute_\n_┃ ⊱ .unmute_\n_┃ ⊱ .kick_\n_┃ ⊱ .promote_\n_┃ ⊱ .demote_\n_┃ ⊱ .tagall_\n_┃ ⊱ .tag_\n_┃ ⊱ .link_\n_┃ ⊱ .antilink_\n_┃ ⊱ .admins_\n_┃ ⊱ .antitag_\n_┃ ⊱ .antibot_\n_┃ ⊱ .warn_\n_┃ ⊱ .welcome_\n_┃ ⊱ .goodbye_\n_┃ ⊱ .poll_\n_┃ ⊱ .antigm_\n_┃ ⊱ .gclog_\n_┃ ⊱ .antispam_\n_┃ ⊱ .silence_\n_┃ ⊱ .gcalerts_\n_┃ ⊱ .antipromote_\n_┃ ⊱ .antidemote_\n_┃ ⊱ .overkill_\n_┃ ⊱ .antijoin_\n_┃ ⊱ .gfilter_\n_┃ ⊱ .approve_\n_┃ ⊱ .reject_`;
             await sendWithBackButton(sock, msg, text);
         }
     },
@@ -892,7 +899,7 @@ Here's your prefix though`;
         name: 'menu_tools',
         isPrefixless: true,
         execute: async (sock, msg) => {
-            const text = `┌────────┐\n│ ⚙️ TOOLS  \n└────────┘\n\n_┃ ⊱ .search_\n_┃ ⊱ .track_\n_┃ ⊱ .getpp_\n_┃ ⊱ .setname_\n_┃ ⊱ .save_\n_┃ ⊱ .tostatus_\n_┃ ⊱ .fw_\n_┃ ⊱ .presence_\n_┃ ⊱ .autotyping_\n_┃ ⊱ .autorecording_\n_┃ ⊱ .alwaysonline_\n_┃ ⊱ .autoread_\n_┃ ⊱ .antidelete_\n_┃ ⊱ .antiviewonce_\n_┃ ⊱ .antibug_\n_┃ ⊱ .clear_\n_┃ ⊱ .autoviewstatus_\n_┃ ⊱ .statusemoji_\n_┃ ⊱ .autoreactstatus_\n_┃ ⊱ .block_\n_┃ ⊱ .unblock_\n_┃ ⊱ .aza_\n_┃ ⊱ .time_\n_┃ ⊱ .weather_\n_┃ ⊱ .device_\n_┃ ⊱ .ss_\n_┃ ⊱ .calc_\n_┃ ⊱ .trt_\n_┃ ⊱ .spam_\n_┃ ⊱ .pfilter_\n_┃ ⊱ .filters_\n_┃ ⊱ .delfilter_`;
+            const text = `┌────────┐\n│ ⚙️ TOOLS  \n└────────┘\n\n_┃ ⊱ .search_\n_┃ ⊱ .track_\n_┃ ⊱ .getpp_\n_┃ ⊱ .getpp-gc_\n_┃ ⊱ .setpp-gc_\n_┃ ⊱ .setname_\n_┃ ⊱ .setname-gc_\n_┃ ⊱ .setbio_\n_┃ ⊱ .setdesc_\n_┃ ⊱ .save_\n_┃ ⊱ .tostatus_\n_┃ ⊱ .fw_\n_┃ ⊱ .presence_\n_┃ ⊱ .autotyping_\n_┃ ⊱ .autorecording_\n_┃ ⊱ .alwaysonline_\n_┃ ⊱ .autoread_\n_┃ ⊱ .antidelete_\n_┃ ⊱ .antiviewonce_\n_┃ ⊱ .antibug_\n_┃ ⊱ .clear_\n_┃ ⊱ .autoviewstatus_\n_┃ ⊱ .statusemoji_\n_┃ ⊱ .autoreactstatus_\n_┃ ⊱ .block_\n_┃ ⊱ .unblock_\n_┃ ⊱ .aza_\n_┃ ⊱ .time_\n_┃ ⊱ .weather_\n_┃ ⊱ .device_\n_┃ ⊱ .ss_\n_┃ ⊱ .calc_\n_┃ ⊱ .trt_\n_┃ ⊱ .spam_\n_┃ ⊱ .pfilter_\n_┃ ⊱ .filters_\n_┃ ⊱ .delfilter_`;
             await sendWithBackButton(sock, msg, text);
         }
     },
