@@ -120,4 +120,15 @@ async function sendWithQuotedMedia(sock, jid, quoted, caption, mentions, extraTe
     }
 }
 
-module.exports = { unwrap, getBody, getQuoted, sendWithQuotedMedia };
+// JID of whoever sent the command. `participantIds` is the group's list of JIDs,
+// used to pick the right form (phone JID vs LID) when the bot itself is the sender.
+function getSenderJid(sock, msg, participantIds = []) {
+    const strip = (j) => (j || '').replace(/:\d+@/, '@');
+    if (msg.key.fromMe) {
+        const own = [strip(sock.user?.id), strip(sock.user?.lid)].filter(Boolean);
+        return own.find(j => participantIds.includes(j)) || own[0] || null;
+    }
+    return msg.key.participant || msg.participant || null;
+}
+
+module.exports = { unwrap, getBody, getQuoted, sendWithQuotedMedia, getSenderJid };
