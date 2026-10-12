@@ -100,7 +100,6 @@ function createServer() {
             isPublic: config.isPublic,
             autoReact: config.autoReact,
             antipm: config.antipm,
-            antigcstatus: config.antigcstatus,
             botJid: config.botJid || null,
             ownerJid: config.ownerJid || null,
             totalCommands,
