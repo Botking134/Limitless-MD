@@ -1,3 +1,4 @@
+// utilities.js
 const config = require('../config');
 const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
 const os = require('os');
@@ -186,7 +187,7 @@ module.exports = [
 
                     // Register active session for SessionManager to intercept replies
                     global.azaSessions = global.azaSessions || {};
-                    global.azaSessions[prompt.key.id] = { step: 1 };
+                    global.azaSessions[prompt.key.id] = { step: 1, ownerBot: (sock.user?.id || '').replace(/:\d+@/, '@') };
                     
                     // Auto-delete session after 5 minutes to prevent RAM memory leaks
                     setTimeout(() => {
@@ -778,7 +779,7 @@ module.exports = [
                 }, { quoted: msg });
 
                 global.noteSessions = global.noteSessions || {};
-                global.noteSessions[prompt.key.id] = { content, author: msg.pushName || 'User' };
+                global.noteSessions[prompt.key.id] = { content, author: msg.pushName || 'User', ownerBot: (sock.user?.id || '').replace(/:\d+@/, '@') };
 
                 // Auto garbage-collection after 5 minutes to prevent RAM leak
                 setTimeout(() => {
