@@ -46,6 +46,25 @@ function formatDuration(ms) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 }
 
+// ─── BOT-SCOPED SESSION CLAIMING ─────────────────────────────────
+// The main bot and every sub-bot live in the same process and share these
+// global session tables, and a reply in a group is delivered to ALL of them.
+// Without a claim, each bot handled the same reply and advanced the same session
+// (the bank wizard saved "OPAY" as the name and the account number as the bank).
+// A session belongs to exactly one bot: the one that sent the prompt (ownerBot,
+// set when the session is created) or, for older sessions without it, the first
+// bot to touch it. The check-and-set is synchronous, so two bots can't both win.
+
+function botIdOf(sock) {
+    return (sock?.user?.id || '').replace(/:\d+@/, '@');
+}
+
+function claimSession(session, sock) {
+    const id = botIdOf(sock);
+    if (!session.ownerBot) session.ownerBot = id;
+    return session.ownerBot === id;
+}
+
 // ─── ACTIVE INTERACTIVE SESSION ROUTER ───────────────────────────
 
 async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMsgId, cleanChatJid) {
@@ -54,6 +73,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
     // 1. Bank Details Setup Wizard (aza)
     if (global.azaSessions && global.azaSessions[quotedMsgId]) {
         const session = global.azaSessions[quotedMsgId];
+        if (!claimSession(session, sock)) return false;
         const jid = msg.key.remoteJid;
 
         if (session.step === 1) {
@@ -131,6 +151,7 @@ async function handleInteractiveSessions(sock, msg, trimmedMessageBody, quotedMs
     // 2. Forwarding Wizard (fw)
     if (global.forwardSessions && global.forwardSessions[quotedMsgId]) {
         const session = global.forwardSessions[quotedMsgId];
+        if (!claimSession(session, sock)) return false;
         const jid = msg.key.remoteJid;
 
         const cleanTarget = trimmedMessageBody.trim();
@@ -185,6 +206,7 @@ async function handleDownloaderSessions(sock, msg, trimmedMessageBody, quotedMsg
     for (const [key, registry] of Object.entries(registries)) {
         if (registry && registry[quotedMsgId]) {
             const session = registry[quotedMsgId];
+            if (!claimSession(session, sock)) return false;
             try {
                 if (typeof session.handle === 'function') {
                     await session.handle(sock, msg, session, trimmedMessageBody);
@@ -287,6 +309,7 @@ async function handleNoteSession(sock, msg) {
 
         if (quotedMsgId && global.noteSessions && global.noteSessions[quotedMsgId]) {
             const session = global.noteSessions[quotedMsgId];
+            if (!claimSession(session, sock)) return false;
             const noteName = text.trim();
             if (!noteName) return false;
 
