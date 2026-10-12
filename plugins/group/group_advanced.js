@@ -8,6 +8,7 @@ const { exec } = require('child_process');
 const axios = require('axios');
 const { readAlertsData, saveAlertsData } = require('../gcalerts');
 const ActivityManager = require('../../helpers/ActivityManager');
+const { getQuoted, sendWithQuotedMedia } = require('../../helpers/TagHelper');
 
 // ─── GLOBALS  ──────────────────────────────────────────────────────
 global.tkickTimers = global.tkickTimers || {};
@@ -692,20 +693,19 @@ const advancedGroupCommands = [
             const groupMetadata = await sock.groupMetadata(jid);
             const participants = groupMetadata.participants.map(p => p.id);
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-            let quotedText = '';
+            const quoted = getQuoted(msg);
+            const messageText = args ? args : (quoted?.text ? quoted.text : (quoted?.media ? '' : "🤞 *Summoned by Satoru Gojo.*"));
 
-            if (quoted && quoted.stanzaId) {
-                const qMsg = quoted.quotedMessage;
-                quotedText = qMsg?.conversation || qMsg?.extendedTextMessage?.text || qMsg?.imageMessage?.caption || qMsg?.videoMessage?.caption || '';
+            let sent = false;
+            if (quoted?.media) {
+                sent = await sendWithQuotedMedia(sock, jid, quoted, messageText, participants);
             }
-
-            const messageText = args ? args : (quotedText ? quotedText : "🤞 *Summoned by Satoru Gojo.*");
-
-            await sock.sendMessage(jid, {
-                text: messageText,
-                mentions: participants
-            });
+            if (!sent) {
+                await sock.sendMessage(jid, {
+                    text: messageText || "🤞 *Summoned by Satoru Gojo.*",
+                    mentions: participants
+                });
+            }
 
             try {
                 await sock.sendMessage(jid, { delete: msg.key });
