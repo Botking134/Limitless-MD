@@ -117,7 +117,7 @@ module.exports = {
     DYNAMIC_KEYS: [
         'prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode',
         'isPublic', 'autoReact', 'antipm', 'lizzyChats', 'chatbotChats', 'fridayChats',
-        'gojoSleepChats', 'gojoGlobalSleep', 'gojoChats',
+        'gojoSleepChats', 'gojoGlobalSleep', 'gojoChats', 'sleepChats',
         'antilink', 'antitag', 'antibot', 'antispam', 'antigm', 'antigcstatus',
         'antipromote', 'antidemote', 'antibug', 'antidelete', 'antigay', 'antiviewonce',
         'stickerCommands', 'welcome', 'goodbye', 'gcalerts', 'presence',
