@@ -10,6 +10,7 @@ const { handleIncomingMessage } = require('./helpers/Infinity');
 const { normalizeToJid, getPhoneJid, loadState, warmLidCache, getPushName } = require('./stateManager');
 const ActivityManager = require('./helpers/ActivityManager');
 const BotContext = require('./helpers/BotContext');
+const SleepGate = require('./helpers/SleepGate');
 const { generateMemberCard, buildCaption } = require('./helpers/WelcomeCardManager');
 
 // ─── INITIALIZE STATE ON BOOT ──────────────────────────────────
@@ -677,6 +678,11 @@ async function dispatchGroupParticipantsUpdate(sock, anu) {
     const botId = sock.__botId || BotContext.MAIN_ID;
     const groupKey = normalizeToJid(anu?.id || '');
 
+    // A bot put to sleep in this group stays completely quiet and never takes
+    // the lease, so another bot that is awake there can still act.
+    SleepGate.guardSocket(sock);
+    if (SleepGate.isSleeping(botId, anu?.id)) return;
+
     if (botId !== BotContext.MAIN_ID) {
         const order = [...(global.subBotSockets?.keys() || [])].indexOf(botId);
         await new Promise(r => setTimeout(r, 1500 * (Math.max(order, 0) + 1)));
@@ -703,6 +709,8 @@ async function handleMessagesUpdate(sock, updates) {
             const deletedMsgId = update.key.id;
             const jid = update.key.remoteJid;
             if (!(global.messageStore && global.messageStore[deletedMsgId])) continue;
+            SleepGate.guardSocket(sock);
+            if (SleepGate.isSleeping(botId, jid)) continue;
 
             if (botId !== BotContext.MAIN_ID) {
                 const order = [...(global.subBotSockets?.keys() || [])].indexOf(botId);
