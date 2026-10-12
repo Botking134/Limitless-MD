@@ -13,6 +13,7 @@ const { handleViewOnce } = require('./log');
 // Sub-module imports
 const { getRawMessage, cleanJid, extractBodyAndTrim, hasTrackableMediaContent } = require('./Message');
 const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation, handleNoteSession } = require('./SessionManager');
+const BotRouter = require('./BotRouter');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 const { recordMessage } = require('./SummaryManager');
@@ -220,6 +221,12 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         let command;
         let args;
 
+        // Multi-bot routing: a reply to a message another of our bots sent is that
+        // bot's to handle (see helpers/BotRouter.js).
+        BotRouter.registerBotIdentity(sock);
+        const routeCtx = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+        if (!BotRouter.isAddressedToThisBot(sock, routeCtx?.participant)) return;
+
         const isNoteHandled = await handleNoteSession(sock, msg);
         if (isNoteHandled) return;
 
@@ -235,6 +242,9 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         const dlHandled = await handleDownloaderSessions(sock, msg, trimmedMessageBody, quotedMsgId);
         if (dlHandled) return;
 
+        // Game state is shared by every bot, so only one bot may act on a given message.
+        const mayHandleGames = BotRouter.claimMessage('game', jid, msg.key.id);
+
         // Quiz session check
         const quizSingleKey = jid + '_' + senderJid;
         const quizMultiKey = jid;
@@ -249,7 +259,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        if (quotedMsgId && activeQuizKey && global.triviaSessions && global.triviaSessions[activeQuizKey]) {
+        if (mayHandleGames && quotedMsgId && activeQuizKey && global.triviaSessions && global.triviaSessions[activeQuizKey]) {
             const session = global.triviaSessions[activeQuizKey];
             if (session.status === 'awaiting_category' && session.lastQuestionMsgId === quotedMsgId) {
                 await executeBotCommand('quiz_cat', sock, msg, trimmedMessageBody, { isOwner: false, isSudo: false, isDev: false, senderNumber });
@@ -257,7 +267,9 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        const answered = await handleActiveGameAnswers(sock, msg, quotedMsgId, trimmedMessageBody, jid, senderJid, senderNumber, executeBotCommand);
+        const answered = mayHandleGames
+            ? await handleActiveGameAnswers(sock, msg, quotedMsgId, trimmedMessageBody, jid, senderJid, senderNumber, executeBotCommand)
+            : false;
         if (answered) return;
 
         await handleAfkDeactivation(sock, msg);
@@ -376,7 +388,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             }
         }
 
-        const redirectedGame = handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody);
+        const redirectedGame = mayHandleGames ? handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody) : null;
         if (redirectedGame) {
             command = redirectedGame.command;
             args = redirectedGame.args;
