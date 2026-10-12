@@ -64,6 +64,7 @@ function register(cmd) {
     commands[key] = {
         execute: cmd.execute,
         isPrefixless: cmd.isPrefixless || false,
+        prefixlessArgs: cmd.prefixlessArgs || false,
         metadata: {
             description: cmd.description || `${cmd.name} command`,
             category: cmd.category || 'tools',
