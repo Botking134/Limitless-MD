@@ -84,6 +84,9 @@ const baseConfig = {
     /** Chats where Gojo is manually put to sleep. */
     gojoSleepChats: [],
 
+    /** Chats this bot has been put to sleep in with .sleep (ignored until .wake). */
+    sleepChats: [],
+
     /** Global Gojo sleep toggle (true = prefixless Gojo is disabled everywhere). */
     gojoGlobalSleep: true,
 
