@@ -11,6 +11,7 @@ config.antilink = config.antilink || {};
 config.antitag = config.antitag || {};
 config.antibot = config.antibot || {};
 config.antigm = config.antigm || {};
+config.antigcstatus = (config.antigcstatus && typeof config.antigcstatus === 'object') ? config.antigcstatus : {};
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -353,16 +354,19 @@ const securityCommands = [
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
             const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
 
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antigcstatus', isAdmin);
             if (!isAuthorized) return;
 
-            if (!config.antigcstatus) {
-                config.antigcstatus = 'off';
-            }
+            // Per-group, like every other anti-* policy — this used to be a
+            // single bot-wide string, so turning it on in one group silently
+            // turned it on for every group the bot is in.
+            config.antigcstatus = (config.antigcstatus && typeof config.antigcstatus === 'object') ? config.antigcstatus : {};
 
             if (!args) {
-                const current = config.antigcstatus || 'off';
+                const current = config.antigcstatus[jid] || 'off';
                 const prompt = `🛡️ *Anti-Status Protection Panel (antigcstatus)* 🛡️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
                                `Status: \`${current.toUpperCase()}\`\n\n` +
                                `Select a moderate policy below:`;
@@ -387,7 +391,7 @@ const securityCommands = [
             const action = args.toLowerCase().trim();
 
             if (['warn', 'delete', 'kick', 'off'].includes(action)) {
-                config.antigcstatus = action;
+                config.antigcstatus[jid] = action;
                 saveState();
                 await sock.sendMessage(jid, { text: `🔒 *Anti-Status Protection updated:* \`${action.toUpperCase()}\`` }, { quoted: msg });
             }
