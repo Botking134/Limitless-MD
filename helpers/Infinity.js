@@ -14,6 +14,7 @@ const { handleViewOnce } = require('./log');
 const { getRawMessage, cleanJid, extractBodyAndTrim, hasTrackableMediaContent } = require('./Message');
 const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation, handleNoteSession } = require('./SessionManager');
 const BotRouter = require('./BotRouter');
+const SleepGate = require('./SleepGate');
 const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 const { recordMessage } = require('./SummaryManager');
@@ -102,6 +103,7 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
 // (sock.__botId, tagged when the socket was created) it actually came from,
 // so a sub-bot owner's settings changes never leak onto the main bot.
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
+    SleepGate.guardSocket(sock);
     return BotContext.runAsBot(sock.__botId, () => handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds));
 }
 
@@ -185,6 +187,14 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         }
 
         const { rawMsg, body, trimmedMessageBody, lowerMessage } = extractBodyAndTrim(msg);
+
+        // Sleep mode (.sleep / .wake): in a chat this bot has been put to sleep in,
+        // it ignores everything - commands, AI, games, filters, moderation - except
+        // the wake command. Per-bot, since sleepChats is a dynamic config key.
+        if (Array.isArray(config.sleepChats) && config.sleepChats.includes(jid)) {
+            const firstWord = (trimmedMessageBody || '').split(/\s+/)[0].toLowerCase();
+            if (firstWord !== `${activePrefix || ''}wake`.toLowerCase()) return;
+        }
 
         try {
             const filterTriggered = await handleFilterInterceptor(sock, msg, trimmedMessageBody, jid);
