@@ -2,7 +2,7 @@
 const config = require('../../config');
 const { saveState, normalizeToJid, resolveToPhoneJid } = require('../../stateManager');
 const { DEV_LIDS } = require('../devs');
-const { getQuoted, sendWithQuotedMedia } = require('../../helpers/TagHelper');
+const { getQuoted, sendWithQuotedMedia, getSenderJid } = require('../../helpers/TagHelper');
 
 // ─── GLOBAL TIMERS ──────────────────────────────────────────────
 global.groupTimers = global.groupTimers || {};
@@ -472,7 +472,13 @@ module.exports = [
             const participants = groupMetadata.participants.map(p => p.id);
 
             const quoted = getQuoted(msg);
-            const messageText = args ? args : (quoted?.text ? quoted.text : (quoted?.media ? '' : "🤞 *Summoned by Satoru Gojo.*"));
+
+            // Default text names whoever ran the command, as a mention.
+            const senderJid = getSenderJid(sock, msg, participants);
+            const defaultText = `⛓️ *Summoned by ${senderJid ? '@' + senderJid.split('@')[0] : 'the summoner'}.*`;
+            if (senderJid && !participants.includes(senderJid)) participants.push(senderJid);
+
+            const messageText = args ? args : (quoted?.text ? quoted.text : (quoted?.media ? '' : defaultText));
 
             if (quoted?.media) {
                 const sent = await sendWithQuotedMedia(sock, jid, quoted, messageText, participants);
@@ -480,7 +486,7 @@ module.exports = [
             }
 
             await sock.sendMessage(jid, {
-                text: messageText || "🤞 *Summoned by Satoru Gojo.*",
+                text: messageText || defaultText,
                 mentions: participants
             });
         }
