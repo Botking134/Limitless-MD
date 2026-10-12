@@ -2,12 +2,7 @@
 const config = require('../../config');
 const { saveState, normalizeToJid, resolveToPhoneJid } = require('../../stateManager');
 const { DEV_LIDS } = require('../devs');
-
-// ─── MADARA GIFS ──────────────────────────────────────────────────
-const madaraGifs = [
-    "https://media.giphy.com/media/PmCiutdmK8mt2/giphy.mp4",
-    "https://media.giphy.com/media/5D8fDjKyQfuZW/giphy.mp4"
-];
+const { getQuoted, sendWithQuotedMedia } = require('../../helpers/TagHelper');
 
 // ─── GLOBAL TIMERS ──────────────────────────────────────────────
 global.groupTimers = global.groupTimers || {};
@@ -423,44 +418,41 @@ module.exports = [
             const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'tagall');
             if (!isAuthorized) return;
 
-            const messageText = args ? args : "Attention everyone!";
             const groupMetadata = await sock.groupMetadata(jid);
             const participants = groupMetadata.participants;
+            const quoted = getQuoted(msg);
+
+            const messageText = args ? args : (quoted?.text ? quoted.text : "Attention everyone!");
 
             const admins = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin');
             const members = participants.filter(p => p.admin === null || p.admin === undefined);
 
-            let text = `📢 *Note:* _"${messageText}"_\n\n`;
-            
-            text += `             ⟬ ＡＤＭＩＮＳ⟭\n`;
+            const header = `📢 *Note:* _"${messageText}"_`;
+
+            let list = `             ⟬ ＡＤＭＩＮＳ⟭\n`;
             for (let i = 0; i < admins.length; i += 2) {
                 const a1 = admins[i] ? `➣@${admins[i].id.split('@')[0]}` : '';
                 const a2 = admins[i + 1] ? `                      ➣@${admins[i + 1].id.split('@')[0]}` : '';
-                text += `${a1}${a2}\n`;
+                list += `${a1}${a2}\n`;
             }
 
-            text += `\n           ☲ＭＥＭＢＥＲＳ☲\n`;
+            list += `\n           ☲ＭＥＭＢＥＲＳ☲\n`;
             for (let i = 0; i < members.length; i++) {
-                text += `➥@${members[i].id.split('@')[0]}\n`;
+                list += `➥@${members[i].id.split('@')[0]}\n`;
             }
 
             const allJids = participants.map(p => p.id);
 
-            const randomGif = madaraGifs[Math.floor(Math.random() * madaraGifs.length)];
-            try {
-                await sock.sendMessage(jid, {
-                    video: { url: randomGif },
-                    gifPlayback: true,
-                    caption: text,
-                    mentions: allJids
-                });
-            } catch (gifErr) {
-                console.error("Failed to send Madara GIF for tagall:", gifErr.message);
-                await sock.sendMessage(jid, {
-                    text: text,
-                    mentions: allJids
-                });
+            // Replying to a picture/video: send the real media, then the member list.
+            if (quoted?.media) {
+                const sent = await sendWithQuotedMedia(sock, jid, quoted, header, allJids, list);
+                if (sent) return;
             }
+
+            await sock.sendMessage(jid, {
+                text: `${header}\n\n${list}`,
+                mentions: allJids
+            });
         }
     },
 
@@ -479,31 +471,18 @@ module.exports = [
             const groupMetadata = await sock.groupMetadata(jid);
             const participants = groupMetadata.participants.map(p => p.id);
 
-            const quoted = msg.message.extendedTextMessage?.contextInfo;
-            let quotedText = '';
+            const quoted = getQuoted(msg);
+            const messageText = args ? args : (quoted?.text ? quoted.text : (quoted?.media ? '' : "🤞 *Summoned by Satoru Gojo.*"));
 
-            if (quoted && quoted.stanzaId) {
-                const qMsg = quoted.quotedMessage;
-                quotedText = qMsg?.conversation || qMsg?.extendedTextMessage?.text || qMsg?.imageMessage?.caption || qMsg?.videoMessage?.caption || '';
+            if (quoted?.media) {
+                const sent = await sendWithQuotedMedia(sock, jid, quoted, messageText, participants);
+                if (sent) return;
             }
 
-            const messageText = args ? args : (quotedText ? quotedText : "🤞 *Summoned by Satoru Gojo.*");
-
-            const randomGif = madaraGifs[Math.floor(Math.random() * madaraGifs.length)];
-            try {
-                await sock.sendMessage(jid, {
-                    video: { url: randomGif },
-                    gifPlayback: true,
-                    caption: messageText,
-                    mentions: participants
-                });
-            } catch (gifErr) {
-                console.error("Failed to send Madara GIF for tag:", gifErr.message);
-                await sock.sendMessage(jid, {
-                    text: messageText,
-                    mentions: participants
-                });
-            }
+            await sock.sendMessage(jid, {
+                text: messageText || "🤞 *Summoned by Satoru Gojo.*",
+                mentions: participants
+            });
         }
     },
 
