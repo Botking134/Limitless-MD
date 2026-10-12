@@ -1,4 +1,4 @@
-// utilities.js
+// plugins/utilities.js
 const config = require('../config');
 const { saveState, normalizeToJid, getPhoneJid } = require('../stateManager');
 const os = require('os');
