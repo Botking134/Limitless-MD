@@ -104,8 +104,8 @@ const baseConfig = {
     /** Anti-group-mention policy: 'delete', 'warn', 'kick', or 'off'. */
     antigm: {},
 
-    /** Anti-status-update policy: 'delete', 'warn', 'kick', or 'off'. */
-    antigcstatus: "off",
+    /** Anti-gcstatus policy, per group: { [groupJid]: 'delete'|'warn'|'kick'|'off' }. */
+    antigcstatus: {},
 
     /** Antipromote protection: 'on' or 'off'. */
     antipromote: {},
