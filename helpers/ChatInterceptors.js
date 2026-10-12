@@ -208,19 +208,50 @@ async function handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid
         return true;
     }
 
-    // 4. Anti-Group-Mention Scanner (Antigm with Status & Context Group Mention Support)
+    // 4. Anti-Group-Mention Scanner (Antigm — catches the GROUP ITSELF being
+    // @-mentioned/tagged, as opposed to antigcstatus below, which is the
+    // separate guard over the bot's own gcstatus command / native group
+    // status posts. These used to collide: both watched groupStatusMessageV2,
+    // and because this scanner runs first and returns early, it silently
+    // swallowed every groupStatusMessageV2 event before antigcstatus ever
+    // got a turn — so antigcstatus only ever fired when antigm was off.
+    // They're now split by actual WhatsApp message/proto type:
+    //   antigm        → contextInfo.groupMentions (real @group tag),
+    //                    groupMentionedMessage, groupStatusMentionMessage
+    //                    (a status that mentions this group)
+    //   antigcstatus  → groupStatusMessage / groupStatusMessageV2
+    //                    (an actual post TO the group's status)
     const antigmPolicy = config.antigm?.[jid] || 'off';
-    // NOTE: rawUnwrapped has already been unwrapped by getRawMessage(), which recurses
-    // INTO groupStatusMessageV2.message and returns the inner content directly — so
-    // rawUnwrapped never still has a groupStatusMessageV2 key on it. Must check the
-    // original, non-unwrapped msg.message instead (same pattern used in Infinity.js).
-    const isStatusMention = !!(msg.message?.groupStatusMessageV2 || msg.message?.groupStatusMentionMessage);
-    const hasContextGroupMention = !!(rawUnwrapped?.extendedTextMessage?.contextInfo?.groupMention);
 
-    const isGroupMention = mentionedJids.some(j => j.endsWith('@g.us')) || 
-                           /@g\.us/i.test(body) || 
+    // NOTE: rawUnwrapped has already been unwrapped by getRawMessage(), which
+    // recurses into wrapper types and returns the inner content directly — so
+    // top-level message-type fields (groupMentionedMessage, groupStatusMentionMessage,
+    // etc.) must be checked against the original, non-unwrapped msg.message,
+    // same pattern used in Infinity.js for groupStatusMessageV2.
+    const isGroupMentionedViaStatus = !!msg.message?.groupStatusMentionMessage;
+    const hasGroupMentionedMessage = !!msg.message?.groupMentionedMessage;
+
+    // Real WhatsApp "@group" tags live in contextInfo.groupMentions — a
+    // REPEATED array of { groupJid, groupSubject }, not a singular
+    // "groupMention" field. The old check (`contextInfo?.groupMention`,
+    // singular) was reading a field that doesn't exist on the proto and was
+    // always undefined, so an actual @group tag in a message never tripped
+    // this scanner at all.
+    const msgContextInfo = rawUnwrapped?.contextInfo ||
+                           rawUnwrapped?.extendedTextMessage?.contextInfo ||
+                           rawUnwrapped?.imageMessage?.contextInfo ||
+                           rawUnwrapped?.videoMessage?.contextInfo ||
+                           rawUnwrapped?.stickerMessage?.contextInfo ||
+                           rawUnwrapped?.audioMessage?.contextInfo ||
+                           rawUnwrapped?.documentMessage?.contextInfo;
+    const contextGroupMentions = msgContextInfo?.groupMentions || [];
+    const hasContextGroupMention = Array.isArray(contextGroupMentions) && contextGroupMentions.length > 0;
+
+    const isGroupMention = mentionedJids.some(j => j.endsWith('@g.us')) ||
+                           /@g\.us/i.test(body) ||
                            /This group was mentioned/i.test(body) ||
-                           isStatusMention ||
+                           isGroupMentionedViaStatus ||
+                           hasGroupMentionedMessage ||
                            hasContextGroupMention;
 
     if (isGroupMention && antigmPolicy !== 'off') {
@@ -232,11 +263,18 @@ async function handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid
 }
 
 // ─── GROUP STATUS PROTECTION ─────────────────────────────────────
+// Guards the groupStatusMessage / groupStatusMessageV2 territory — the same
+// message shape the bot's own .gcstatus command relays (see
+// plugins/group/group_advanced.js). Scoped per-group via jid, same as every
+// other anti-* policy (config.antigcstatus[jid]), not a single bot-wide flag
+// — it used to be a bare string (config.antigcstatus = "off"/"warn"/...),
+// meaning turning it on in one group silently turned it on in every group
+// the bot is in at once.
 async function handleGroupStatusProtection(sock, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev, isAdmin) {
     const isImmune = isAuthorized || isDev || isAdmin;
     if (isImmune) return false;
 
-    const policy = config.antigcstatus || 'off';
+    const policy = config.antigcstatus?.[cleanChatJid] || 'off';
     if (policy !== 'off') {
         await applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, cleanChatJid, "Antigcstatus");
         return true;
