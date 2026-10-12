@@ -595,6 +595,49 @@ const securityCommands = [
         }
     },
 
+    // 9b. RESETWARN (alias: mercy) - clears a user's warning count in this group
+    {
+        name: 'resetwarn',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
+            const jid = msg.key.remoteJid;
+            const isGroup = jid.endsWith('@g.us');
+            if (!isGroup) return;
+
+            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'resetwarn', isAdmin);
+            if (!isAuthorized) return;
+
+            const targetJid = parseTargetUser(msg, args);
+            if (!targetJid) {
+                return await sock.sendMessage(jid, { text: "❌ Please mention a user or reply to their message to reset their warnings." }, { quoted: msg });
+            }
+
+            const targetNumber = targetJid.split('@')[0];
+            const warnKey = `${jid}_${targetNumber}`;
+            config.warns = config.warns || {};
+            const previous = Number(config.warns[warnKey]) || 0;
+
+            if (previous === 0) {
+                return await sock.sendMessage(jid, {
+                    text: `🕊️ @${targetNumber} has no warnings to clear.`,
+                    mentions: [targetJid]
+                }, { quoted: msg });
+            }
+
+            delete config.warns[warnKey];
+            saveState();
+
+            const threshold = Number(config.warnThreshold) || 5;
+            await sock.sendMessage(jid, {
+                text: `            🕊️ *Mercy Granted* 🕊️\n\n` +
+                      `👤 *Pardoned:* @${targetNumber}\n\n` +
+                      `📉 *Count:* ${previous} → 0 / ${threshold}\n\n` +
+                      `_Do not waste it._`,
+                mentions: [targetJid]
+            }, { quoted: msg });
+        }
+    },
+
     // 10. SILENCE
     {
         name: 'silence',
@@ -906,6 +949,7 @@ const securityCommands = [
 const aliases = [];
 securityCommands.forEach(cmd => {
     if (cmd.name === 'antilink') aliases.push({ ...cmd, name: 'infinity' });
+    if (cmd.name === 'resetwarn') aliases.push({ ...cmd, name: 'mercy' });
 });
 securityCommands.push(...aliases);
 
