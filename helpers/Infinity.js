@@ -498,6 +498,17 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                 } else if (Array.isArray(commands) && commands.some(c => c.name === targetLower && c.isPrefixless)) {
                     command = targetLower;
                     args = '';
+                } else {
+                    // Prefixless commands flagged prefixlessArgs (e.g. "summon I am awesome")
+                    // may carry follow-up text after the command word.
+                    const firstSpace = trimmedMessageBody.search(/\s/);
+                    if (firstSpace > 0 && typeof commands === 'object' && !Array.isArray(commands)) {
+                        const head = trimmedMessageBody.slice(0, firstSpace).toLowerCase();
+                        if (commands[head]?.isPrefixless && commands[head]?.prefixlessArgs) {
+                            command = head;
+                            args = trimmedMessageBody.slice(firstSpace + 1).trim();
+                        }
+                    }
                 }
             }
         }
