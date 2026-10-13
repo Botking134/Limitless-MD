@@ -118,6 +118,18 @@ function findTopLevelType(message, wanted) {
     return null;
 }
 
+// Is THIS bot an admin in the group? true / false, or null when metadata is unavailable.
+// A revoke of someone else's message from a non-admin is ignored by WhatsApp with no error,
+// which looks exactly like "the delete was sent but nothing happened".
+async function isBotGroupAdmin(sock, jid) {
+    const metadata = await getCachedGroupMetadata(sock, jid);
+    if (!metadata?.participants) return null;
+    const mine = [sock.user?.id, sock.user?.lid].filter(Boolean).map(cleanJid);
+    const entry = metadata.participants.find(p =>
+        mine.includes(cleanJid(p.id)) || (p.lid && mine.includes(cleanJid(p.lid))));
+    return !!entry && (entry.admin === 'admin' || entry.admin === 'superadmin');
+}
+
 // Owner / sudo / dev / admin check for the status fast path below. Cache-first, and
 // it only reaches for a network lookup when the sender is an unknown LID.
 async function quickImmunity(sock, jid, senderJid) {
@@ -273,8 +285,16 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             if (wantGc || wantGm) {
                 try {
                     const immune = await quickImmunity(sock, jid, senderJid);
-                    console.log(`[FAST PATH] ${wantGc ? 'antigcstatus' : 'antigm'} sender=${senderNumber} immune=${immune}`);
+                    const botAdmin = immune ? null : await isBotGroupAdmin(sock, jid);
+                    console.log(`[FAST PATH] ${wantGc ? 'antigcstatus' : 'antigm'} sender=${senderNumber} immune=${immune} botAdmin=${botAdmin}`);
                     if (!immune) {
+                        if (botAdmin === false) {
+                            console.log(`[FAST PATH] This bot is NOT an admin in ${jid}, so it cannot delete or kick. Make it admin, or turn the protection off for this bot.`);
+                            return;
+                        }
+                        // If several of our bots are in this group and all have the protection on,
+                        // only the first one to see the post acts (no double notices or double warns).
+                        if (!BotRouter.claimMessage('gcstatus', jid, msg.key.id)) return;
                         if (wantGc) await applySecurityPolicy(sock, msg, gcPolicy, senderJid, senderNumber, cleanChatJid, "Antigcstatus");
                         else await applySecurityPolicy(sock, msg, gmPolicy, senderJid, senderNumber, jid, "Anti-Group-Mention");
                         return;
