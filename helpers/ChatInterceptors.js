@@ -80,6 +80,7 @@ async function deleteOffendingMessage(sock, jid, msg, reason = '') {
     };
     try {
         await sock.sendMessage(key.remoteJid, { delete: key });
+        console.log(`[SECURITY] Delete request sent for ${key.id} (${reason || 'policy'}), participant=${key.participant || 'none'}`);
         return true;
     } catch (err) {
         console.error(`[SECURITY] Delete failed (${reason || 'policy'}):`, err?.message || err, JSON.stringify(key));
