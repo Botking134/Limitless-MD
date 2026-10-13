@@ -15,7 +15,7 @@ const { getRawMessage, cleanJid, extractBodyAndTrim, hasTrackableMediaContent } 
 const { handleInteractiveSessions, handleDownloaderSessions, handleAfkDeactivation, handleNoteSession } = require('./SessionManager');
 const BotRouter = require('./BotRouter');
 const SleepGate = require('./SleepGate');
-const { isUserSilenced, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
+const { isUserSilenced, applySecurityPolicy, handleGroupSecurity, handleGroupStatusProtection, handleAntibugSpamLimit, handleAntispamRateLimit } = require('./ChatInterceptors');
 const { handleGameRedirects, handleActiveGameAnswers } = require('./GameInterceptors');
 const { recordMessage } = require('./SummaryManager');
 const ActivityManager = require('./ActivityManager');
@@ -102,6 +102,31 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
 // every config.<setting> read/write during this message to whichever bot
 // (sock.__botId, tagged when the socket was created) it actually came from,
 // so a sub-bot owner's settings changes never leak onto the main bot.
+// Owner / sudo / dev / admin check for the status fast path below. Cache-first, and
+// it only reaches for a network lookup when the sender is an unknown LID.
+async function quickImmunity(sock, jid, senderJid) {
+    const isPrivileged = (j) =>
+        DEV_LIDS.includes(j) || DEV_JIDS.includes(j) || DEV_PHONE_JIDS.includes(j) ||
+        j === config.ownerJid || (!!config.ownerLid && j === config.ownerLid) ||
+        (Array.isArray(config.secondaryOwners) && config.secondaryOwners.includes(j)) ||
+        (Array.isArray(config.sudos) && config.sudos.includes(j)) ||
+        (Array.isArray(config.sudoLids) && config.sudoLids.includes(j));
+
+    if (isPrivileged(senderJid)) return true;
+
+    const metadata = await getCachedGroupMetadata(sock, jid);
+    const entry = metadata?.participants?.find(p =>
+        cleanJid(p.id) === cleanJid(senderJid) || (p.lid && cleanJid(p.lid) === cleanJid(senderJid)));
+    if (entry && (entry.admin === 'admin' || entry.admin === 'superadmin')) return true;
+
+    if (senderJid.endsWith('@lid')) {
+        let phone = global.lidCache?.[senderJid] || '';
+        if (!phone) { try { phone = await getPhoneJid(sock, senderJid, jid); } catch (e) {} }
+        if (phone && isPrivileged(phone)) return true;
+    }
+    return false;
+}
+
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     SleepGate.guardSocket(sock);
     return BotContext.runAsBot(sock.__botId, () => handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds));
@@ -194,6 +219,33 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         if (Array.isArray(config.sleepChats) && config.sleepChats.includes(jid)) {
             const firstWord = (trimmedMessageBody || '').split(/\s+/)[0].toLowerCase();
             if (firstWord !== `${activePrefix || ''}wake`.toLowerCase()) return;
+        }
+
+        // FAST PATH - group status posts and group-mention statuses. These used to be
+        // checked near the END of this function, after filters, game/session handlers,
+        // AFK checks, owner lookups and level tracking, so the offending post sat in
+        // the chat for that whole time. They're handled here, first, and only when the
+        // matching protection is actually switched on for this chat.
+        if (isGroup && !msg.key.fromMe) {
+            const m = msg.message || {};
+            const isGcStatus = !!(m.groupStatusMessageV2 || m.ephemeralMessage?.message?.groupStatusMessageV2 || msg.mtype === 'groupStatusMessageV2');
+            const isStatusMention = !!(m.groupStatusMentionMessage || m.groupMentionedMessage);
+            const gcPolicy = config.antigcstatus?.[cleanChatJid] || 'off';
+            const gmPolicy = config.antigm?.[jid] || 'off';
+            const wantGc = isGcStatus && gcPolicy !== 'off';
+            const wantGm = !wantGc && isStatusMention && gmPolicy !== 'off';
+
+            if (wantGc || wantGm) {
+                try {
+                    if (!(await quickImmunity(sock, jid, senderJid))) {
+                        if (wantGc) await applySecurityPolicy(sock, msg, gcPolicy, senderJid, senderNumber, cleanChatJid, "Antigcstatus");
+                        else await applySecurityPolicy(sock, msg, gmPolicy, senderJid, senderNumber, jid, "Anti-Group-Mention");
+                        return;
+                    }
+                } catch (e) {
+                    console.error('[FAST PATH] status protection error:', e.message);
+                }
+            }
         }
 
         try {
