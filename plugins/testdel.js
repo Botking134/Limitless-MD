@@ -4,6 +4,10 @@
 //   .testdel           reply to the message -> tries delete forms 1-3 one after another
 //   .testdel wrapped   experimental form 4 (see below) - only when you ask for it
 //
+// Works on the bot's own posts too (post one with .gcstatus, then reply to it): a post
+// the bot made itself is revoked as fromMe, which needs no admin rights, so it shows
+// whether deleting a group status works at all.
+//
 // Before each attempt it posts a short note, so you can see which attempt made the
 // message disappear. Owner / dev only, groups only. Safe to delete this file afterwards.
 //
@@ -43,25 +47,35 @@ module.exports = [
                 return await sock.sendMessage(jid, { text: "❌ Reply to the message you want to test deleting." }, { quoted: msg });
             }
 
-            const key = { remoteJid: jid, id: reply.stanzaId, fromMe: false, participant: reply.participant };
+            // A post made by this bot itself is revoked as "fromMe" (no admin rights involved);
+            // anyone else's is an admin revoke. Testing both tells us which case fails.
+            const strip = (j) => (j || '').replace(/:\d+@/, '@');
+            const botIds = [sock.user?.id, sock.user?.lid].filter(Boolean).map(strip);
+            const isOwn = !!reply.participant && botIds.includes(strip(reply.participant));
+            const key = {
+                remoteJid: jid,
+                id: reply.stanzaId,
+                fromMe: isOwn,
+                participant: isOwn ? undefined : reply.participant
+            };
             const note = (text) => sock.sendMessage(jid, { text });
             const wantsWrapped = /wrapped/i.test(args || '');
 
             try {
                 if (!wantsWrapped) {
-                    await note('🧪 Attempt 1: plain revoke (as received)');
+                    await note(`🧪 Attempt 1: plain revoke (${isOwn ? "the bot's own post" : "someone else's post, admin revoke"})`);
                     await sock.sendMessage(jid, { delete: key });
                     await wait(5000);
 
                     let phone = '';
-                    if (key.participant?.endsWith('@lid')) {
+                    if (!isOwn && key.participant?.endsWith('@lid')) {
                         try { phone = await getPhoneJid(sock, key.participant, jid); } catch (e) {}
                     }
                     if (phone && phone !== key.participant) {
                         await note('🧪 Attempt 2: revoke with phone-number participant');
                         await sock.sendMessage(jid, { delete: { ...key, participant: phone } });
                     } else {
-                        await note('🧪 Attempt 2 skipped (no phone JID for this participant)');
+                        await note(isOwn ? '🧪 Attempt 2 skipped (own post)' : '🧪 Attempt 2 skipped (no phone JID for this participant)');
                     }
                     await wait(5000);
 
