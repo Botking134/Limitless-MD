@@ -102,6 +102,22 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
 // every config.<setting> read/write during this message to whichever bot
 // (sock.__botId, tagged when the socket was created) it actually came from,
 // so a sub-bot owner's settings changes never leak onto the main bot.
+// Finds a message-type key at the top level of a message, looking through the
+// usual wrapper layers (ephemeral, view-once, device-sent...). It deliberately does
+// NOT look inside contextInfo, so a normal reply that merely quotes a status is
+// never mistaken for the status itself.
+function findTopLevelType(message, wanted) {
+    let cur = message;
+    for (let i = 0; i < 5 && cur; i++) {
+        for (const k of wanted) if (cur[k]) return k;
+        cur = cur.ephemeralMessage?.message || cur.viewOnceMessage?.message ||
+              cur.viewOnceMessageV2?.message || cur.viewOnceMessageV2Extension?.message ||
+              cur.documentWithCaptionMessage?.message || cur.deviceSentMessage?.message ||
+              cur.editedMessage?.message || null;
+    }
+    return null;
+}
+
 // Owner / sudo / dev / admin check for the status fast path below. Cache-first, and
 // it only reaches for a network lookup when the sender is an unknown LID.
 async function quickImmunity(sock, jid, senderJid) {
@@ -114,14 +130,20 @@ async function quickImmunity(sock, jid, senderJid) {
 
     if (isPrivileged(senderJid)) return true;
 
-    const metadata = await getCachedGroupMetadata(sock, jid);
+    // On a weak connection these lookups can hang or fail, and the post stays visible
+    // the whole time. Each is capped; if it doesn't answer in time the sender is treated
+    // as a regular member and the delete goes out.
+    const withTimeout = (promise, ms) =>
+        Promise.race([promise, new Promise(resolve => setTimeout(() => resolve(null), ms))]);
+
+    const metadata = await withTimeout(getCachedGroupMetadata(sock, jid), 2000);
     const entry = metadata?.participants?.find(p =>
         cleanJid(p.id) === cleanJid(senderJid) || (p.lid && cleanJid(p.lid) === cleanJid(senderJid)));
     if (entry && (entry.admin === 'admin' || entry.admin === 'superadmin')) return true;
 
     if (senderJid.endsWith('@lid')) {
         let phone = global.lidCache?.[senderJid] || '';
-        if (!phone) { try { phone = await getPhoneJid(sock, senderJid, jid); } catch (e) {} }
+        if (!phone) { try { phone = await withTimeout(getPhoneJid(sock, senderJid, jid), 1200); } catch (e) {} }
         if (phone && isPrivileged(phone)) return true;
     }
     return false;
@@ -137,6 +159,12 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         const activePrefix = getActivePrefix();
         if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
         const msg = chatUpdate.messages[0];
+        // Diagnostic: a group event that arrives with NO message body (e.g. a stub) is
+        // dropped just below. If a status post shows up like that it would otherwise
+        // be invisible, so log it (group chats only, never our own messages).
+        if (msg && !msg.message && msg.key?.remoteJid?.endsWith('@g.us') && !msg.key.fromMe) {
+            console.log(`[STATUS-DEBUG] ${msg.key.remoteJid} event with no message body: stubType=${msg.messageStubType ?? '-'} params=${JSON.stringify(msg.messageStubParameters || []).slice(0, 120)} from=${msg.key.participant || '-'}`);
+        }
         if (!msg || !msg.message) return;
 
         const jid = msg.key.remoteJid;
@@ -228,16 +256,25 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         // matching protection is actually switched on for this chat.
         if (isGroup && !msg.key.fromMe) {
             const m = msg.message || {};
-            const isGcStatus = !!(m.groupStatusMessageV2 || m.ephemeralMessage?.message?.groupStatusMessageV2 || msg.mtype === 'groupStatusMessageV2');
-            const isStatusMention = !!(m.groupStatusMentionMessage || m.groupMentionedMessage);
+            const isGcStatus = !!findTopLevelType(m, ['groupStatusMessageV2', 'groupStatusMessage']) || msg.mtype === 'groupStatusMessageV2';
+            const isStatusMention = !!findTopLevelType(m, ['groupStatusMentionMessage', 'groupMentionedMessage']);
             const gcPolicy = config.antigcstatus?.[cleanChatJid] || 'off';
             const gmPolicy = config.antigm?.[jid] || 'off';
+
+            // Diagnostic: anything status-shaped that reaches the handler is logged, so a
+            // missed status can be told apart from one that never arrived.
+            const topKeys = Object.keys(m);
+            if (isGcStatus || isStatusMention || topKeys.some(k => /status/i.test(k))) {
+                console.log(`[STATUS-DEBUG] ${jid} from=${senderNumber} keys=${topKeys.join(',')} gc=${isGcStatus} mention=${isStatusMention} antigcstatus=${gcPolicy} antigm=${gmPolicy}`);
+            }
             const wantGc = isGcStatus && gcPolicy !== 'off';
             const wantGm = !wantGc && isStatusMention && gmPolicy !== 'off';
 
             if (wantGc || wantGm) {
                 try {
-                    if (!(await quickImmunity(sock, jid, senderJid))) {
+                    const immune = await quickImmunity(sock, jid, senderJid);
+                    console.log(`[FAST PATH] ${wantGc ? 'antigcstatus' : 'antigm'} sender=${senderNumber} immune=${immune}`);
+                    if (!immune) {
                         if (wantGc) await applySecurityPolicy(sock, msg, gcPolicy, senderJid, senderNumber, cleanChatJid, "Antigcstatus");
                         else await applySecurityPolicy(sock, msg, gmPolicy, senderJid, senderNumber, jid, "Anti-Group-Mention");
                         return;
