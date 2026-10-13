@@ -902,6 +902,38 @@ module.exports = [
         }
     },
 
+    // ─── SETPREFIX ─────────────────────────────────────────────
+    // Shortcut for `.setvar prefix=<value>`. The prefix is stored per bot, so
+    // changing it on a sub-bot never touches the main bot (and vice versa).
+    {
+        name: 'setprefix',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner) return;
+
+            const newPrefix = (args || '').trim().split(/\s+/)[0];
+            if (!newPrefix) {
+                return await sock.sendMessage(jid, {
+                    text: `❌ Usage: \`${config.prefix}setprefix <symbol>\`\nExample: \`${config.prefix}setprefix !\``
+                }, { quoted: msg });
+            }
+            if (newPrefix.length > 3) {
+                return await sock.sendMessage(jid, { text: "❌ A prefix can be at most 3 characters." }, { quoted: msg });
+            }
+
+            const oldPrefix = config.prefix;
+            if (!setVar('prefix', newPrefix)) {
+                return await sock.sendMessage(jid, { text: "❌ Failed to save the new prefix." }, { quoted: msg });
+            }
+            require('../commands').reload();
+
+            await sock.sendMessage(jid, {
+                text: `✅ *Prefix changed:* \`${oldPrefix}\` → \`${newPrefix}\`\n_Commands now start with_ \`${newPrefix}\` _for this bot._`
+            }, { quoted: msg });
+        }
+    },
+
     // ─── SETTINGS ────────────────────────────────────────────────
     {
         name: 'settings',
