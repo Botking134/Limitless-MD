@@ -67,12 +67,36 @@ function isUserSilenced(silencedUsers, jid, senderJid) {
     return null;
 }
 
+// ─── FAST, VISIBLE MESSAGE DELETION ─────────────────────────────
+// Revoke needs the full key (chat, id, and for other people's messages the
+// participant). Failures used to be swallowed silently, which made "it doesn't
+// delete" impossible to diagnose, so they are logged with the key that was used.
+async function deleteOffendingMessage(sock, jid, msg, reason = '') {
+    const key = {
+        remoteJid: msg.key?.remoteJid || jid,
+        id: msg.key?.id,
+        fromMe: false,
+        participant: msg.key?.participant || msg.participant || undefined
+    };
+    try {
+        await sock.sendMessage(key.remoteJid, { delete: key });
+        return true;
+    } catch (err) {
+        console.error(`[SECURITY] Delete failed (${reason || 'policy'}):`, err?.message || err, JSON.stringify(key));
+        return false;
+    }
+}
+
 // ─── SECURITY POLICY EXECUTION LAYER ───────────────────────────
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
     if (!policy || policy === 'off') return;
 
     // POLICY NORMALIZATION: Automatically map 'on' to 'delete'
     const effectivePolicy = policy === 'on' ? 'delete' : policy;
+
+    // Delete FIRST. This used to run after the sender's LID was resolved to a phone
+    // number (a network lookup), which is time the offending post stayed visible.
+    await deleteOffendingMessage(sock, jid, msg, violationReason);
 
     let resolvedSender = normalizeToJid(senderJid);
     if (resolvedSender.endsWith('@lid')) {
@@ -91,11 +115,6 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
     // and warn-count keys, where a stable phone-number identity matters
     // more than mention rendering.
     const mentionJid = normalizeToJid(senderJid);
-
-    // Attempt message deletion safely
-    try {
-        await sock.sendMessage(jid, { delete: msg.key });
-    } catch (delErr) { /* ignore deletion failure */ }
 
     // Helper to resolve the exact participant ID from group metadata for kicking
     async function getKickTargets(target) {
