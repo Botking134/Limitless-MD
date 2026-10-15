@@ -222,18 +222,30 @@ function isAddressed(sock, msg) {
     const botJid = sock.user?.id 
         ? normalizeToJid(sock.user.id) 
         : (sock.user?.jid ? normalizeToJid(sock.user.jid) : '');
+    const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+
+    // Most reliable reply check: the quoted message is one Cas himself sent.
+    // The sender of a quoted message is often a @lid in groups, which never
+    // matches the bot's phone JID, so don't rely on the sender alone.
+    const quotedStanzaId = contextInfo?.stanzaId;
+    if (quotedStanzaId && global.botMessageAgents && global.botMessageAgents[quotedStanzaId] === 'cas') {
+        return true;
+    }
 
     let quotedParticipant = '';
     if (msg.quoted?.sender) quotedParticipant = normalizeToJid(msg.quoted.sender);
     else if (msg.quoted?.participant) quotedParticipant = normalizeToJid(msg.quoted.participant);
     else if (contextInfo?.participant) quotedParticipant = normalizeToJid(contextInfo.participant);
 
-    if (quotedParticipant && botJid && quotedParticipant === botJid) {
+    if (quotedParticipant && (quotedParticipant === botJid || (botLid && quotedParticipant === botLid))) {
         return true;
     }
 
     const mentions = contextInfo?.mentionedJid || msg.mentionedJid || [];
-    if (botJid && mentions.some(m => normalizeToJid(m) === botJid)) {
+    if (mentions.some(m => {
+        const nm = normalizeToJid(m);
+        return (botJid && nm === botJid) || (botLid && nm === botLid);
+    })) {
         return true;
     }
 
@@ -766,7 +778,12 @@ module.exports = {
         // Decorates nested quoted message context immediately before the addressing checks execute
         decorateQuotedMessage(msg, botJid);
 
-        if (!isAddressed(sock, msg)) return;
+        if (!isAddressed(sock, msg)) {
+            if (quotedMsgId) {
+                console.log(`[CAS] Ignored reply: quoted message ${quotedMsgId} is not recognised as Cas's (agent: ${global.botMessageAgents?.[quotedMsgId] || 'none'}).`);
+            }
+            return;
+        }
 
         let query = getMessageText(msg);
         if (!query) return;
