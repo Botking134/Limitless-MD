@@ -15,21 +15,10 @@ global.tkickTimers = global.tkickTimers || {};
 global.kickallActive = global.kickallActive || {};
 global.groupTimers = global.groupTimers || {};
 
-// ─── TIER GRID CONFIGURATION ───────────────────────────────────────
-const TIER_DATA = [
-    { index: 11, name: "Infinitesimal", req: 0, icon: "🌌", desc: "Lower-dimensional entity unable to affect the 3D world." },
-    { index: 10, name: "Human", req: 15, icon: "🏃", desc: "Standard human capabilities up to peak athlete level." },
-    { index: 9, name: "Superhuman", req: 45, icon: "⚡", desc: "Street-level fighter. Can smash steel, concrete, or small rooms." },
-    { index: 8, name: "Urban", req: 90, icon: "🏢", desc: "Destructive force ranging from single buildings to city blocks." },
-    { index: 7, name: "Nuclear / Regional", req: 150, icon: "☄️", desc: "Capable of leveling towns, major cities, or vaporizing mountains." },
-    { index: 6, name: "Global", req: 250, icon: "🗺️", desc: "Tectonic force capable of destroying island nations or continents." },
-    { index: 5, name: "Planetary", req: 400, icon: "🪐", desc: "Celestial power capable of shattering moons and gas giants." },
-    { index: 4, name: "Stellar", req: 600, icon: "☀️", desc: "Cosmic power able to completely obliterate stars and solar systems." },
-    { index: 3, name: "Cosmic", req: 800, icon: "🌌", desc: "Reality-spanning scale. Can collapse galaxies and physical matter." },
-    { index: 2, name: "Multiversal", req: 900, icon: "🔮", desc: "Manipulates multiple timelines and distinct universes simultaneously." },
-    { index: 1, name: "Extradimensional (Outerversal)", req: 1000, icon: "👁️", desc: "Transcends space, time, and dimensional conceptual frameworks." },
-    { index: 0, name: "Boundless", req: 1500, icon: "👑", desc: "True omnipotence. Beyond any logical framework or hierarchy." }
-];
+// ─── TIER GRID ─────────────────────────────────────────────────────
+// Single source of truth lives in helpers/ActivityManager.js (TIER_SCALE there
+// controls how many messages each tier takes).
+const { TIER_DATA, MAIN_TIERS } = ActivityManager;
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -214,12 +203,17 @@ const advancedGroupCommands = [
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
 
-            let layout = `📊 *Infinite Void — Universal Power Grid (12-Tiers)*\n` +
+            let layout = `📊 *Infinite Void — Universal Power Grid (${MAIN_TIERS.length} Tiers · ${TIER_DATA.length} Steps)*\n` +
                          `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
-            TIER_DATA.forEach(tier => {
-                layout += `${tier.icon} *Tier ${tier.index}: ${tier.name}* (${tier.req} Messages)\n` +
-                          `_Status: ${tier.desc}_\n\n`;
+            MAIN_TIERS.forEach(tier => {
+                const steps = TIER_DATA.filter(t => t.index === tier.index);
+                layout += `${tier.icon} *Tier ${tier.index}: ${tier.name}* (${steps[0].req}+ Messages)\n` +
+                          `_${tier.desc}_\n`;
+                if (steps.length > 1) {
+                    layout += steps.map(t => `▫️ ${t.stepName.replace(/ Level$/, '')} — ${t.req}`).join('\n') + '\n';
+                }
+                layout += '\n';
             });
 
             layout += `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -259,7 +253,7 @@ const advancedGroupCommands = [
             const targetNumber = targetJid.split('@')[0];
 
             const bar = stats.nextTier
-                ? `📈 *Next Tier:* ${stats.nextTier.icon} ${stats.nextTier.name} _(${stats.remaining} messages to go)_`
+                ? `📈 *Next Step:* ${stats.nextTier.icon} ${stats.nextTier.name} _(${stats.remaining} messages to go)_`
                 : `👑 *Maxed out — Boundless tier reached.*`;
 
             const card =
