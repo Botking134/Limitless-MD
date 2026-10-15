@@ -169,48 +169,75 @@ function recordGroupMessage(jid, memberJid) {
 
 // ─── QUERIES (rank / leaderboard) ───────────────────────────────────
 
+// ─── IDENTITY MERGING ───────────────────────────────────────────────
+// Counts are recorded under whichever ID the bot knew for the sender at that
+// moment: their phone JID when resolved, otherwise their @lid. The same person
+// can therefore have two records (or a lookup can use a different ID than the
+// one stored), which made .rank report the wrong position while the
+// leaderboard — which just lists stored keys — looked right. Everything below
+// folds those IDs into one canonical identity before counting or ranking.
+function canonicalJid(jid) {
+    if (!jid || typeof jid !== 'string') return '';
+    const at = jid.indexOf('@');
+    if (at === -1) return jid;
+    let clean = jid.slice(0, at).split(':')[0] + jid.slice(at);
+    if (clean.endsWith('@lid')) {
+        const mapped = global.lidCache && global.lidCache[clean];
+        if (mapped && typeof mapped === 'string') {
+            const mAt = mapped.indexOf('@');
+            clean = mAt === -1 ? mapped : mapped.slice(0, mAt).split(':')[0] + mapped.slice(mAt);
+        }
+    }
+    return clean;
+}
+
+// Returns Map<canonicalJid, messages> with duplicate identities summed.
+function aggregateMembers(group) {
+    const merged = new Map();
+    for (const [id, record] of Object.entries(group.members || {})) {
+        const key = canonicalJid(id);
+        merged.set(key, (merged.get(key) || 0) + (record.messages || 0));
+    }
+    return merged;
+}
+
 /**
  * @param {string} jid Group JID.
  * @param {string} memberJid Member to look up.
- * @param {number|null} totalGroupMembers Optional real group member count (e.g.
- *   from groupMetadata.participants.length). When given, it's used as the
- *   ranking denominator instead of "members who've ever had a tracked
- *   message" — so the number shown actually matches the group's real size.
- *   Falls back to the old tracked-only count when omitted, and never lets
- *   the denominator dip below whatever `position` needs (e.g. if someone
- *   who left the group is still in the records).
+ * @param {number|null} totalGroupMembers Optional real group member count, used
+ *   as the denominator when larger than the tracked count.
+ * @param {string[]} aliases Other IDs known for the same person (e.g. the
+ *   original @lid before it was resolved to a phone JID).
  */
-function getRank(jid, memberJid, totalGroupMembers = null) {
+function getRank(jid, memberJid, totalGroupMembers = null, aliases = []) {
     const data = readLevels();
     const group = getGroup(data, jid);
-    const record = group.members[memberJid] || { messages: 0 };
-    const tier = getTierForCount(record.messages);
-    const nextTier = getNextTier(record.messages);
+    const merged = aggregateMembers(group);
 
-    const ranked = Object.entries(group.members)
-        .sort((a, b) => (b[1].messages || 0) - (a[1].messages || 0));
-    const foundIndex = ranked.findIndex(([id]) => id === memberJid);
+    const targetKeys = new Set([memberJid, ...aliases].map(canonicalJid).filter(Boolean));
+    const matchedKey = [...targetKeys].find(k => merged.has(k));
+    const messages = matchedKey ? merged.get(matchedKey) : 0;
 
-    // If this member has no tracked-message record at all, they aren't in
-    // `ranked` — but they still occupy a real (last) place in the group's
-    // standings. Counting them into the denominator too keeps position and
-    // total consistent (previously this could show e.g. "#89 of 88": a
-    // member ranked past the end of a list that didn't include them).
+    const tier = getTierForCount(messages);
+    const nextTier = getNextTier(messages);
+
+    const ranked = [...merged.entries()].sort((a, b) => b[1] - a[1]);
+    const foundIndex = matchedKey ? ranked.findIndex(([id]) => id === matchedKey) : -1;
+
+    // Someone with no record still holds a real (last) place; count them in
+    // the denominator too so position and total stay consistent.
     const position = foundIndex >= 0 ? foundIndex + 1 : ranked.length + 1;
     let totalTracked = foundIndex >= 0 ? ranked.length : ranked.length + 1;
 
     if (typeof totalGroupMembers === 'number' && totalGroupMembers > 0) {
-        // Real group size should be the denominator when we have it, but
-        // never let it undercut `position` (e.g. stale participant counts,
-        // or members who left but are still in the tracked records).
         totalTracked = Math.max(totalTracked, totalGroupMembers);
     }
 
     return {
-        messages: record.messages || 0,
+        messages,
         tier,
         nextTier,
-        remaining: nextTier ? Math.max(0, nextTier.req - record.messages) : 0,
+        remaining: nextTier ? Math.max(0, nextTier.req - messages) : 0,
         position,
         totalTracked
     };
@@ -220,11 +247,11 @@ function getLeaderboard(jid, limit = 10) {
     const data = readLevels();
     const group = getGroup(data, jid);
 
-    return Object.entries(group.members)
-        .map(([memberJid, record]) => ({
+    return [...aggregateMembers(group).entries()]
+        .map(([memberJid, messages]) => ({
             jid: memberJid,
-            messages: record.messages || 0,
-            tier: getTierForCount(record.messages || 0)
+            messages,
+            tier: getTierForCount(messages)
         }))
         .sort((a, b) => b.messages - a.messages)
         .slice(0, limit);
