@@ -540,7 +540,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         const isAizenCalled = /\baizen\b/i.test(lowerMessage);
         const isLizzyCalled = /\blizzy\b/i.test(lowerMessage);
         const isFridayCalled = /\bfriday\b/i.test(lowerMessage);
-        const isUrielCalled = /\buriel\b/i.test(lowerMessage);
+        const isCasCalled = /\bcas\b/i.test(lowerMessage);
 
         let identifiedAgent = null;
 
@@ -551,7 +551,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             else if (isAizenCalled && config.chatbotChats?.includes(jid)) identifiedAgent = 'aizen';
             else if (isLizzyCalled && config.lizzyChats?.includes(jid)) identifiedAgent = 'lizzy';
             else if (isFridayCalled && config.fridayChats?.includes(jid)) identifiedAgent = 'friday';
-            else if (isUrielCalled) identifiedAgent = 'uriel';
+            else if (isCasCalled) identifiedAgent = 'cas';
         }
 
         if (identifiedAgent === 'gojo' && !config.gojoChats?.includes(jid) && !trimmedMessageBody.startsWith(activePrefix)) {
@@ -563,7 +563,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             else if (identifiedAgent === 'aizen' || identifiedAgent === 'jarvis') { command = 'aizen_chat'; args = trimmedMessageBody; }
             else if (identifiedAgent === 'lizzy') { command = 'lizzy_chat'; args = trimmedMessageBody; }
             else if (identifiedAgent === 'friday') { command = 'friday_chat'; args = trimmedMessageBody; }
-            else if (identifiedAgent === 'uriel') { command = 'uriel'; args = trimmedMessageBody; }
+            else if (identifiedAgent === 'cas') { command = 'cas'; args = trimmedMessageBody; }
         }
 
         if (isGroup && !isAuthorized && !isDev && !msg.key.fromMe) {
@@ -647,7 +647,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         if (!command) return;
 
         if (command === 'gojo_chat') global.activeAgentContext = 'gojo';
-        else if (command === 'uriel') global.activeAgentContext = 'uriel';
+        else if (command === 'cas') global.activeAgentContext = 'cas';
         else if (command === 'lizzy_chat') global.activeAgentContext = 'lizzy';
         else if (command === 'aizen_chat') global.activeAgentContext = 'aizen';
         else if (command === 'friday_chat') global.activeAgentContext = 'friday';
@@ -666,7 +666,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
             'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'repo_url', 'pvp_defend',
             'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download',
-            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans', 'uriel',
+            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans', 'cas',
             'vault8', 'escape', 'guess', 'millionaire', 'ttt', 'rps', 'torf',
             'charade', 'wcg', 'anagram', 'quiz_ans', 'charade_ans', 'anagram_ans',
             'wcg_ans', 'torf_ans', 'millionaire_ans', 'quiz_cat', 'jail_ans'
