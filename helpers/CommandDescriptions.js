@@ -67,7 +67,7 @@ module.exports = {
     user: "Show a tappable contact card (photo + message button) for a user.",
     id: "Show a user's or group's resolved JID and LID.",
     dev: "Show the bot developer's contact card.",
-    uriel: "Prefixless AI persona command, restricted to owners/sudo/devs.",
+    cas: "Cas, the Thought Robot — prefixless AI persona command, restricted to owners/sudo/devs.",
     aza: "Show saved bank account details, or run `.aza set` to configure them.",
     'alive-set': "Configure the bot's custom .alive message/media template.",
     ping2: "Alternate animated latency check.",
