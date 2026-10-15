@@ -122,6 +122,6 @@ module.exports = {
         'antipromote', 'antidemote', 'antibug', 'antidelete', 'antigay', 'antiviewonce',
         'stickerCommands', 'welcome', 'goodbye', 'gcalerts', 'presence',
         'autoviewstatus', 'autoreactstatus', 'statusemoji',
-        'afk', 'aliveMediaUrl', 'aliveMessage', 'gayList', 'urielGlobalActive'
+        'afk', 'aliveMediaUrl', 'aliveMessage', 'gayList', 'casGlobalActive', 'urielGlobalActive'
     ]
 };
