@@ -8,6 +8,25 @@ const fs = require('fs');
 const path = require('path');
 const { saveState } = require('../stateManager');
 
+// Real one-line descriptions for ~320 commands. Most plugins don't declare their
+// own `description`, so without this Cas only sees "<name> command" and has to
+// guess from the name alone.
+let COMMAND_DESCRIPTIONS = {};
+try { COMMAND_DESCRIPTIONS = require('../helpers/CommandDescriptions'); } catch (_) {}
+
+// Where CommandDescriptions.js is wrong or vague, trust the plugin code instead.
+// (`mute` in group_basic.js opens/closes the whole group: ".mute close" / ".mute open [time]".)
+const CAS_DESC_OVERRIDES = {
+    mute: "Close the whole group to admins-only (arg 'close') or reopen it (arg 'open'), optional time like 10m."
+};
+
+// Actions too serious to run off a loose guess: the user's message must actually
+// name the command (or its obvious word) before Cas will fire one of these.
+const CAS_CONFIRM_REQUIRED = new Set([
+    'restart', 'shutdown', 'kickall', 'ban', 'unban', 'delowner', 'addowner', 'setsudo',
+    'delsudo', 'setvar', 'update', 'upgrade', 'antipm', 'block', 'creategc', 'delbot', 'exit'
+]);
+
 // ─── MASTER CACHE ──────────────────────────────────────────────────
 let cachedRegistry = null;
 
@@ -418,62 +437,120 @@ async function synthesizeCasVoice(text) {
     return applyCosmicEffect(raw);
 }
 
+
+// ─── STICKERS ──────────────────────────────────────────────────────
+// Cas has no moods, so this is one flat pool (no emotion mapping): after a
+// reply he drops a random sticker from it, never the same one twice in a row.
+const CAS_STICKERS = [
+    "https://files.catbox.moe/6b1ct6.jpeg",
+    "https://files.catbox.moe/cej6pu.jpeg",
+    "https://files.catbox.moe/14vg4n.jpeg",
+    "https://files.catbox.moe/dd17md.jpeg",
+    "https://files.catbox.moe/peuas8.jpeg",
+    "https://files.catbox.moe/b2c5k1.jpeg",
+    "https://files.catbox.moe/em25rg.jpg",
+    "https://files.catbox.moe/je6y8b.jpg",
+    "https://files.catbox.moe/fpemx9.jpg",
+    "https://files.catbox.moe/qi1u2u.jpg"
+];
+// Chance (0 to 1) of a sticker after a reply. 1 = every reply.
+const CAS_STICKER_CHANCE = 0.8;
+let lastCasSticker = null;
+
+async function sendCasSticker(sock, jid) {
+    if (!CAS_STICKERS.length || Math.random() >= CAS_STICKER_CHANCE) return;
+    let Sticker, StickerTypes;
+    try {
+        ({ Sticker, StickerTypes } = require('wa-sticker-formatter'));
+    } catch (e) {
+        console.error('[CAS STICKER] wa-sticker-formatter not available:', e.message);
+        return;
+    }
+
+    const choices = CAS_STICKERS.length > 1 ? CAS_STICKERS.filter(u => u !== lastCasSticker) : CAS_STICKERS;
+    const url = choices[Math.floor(Math.random() * choices.length)];
+    lastCasSticker = url;
+
+    try {
+        const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 12000 });
+        const sticker = new Sticker(Buffer.from(res.data), {
+            pack: config.packName || 'Limitless-MD',
+            author: 'Cas',
+            type: StickerTypes.FULL,
+            quality: 40
+        });
+        await sock.sendMessage(jid, { sticker: await sticker.toBuffer() });
+    } catch (e) {
+        console.error(`[CAS STICKER] Failed to send ${url}:`, e.message);
+    }
+}
+
 // ─── HYBRID INTENT INTERCEPTOR (Direct Action Router) ──────────────
+// Fast path for unambiguous one-liners. Every pattern is anchored to the WHOLE
+// message, so casual sentences that merely contain a keyword ("shopping",
+// "speed of light", "delhi") fall through to the AI instead of firing a command.
+const POLITE = '(?:(?:please|pls|plz|can you|could you|kindly)\\s+)*';
+const rx = (body) => new RegExp(`^${POLITE}${body}$`, 'i');
+
+const INTERCEPT_RULES = [
+    {
+        re: rx('(?:delete|del|dlt|remove)(?:\\s+(?:this|that|it|the message|this message|that message))?'),
+        reply: "Deleting the message.",
+        tag: { command: "delete", args: "" }
+    },
+    {
+        re: new RegExp(`^${POLITE}(?:(?:make|create|turn|convert|change)\\s+(?:this|that|it|the\\s+\\w+)\\s+(?:in)?to\\s+(?:a\\s+)?sticker|(?:make|create|turn|convert)\\s+(?:this|that|it)\\s+a\\s+sticker|(?:make|create)\\s+(?:a\\s+)?sticker|(?:to\\s+)?sticker)$`, 'i'),
+        reply: "Alright! Here's your sticker, let me know if you need anything else!",
+        tag: { command: "sticker", args: "" }
+    },
+    {
+        re: rx("(?:ping|(?:check|test|show)\\s+(?:the\\s+|your\\s+|bot(?:'s)?\\s+)*(?:ping|speed|latency|response time)|(?:what(?:'s| is)\\s+)?(?:the\\s+|your\\s+)?(?:bot\\s+)?(?:ping|speed|latency|response time)|how fast are you(?:\\s+running)?(?:\\s+right now)?)"),
+        reply: "Sure thing! Checking that speed for you now...",
+        tag: { command: "ping", args: "" }
+    },
+    {
+        re: rx('(?:(?:tag|mention|summon|call)\\s+(?:everyone|everybody|all|all members|the group|everyone in the group|everyone here)|tagall)'),
+        reply: "Okay! Summoning everyone in the group now.",
+        tag: { command: "tagall", args: "" }
+    },
+    // Open/unlock are checked BEFORE close/lock-style rules. (The old substring
+    // checks matched "mute group" inside "unmute group", so asking to unlock a
+    // group actually locked it.)
+    {
+        re: rx('(?:unmute|unlock|open)\\s+(?:the\\s+)?(?:group|chat|gc)'),
+        reply: "Opening up the group parameters for everyone.",
+        tag: { command: "mute", args: "open" }
+    },
+    {
+        re: rx('(?:mute|lock|close)\\s+(?:the\\s+)?(?:group|chat|gc)'),
+        reply: "Locking down the group parameters now.",
+        tag: { command: "mute", args: "close" }
+    }
+];
+
 function runSmartInterceptor(query) {
-    const lower = query.toLowerCase().trim();
-
-    // 1. Target Deletions
-    if (lower.startsWith('delete') || lower.startsWith('del') || lower === 'remove this' || lower === 'remove') {
-        return {
-            cleanReply: "Deleting the message.",
-            tag: { command: "delete", args: "" }
-        };
+    const lower = query.toLowerCase().trim().replace(/[.!?,\s]+$/g, '');
+    for (const rule of INTERCEPT_RULES) {
+        if (rule.re.test(lower)) {
+            return { cleanReply: rule.reply, tag: { ...rule.tag } };
+        }
     }
-
-    // 2. Sticker Generation
-    if (lower.includes('sticker') || lower.includes('to sticker') || lower.includes('make sticker')) {
-        return {
-            cleanReply: "Alright! Here's your sticker, let me know if you need anything else!",
-            tag: { command: "sticker", args: "" }
-        };
-    }
-
-    // 3. System Speed Metrics
-    if (lower.includes('ping') || lower.includes('speed') || lower.includes('latency') || lower.includes('response time')) {
-        return {
-            cleanReply: "Sure thing! Checking that speed for you now...",
-            tag: { command: "ping", args: "" }
-        };
-    }
-
-    // 4. Summons and Broadcasts
-    if (lower.includes('tag everyone') || lower.includes('tag all') || lower.includes('tagall') || lower === 'tag the group') {
-        return {
-            cleanReply: "Okay! Summoning everyone in the group now.",
-            tag: { command: "tagall", args: "" }
-        };
-    }
-
-    // 5. Mute/Lock Actions
-    if (lower.includes('mute group') || lower.includes('mute chat') || lower.includes('lock group') || lower.includes('lock chat') || lower.includes('close group') || lower.includes('close chat')) {
-        return {
-            cleanReply: "Locking down the group parameters now.",
-            tag: { command: "mute", args: "close" }
-        };
-    }
-
-    // 6. Unmute/Unlock Actions
-    if (lower.includes('unmute group') || lower.includes('unmute chat') || lower.includes('unlock group') || lower.includes('unlock chat') || lower.includes('open group') || lower.includes('open chat')) {
-        return {
-            cleanReply: "Opening up the group parameters for everyone.",
-            tag: { command: "mute", args: "open" }
-        };
-    }
-
     return null;
 }
 
 // ─── COMMAND LIST BUILDER ──────────────────────────────────────────
+function isExecutableEntry(entry) {
+    return typeof entry === 'function' || typeof entry?.execute === 'function';
+}
+
+function describeCommand(name, meta) {
+    if (CAS_DESC_OVERRIDES[name]) return CAS_DESC_OVERRIDES[name];
+    const own = (meta?.description || '').trim();
+    const isPlaceholder = !own || own.toLowerCase() === `${name} command`.toLowerCase();
+    const desc = isPlaceholder ? (COMMAND_DESCRIPTIONS[name] || '') : own;
+    return (desc || 'No description').trim().slice(0, 140);
+}
+
 function buildCommandList(userContext) {
     const registry = getRegistry();
     const { isOwner, isDev, isSudo } = userContext;
@@ -491,42 +568,58 @@ function buildCommandList(userContext) {
     if (isDev || isOwner) allowed.add('dev');
     if (isOwner || isDev) allowed.add('owner');
 
-    const categories = {};
     const isMap = registry instanceof Map;
     const entries = isMap ? Array.from(registry.entries()) : Object.entries(registry);
 
-    const seenCommands = new Set();
+    // Pass 1: executable commands only. (The registry also holds raw plugin
+    // modules keyed by file name — "fun", "games", "tools" — which are not
+    // commands and used to be offered to the model as if they were.)
+    const primary = new Map();   // name -> { meta, entry }
+    const aliasOf = new Map();   // alias -> target name
 
     for (const [key, entry] of entries) {
         if (key === 'reload' || key === 'cas') continue;
+        if (!isExecutableEntry(entry)) continue;
+
         const meta = entry?.metadata || entry;
-        if (!meta) continue;
-        
         const permission = meta.permission || 'public';
         if (!allowed.has(permission)) continue;
 
         const cleanKey = key.toLowerCase().replace(prefix, '');
-        
-        if (!isOwner && !isDev && !isSudo && privilegedCommands.has(cleanKey)) {
+        if (!isOwner && !isDev && !isSudo && privilegedCommands.has(cleanKey)) continue;
+
+        const aliasMatch = (COMMAND_DESCRIPTIONS[cleanKey] || '').match(/^Alias of ([\w-]+)/i);
+        if (aliasMatch) {
+            aliasOf.set(cleanKey, aliasMatch[1].toLowerCase());
             continue;
         }
 
         const primaryName = meta.name || cleanKey;
-        if (seenCommands.has(primaryName)) {
-            continue;
-        }
-        seenCommands.add(primaryName);
-
-        const cat = meta.category || 'tools';
-        if (!categories[cat]) categories[cat] = [];
-        
-        const display = meta.isPrefixless ? primaryName : `${prefix}${primaryName}`;
-        const desc = (meta.description || 'No description').trim();
-        
-        categories[cat].push(`${display}(${desc})`);
+        if (!primary.has(primaryName)) primary.set(primaryName, { meta, entry });
     }
 
-    let output = "AVAILABLE COMMANDS:\n";
+    // Pass 2: fold aliases into the command they point at, so the model sees
+    // "leaderboard|lb" once instead of two unrelated-looking commands.
+    const aliasesByTarget = {};
+    for (const [alias, target] of aliasOf) {
+        if (primary.has(target)) (aliasesByTarget[target] = aliasesByTarget[target] || []).push(alias);
+        else {
+            // target not offered (filtered or missing) - keep the alias as its own entry
+            const reg = isMap ? registry.get(alias) : registry[alias];
+            if (reg && isExecutableEntry(reg)) primary.set(alias, { meta: reg?.metadata || reg, entry: reg });
+        }
+    }
+
+    const categories = {};
+    for (const [name, { meta }] of primary) {
+        const cat = meta.category || 'tools';
+        (categories[cat] = categories[cat] || []);
+        const display = meta.isPrefixless ? name : `${prefix}${name}`;
+        const aka = aliasesByTarget[name] ? `|${aliasesByTarget[name].join('|')}` : '';
+        categories[cat].push(`${display}${aka}(${describeCommand(name, meta)})`);
+    }
+
+    let output = "AVAILABLE COMMANDS (name|aliases(description)):\n";
     for (const [cat, cmds] of Object.entries(categories)) {
         if (cmds.length === 0) continue;
         output += `• ${cat.toUpperCase()}: ${cmds.join(', ')}\n`;
@@ -535,6 +628,11 @@ function buildCommandList(userContext) {
 }
 
 // ─── HIGH-THROUGHPUT GROQ API CALL ─────────────────────────────────
+// gpt-oss "thinks" before answering, and that thinking counts against the token
+// limit. With the old 300-token cap a long reply could run out of room before
+// the trailing [CMD: ...] tag was written, so the command never ran. This asks
+// for light reasoning, a roomy limit and a low temperature (steadier command
+// choice), and falls back to a plain request if the API rejects those options.
 async function queryGroq(messages) {
     const apiKey = config.groqApiKey;
     const model = "openai/gpt-oss-20b"; 
@@ -543,32 +641,45 @@ async function queryGroq(messages) {
         console.error('[CAS] Groq API key missing.');
         return "My connection is down. Please check the API key.";
     }
-    try {
-        const resp = await axios.post(GROQ_BASE_URL, {
-            model,
-            messages,
-            temperature: 0.5,
-            max_tokens: 300 
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            },
-            timeout: 10000 
-        });
-        return resp.data.choices?.[0]?.message?.content || '';
-    } catch (err) {
-        console.error('[CAS] Groq error:', err.response?.data || err.message);
-        return "I'm having trouble thinking right now. Try again in a moment.";
+
+    const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+    };
+    const attempts = [
+        { model, messages, temperature: 0.2, max_completion_tokens: 1024, reasoning_effort: 'low' },
+        { model, messages, temperature: 0.2, max_tokens: 600 }
+    ];
+
+    let lastErr = null;
+    for (const body of attempts) {
+        try {
+            const resp = await axios.post(GROQ_BASE_URL, body, { headers, timeout: 20000 });
+            const content = resp.data.choices?.[0]?.message?.content || '';
+            if (content.trim()) return content;
+            console.warn('[CAS] Groq returned an empty reply, retrying with a plain request.');
+        } catch (err) {
+            lastErr = err;
+            const status = err.response?.status;
+            console.error('[CAS] Groq error:', err.response?.data || err.message);
+            // Only an option the API refused (400) is worth retrying differently.
+            if (status !== 400) break;
+        }
     }
+    return lastErr
+        ? "I'm having trouble thinking right now. Try again in a moment."
+        : "I did not catch that. Say it again?";
 }
 
 // ─── COMMAND TAG PARSER ───────────────────────────────────────────
+const CMD_TAG_RE = /\[\s*CMD\s*:\s*([^\]]*)\]/i;
+
 function extractCommandTag(text) {
-    const match = text.match(/\[CMD:\s*([^\]]+)\]/i);
+    const match = (text || '').match(CMD_TAG_RE);
     if (!match) return null;
 
     const rawContent = match[1].trim(); 
+    if (!rawContent) return null;
     const prefix = getPrefix();
 
     let cleanContent = rawContent;
@@ -576,43 +687,85 @@ function extractCommandTag(text) {
         cleanContent = cleanContent.slice(prefix.length).trim();
     }
 
-    const spaceIndex = cleanContent.indexOf(' ');
+    const spaceIndex = cleanContent.search(/\s/);
     let command = '';
     let args = '';
 
     if (spaceIndex === -1) {
         command = cleanContent.toLowerCase();
-        args = '';
     } else {
         command = cleanContent.slice(0, spaceIndex).toLowerCase();
         args = cleanContent.slice(spaceIndex + 1).trim();
     }
 
-    return {
-        command: command, 
-        args: args,       
-        raw: match[0]
-    };
+    return { command, args, raw: match[0] };
+}
+
+// Removes every [CMD: ...] tag (not just the first) and any tag the model left
+// unclosed, so none of it is ever read aloud.
+function stripCommandTags(text) {
+    return (text || '')
+        .replace(/\[\s*CMD\s*:[^\]]*\]/gi, '')
+        .replace(/\[\s*CMD\s*:[^\]]*$/i, '')
+        .trim();
+}
+
+function editDistance(a, b) {
+    if (a === b) return 0;
+    const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+    for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+        for (let j = 1; j <= b.length; j++) {
+            dp[i][j] = Math.min(
+                dp[i - 1][j] + 1,
+                dp[i][j - 1] + 1,
+                dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+            );
+        }
+    }
+    return dp[a.length][b.length];
+}
+
+// Finds the real registry entry for a command name the model produced.
+// Exact match first, then prefixed, then (only for a clear one-typo miss on a
+// name of 4+ letters, and only when exactly one command is that close) a fuzzy
+// match. Non-executable entries are never returned.
+function lookupCommand(registry, command) {
+    const prefix = getPrefix();
+    const isMap = registry instanceof Map;
+    const get = (k) => (isMap ? registry.get(k) : registry[k]);
+
+    const name = (command || '').toLowerCase().replace(/^[^a-z0-9_-]+/, '');
+    for (const k of [name, `${prefix}${name}`]) {
+        const entry = get(k);
+        if (entry && isExecutableEntry(entry)) return { key: name, entry };
+    }
+
+    if (name.length >= 4) {
+        const keys = (isMap ? Array.from(registry.keys()) : Object.keys(registry))
+            .filter(k => typeof k === 'string' && isExecutableEntry(get(k)));
+        const near = keys.filter(k => Math.abs(k.length - name.length) <= 1 && editDistance(k.toLowerCase(), name) === 1);
+        if (near.length === 1) {
+            console.log(`[CAS] Fuzzy-matched command "${name}" -> "${near[0]}".`);
+            return { key: near[0].toLowerCase(), entry: get(near[0]) };
+        }
+    }
+    return null;
 }
 
 // ─── UNIVERSAL COMMAND EXECUTOR ──────────────────────────────────
 async function executeCommand(tag, sock, msg, userContext) {
     const registry = getRegistry();
-    const { command, args } = tag; 
+    const { args } = tag; 
+    const command = lookupCommand(registry, tag.command)?.key || tag.command;
     const prefix = getPrefix();
-    const isMap = registry instanceof Map;
 
-    let entry = isMap ? registry.get(command) : registry[command];
-
-    if (!entry) {
-        const withPrefix = `${prefix}${command}`;
-        entry = isMap ? registry.get(withPrefix) : registry[withPrefix];
-    }
-
-    if (!entry) {
+    const found = lookupCommand(registry, command);
+    if (!found) {
         console.warn(`[CAS] Command not found in active registry: "${command}".`);
         return false;
     }
+    const entry = found.entry;
 
     const meta = entry.metadata || entry;
     const { isOwner, isDev, isSudo } = userContext;
@@ -826,6 +979,9 @@ COMMAND MATCHING RULES:
    - If the user asks to "lock", "shut", or "mute" a chat, map it to the command that shuts/locks the group based on their descriptions.
    - Use the provided command list as your master directory.
 3. Be Decisive: If a user request matches the description of any command in your list, you MUST append the command tag at the end of your message. Do not simply say you can check it without appending the tag.
+4. Action vs. talk: Only add a tag when the user is asking you to DO something right now. If they ask what a command does, or just mention a word like "ping" or "delete" in passing, answer in words with no tag.
+5. Exact names only: use the command name exactly as listed (aliases after | are also valid). Never invent a command and never invent arguments. Pass only the arguments the user actually gave.
+6. One tag only: at most one [CMD: ...] tag per reply, always the very last line.
 
 COMMAND FORMAT RULES (STRICT):
 - You must end your reply with [CMD: ${prefix}commandName args] on a new line if a command description matches the user's request.
@@ -867,10 +1023,27 @@ You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${
             console.log(`[CAS] Raw Response: "${response}"`);
 
             tag = extractCommandTag(response);
-            cleanReply = response;
-            if (tag) {
-                cleanReply = response.replace(/\[CMD:.*?\]/, '').trim();
-                console.log(`[CAS] Parsed Tag:`, tag);
+            cleanReply = stripCommandTags(response);
+            if (tag) console.log(`[CAS] Parsed Tag:`, tag);
+        }
+
+        // ─── VALIDATE THE COMMAND BEFORE PROMISING ANYTHING ───
+        // The AI can name a command that doesn't exist or that the message never
+        // asked for. Catch both here so Cas never says "on it" and then does nothing.
+        if (tag) {
+            const hit = lookupCommand(getRegistry(), tag.command);
+            if (!hit) {
+                console.warn(`[CAS] Model asked for unknown command "${tag.command}" — not executing.`);
+                tag = null;
+                cleanReply = "I do not have a command for that. Ask me what I can do, and I will show you.";
+            } else {
+                tag.command = hit.key;
+                const mentioned = query.toLowerCase().includes(hit.key);
+                if (CAS_CONFIRM_REQUIRED.has(hit.key) && !mentioned) {
+                    console.warn(`[CAS] Held back high-impact command "${hit.key}": the message did not name it.`);
+                    tag = null;
+                    cleanReply = `That is a serious action. If you really want it, say the word ${hit.key} and I will do it.`;
+                }
             }
         }
 
@@ -879,6 +1052,12 @@ You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${
         // STEP 1: Execute command SILENTLY first
         if (tag) {
             commandSuccess = await executeCommand(tag, sock, msg, userContext);
+            if (!commandSuccess) {
+                console.warn(`[CAS] Command "${tag.command}" did not complete.`);
+                cleanReply = "I tried to run that, but it did not go through. Check the console for the reason.";
+            } else if (!cleanReply) {
+                cleanReply = "Done.";
+            }
         }
 
         // STEP 2: Send conversational reply as standard playable audio
@@ -894,10 +1073,12 @@ You: "Alright! Here's your sticker, let know if you need anything else! [CMD: ${
             } else {
                 await sock.sendMessage(jid, { text: cleanReply }, { quoted: msg });
             }
+            // Fire-and-forget so a slow or failing sticker never delays or breaks the reply.
+            sendCasSticker(sock, jid).catch(() => {});
         }
 
         memory[jid].push({ role: 'user', content: query });
-        memory[jid].push({ role: 'assistant', content: cleanReply || response });
+        memory[jid].push({ role: 'assistant', content: cleanReply || '' });
         if (memory[jid].length > 30) memory[jid].splice(0, 10);
     }
 };
