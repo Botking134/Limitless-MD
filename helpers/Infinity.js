@@ -470,7 +470,9 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             try {
                 const canonicalSenderJid = senderPhoneJid || senderJid;
                 const levelResult = ActivityManager.recordGroupMessage(jid, canonicalSenderJid);
-                if (levelResult?.leveledUp) {
+                // Only announce a jump into a new main tier — the Low/High/Complex
+                // steps inside a tier still count for .rank but stay quiet.
+                if (levelResult?.leveledUp && levelResult.majorChange) {
                     const { readAlertsData } = require('../plugins/gcalerts');
                     const alerts = readAlertsData();
                     const levelupOn = alerts.levelup?.[jid] === 'on';
