@@ -11,7 +11,7 @@ const VARS_PATH = path.join(__dirname, 'storage', 'vars.json');
 // settings get scoped per sub-bot). This file used to keep its OWN copy of the
 // list, and the two drifted apart: ten settings (antiviewonce, antidelete,
 // antibot-adjacent antibug, antigay, afk, gojoChats, aliveMediaUrl,
-// aliveMessage, gayList, urielGlobalActive) plus the status view/react
+// aliveMessage, gayList, casGlobalActive) plus the status view/react
 // settings were scoped per bot but missing here, so the MAIN bot never saved
 // them to vars.json and they reset on every restart, while sub-bots (which
 // save their whole settings object) kept them. Sharing one list stops that
