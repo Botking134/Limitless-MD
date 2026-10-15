@@ -243,6 +243,7 @@ const advancedGroupCommands = [
             if (!targetJid) {
                 targetJid = cleanJid(msg.key.participant || msg.key.remoteJid || '');
             }
+            const originalTargetJid = targetJid;
             if (targetJid.endsWith('@lid')) {
                 const resolved = await safeResolveToPhoneJid(sock, targetJid);
                 if (resolved) targetJid = resolved;
@@ -254,7 +255,7 @@ const advancedGroupCommands = [
                 totalGroupMembers = groupMetadata?.participants?.length || null;
             } catch (e) { /* fall back to tracked-only denominator */ }
 
-            const stats = ActivityManager.getRank(jid, targetJid, totalGroupMembers);
+            const stats = ActivityManager.getRank(jid, targetJid, totalGroupMembers, [originalTargetJid]);
             const targetNumber = targetJid.split('@')[0];
 
             const bar = stats.nextTier
