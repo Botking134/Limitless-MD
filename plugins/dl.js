@@ -4,6 +4,16 @@ const config = require('../config');
 const { normalizeToJid, saveState } = require('../stateManager');
 const axios = require('axios');
 const FormData = require('form-data');
+const UI = require('../helpers/DownloaderUI');
+
+// ─── KEYS ─────────────────────────────────────────────────────────
+// AudD is the song-recognition service behind .shazam and .find.
+// Paste your AudD token between the quotes. While it is empty, those two
+// commands fall back to the older shazam endpoint.
+const AUDD_TOKEN = '';
+
+// Only needed if apis.davidcyril.name.ng starts requiring a key (sent as X-API-Key).
+const DAVID_API_KEY = '';
 
 // ─── GLOBAL SESSIONS ──────────────────────────────────────────────
 global.songSessions = global.songSessions || {};
@@ -47,7 +57,7 @@ function isLikelyAudio(buffer) {
 }
 
 // Upgraded fetchBuffer with User-Agent spoofing and direct Content-Type extraction
-async function fetchBuffer(url) {
+async function fetchBuffer(url, timeout = 15000) {
     if (!url) throw new Error('No URL provided');
     const response = await axios.get(url, {
         responseType: 'arraybuffer',
@@ -56,7 +66,7 @@ async function fetchBuffer(url) {
             'Referer': 'https://www.google.com/'
         },
         maxRedirects: 5,
-        timeout: 15000
+        timeout
     });
     const buffer = Buffer.from(response.data);
     // Attaching real MIME-Type header directly to the buffer object
@@ -95,20 +105,22 @@ async function uploadToCloud(buffer, mimeType) {
     throw new Error("Cloud upload gateways failed.");
 }
 
-async function downloadMedia(apiUrl, params = {}, method = 'GET') {
+async function downloadMedia(apiUrl, params = {}, method = 'GET', opts = {}) {
     try {
+        const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+        if (DAVID_API_KEY && /davidcyril/i.test(apiUrl)) headers['X-API-Key'] = DAVID_API_KEY;
         const response = await axios({
             method,
             url: apiUrl,
             params: method === 'GET' ? params : undefined,
             data: method === 'POST' ? params : undefined,
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             // Was unset, so a hung upstream (e.g. /play going unresponsive)
             // left every command that calls this — song, play, tiktok, ig, fb,
             // spotify, pinterest, mediafire, gdrive, lyrics, img, xvid, apk,
             // web, shazam, obf — stuck on "⏳ ..." forever with no error ever
             // shown to the user. Now it fails fast with a clear message instead.
-            timeout: 20000
+            timeout: opts.timeout || 20000
         });
         return response.data;
     } catch (err) {
@@ -271,7 +283,7 @@ async function handleSongReply(sock, msg, session, userReply) {
 
         await sock.sendMessage(jid, audioPayload, { quoted: msg });
     } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Download failed: ${err.message}` });
+        await sock.sendMessage(jid, { text: UI.errorText(err.message) });
     }
 }
 
@@ -287,7 +299,7 @@ async function handleTgsReply(sock, msg, session, userReply) {
         const buffer = await fetchBuffer(sticker.url);
         await sock.sendMessage(jid, { sticker: buffer });
     } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Download failed: ${err.message}` });
+        await sock.sendMessage(jid, { text: UI.errorText(err.message) });
     }
 }
 
@@ -299,25 +311,24 @@ async function handleLyricsReply(sock, msg, session, userReply) {
         return await sock.sendMessage(jid, { text: `❌ Invalid selection. Please choose a number between 1 and ${session.results.length}.` });
     }
     const result = session.results[num - 1];
-    
-    await sock.sendMessage(jid, { text: `⏳ Fetching full lyrics text for *${result.title}*...` }, { quoted: msg });
+
+    const ui = await UI.begin(sock, msg, 'lyrics', { steps: ['Fetching lyrics', 'Preparing'] });
     try {
         const lyricsData = await downloadMedia('https://apis.davidcyril.name.ng/lyrics', { text: `${result.title} ${result.artist}` });
         const lyricsText = lyricsData?.lyrics || lyricsData?.result || null;
 
         if (!lyricsText) {
-            return await sock.sendMessage(jid, { text: `📝 *${result.title}* (${result.artist})\n\nLyrics text could not be parsed. Read online here: ${result.url}` });
+            await sock.sendMessage(jid, {
+                text: UI.card({ icon: '📝', title: result.title, fields: [['Artist', result.artist]], note: `The lyrics text could not be read. Read them online: ${result.url}` })
+            });
+            return await ui.done();
         }
 
-        const noteCard =
-            `📝 *LYRICS: ${result.title.toUpperCase()}* 📝\n` +
-            `👤 *Artist:* ${result.artist}\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `${lyricsText}`;
-
-        await sock.sendMessage(jid, { text: noteCard });
+        const header = UI.card({ icon: '📝', title: result.title, fields: [['Artist', result.artist]] });
+        await sock.sendMessage(jid, { text: `${header}\n\n${lyricsText}` });
+        await ui.done();
     } catch (err) {
-        await sock.sendMessage(jid, { text: `❌ Failed to fetch lyrics: ${err.message}` });
+        await ui.fail(`Failed to fetch lyrics: ${err.message}`);
     }
 }
 
@@ -329,7 +340,7 @@ async function handleXvidReply(sock, msg, session, userReply) {
     }
     const video = session.results[num - 1];
     await sock.sendMessage(jid, {
-        text: `🎥 *${video.title}*\n\n▶️ Watch at: ${video.url}`
+        text: UI.card({ icon: '🎥', title: video.title, sections: [{ rows: ['▶️ Watch', video.url] }], footer: true })
     });
 }
 
@@ -388,6 +399,336 @@ async function handleXvidReply(sock, msg, session, userReply) {
         return [...new Set(matches)];
     }
 
+// ─── SONG SOURCES ────────────────────────────────────────────────
+
+function qualityFromUrl(url) {
+    const m = String(url || '').match(/[-_](\d{2,3})(?:kbps)?[-_.]/);
+    return m ? `${m[1]}kbps` : '128kbps';
+}
+
+// play-v2 takes a plain song name and returns a direct mp3 on a CDN in ONE call.
+// The first call for a song can be slow (it converts on demand), so this waits up
+// to 60s and retries once; a repeat call comes back quickly.
+async function fetchPlayV2(query) {
+    const data = await withRetry(
+        () => downloadMedia('https://apis.davidcyril.name.ng/play-v2', { q: query }, 'GET', { timeout: 60000 }),
+        2, 1500
+    );
+    const r = data?.result;
+    const audioUrl = r?.audio?.url;
+    if (!data?.success || !audioUrl) throw new Error(data?.message || 'No audio link returned');
+    return {
+        title: r.title || query,
+        thumbnail: r.thumbnail || null,
+        durationText: UI.formatDuration(r.duration),
+        source: r.source || null,
+        audioUrl,
+        quality: `MP3 • ${qualityFromUrl(audioUrl)}`
+    };
+}
+
+// The original /play flow (a converter link that is often stale). Kept as the backup.
+async function fetchLegacyPlay(query) {
+    let song, audioBuffer;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 1 });
+        if (!data?.result) throw new Error('No song found.');
+        song = data.result;
+        const downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
+        if (!downloadUrl) throw new Error('No download link');
+        try {
+            const buf = await fetchBuffer(downloadUrl);
+            if (isLikelyAudio(buf)) { audioBuffer = buf; break; }
+        } catch (e) { /* retry */ }
+        if (attempt < 3) await delay(1200);
+    }
+    if (!audioBuffer) throw new Error('The song link kept coming back invalid or expired after 3 tries.');
+    return {
+        song: {
+            title: song.title,
+            thumbnail: song.thumbnail || null,
+            durationText: song.duration || 'N/A',
+            source: song.video_url || null,
+            audioUrl: null,
+            quality: 'MP3'
+        },
+        audioBuffer
+    };
+}
+
+// Finds a song by name and returns { song, audioBuffer }.
+// onStep(1) fires when the audio download starts (drives the progress card).
+async function getSongAudio(query, onStep) {
+    try {
+        const song = await fetchPlayV2(query);
+        if (onStep) onStep(1);
+        const audioBuffer = await fetchBuffer(song.audioUrl, 60000);
+        if (isLikelyAudio(audioBuffer)) return { song, audioBuffer };
+        console.log('[PLAY] play-v2 link did not return audio, trying the older source');
+    } catch (err) {
+        console.log('[PLAY] play-v2 failed:', err.message);
+    }
+    if (onStep) onStep(1);
+    return await fetchLegacyPlay(query);
+}
+
+// ─── VIDEO / MEDIA SOURCES ───────────────────────────────────────
+
+// Decides photo / video / audio from the real Content-Type, falling back to the
+// filename (prexzy's links carry it inside a signed token).
+function classifyMedia(buffer, url = '') {
+    const mime = (buffer?.mimeType || '').toLowerCase();
+    if (mime.startsWith('video')) return 'video';
+    if (mime.startsWith('image')) return 'image';
+    if (mime.startsWith('audio')) return 'audio';
+
+    let name = String(url).split('?')[0];
+    const token = String(url).match(/[?&]token=([^&]+)/)?.[1];
+    if (token) {
+        try { name = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).filename || name; } catch (e) { /* use url */ }
+    }
+    const ext = name.split('.').pop().toLowerCase();
+    if (['mp4', 'mov', 'webm', 'mkv'].includes(ext)) return 'video';
+    if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return 'image';
+    if (['mp3', 'm4a', 'ogg', 'wav'].includes(ext)) return 'audio';
+    return 'video';
+}
+
+// Facebook: prexzy facebookv2 first, the older source as the backup.
+async function getFacebookMedia(url) {
+    try {
+        const data = await withRetry(() => downloadMedia('https://prexzyapis.com/download/facebookv2', { url }, 'GET', { timeout: 30000 }));
+        const d = data?.data || {};
+        const links = (Array.isArray(d.download_links) ? d.download_links : [])
+            .map(l => (typeof l === 'string'
+                ? { url: l, quality: '' }
+                : { url: l.url || l.link || l.download || l.href, quality: String(l.quality || l.label || l.resolution || l.res || '') }))
+            .filter(l => /^https?:/i.test(l.url || ''));
+        if (links.length) {
+            const best = links.find(l => /1080|720|hd/i.test(l.quality)) || links[0];
+            return { url: best.url, quality: best.quality || 'Standard', title: d.title || 'Facebook Video', duration: d.duration || '' };
+        }
+        console.log('[FB] facebookv2 returned no links, trying the older source');
+    } catch (e) {
+        console.log('[FB] facebookv2 failed:', e.message);
+    }
+
+    const data = await downloadMedia('https://apis.davidcyril.name.ng/facebook', { url });
+    if (!data || !data.success) throw new Error(data?.message || 'API returned an error');
+    const hd = data?.result?.downloads?.hd?.url;
+    const sd = data?.result?.downloads?.sd?.url;
+    if (!hd && !sd) throw new Error('No download link found');
+    return { url: hd || sd, quality: hd ? 'HD' : 'SD', title: data.result?.title || 'Facebook Video', duration: data.result?.duration || '' };
+}
+
+// TikTok: prexzy first (HD link, then the standard one), the older endpoints as the backup.
+async function getTikTokMedia(url) {
+    try {
+        const data = await withRetry(() => downloadMedia('https://prexzyapis.com/download/tiktok', { url }, 'GET', { timeout: 30000 }));
+        const d = data?.data;
+        const urls = [d?.hdplay, d?.play].filter(u => /^https?:/i.test(u || ''));
+        if (urls.length) {
+            return {
+                urls,
+                title: d.title || 'TikTok video',
+                creator: d.author?.nickname ? `${d.author.nickname}${d.author.unique_id ? ` (@${d.author.unique_id})` : ''}` : '',
+                duration: UI.formatDuration(d.duration),
+                plays: d.play_count != null ? UI.formatCount(d.play_count) : '',
+                likes: d.digg_count != null ? UI.formatCount(d.digg_count) : ''
+            };
+        }
+        console.log('[TIKTOK] prexzy returned no video link, trying the older endpoints');
+    } catch (e) {
+        console.log('[TIKTOK] prexzy failed:', e.message);
+    }
+
+    let data = await withRetry(() => downloadMedia(`https://apis.davidcyril.name.ng/download/tiktokv4?url=${encodeURIComponent(url)}`));
+    let res = data?.results || data?.result || data;
+    let downloadUrl = res?.nowatermark || res?.noWatermark || res?.video || res?.play || res?.download_url ||
+                      (Array.isArray(res?.downloads) ? res.downloads[0]?.url : null) || extractDownloadUrl(data);
+    if (!downloadUrl) {
+        data = await withRetry(() => downloadMedia(`https://apis.davidcyril.name.ng/download/tiktok?url=${encodeURIComponent(url)}`));
+        res = data?.results || data?.result || data;
+        downloadUrl = res?.video || res?.nowatermark || extractDownloadUrl(data);
+    }
+    if (!downloadUrl) throw new Error('No valid video download link found.');
+    return { urls: [downloadUrl], title: res?.title || res?.caption || res?.desc || 'TikTok video', creator: '', duration: '', plays: '', likes: '' };
+}
+
+// Instagram: prexzy igv2 (a list, so albums work), the older source as the backup.
+async function getInstagramItems(url) {
+    try {
+        const data = await withRetry(() => downloadMedia('https://prexzyapis.com/download/igv2', { url }, 'GET', { timeout: 30000 }));
+        const items = (Array.isArray(data?.results) ? data.results : [])
+            .map(r => ({ url: r.download || r.url })).filter(r => /^https?:/i.test(r.url || ''));
+        if (items.length) return items;
+        console.log('[IG] igv2 returned no items, trying the older source');
+    } catch (e) {
+        console.log('[IG] igv2 failed:', e.message);
+    }
+    const data = await downloadMedia('https://apis.davidcyril.name.ng/instagram', { url });
+    const downloadUrl = data?.result?.video || data?.result?.mp3 || extractDownloadUrl(data);
+    if (!downloadUrl) throw new Error('No download link found');
+    return [{ url: downloadUrl }];
+}
+
+// ─── SONG RECOGNITION (.shazam / .find) ──────────────────────────
+
+// Works out WHERE the audio comes from, without downloading anything yet.
+function findRecognitionSource(msg, args) {
+    const typed = (args || '').match(/(https?:\/\/[^\s]+)/i);
+    if (typed) return { url: typed[1] };
+
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+    const quoted = contextInfo?.quotedMessage;
+    if (!quoted) return null;
+
+    const raw = getRawMessage(quoted);
+    if (raw?.audioMessage) return { node: raw.audioMessage, type: 'audio', mime: raw.audioMessage.mimetype || 'audio/mpeg' };
+    if (raw?.documentMessage?.mimetype?.startsWith('audio/')) return { node: raw.documentMessage, type: 'document', mime: raw.documentMessage.mimetype };
+    if (raw?.videoMessage) return { node: raw.videoMessage, type: 'video', mime: raw.videoMessage.mimetype || 'video/mp4' };
+
+    const text = raw?.conversation || raw?.extendedTextMessage?.text || raw?.imageMessage?.caption || raw?.videoMessage?.caption || '';
+    const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
+    return urlMatch ? { url: urlMatch[1] } : null;
+}
+
+async function loadRecognitionAudio(source) {
+    if (source.url) return { url: source.url };
+    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+    const stream = await downloadContentFromMessage(source.node, source.type);
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    const buffer = Buffer.concat(chunks);
+    if (buffer.length > 15 * 1024 * 1024) throw new Error('That clip is too large. Send a shorter one (under about 15 MB).');
+    return { buffer, mimeType: source.mime };
+}
+
+async function recognizeWithAudD({ buffer, mimeType, url }) {
+    const form = new FormData();
+    form.append('api_token', AUDD_TOKEN);
+    form.append('return', 'apple_music,spotify');
+    if (buffer) {
+        const ext = (mimeType || 'audio/mpeg').split('/')[1].split(';')[0] || 'mp3';
+        form.append('file', buffer, { filename: `clip.${ext}`, contentType: mimeType || 'audio/mpeg' });
+    } else {
+        form.append('url', url);
+    }
+    const res = await axios.post('https://api.audd.io/', form, {
+        headers: form.getHeaders(), timeout: 45000, maxBodyLength: Infinity, maxContentLength: Infinity
+    });
+    const d = res.data;
+    if (d?.status !== 'success') throw new Error(d?.error?.error_message || 'AudD returned an error');
+    const r = d.result;
+    if (!r) { const e = new Error('No match'); e.code = 'NO_MATCH'; throw e; }
+
+    const apple = r.apple_music || {};
+    const spotify = r.spotify || {};
+    const art = apple.artwork?.url ? apple.artwork.url.replace('{w}', '600').replace('{h}', '600') : (spotify.album?.images?.[0]?.url || null);
+    return {
+        title: r.title, artist: r.artist, album: r.album || apple.albumName || '',
+        year: String(r.release_date || apple.releaseDate || '').slice(0, 4),
+        genre: (apple.genreNames || []).filter(g => g !== 'Music').join(', '),
+        timecode: r.timecode || '',
+        spotifyUrl: spotify.external_urls?.spotify || '',
+        appleUrl: apple.url || '',
+        songLink: r.song_link || '',
+        cover: art
+    };
+}
+
+// The older endpoint (needs a link, so a raw clip is uploaded first).
+async function recognizeWithLegacy({ buffer, mimeType, url }) {
+    let audioUrl = url;
+    if (!audioUrl && buffer) audioUrl = await uploadToCloud(buffer, mimeType || 'audio/mpeg');
+    if (!audioUrl) throw new Error('No audio to analyse');
+    const data = await downloadMedia('https://apis.davidcyril.name.ng/shazam', { url: audioUrl });
+    if (!data || !data.success) throw new Error(data?.message || 'Could not identify the song');
+    const r = data.result || data;
+    if (!r.title) { const e = new Error('No match'); e.code = 'NO_MATCH'; throw e; }
+    return {
+        title: r.title, artist: r.artist || 'Unknown', album: r.album || '',
+        year: String(r.release_date || '').slice(0, 4), genre: r.genre || '', timecode: '',
+        spotifyUrl: '', appleUrl: '', songLink: '', cover: r.cover || null
+    };
+}
+
+async function recognizeSong(input) {
+    if (AUDD_TOKEN) {
+        try {
+            return await recognizeWithAudD(input);
+        } catch (err) {
+            if (err.code === 'NO_MATCH') throw err;
+            console.log('[SHAZAM] AudD failed, using the older endpoint:', err.message);
+        }
+    }
+    return await recognizeWithLegacy(input);
+}
+
+// mode 'shazam' = details only. mode 'find' = details + links + a Download button.
+async function runRecognition(sock, msg, args, mode) {
+    const jid = msg.key.remoteJid;
+    const cmdName = mode === 'find' ? 'find' : 'shazam';
+
+    const source = findRecognitionSource(msg, args);
+    if (!source) {
+        return await sock.sendMessage(jid, {
+            text: UI.usage(`Reply to an audio, voice note or video with \`.${cmdName}\`, or send a link to an audio file.`)
+        }, { quoted: msg });
+    }
+
+    const ui = await UI.begin(sock, msg, cmdName);
+    try {
+        const input = await loadRecognitionAudio(source);
+        await ui.step(1);
+        const song = await recognizeSong(input);
+        await ui.step(2);
+
+        const fields = [
+            ['Title', song.title], ['Artist', song.artist], ['Album', song.album],
+            ['Year', song.year], ['Genre', song.genre], ['Matched at', song.timecode]
+        ];
+        const sections = [];
+        if (mode === 'find') {
+            const query = `${song.title} ${song.artist}`.replace(/\s+/g, ' ').trim();
+            const rows = [];
+            if (song.spotifyUrl) rows.push('🎧 Spotify', song.spotifyUrl);
+            if (song.appleUrl) rows.push('🍎 Apple Music', song.appleUrl);
+            if (song.songLink) rows.push('🔗 All platforms', song.songLink);
+            rows.push('▶️ YouTube', `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`);
+            sections.push({ rows });
+        }
+        const caption = UI.card({ icon: '🎶', title: 'SONG FOUND', fields, sections, footer: true });
+
+        let cover = null;
+        if (song.cover) { try { cover = await fetchBuffer(song.cover, 20000); } catch (e) { /* no cover */ } }
+        const base = cover ? { image: cover, caption } : { text: caption };
+
+        if (mode === 'find') {
+            const downloadQuery = `${song.title} ${song.artist}`.replace(/\s+/g, ' ').trim().slice(0, 120);
+            const prefix = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+            const buttons = [{ buttonId: `${prefix}play ${downloadQuery}`, buttonText: { displayText: '⬇️ Download' }, type: 1 }];
+            try {
+                await sock.sendMessage(jid, { ...base, buttons, headerType: cover ? 4 : 1 }, { quoted: msg });
+            } catch (btnErr) {
+                console.log('[FIND] buttons not accepted, sending without:', btnErr.message);
+                await sock.sendMessage(jid, base, { quoted: msg });
+            }
+        } else {
+            await sock.sendMessage(jid, base, { quoted: msg });
+        }
+        await ui.done();
+    } catch (err) {
+        console.error('[SHAZAM] failed:', err.message);
+        if (err.code === 'NO_MATCH') {
+            await ui.fail("Couldn't identify that song.", { title: 'NO MATCH', hint: 'Try a clearer 10 to 20 second clip with less background noise.' });
+        } else {
+            await ui.fail(err.message, { title: 'IDENTIFICATION FAILED' });
+        }
+    }
+}
+
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 module.exports = [
@@ -399,7 +740,7 @@ module.exports = [
             const jid = msg.key.remoteJid;
             const url = extractUrlFromMsg(msg, args);
             if (!url || !/catbox\.moe/i.test(url)) {
-                return await sock.sendMessage(jid, { text: "❌ Please provide a catbox.moe file or album link.\n\nUsage: `.catbox <link>`" }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: UI.usage("Please provide a catbox.moe file or album link.\n\nUsage: `.catbox <link>`") }, { quoted: msg });
             }
 
             const isAlbum = /catbox\.moe\/c\//i.test(url);
@@ -426,29 +767,36 @@ module.exports = [
                 }
             } catch (error) {
                 console.error('[CATBOX] Error:', error.message);
-                await sock.sendMessage(jid, { text: `❌ Failed to download from catbox: ${error.message}` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: UI.errorText(`Failed to download from catbox: ${error.message}`) }, { quoted: msg });
             }
         }
     },
 
-    // 1. Facebook
+    // 1. Facebook (prexzy first, the older source as backup)
     {
         name: 'fb',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Facebook video URL." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching Facebook video..." }, { quoted: msg });
+            const url = extractUrlFromMsg(msg, args);
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Please provide a Facebook video URL.\n\nExample: `.fb <link>`") }, { quoted: msg });
+
+            const ui = await UI.begin(sock, msg, 'facebook');
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/facebook', { url });
-                if (!data || !data.success) throw new Error(data?.message || 'API returned error');
-                const downloadUrl = data?.result?.downloads?.hd?.url || data?.result?.downloads?.sd?.url;
-                if (!downloadUrl) throw new Error('No download link found');
-                const buffer = await fetchBuffer(downloadUrl);
-                await sock.sendMessage(jid, { video: buffer, caption: data.result?.title || 'Facebook video' });
+                const media = await getFacebookMedia(url);
+                await ui.step(1);
+                const buffer = await fetchBuffer(media.url, 60000);
+                await ui.step(2);
+                const caption = UI.card({
+                    icon: '📘', title: media.title,
+                    fields: [['Quality', media.quality], ['Duration', media.duration], ['Size', UI.formatBytes(buffer.length)]],
+                    footer: true
+                });
+                await sock.sendMessage(jid, { video: buffer, caption }, { quoted: msg });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                console.error('[FB] failed:', err.message);
+                await ui.fail(err.message);
             }
         }
     },
@@ -463,7 +811,7 @@ module.exports = [
 
     
 
-    // 2. TikTok Downloader (.tt / .tiktok / .tt2 - Multi-Structure & Reply Support)
+    // 2. TikTok Downloader (.tt / .tiktok) - prexzy first, the older endpoints as backup
     {
         name: 'tt',
         isPrefixless: false,
@@ -472,56 +820,37 @@ module.exports = [
             const url = extractUrlFromMsg(msg, args);
 
             if (!url || !url.includes('tiktok.com')) {
-                return await sock.sendMessage(jid, { 
-                    text: "❌ Please provide or reply to a valid TikTok video link.\n\n*Examples:*\n• `.tt https://vm.tiktok.com/xxxx/`\n• Reply to a TikTok link with `.tt`" 
+                return await sock.sendMessage(jid, {
+                    text: UI.usage("Please provide or reply to a valid TikTok video link.\n\nExamples:\n• `.tt https://vm.tiktok.com/xxxx/`\n• Reply to a TikTok link with `.tt`")
                 }, { quoted: msg });
             }
 
-            const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching TikTok video..." }, { quoted: msg });
-
+            const ui = await UI.begin(sock, msg, 'tiktok');
             try {
-                // Primary: tiktokv4 (in practice this one almost always comes
-                // back with empty results — kept first in case that changes,
-                // but the secondary endpoint below is the one doing real work)
-                let endpoint = `https://apis.davidcyril.name.ng/download/tiktokv4?url=${encodeURIComponent(url)}`;
-                let data = await withRetry(() => downloadMedia(endpoint));
+                const media = await getTikTokMedia(url);
+                await ui.step(1);
 
-                let res = data?.results || data?.result || data;
-                let downloadUrl = res?.nowatermark ||
-                                  res?.noWatermark ||
-                                  res?.video ||
-                                  res?.play ||
-                                  res?.download_url ||
-                                  (Array.isArray(res?.downloads) ? res.downloads[0]?.url : null) ||
-                                  extractDownloadUrl(data);
-
-                // Fallback: Secondary TikTok Endpoint if primary returned no link.
-                // This one intermittently 500s on an otherwise-good request, so
-                // it gets the retry treatment too rather than failing on one blip.
-                if (!downloadUrl) {
-                    endpoint = `https://apis.davidcyril.name.ng/download/tiktok?url=${encodeURIComponent(url)}`;
-                    data = await withRetry(() => downloadMedia(endpoint));
-                    res = data?.results || data?.result || data;
-                    downloadUrl = res?.video || res?.nowatermark || extractDownloadUrl(data);
+                // Try the HD link first, then the standard one.
+                let buffer = null;
+                for (const candidate of media.urls) {
+                    try {
+                        const buf = await fetchBuffer(candidate, 60000);
+                        if (buf.length > 10000) { buffer = buf; break; }
+                    } catch (e) { /* try the next link */ }
                 }
+                if (!buffer) throw new Error('The video link could not be downloaded.');
 
-                if (!downloadUrl) {
-                    throw new Error('No valid video download link found.');
-                }
-
-                const buffer = await fetchBuffer(downloadUrl);
-                const captionText = res?.title || res?.caption || res?.desc || 'TikTok Video 🎬';
-
-                await sock.sendMessage(jid, { video: buffer, caption: captionText }, { quoted: msg });
-                
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) { /* ignore */ }
-
-            } catch (err) {
-                console.error("❌ [TIKTOK DOWNLOAD FAILED]:", err.message);
-                await sock.sendMessage(jid, { 
-                    text: `❌ TikTok download failed: ${err.message}`, 
-                    edit: statusMsg.key 
+                await ui.step(2);
+                const caption = UI.card({
+                    icon: '🎵', title: media.title,
+                    fields: [['Creator', media.creator], ['Duration', media.duration], ['Plays', media.plays], ['Likes', media.likes], ['Size', UI.formatBytes(buffer.length)]],
+                    footer: true
                 });
+                await sock.sendMessage(jid, { video: buffer, caption }, { quoted: msg });
+                await ui.done();
+            } catch (err) {
+                console.error('[TIKTOK DOWNLOAD FAILED]:', err.message);
+                await ui.fail(err.message);
             }
         }
     },
@@ -550,22 +879,28 @@ module.exports = [
                 if (last === 'mp3' || last === 'audio') { type = 'audio'; url = parts.slice(0, -1).join(' '); }
                 else if (last === 'mp4' || last === 'video') { type = 'video'; url = parts.slice(0, -1).join(' '); }
             }
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a YouTube URL." }, { quoted: msg });
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Please provide a YouTube URL.") }, { quoted: msg });
             const endpoint = 'https://apis.davidcyril.name.ng/download/savetube';
-            await sock.sendMessage(jid, { text: `⏳ Downloading ${type}...` }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'youtube');
             try {
                 const data = await downloadMedia(endpoint, { url });
                 const downloadUrl = extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
                 const buffer = await fetchBuffer(downloadUrl);
-                const caption = data?.data?.title || 'YouTube';
+                const caption = UI.card({
+                    icon: '▶️', title: data?.data?.title || 'YouTube',
+                    fields: [['Type', type === 'audio' ? 'MP3 audio' : 'MP4 video'], ['Size', UI.formatBytes(buffer.length)]],
+                    footer: true
+                });
                 if (type === 'audio') {
-                    await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false, caption });
+                    await sock.sendMessage(jid, { text: caption }, { quoted: msg });
+                    await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
                 } else {
-                    await sock.sendMessage(jid, { video: buffer, caption });
+                    await sock.sendMessage(jid, { video: buffer, caption }, { quoted: msg });
                 }
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -578,29 +913,44 @@ module.exports = [
         }
     },
 
-    // 4. Instagram (Fixed audio misidentification checks)
+    // 4. Instagram (prexzy igv2 first: handles albums; the older source as backup)
     {
         name: 'ig',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
-            const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide an Instagram URL." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching Instagram media..." }, { quoted: msg });
+            const url = extractUrlFromMsg(msg, args);
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Please provide an Instagram URL.\n\nExample: `.ig <link>`") }, { quoted: msg });
+
+            const ui = await UI.begin(sock, msg, 'instagram');
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/instagram', { url });
-                const downloadUrl = data?.result?.video || data?.result?.mp3 || extractDownloadUrl(data);
-                if (!downloadUrl) throw new Error('No download link found');
-                const buffer = await fetchBuffer(downloadUrl);
-                
-                const isVideo = downloadUrl.includes('video') || downloadUrl.includes('mp4') || !downloadUrl.includes('mp3');
-                if (isVideo) {
-                    await sock.sendMessage(jid, { video: buffer, caption: extractTitle(data) });
-                } else {
-                    await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false, caption: extractTitle(data) });
+                const items = (await getInstagramItems(url)).slice(0, 10);
+                await ui.step(1);
+
+                for (let i = 0; i < items.length; i++) {
+                    const buffer = await fetchBuffer(items[i].url, 60000);
+                    if (i === 0) await ui.step(2);
+
+                    const kind = classifyMedia(buffer, items[i].url);
+                    const label = kind === 'video' ? 'Video' : (kind === 'image' ? 'Photo' : 'Audio');
+                    const caption = i === 0
+                        ? UI.card({
+                            icon: '📸', title: items.length > 1 ? `Instagram album • ${items.length} items` : 'Instagram',
+                            fields: [['Type', label], ['Size', UI.formatBytes(buffer.length)]],
+                            footer: true
+                        })
+                        : `📸 ${i + 1} of ${items.length}`;
+
+                    if (kind === 'image') await sock.sendMessage(jid, { image: buffer, caption }, { quoted: msg });
+                    else if (kind === 'audio') await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                    else await sock.sendMessage(jid, { video: buffer, caption }, { quoted: msg });
+
+                    if (i < items.length - 1) await delay(500);
                 }
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                console.error('[IG] failed:', err.message);
+                await ui.fail(err.message);
             }
         }
     },
@@ -620,16 +970,21 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Twitter/X URL." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching Twitter/X media..." }, { quoted: msg });
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Please provide a Twitter/X URL.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'twitter');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/twitter', { url });
                 const downloadUrl = data?.video_hd || data?.video_sd || extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
                 const buffer = await fetchBuffer(downloadUrl);
-                await sock.sendMessage(jid, { video: buffer, caption: data.description || 'Twitter video' });
+                const caption = UI.card({
+                    icon: '🐦', title: data.description || 'Twitter video',
+                    fields: [['Size', UI.formatBytes(buffer.length)]], footer: true
+                });
+                await sock.sendMessage(jid, { video: buffer, caption }, { quoted: msg });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -649,16 +1004,22 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Spotify track URL." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching Spotify track..." }, { quoted: msg });
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Please provide a Spotify track URL.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'spotify');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/spotifydl', { url });
                 const downloadUrl = data?.DownloadLink || extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
                 const buffer = await fetchBuffer(downloadUrl);
-                await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false, caption: data.title || 'Spotify' });
+                const caption = UI.card({
+                    icon: '🟢', title: data.title || 'Spotify',
+                    fields: [['Size', UI.formatBytes(buffer.length)]], footer: true
+                });
+                await sock.sendMessage(jid, { text: caption }, { quoted: msg });
+                await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -670,16 +1031,17 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Pinterest pin URL." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching Pinterest media..." }, { quoted: msg });
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Please provide a Pinterest pin URL.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'pinterest');
             try {
                 const data = await downloadMedia('https://apis.prexzyvilla.site/download/pinterest', { url });
                 const downloadUrl = extractDownloadUrl(data);
                 if (!downloadUrl) throw new Error('No download link found');
                 const buffer = await fetchBuffer(downloadUrl);
                 await sock.sendMessage(jid, { image: buffer, caption: extractTitle(data) });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -691,8 +1053,8 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a MediaFire link." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching MediaFire file..." }, { quoted: msg });
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Please provide a MediaFire link.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'mediafire');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/mediafire', { url });
                 const downloadUrl = data?.downloadLink || extractDownloadUrl(data);
@@ -708,8 +1070,9 @@ module.exports = [
                     mimetype: mime,
                     caption: data.fileName || 'MediaFire file'
                 });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -721,8 +1084,8 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Please provide a Google Drive link." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Fetching Google Drive file..." }, { quoted: msg });
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Please provide a Google Drive link.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'gdrive');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/gdrive', { url });
                 const downloadUrl = data?.download_link || extractDownloadUrl(data);
@@ -738,8 +1101,9 @@ module.exports = [
                     mimetype: mime,
                     caption: data.name || 'Google Drive file'
                 });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -766,8 +1130,8 @@ module.exports = [
                     code = rawContent?.conversation || rawContent?.extendedTextMessage?.text || '';
                 }
             }
-            if (!code) return await sock.sendMessage(jid, { text: "❌ Please provide JavaScript code to obfuscate." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: `⏳ Obfuscating with ${level} level...` }, { quoted: msg });
+            if (!code) return await sock.sendMessage(jid, { text: UI.usage("Please provide JavaScript code to obfuscate.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'obf');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/obfuscate', { code, level }, 'POST');
                 if (!data || !data.success) throw new Error(data?.message || 'API error');
@@ -780,102 +1144,87 @@ module.exports = [
                     mimetype: 'text/javascript',
                     caption: `✅ Obfuscated (${level})`
                 });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
 
 
-// 11. Song (interactive search with split image + audio delivery)
+// 11. Song (one call, delivered as a native music card)
     {
         name: 'song',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const query = args?.trim();
-            if (!query) return await sock.sendMessage(jid, { text: "❌ Provide a song name." }, { quoted: msg });
-            
-            await sock.sendMessage(jid, { text: "🔍 Searching..." }, { quoted: msg });
+            if (!query) return await sock.sendMessage(jid, { text: UI.usage("Provide a song name.\n\nExample: `.song Faded`") }, { quoted: msg });
+
+            const ui = await UI.begin(sock, msg, 'song');
             try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 5 });
-                if (!data?.result) return await sock.sendMessage(jid, { text: "❌ No songs found." });
-                const song = data.result;
-                
-                let list = `🎵 *Song Found:*\n\n1. *${song.title}*\n`;
-                if (song.duration) list += `   ⏱️ ${song.duration}\n`;
-                list += `\n📌 Reply with **1** to download.`;
-                
-                const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
-                
-                // Registered via safe session helper, pointing to the handleSongReply function above
-                registerSession('song', prompt.key.id, { results: [song], handle: handleSongReply, query });
+                const { song, audioBuffer } = await getSongAudio(query, (i) => ui.step(i));
+                await ui.step(2);
+
+                let thumb = null;
+                if (song.thumbnail) { try { thumb = await fetchBuffer(song.thumbnail); } catch (e) { /* no cover */ } }
+
+                const payload = { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false };
+                if (thumb) {
+                    payload.contextInfo = {
+                        externalAdReply: {
+                            title: song.title,
+                            body: `${song.durationText} • ${song.quality}`,
+                            thumbnail: thumb,
+                            mediaType: 2, // renders as a native music card
+                            mediaUrl: song.source || undefined,
+                            sourceUrl: song.source || undefined
+                        }
+                    };
+                }
+                await sock.sendMessage(jid, payload, { quoted: msg });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Search failed: ${err.message}` });
+                console.error('[SONG] failed:', err.message);
+                await ui.fail(err.message);
             }
         }
     },
 
-    // 12. Play (direct song fetch with safe split delivery)
+    // 12. Play (details card with the cover, then the audio)
     {
         name: 'play',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const query = args?.trim();
-            if (!query) return await sock.sendMessage(jid, { text: "❌ Provide a song name." }, { quoted: msg });
-            
-            await sock.sendMessage(jid, { text: "⏳ Fetching song..." }, { quoted: msg });
+            if (!query) return await sock.sendMessage(jid, { text: UI.usage("Provide a song name.\n\nExample: `.play Faded`") }, { quoted: msg });
+
+            const ui = await UI.begin(sock, msg, 'play');
             try {
-                let song, downloadUrl, audioBuffer;
-                // Up to 3 attempts: each one re-searches from scratch to get a
-                // fresh download token, since a stale one fails as a tiny error
-                // page rather than a clean error (see isLikelyAudio above).
-                for (let attempt = 1; attempt <= 3; attempt++) {
-                    const data = await downloadMedia('https://apis.davidcyril.name.ng/play', { query, limit: 1 });
-                    if (!data?.result) return await sock.sendMessage(jid, { text: "❌ No song found." });
-                    song = data.result;
-                    downloadUrl = song.download_url || song.download || extractDownloadUrl(song);
-                    if (!downloadUrl) throw new Error('No download link');
+                const { song, audioBuffer } = await getSongAudio(query, (i) => ui.step(i));
+                await ui.step(2);
 
-                    try {
-                        const buf = await fetchBuffer(downloadUrl);
-                        if (isLikelyAudio(buf)) { audioBuffer = buf; break; }
-                    } catch (e) { /* fall through to retry */ }
+                let thumb = null;
+                if (song.thumbnail) { try { thumb = await fetchBuffer(song.thumbnail); } catch (e) { console.log('[Play Command] Failed to download the cover.'); } }
 
-                    if (attempt < 3) await delay(1200);
-                }
-                if (!audioBuffer) throw new Error('The song link kept coming back invalid or expired after 3 tries. Try again in a moment.');
+                const caption = UI.card({
+                    icon: '🎵', title: song.title,
+                    fields: [['Duration', song.durationText], ['Quality', song.quality], ['Size', UI.formatBytes(audioBuffer.length)]],
+                    footer: true
+                });
+                if (thumb) await sock.sendMessage(jid, { image: thumb, caption }, { quoted: msg });
+                else await sock.sendMessage(jid, { text: caption }, { quoted: msg });
 
-                let thumbBuffer = null;
-                if (song.thumbnail) {
-                    try { 
-                        thumbBuffer = await fetchBuffer(song.thumbnail); 
-                    } catch (e) {
-                        console.log("[Play Command] Failed to download thumbnail fallback.");
-                    }
-                }
-
-                // 1. Send high-quality image with song details in caption (keeps layout compatible)
-                if (thumbBuffer) {
-                    const caption = `🎵 *${song.title}*\n👤 *Artist:* ${song.artist || 'Limitless Music'}\n⏱️ *Duration:* ${song.duration || 'N/A'}`;
-                    await sock.sendMessage(jid, { image: thumbBuffer, caption: caption }, { quoted: msg });
-                }
-
-                // 2. Send clean audio bubble immediately after
-                await sock.sendMessage(jid, {
-                    audio: audioBuffer,
-                    mimetype: 'audio/mpeg',
-                    ptt: false
-                }, { quoted: msg });
-
+                await sock.sendMessage(jid, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                console.error('[PLAY] failed:', err.message);
+                await ui.fail(err.message);
             }
         }
     },
 
-    
 // 13. Telegram Stickers (using Telegram Bot API - Fixed Edit ID Reply Bug)
     {
         name: 'tgs',
@@ -883,15 +1232,15 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Provide Telegram sticker pack URL.\nExample: `.tgs https://t.me/addstickers/doakesreactions`" }, { quoted: msg });
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Provide a Telegram sticker pack URL.\n\nExample: `.tgs https://t.me/addstickers/doakesreactions`") }, { quoted: msg });
 
             // 1. Send the initial loading message container (gets the persistent ID)
-            const statusMsg = await sock.sendMessage(jid, { text: "⏳ Fetching sticker pack via Telegram API..." }, { quoted: msg });
+            const statusMsg = await sock.sendMessage(jid, { text: UI.statusText('tgs', 0) }, { quoted: msg });
 
             const token = config.telegramBotToken;
             if (!token) {
                 return await sock.sendMessage(jid, {
-                    text: "❌ Telegram Bot Token not configured. Please add TELEGRAM_BOT_TOKEN to your .env file.",
+                    text: UI.errorText("Telegram Bot Token not configured. Please add TELEGRAM_BOT_TOKEN to your .env file.", { title: 'SETUP NEEDED', hint: '' }),
                     edit: statusMsg.key
                 });
             }
@@ -899,7 +1248,7 @@ module.exports = [
             const packMatch = url.match(/addstickers\/([a-zA-Z0-9_]+)/i);
             if (!packMatch) {
                 return await sock.sendMessage(jid, {
-                    text: "❌ Invalid sticker pack URL. Must be like: https://t.me/addstickers/PackName",
+                    text: UI.errorText("Invalid sticker pack URL. It must look like: https://t.me/addstickers/PackName"),
                     edit: statusMsg.key
                 });
             }
@@ -916,20 +1265,16 @@ module.exports = [
 
                 const stickers = data.result.stickers || [];
                 if (stickers.length === 0) {
-                    await sock.sendMessage(jid, { text: "❌ No stickers found in this pack.", edit: statusMsg.key });
+                    await sock.sendMessage(jid, { text: UI.errorText("No stickers found in this pack."), edit: statusMsg.key });
                     return;
                 }
 
                 const maxShow = Math.min(stickers.length, 20);
-                let list = `📦 *${data.result.title || 'Stickers'}*\n\n`;
-                for (let i = 0; i < maxShow; i++) {
-                    const s = stickers[i];
-                    list += `${i+1}. ${s.emoji || '📌'} ${s.is_animated ? '🔄 (Animated)' : ''}\n`;
-                }
-                if (stickers.length > 20) {
-                    list += `\n*Showing first 20 of ${stickers.length}*`;
-                }
-                list += `\n\n📌 Reply with number to download.`;
+                const list = UI.card({
+                    icon: '🧩', title: data.result.title || 'Stickers',
+                    fields: stickers.slice(0, maxShow).map((st, i) => [`${i + 1}.`, `${st.emoji || '📌'}${st.is_animated ? ' (animated)' : ''}`]),
+                    note: `${stickers.length > 20 ? `Showing the first 20 of ${stickers.length}. ` : ''}📌 Reply with a number to download.`
+                });
 
                 // 2. Edit the loading message to display the list
                 await sock.sendMessage(jid, { text: list, edit: statusMsg.key });
@@ -945,7 +1290,7 @@ module.exports = [
             } catch (err) {
                 console.error('[TGS] Error:', err.message);
                 await sock.sendMessage(jid, {
-                    text: `❌ Failed to fetch sticker pack: ${err.message}`,
+                    text: UI.errorText(`Failed to fetch sticker pack: ${err.message}`),
                     edit: statusMsg.key
                 });
             }
@@ -959,8 +1304,8 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const query = args?.trim();
-            if (!query) return await sock.sendMessage(jid, { text: "❌ Provide an app name (e.g., whatsapp)." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Searching APK..." }, { quoted: msg });
+            if (!query) return await sock.sendMessage(jid, { text: UI.usage("Provide an app name (e.g., whatsapp).") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'apk');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/download/apk', { text: query });
                 if (!data?.status) throw new Error(data?.message || 'API error');
@@ -974,8 +1319,9 @@ module.exports = [
                     mimetype: 'application/vnd.android.package-archive',
                     caption: `📱 *${apk.name}*\nVersion: ${apk.lastUpdated || 'latest'}`
                 });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -987,8 +1333,8 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const url = args?.trim();
-            if (!url) return await sock.sendMessage(jid, { text: "❌ Provide a website URL." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "⏳ Downloading website..." }, { quoted: msg });
+            if (!url) return await sock.sendMessage(jid, { text: UI.usage("Provide a website URL.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'web');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/tools/downloadweb', { url });
                 if (!data?.success) throw new Error(data?.message || 'API error');
@@ -1001,8 +1347,9 @@ module.exports = [
                     mimetype: 'application/zip',
                     caption: `📦 Website downloaded from ${url}`
                 });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -1014,25 +1361,26 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const query = args?.trim();
-            if (!query) return await sock.sendMessage(jid, { text: "❌ Provide song name/artist." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "🔍 Searching lyrics..." }, { quoted: msg });
+            if (!query) return await sock.sendMessage(jid, { text: UI.usage("Provide song name/artist.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'lyrics');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/lyrics/genius', { q: query });
                 if (!data?.success || !data.results || data.results.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No lyrics found." });
+                    return await ui.fail("No lyrics found.");
                 }
                 const results = data.results.slice(0, 5);
-                let list = `🎵 *Lyrics Search Results:*\n\n`;
-                results.forEach((r, i) => {
-                    list += `${i+1}. *${r.title}* - ${r.artist}\n`;
+                const list = UI.card({
+                    icon: '📝', title: 'LYRICS RESULTS',
+                    fields: results.map((r, i) => [`${i + 1}.`, `${r.title} - ${r.artist}`]),
+                    note: '📌 Reply with a number to view the lyrics.'
                 });
-                list += `\n📌 Reply with number to view lyrics.`;
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
                 
                 // Registered via safe session helper
                 registerSession('lyrics', prompt.key.id, { results, handle: handleLyricsReply });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -1051,20 +1399,21 @@ module.exports = [
                 count = Math.min(parseInt(first), 10);
                 query = parts.slice(1).join(' ');
             }
-            if (!query) return await sock.sendMessage(jid, { text: "❌ Provide a search query." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: `🔍 Searching for images...` }, { quoted: msg });
+            if (!query) return await sock.sendMessage(jid, { text: UI.usage("Provide a search query.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'images');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/search/pinterest', { text: query });
                 if (!data?.success || !data.result || data.result.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No images found." });
+                    return await ui.fail("No images found.");
                 }
                 const images = data.result.slice(0, count);
                 for (const img of images) {
                     const buffer = await fetchBuffer(img.image);
                     await sock.sendMessage(jid, { image: buffer });
                 }
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
@@ -1076,107 +1425,40 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const query = args?.trim();
-            if (!query) return await sock.sendMessage(jid, { text: "❌ Provide a search term." }, { quoted: msg });
-            await sock.sendMessage(jid, { text: "🔍 Searching XVID..." }, { quoted: msg });
+            if (!query) return await sock.sendMessage(jid, { text: UI.usage("Provide a search term.") }, { quoted: msg });
+            const ui = await UI.begin(sock, msg, 'xvid');
             try {
                 const data = await downloadMedia('https://apis.davidcyril.name.ng/search/xvideo', { text: query });
                 if (!data?.success || !data.result || data.result.length === 0) {
-                    return await sock.sendMessage(jid, { text: "❌ No videos found." });
+                    return await ui.fail("No videos found.");
                 }
                 const results = data.result.slice(0, 10);
-                let list = `🎥 *XVID Results:*\n\n`;
-                results.forEach((r, i) => {
-                    list += `${i+1}. *${r.title}* (${r.duration})\n`;
+                const list = UI.card({
+                    icon: '🎥', title: 'VIDEO RESULTS',
+                    fields: results.map((r, i) => [`${i + 1}.`, `${r.title} (${r.duration})`]),
+                    note: '📌 Reply with a number to get the video link.'
                 });
-                list += `\n📌 Reply with number to get video link.`;
                 const prompt = await sock.sendMessage(jid, { text: list }, { quoted: msg });
                 
                 // Registered via safe session helper
                 registerSession('xvid', prompt.key.id, { results, handle: handleXvidReply });
+                await ui.done();
             } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
+                await ui.fail(err.message);
             }
         }
     },
 
-    // 19. Shazam
+    // 19. Shazam (details only) and Find (details + links + Download button)
     {
         name: 'shazam',
         isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
-            const jid = msg.key.remoteJid;
-            let audioUrl = args?.trim() || '';
-
-            if (!audioUrl) {
-                const rawMsg = getRawMessage(msg.message);
-                const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-                const quoted = contextInfo?.quotedMessage;
-                let audioBuffer = null;
-                let mimeType = null;
-
-                if (quoted) {
-                    const rawContent = getRawMessage(quoted);
-                    const audioMsg = rawContent?.audioMessage || (rawContent?.documentMessage?.mimetype?.startsWith('audio/') ? rawContent.documentMessage : null);
-                    if (audioMsg) {
-                        const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                        const stream = await downloadContentFromMessage(audioMsg, 'audio');
-                        const chunks = [];
-                        for await (const chunk of stream) chunks.push(chunk);
-                        audioBuffer = Buffer.concat(chunks);
-                        mimeType = audioMsg.mimetype || 'audio/mpeg';
-                    }
-                }
-
-                if (audioBuffer) {
-                    try {
-                        await sock.sendMessage(jid, { text: "⏳ Uploading audio for Shazam..." }, { quoted: msg });
-                        audioUrl = await uploadToCloud(audioBuffer, mimeType);
-                    } catch (uploadErr) {
-                        return await sock.sendMessage(jid, { text: `❌ Failed to upload audio: ${uploadErr.message}` }, { quoted: msg });
-                    }
-                } else {
-                    if (quoted) {
-                        const rawContent = getRawMessage(quoted);
-                        const text = rawContent?.conversation || rawContent?.extendedTextMessage?.text || rawContent?.imageMessage?.caption || rawContent?.videoMessage?.caption || '';
-                        const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
-                        if (urlMatch) audioUrl = urlMatch[1];
-                    }
-                }
-            }
-
-            if (!audioUrl) {
-                return await sock.sendMessage(jid, {
-                    text: "❌ Please provide an audio URL, reply to an audio message, or reply to a message containing a URL.\nExample: `.shazam https://example.com/song.mp3`"
-                }, { quoted: msg });
-            }
-
-            await sock.sendMessage(jid, { text: "🔍 Shazaming... 🎶" }, { quoted: msg });
-            try {
-                const data = await downloadMedia('https://apis.davidcyril.name.ng/shazam', { url: audioUrl });
-                if (!data || !data.success) {
-                    throw new Error(data?.message || 'Shazam failed');
-                }
-                const result = data.result || data;
-                let responseText = `🎵 *Shazam Result*\n\n`;
-                responseText += `*Title:* ${result.title || 'Unknown'}\n`;
-                responseText += `*Artist:* ${result.artist || 'Unknown'}\n`;
-                if (result.album) responseText += `*Album:* ${result.album}\n`;
-                if (result.release_date) responseText += `*Released:* ${result.release_date}\n`;
-                if (result.genre) responseText += `*Genre:* ${result.genre}\n`;
-                if (result.cover) {
-                    try {
-                        const thumbBuffer = await fetchBuffer(result.cover);
-                        await sock.sendMessage(jid, { image: thumbBuffer, caption: responseText });
-                    } catch (e) {
-                        await sock.sendMessage(jid, { text: responseText });
-                    }
-                } else {
-                    await sock.sendMessage(jid, { text: responseText });
-                }
-            } catch (err) {
-                await sock.sendMessage(jid, { text: `❌ Failed: ${err.message}` });
-            }
-        }
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => runRecognition(sock, msg, args, 'shazam')
+    },
+    {
+        name: 'find',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => runRecognition(sock, msg, args, 'find')
     }
 ];
 
