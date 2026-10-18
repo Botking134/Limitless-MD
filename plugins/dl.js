@@ -8,9 +8,7 @@ const UI = require('../helpers/DownloaderUI');
 
 // ─── KEYS ─────────────────────────────────────────────────────────
 // AudD is the song-recognition service behind .shazam and .find.
-// Paste your AudD token between the quotes. While it is empty, those two
-// commands fall back to the older shazam endpoint.
-const AUDD_TOKEN = '';
+const AUDD_TOKEN = 'afc72ab7d043dc4de76dd5a7ccb0a0c1';
 
 // Only needed if apis.davidcyril.name.ng starts requiring a key (sent as X-API-Key).
 const DAVID_API_KEY = '';
@@ -619,7 +617,10 @@ async function recognizeWithAudD({ buffer, mimeType, url }) {
         headers: form.getHeaders(), timeout: 45000, maxBodyLength: Infinity, maxContentLength: Infinity
     });
     const d = res.data;
-    if (d?.status !== 'success') throw new Error(d?.error?.error_message || 'AudD returned an error');
+    if (d?.status !== 'success') {
+        const code = d?.error?.error_code;
+        throw new Error(`${d?.error?.error_message || 'AudD returned an error'}${code ? ` (code ${code})` : ''}`);
+    }
     const r = d.result;
     if (!r) { const e = new Error('No match'); e.code = 'NO_MATCH'; throw e; }
 
@@ -638,32 +639,19 @@ async function recognizeWithAudD({ buffer, mimeType, url }) {
     };
 }
 
-// The older endpoint (needs a link, so a raw clip is uploaded first).
-async function recognizeWithLegacy({ buffer, mimeType, url }) {
-    let audioUrl = url;
-    if (!audioUrl && buffer) audioUrl = await uploadToCloud(buffer, mimeType || 'audio/mpeg');
-    if (!audioUrl) throw new Error('No audio to analyse');
-    const data = await downloadMedia('https://apis.davidcyril.name.ng/shazam', { url: audioUrl });
-    if (!data || !data.success) throw new Error(data?.message || 'Could not identify the song');
-    const r = data.result || data;
-    if (!r.title) { const e = new Error('No match'); e.code = 'NO_MATCH'; throw e; }
-    return {
-        title: r.title, artist: r.artist || 'Unknown', album: r.album || '',
-        year: String(r.release_date || '').slice(0, 4), genre: r.genre || '', timecode: '',
-        spotifyUrl: '', appleUrl: '', songLink: '', cover: r.cover || null
-    };
-}
-
 async function recognizeSong(input) {
-    if (AUDD_TOKEN) {
-        try {
-            return await recognizeWithAudD(input);
-        } catch (err) {
-            if (err.code === 'NO_MATCH') throw err;
-            console.log('[SHAZAM] AudD failed, using the older endpoint:', err.message);
-        }
+    if (!AUDD_TOKEN) {
+        const e = new Error('No AudD token is set in dl.js');
+        e.hint = 'Paste your AudD token into AUDD_TOKEN at the top of dl.js.';
+        throw e;
     }
-    return await recognizeWithLegacy(input);
+    try {
+        return await recognizeWithAudD(input);
+    } catch (err) {
+        if (err.code === 'NO_MATCH') throw err;
+        // Say plainly what AudD answered (an API error code, an HTTP status, or a timeout).
+        throw new Error(err.response?.status ? `AudD answered HTTP ${err.response.status}` : err.message);
+    }
 }
 
 // mode 'shazam' = details only. mode 'find' = details + links + a Download button.
@@ -724,7 +712,7 @@ async function runRecognition(sock, msg, args, mode) {
         if (err.code === 'NO_MATCH') {
             await ui.fail("Couldn't identify that song.", { title: 'NO MATCH', hint: 'Try a clearer 10 to 20 second clip with less background noise.' });
         } else {
-            await ui.fail(err.message, { title: 'IDENTIFICATION FAILED' });
+            await ui.fail(err.message, { title: 'IDENTIFICATION FAILED', hint: err.hint });
         }
     }
 }
