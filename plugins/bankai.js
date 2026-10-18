@@ -240,6 +240,18 @@ function searchBankaiMultiple(query) {
     return fuzzyMatches.map(match => match.entry);
 }
 
+// Lore doesn't change, so a successful answer is remembered and the AI is asked once per bankai.
+const abilityCache = new Map();
+
+// gpt-oss is a REASONING model: it "thinks" before it writes, and that thinking counts
+// against max_tokens. With a small limit it used up the whole budget and returned an
+// EMPTY answer, which showed as "Abilities are unknown." So it gets a roomy budget on
+// low effort first, then a bigger one without the effort setting as a backup.
+const ABILITY_ATTEMPTS = [
+    { extra: { reasoning_effort: 'low' }, maxTokens: 1024 },
+    { extra: {}, maxTokens: 2500 }
+];
+
 async function getBankaiAbility(name, bankai) {
     if (bankai.includes('404 error')) {
         return 'This Bankai is beyond description.';
@@ -248,37 +260,50 @@ async function getBankaiAbility(name, bankai) {
         return 'No known abilities are recorded for this Bankai.';
     }
 
-    try {
-        const prompt =
-            `In Bleach, "${name}" wields the Bankai "${bankai}". In 3-4 short lines total, briefly cover: (1) who ${name} is, in one line, and (2) what "${bankai}" does — its core ability or effect.
+    const cacheKey = `${name}|${bankai}`;
+    if (abilityCache.has(cacheKey)) return abilityCache.get(cacheKey);
 
-            CRITICAL FORMATTING RULES:
-            1. Structure the response as short, readable lines or small bullet points using line breaks.
-            2. The total output must be 3-4 lines maximum — be concise, not exhaustive.
-            3. No introductory or concluding remarks — just the lines themselves.`;
+    const prompt =
+        `In Bleach, "${name}" wields the Bankai "${bankai}". In 3-4 short lines total, briefly cover: (1) who ${name} is, in one line, and (2) what "${bankai}" does — its core ability or effect.
 
-        const response = await axios.post(GROQ_BASE_URL, {
-            model: "openai/gpt-oss-20b",
-            messages: [
-                { role: "system", content: "You are a knowledgeable Bleach lore expert. You strictly adhere to line count and formatting requirements." },
-                { role: "user", content: prompt }
-            ],
-            temperature: 0.5,
-            max_tokens: 150
-        }, {
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROQ_API_KEY}`
+        CRITICAL FORMATTING RULES:
+        1. Structure the response as short, readable lines or small bullet points using line breaks.
+        2. The total output must be 3-4 lines maximum — be concise, not exhaustive.
+        3. No introductory or concluding remarks — just the lines themselves.`;
+
+    for (const attempt of ABILITY_ATTEMPTS) {
+        try {
+            const response = await axios.post(GROQ_BASE_URL, {
+                model: "openai/gpt-oss-20b",
+                messages: [
+                    { role: "system", content: "You are a knowledgeable Bleach lore expert. You strictly adhere to line count and formatting requirements." },
+                    { role: "user", content: prompt }
+                ],
+                temperature: 0.5,
+                max_tokens: attempt.maxTokens,
+                ...attempt.extra
+            }, {
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${GROQ_API_KEY}`
+                },
+                timeout: 30000
+            });
+
+            let text = (response.data?.choices?.[0]?.message?.content || '').trim();
+            if (!text) {
+                console.log(`[BANKAI] empty answer for ${bankai} (finish: ${response.data?.choices?.[0]?.finish_reason}), trying again`);
+                continue;
             }
-        });
-
-        let text = response.data?.choices?.[0]?.message?.content || '';
-        if (text.length > 800) text = text.slice(0, 797) + '...';
-        return text.trim() || 'Abilities are unknown.';
-    } catch (err) {
-        console.error('Groq error:', err.message);
-        return 'Could not retrieve abilities.';
+            if (text.length > 800) text = text.slice(0, 797) + '...';
+            abilityCache.set(cacheKey, text);
+            return text;
+        } catch (err) {
+            console.error('Groq error:', err.response?.status ? `HTTP ${err.response.status}` : err.message);
+            // keep going: the next attempt drops the optional setting in case that was rejected
+        }
     }
+    return 'Could not retrieve abilities right now. Try again in a moment.';
 }
 
 async function showBankai(sock, msg, entry) {
