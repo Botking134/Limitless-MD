@@ -215,6 +215,12 @@ const baseConfig = {
         'cRTVRoxq'
     ].join(''),
 
+const imgbbApiKey = [
+    "29bd2e49",
+    "1683420d",
+    "bfb514a5",
+    "e4b40b95"
+].join("");
 
 
 telegramBotToken: [
