@@ -764,44 +764,63 @@ async function startBot() {
     let targetNumber = null;
     let pairingMode = false;
 
-    // In interactive terminal, allow fast CLI prompt; in web/headless mode, don't block
-    if (!state.creds.registered && process.stdin.isTTY) {
-        console.log(`
-========================================
-⚡ AUTHENTICATION REQUIRED
-========================================
-1. Request Pairing Code (Enter number)
-2. Scan QR Code (Display QR)
-========================================
-(You can also use the Web UI on port 3000 to scan QR or generate code)
-`);
-        try {
-            const promptPromise = question('Select option (1 or 2, or press Enter for QR): ');
-            const timeoutPromise = new Promise(r => setTimeout(() => r('timeout'), 8000));
-            const choice = await Promise.race([promptPromise, timeoutPromise]);
-
-            if (choice === '1') {
-                pairingMode = true;
+    // Pairing-code only (no QR fallback). Ask for the number once; it is
+    // remembered across automatic reconnects so the prompt doesn't repeat.
+    if (!state.creds.registered) {
+        if (global.pendingPairNumber) {
+            targetNumber = global.pendingPairNumber;
+            pairingMode = true;
+        } else if (process.stdin.isTTY) {
+            console.log(`\n========================================\n⚡ AUTHENTICATION REQUIRED\n========================================\n(You can also use the Web UI on port 3000 to generate a pairing code)\n`);
+            try {
                 console.log('👉 Enter your WhatsApp number with country code:');
-                let numberInput = await question('');
-                targetNumber = numberInput.replace(/[^0-9]/g, '');
+                const numberInput = await question('');
+                targetNumber = (numberInput || '').replace(/[^0-9]/g, '');
                 if (targetNumber) {
+                    global.pendingPairNumber = targetNumber;
+                    pairingMode = true;
                     console.log(`\n⏳ Requesting pairing code for ${targetNumber}...\n`);
                 }
-            } else if (choice === '2' || choice === '' || choice === 'timeout') {
-                pairingMode = false;
-                console.log('\n📱 QR mode active. Waiting for QR...\n');
+            } catch (e) {
+                // Ignore prompt error; Web UI can still be used
             }
-        } catch (e) {
-            // Ignore prompt error and proceed with standard QR/web pairing
         }
     }
 
     const QRCode = require('qrcode');
 
+    // Pick a current WhatsApp Web version. Some forks return a very old one
+    // (e.g. 2.2413.1), which makes WhatsApp reject the connection with 405.
+    const isFreshVersion = (v) => Array.isArray(v) && v.length === 3 && v[0] === 2 && v[1] >= 3000;
+    let waVersion;
+    try {
+        const res = await require('axios').get(
+            'https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/baileys-version.json',
+            { timeout: 10000 }
+        );
+        if (isFreshVersion(res.data && res.data.version)) waVersion = res.data.version;
+    } catch (e) {
+        console.log('⚠️ GitHub version lookup failed: ' + e.message);
+    }
+    if (!waVersion) {
+        try {
+            const baileysMod = await import('@itsliaaa/baileys');
+            if (typeof baileysMod.fetchLatestBaileysVersion === 'function') {
+                const { version } = await baileysMod.fetchLatestBaileysVersion();
+                if (isFreshVersion(version)) waVersion = version;
+            }
+        } catch (e) {
+            console.log('⚠️ Library version lookup failed: ' + e.message);
+        }
+    }
+    console.log(waVersion
+        ? '🌐 Using WhatsApp version: ' + waVersion.join('.')
+        : '⚠️ No fresh WA version found, using the library default');
+
     const sock = makeWASocket({
+        ...(waVersion ? { version: waVersion } : {}),
         auth: state,
-        printQRInTerminal: true,
+        printQRInTerminal: false,
         logger: require('pino')({ level: 'silent' }),
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
@@ -899,11 +918,6 @@ async function startBot() {
             }
             global.pairingStatus.lastUpdate = Date.now();
 
-            if (!pairingMode && !qrDisplayed) {
-                qrDisplayed = true;
-                console.log('\n📱 [QR CODE] Ready! Scan with WhatsApp or open the Web UI:');
-                console.log('\n👉 Open WhatsApp > Linked Devices > Link a Device\n');
-            }
         }
 
         if (targetNumber && !pairingCodeRequested && pairingMode) {
