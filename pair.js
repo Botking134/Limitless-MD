@@ -837,15 +837,16 @@ async function startBot() {
 
     activeSocketInstance = sock;
 
-    // ─── LEGACY BUTTON + LIST SUPPORT ─────────────────────────────
+    // ─── LEGACY BUTTON + LIST SUPPORT (via richMenu) ──────────────
     // Old-style `buttons: [{ buttonId, buttonText, type: 1 }]` and
     // `listMessage`-style content (title, buttonText, sections[].rows[].rowId)
-    // no longer render on current WhatsApp, and the plain Baileys library
-    // doesn't convert them. Here they are converted into native-flow
-    // interactive messages (quick_reply / single_select) and relayed with the
-    // <biz> node WhatsApp needs to draw them.
-    let _baileysModPromise = null;
-    const getBaileysMod = () => (_baileysModPromise = _baileysModPromise || import('@itsliaaa/baileys'));
+    // are not drawn by current WhatsApp. The @vansnowi/baileys `richMenu`
+    // helper is the format that renders, so such messages are sent as:
+    //   1) the normal text (or image + caption), then
+    //   2) a richMenu with quick-reply buttons.
+    // A richMenu button sends its own label as a chat message when tapped, so
+    // every label is a full command (prefix included), e.g. "!update proceed".
+    const cmdPrefix = () => (Array.isArray(config.prefix) ? (config.prefix[0] || '!') : (config.prefix || '!'));
 
     const isLegacyButtons = (content) =>
         !!content && typeof content === 'object' &&
@@ -860,89 +861,83 @@ async function startBot() {
 
     const legacyButtonLabel = (b) => (typeof b.buttonText === 'string' ? b.buttonText : b.buttonText.displayText);
 
-    // Builds the media header (if any), quote info, wrapper and <biz> nodes, then relays.
-    async function relayInteractive(jid, interactive, content, options) {
-        const { generateWAMessageFromContent, prepareWAMessageMedia, proto } = await getBaileysMod();
+    // Ids of the `.git` list rows -> the real command
+    const GIT_ROWS = {
+        git_pull: 'git pull', git_status: 'git status', git_push: 'git push',
+        git_revert: 'git revert', git_setup: 'git setup', git_force: 'git force', git_info: 'git info'
+    };
+    const rowToCommand = (id) => {
+        const raw = String(id).trim();
+        const pfx = cmdPrefix();
+        if (GIT_ROWS[raw.toLowerCase()]) return pfx + GIT_ROWS[raw.toLowerCase()];
+        return raw.startsWith(pfx) ? raw : pfx + raw;
+    };
 
-        const mediaKey = content.image ? 'image' : (content.video ? 'video' : null);
-        if (mediaKey) {
-            const media = await prepareWAMessageMedia({ [mediaKey]: content[mediaKey] }, { upload: sock.waUploadToServer });
-            interactive.header = { hasMediaAttachment: true, ...media };
-        } else if (!interactive.header) {
-            // WhatsApp clients expect a header object even when it is empty
-            interactive.header = { title: '', subtitle: '', hasMediaAttachment: false };
-        }
+    const chunk = (arr, n) => {
+        const out = [];
+        for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+        return out;
+    };
 
-        const quoted = options?.quoted;
-        if (quoted?.key?.id) {
-            interactive.contextInfo = {
-                stanzaId: quoted.key.id,
-                participant: quoted.key.participant || quoted.key.remoteJid,
-                quotedMessage: quoted.message
-            };
-        }
-
-        const fullMsg = generateWAMessageFromContent(jid, proto.Message.fromObject({
-            viewOnceMessage: {
-                message: {
-                    messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-                    interactiveMessage: interactive
-                }
-            }
-        }), { userJid: sock.user.id });
-
-        const nodes = [{
-            tag: 'biz',
-            attrs: {},
-            content: [{
-                tag: 'interactive',
-                attrs: { type: 'native_flow', v: '1' },
-                content: [{ tag: 'native_flow', attrs: { v: '9', name: 'mixed' } }]
-            }]
-        }];
-        if (!jid.endsWith('@g.us')) nodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
-
-        await sock.relayMessage(jid, fullMsg.message, { messageId: fullMsg.key.id, additionalNodes: nodes });
-        return fullMsg;
-    }
-
-    async function sendLegacyButtons(jid, content, options) {
-        const interactive = {
-            body: { text: content.caption || content.text || ' ' },
-            nativeFlowMessage: {
-                buttons: content.buttons.map(b => ({
-                    name: 'quick_reply',
-                    buttonParamsJson: JSON.stringify({ display_text: legacyButtonLabel(b), id: b.buttonId })
-                }))
+    // Builds the richMenu options: one button group, or a carousel when > 3 buttons
+    const richBody = (labels, title, toast) => {
+        if (labels.length <= 3) return { body: { title: title || 'Tap an option', buttons: labels, toast: toast || 'Sending...' } };
+        const groups = chunk(labels, 3);
+        return {
+            body: {
+                carousel: true,
+                cards: groups.map((g, i) => ({ title: groups.length > 1 ? `${title || 'Options'} ${i + 1}` : (title || 'Options'), buttons: g, toast: toast || 'Sending...' }))
             }
         };
-        if (content.footer) interactive.footer = { text: content.footer };
-        return relayInteractive(jid, interactive, content, options);
+    };
+
+    async function sendLegacyButtons(jid, content, options) {
+        if (typeof sock.richMenu !== 'function') throw new Error('sock.richMenu is not available in this Baileys build');
+        const base = (content.caption || content.text || ' ') + (content.footer ? `\n\n_${content.footer}_` : '');
+
+        let sent;
+        if (content.image) sent = await originalSendMessage(jid, { image: content.image, caption: base, ...(content.mentions ? { mentions: content.mentions } : {}) }, options);
+        else if (content.video) sent = await originalSendMessage(jid, { video: content.video, caption: base, ...(content.mentions ? { mentions: content.mentions } : {}) }, options);
+        else sent = await originalSendMessage(jid, { text: base, ...(content.mentions ? { mentions: content.mentions } : {}) }, options);
+
+        const labels = content.buttons.map(b => String(b.buttonId).trim());
+        try {
+            await sock.richMenu(jid, richBody(labels, 'Tap an option'));
+        } catch (e) {
+            console.error('⚠️ [BUTTONS] richMenu failed, sending command list instead:', e.message);
+            await originalSendMessage(jid, { text: 'Send one of these:\n' + labels.map(l => '▫️ ' + l).join('\n') }, options);
+        }
+        return sent;
     }
 
     async function sendLegacyList(jid, content, options) {
-        const interactive = {
-            body: { text: content.text || content.caption || ' ' },
-            nativeFlowMessage: {
-                buttons: [{
-                    name: 'single_select',
-                    buttonParamsJson: JSON.stringify({
-                        title: content.buttonText,
-                        sections: content.sections.map(sec => ({
-                            title: sec.title || '',
-                            rows: sec.rows.map(r => ({
-                                title: r.title,
-                                description: r.description || '',
-                                id: r.rowId || r.id
-                            }))
-                        }))
-                    })
-                }]
-            }
-        };
-        if (content.footer) interactive.footer = { text: content.footer };
-        if (content.title) interactive.header = { title: content.title, hasMediaAttachment: false };
-        return relayInteractive(jid, interactive, {}, options);
+        if (typeof sock.richMenu !== 'function') throw new Error('sock.richMenu is not available in this Baileys build');
+        const rows = content.sections.flatMap(sec => sec.rows.map(r => ({ ...r, section: sec.title || content.title || 'Options' })));
+
+        const lines = rows.map(r => `▫️ *${r.title}*${r.description ? ` — ${r.description}` : ''}`).join('\n');
+        const head = (content.title ? `*${content.title}*\n\n` : '') + (content.text || '');
+        const text = `${head}\n\n${lines}` + (content.footer ? `\n\n_${content.footer}_` : '');
+        const sent = await originalSendMessage(jid, { text }, options);
+
+        // One carousel card per section chunk of 3 commands
+        const cards = [];
+        for (const sec of content.sections) {
+            const labels = sec.rows.map(r => rowToCommand(r.rowId || r.id));
+            const groups = chunk(labels, 3);
+            groups.forEach((g, i) => cards.push({
+                title: (sec.title || content.title || 'Options') + (groups.length > 1 ? ` ${i + 1}` : ''),
+                buttons: g,
+                toast: 'Sending...'
+            }));
+        }
+        try {
+            await sock.richMenu(jid, { body: { carousel: true, cards } });
+        } catch (e) {
+            console.error('⚠️ [BUTTONS] richMenu failed, sending command list instead:', e.message);
+            const all = cards.flatMap(c => c.buttons);
+            await originalSendMessage(jid, { text: 'Send one of these:\n' + all.map(l => '▫️ ' + l).join('\n') }, options);
+        }
+        return sent;
     }
 
     // ─── UNBLOCKED SEND MESSAGE WRAPPER ───────────────────────────
@@ -985,7 +980,7 @@ async function startBot() {
 
         let sent;
         try {
-            if ((isLegacyButtons(content) || isLegacyList(content)) && typeof sock.relayMessage === 'function') {
+            if (isLegacyButtons(content) || isLegacyList(content)) {
                 try {
                     sent = isLegacyList(content)
                         ? await sendLegacyList(jid, content, options)
