@@ -282,6 +282,121 @@ async function generateImageWithGemini(prompt) {
     throw lastErr || new Error('All Gemini image models failed.');
 }
 
+// ─── CODED IMAGE WARP (no AI, no API keys) ───────────────────────
+// Pure pixel remapping: for every output pixel we work out where it should
+// come from in the source image, then sample it with bilinear filtering.
+const WARP_EFFECTS = ['swirl', 'bulge', 'pinch', 'wave', 'ripple', 'glitch'];
+
+function warpSample(src, w, h, x, y, out, oi) {
+    if (x < 0) x = 0; else if (x > w - 1) x = w - 1;
+    if (y < 0) y = 0; else if (y > h - 1) y = h - 1;
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const x1 = Math.min(x0 + 1, w - 1), y1 = Math.min(y0 + 1, h - 1);
+    const fx = x - x0, fy = y - y0;
+    const i00 = (y0 * w + x0) * 4, i10 = (y0 * w + x1) * 4;
+    const i01 = (y1 * w + x0) * 4, i11 = (y1 * w + x1) * 4;
+    for (let c = 0; c < 4; c++) {
+        const top = src[i00 + c] * (1 - fx) + src[i10 + c] * fx;
+        const bot = src[i01 + c] * (1 - fx) + src[i11 + c] * fx;
+        out[oi + c] = top * (1 - fy) + bot * fy;
+    }
+}
+
+function warpPixels(src, w, h, effect, strength) {
+    const out = Buffer.alloc(src.length);
+    const cx = (w - 1) / 2, cy = (h - 1) / 2;
+    const R = Math.min(w, h) / 2;
+    const s = strength;
+
+    if (effect === 'glitch') {
+        // 1) RGB channel split, 2) horizontal slices shifted sideways
+        const split = Math.max(2, Math.round(w * 0.012 * s));
+        const tmp = Buffer.from(src);
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const i = (y * w + x) * 4;
+                const xr = Math.max(0, x - split), xb = Math.min(w - 1, x + split);
+                tmp[i] = src[(y * w + xr) * 4];
+                tmp[i + 2] = src[(y * w + xb) * 4 + 2];
+            }
+        }
+        tmp.copy(out);
+        const bands = 14 + Math.round(6 * s);
+        for (let b = 0; b < bands; b++) {
+            const y0 = Math.floor(Math.random() * h);
+            const bh = Math.max(2, Math.floor(Math.random() * h * 0.06));
+            const shift = Math.round((Math.random() - 0.5) * w * 0.25 * s);
+            for (let y = y0; y < Math.min(h, y0 + bh); y++) {
+                for (let x = 0; x < w; x++) {
+                    const sx = ((x - shift) % w + w) % w;
+                    const di = (y * w + x) * 4, si = (y * w + sx) * 4;
+                    out[di] = tmp[si]; out[di + 1] = tmp[si + 1]; out[di + 2] = tmp[si + 2]; out[di + 3] = tmp[si + 3];
+                }
+            }
+        }
+        return out;
+    }
+
+    const amp = Math.min(w, h) * 0.03 * s;
+    const lambda = Math.max(8, Math.min(w, h) / 5);
+
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const oi = (y * w + x) * 4;
+            const dx = x - cx, dy = y - cy;
+            const r = Math.sqrt(dx * dx + dy * dy);
+            let sx = x, sy = y;
+
+            if (effect === 'swirl') {
+                if (r < R) {
+                    const t = 1 - r / R;
+                    const ang = 3.2 * s * t * t;
+                    const cos = Math.cos(ang), sin = Math.sin(ang);
+                    sx = cx + dx * cos - dy * sin;
+                    sy = cy + dx * sin + dy * cos;
+                }
+            } else if (effect === 'bulge') {
+                if (r < R && r > 0) {
+                    const sr = R * Math.pow(r / R, 1 + 0.6 * s);
+                    sx = cx + dx * (sr / r);
+                    sy = cy + dy * (sr / r);
+                }
+            } else if (effect === 'pinch') {
+                if (r < R && r > 0) {
+                    const sr = R * Math.pow(r / R, 1 / (1 + 0.6 * s));
+                    sx = cx + dx * (sr / r);
+                    sy = cy + dy * (sr / r);
+                }
+            } else if (effect === 'wave') {
+                sx = x + amp * Math.sin((2 * Math.PI * y) / lambda);
+                sy = y + amp * Math.sin((2 * Math.PI * x) / lambda);
+            } else if (effect === 'ripple') {
+                if (r > 0) {
+                    const sr = r + amp * Math.sin(r / (lambda / 6));
+                    sx = cx + dx * (sr / r);
+                    sy = cy + dy * (sr / r);
+                }
+            }
+            warpSample(src, w, h, sx, sy, out, oi);
+        }
+    }
+    return out;
+}
+
+async function warpImage(inputBuffer, effect, strength) {
+    if (!sharp) throw new Error('Image library (sharp) is not available on this host.');
+    const { data, info } = await sharp(inputBuffer, { failOn: 'none' })
+        .rotate()
+        .resize({ width: 900, height: 900, fit: 'inside', withoutEnlargement: true })
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+    const warped = warpPixels(data, info.width, info.height, effect, strength);
+    return await sharp(warped, { raw: { width: info.width, height: info.height, channels: 4 } })
+        .jpeg({ quality: 90 })
+        .toBuffer();
+}
+
 module.exports = [
     {
         name: 'adapt',
@@ -364,55 +479,30 @@ module.exports = [
             const jid = msg.key.remoteJid;
 
             const media = await downloadMedia(msg);
-            if (!media || media.type !== 'image') return sock.sendMessage(jid, { text: "Reply to an **image** to warp reality." }, { quoted: msg });
+            if (!media || media.type !== 'image') {
+                return sock.sendMessage(jid, {
+                    text: "Reply to an *image* to warp it.\n\nEffects: " + WARP_EFFECTS.join(' | ') + " | random\nExample: `.warp swirl 2` (the number is the strength, 0.5 to 3)"
+                }, { quoted: msg });
+            }
 
-            const userPrompt = args ? args.trim() : null;
+            const parts = (args ? args.trim().toLowerCase() : '').split(/\s+/).filter(Boolean);
+            let effect = parts.find(p => WARP_EFFECTS.includes(p) || p === 'random');
+            let strength = parseFloat(parts.find(p => !isNaN(parseFloat(p))));
+            if (isNaN(strength)) strength = 1;
+            strength = Math.min(3, Math.max(0.5, strength));
+            if (!effect || effect === 'random') effect = WARP_EFFECTS[Math.floor(Math.random() * WARP_EFFECTS.length)];
 
-            // Send loading sticker first
             await sendLoadingSticker(sock, jid, VORTEX, 'Warping Reality');
 
             try {
-                const base64Img = media.buffer.toString('base64');
-                const visionSystemPrompt = userPrompt 
-                    ? `Describe this image in detail. Then, alter the description to fulfill this request: "${userPrompt}". Output ONLY the final detailed prompt for image generation.`
-                    : `Describe this image in detail. Then, mutate the description into a surreal, highly corrupted, reality-warping visual. Output ONLY the final detailed prompt for image generation.`;
-
-                // STEP 1: Vision / Analysis — Gemini (3.7 → 3.6 → 3.5), falling
-                // back to Pollinations' free vision endpoint if all three are
-                // unavailable (e.g. a 503 demand spike on Google's side).
-                let generatedPrompt;
-                try {
-                    generatedPrompt = await describeImageWithGemini(base64Img, 'image/jpeg', visionSystemPrompt);
-                } catch (visionErr) {
-                    console.error("[Warp] Gemini vision unavailable, falling back to Pollinations:", visionErr.message);
-                    generatedPrompt = await describeImageWithPollinations(base64Img, 'image/jpeg', visionSystemPrompt);
-                }
-
-                // STEP 2: Image Synthesis — Gemini Nano Banana 2 first
-                // (gemini-3.1-flash-image → gemini-3.1-flash-lite-image).
-                // Falls back to Pollinations.ai — free, no API key, no
-                // quota — only if both Gemini image models genuinely fail
-                // (e.g. a 503 demand spike on Google's side).
-                let warpedImageBuffer;
-                try {
-                    warpedImageBuffer = await generateImageWithGemini(generatedPrompt);
-                } catch (geminiErr) {
-                    console.error("[Warp] Gemini image generation unavailable, falling back to Pollinations:", geminiErr.message);
-                    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(generatedPrompt)}?width=1024&height=1024&nologo=true`;
-                    const pollinationsRes = await axios.get(pollinationsUrl, { responseType: 'arraybuffer', timeout: 60000 });
-                    warpedImageBuffer = Buffer.from(pollinationsRes.data);
-                }
-
-                // Send the generated result
-                await sock.sendMessage(jid, { 
-                    image: warpedImageBuffer, 
-                    caption: `🌌 *Reality Warped*\n\n_Prompt:_ ${userPrompt || "Surreal Mutation"}` 
+                const output = await warpImage(media.buffer, effect, strength);
+                await sock.sendMessage(jid, {
+                    image: output,
+                    caption: `🌌 *Reality Warped*\n\n_Effect:_ ${effect} (x${strength})`
                 }, { quoted: msg });
-
             } catch (e) {
-                console.error("[Warp Error]:", e?.response?.data || e.message);
-                const errMsg = e?.response?.data?.error?.message || e.message;
-                sock.sendMessage(jid, { text: `⚠️ The warp matrix collapsed: ${errMsg}` }, { quoted: msg });
+                console.error("[Warp Error]:", e.message);
+                sock.sendMessage(jid, { text: `⚠️ The warp matrix collapsed: ${e.message}` }, { quoted: msg });
             }
         }
     }
