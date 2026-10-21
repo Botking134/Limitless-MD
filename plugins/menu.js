@@ -591,55 +591,43 @@ _Swipe through the cards below to explore command categories._ 🔮`;
 }
 
 // ─── MENU 3: vansnowi richMenu (title + banner + grouped button cards) ───
-// Layout: title and banner image on top, then swipeable cards that each hold
-// up to 3 quick-reply buttons. The button text is the command itself
-// (menu_ai, menu_games, ...), so tapping a button runs that command.
-// Falls back to the old card menu if richMenu is missing or fails.
+// A richMenu button sends its own label as a chat message when tapped, so each
+// label is a full command (prefix included), e.g. "!menu_ai".
+// Several layouts are tried from richest to simplest; the old card menu is the
+// last resort. Every failure is logged with the reason.
 async function renderRichMenu3(sock, msg) {
     const jid = msg.key.remoteJid;
-    const uptime = formatUptime(process.uptime());
 
     if (typeof sock.richMenu !== 'function') {
         console.error('❌ [RICH MENU] sock.richMenu is not a function. Installed Baileys fork has no richMenu. Using old card menu.');
         return await renderSequentialCardMenu(sock, msg);
     }
 
+    const pfx = Array.isArray(config.prefix) ? (config.prefix[0] || '!') : (config.prefix || '!');
     const banner = menuImages[Math.floor(Math.random() * menuImages.length)];
+    const labels = menuCategories.map(c => pfx + c.cmd);
 
-    // Group the 8 category commands into cards of up to 3 buttons
-    const cmds = menuCategories.map(c => c.cmd);
     const cards = [];
-    for (let i = 0; i < cmds.length; i += 3) {
-        cards.push({
-            title: 'Menu' + (cards.length + 1),
-            buttons: cmds.slice(i, i + 3),
-            toast: 'Opening...'
-        });
+    for (let i = 0; i < labels.length; i += 3) {
+        cards.push({ title: 'Menu' + (cards.length + 1), buttons: labels.slice(i, i + 3), toast: 'Opening...' });
     }
 
-    const menuPayload = {
-        header: {
-            title: 'Limitless-MD Menu',
-            image: { url: banner, inline: false }
-        },
-        body: {
-            carousel: true,
-            cards
-        }
-    };
+    const attempts = [
+        { name: 'banner + carousel', payload: { header: { title: 'Limitless-MD Menu', image: { url: banner, inline: false } }, body: { carousel: true, cards } } },
+        { name: 'title + carousel',  payload: { header: { title: 'Limitless-MD Menu' }, body: { carousel: true, cards } } },
+        { name: 'carousel only',     payload: { body: { carousel: true, cards } } }
+    ];
 
-    try {
-        await sock.richMenu(jid, menuPayload);
-    } catch (err) {
-        console.error('❌ [RICH MENU ERROR]:', err && err.stack ? err.stack : err);
-        // Retry once with a plain carousel (no header image) before falling back
+    for (const attempt of attempts) {
         try {
-            await sock.richMenu(jid, { body: menuPayload.body });
-        } catch (err2) {
-            console.error('❌ [RICH MENU RETRY ERROR]:', err2 && err2.message ? err2.message : err2);
-            await renderSequentialCardMenu(sock, msg);
+            await sock.richMenu(jid, attempt.payload);
+            console.log('✅ [RICH MENU] sent with layout: ' + attempt.name);
+            return;
+        } catch (err) {
+            console.error('❌ [RICH MENU] layout "' + attempt.name + '" failed: ' + (err && err.message ? err.message : err));
         }
     }
+    await renderSequentialCardMenu(sock, msg);
 }
 
 async function renderCarouselMenu(sock, msg) {
