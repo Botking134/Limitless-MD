@@ -1024,7 +1024,7 @@ async function startBot() {
                             const botJid = config.botJid || sock.user?.id;
                             if (botJid) {
                                 const targetRecipient = botJid.includes('@') ? botJid : `${botJid}@s.whatsapp.net`;
-                                const imgBuffer = await fetchMediaBuffer("https://qu.ax/I6tKC");
+                                const imgBuffer = await fetchMediaBuffer("https://files.catbox.moe/2cksqc.jpg");
                                 
                                 if (imgBuffer) {
                                     await sock.sendMessage(targetRecipient, { 
