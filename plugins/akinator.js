@@ -21,7 +21,8 @@ const MIN_QUESTIONS_BEFORE_GUESS = 8;
 const MIN_CONFIDENCE = 80;
 const SESSION_TTL = 15 * 60 * 1000; // 15 min of inactivity ends the game
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-20b']; // tried in order
+const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant']; // tried in order
+const GROQ_DEADLINE_MS = 45000; // stop trying more models/variants after this long
 const PINTEREST_SEARCH = 'https://apis.davidcyril.name.ng/search/pinterest';
 
 const ANSWER_MAP = {
@@ -88,31 +89,69 @@ function transcript(session) {
     return text;
 }
 
+// "gpt-oss"-style models think before answering, and that thinking counts
+// against the token limit (the old fixed 250 could run out mid-answer).
+const isReasoningModel = (model) => /gpt-oss|qwen3|deepseek-r1/i.test(model);
+
+// Turns an axios error into the one line that actually explains it.
+function describeError(e) {
+    const d = e.response?.data;
+    const err = d?.error;
+    const reason = err
+        ? [err.code || err.type, err.message].filter(Boolean).join(' - ')
+        : (typeof d === 'string' ? d : d ? JSON.stringify(d) : '');
+    return `${e.response?.status || 'ERR'} ${String(reason || e.message).replace(/\s+/g, ' ').slice(0, 300)}`;
+}
+
+// Tries each model, and for each model a few request shapes from strictest to
+// plainest. Groq's JSON mode answers HTTP 400 ("json_validate_failed") whenever
+// the model's text is not perfectly valid JSON, so a plain request is tried
+// next, and when the 400 carries the model's own text we use that directly.
 async function callGroq(userContent) {
     const apiKey = config.groqApiKey;
     if (!apiKey) throw new Error('GROQ API key is not set in config');
+    const started = Date.now();
     let lastErr;
+
     for (const model of GROQ_MODELS) {
-        try {
-            const res = await axios.post(GROQ_URL, {
-                model,
-                messages: [
-                    { role: 'system', content: SYSTEM_PROMPT },
-                    { role: 'user', content: userContent }
-                ],
-                temperature: 0.4,
-                max_tokens: 250,
-                response_format: { type: 'json_object' }
-            }, {
-                headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                timeout: 30000
-            });
-            return res.data?.choices?.[0]?.message?.content || '';
-        } catch (e) {
-            lastErr = e;
-            // Try the next model on "model not found / bad request" style errors
-            const status = e.response?.status;
-            if (status && ![400, 404].includes(status)) break;
+        const base = {
+            model,
+            messages: [
+                { role: 'system', content: SYSTEM_PROMPT },
+                { role: 'user', content: userContent }
+            ],
+            temperature: 0.4
+        };
+        const json = { response_format: { type: 'json_object' } };
+        const variants = isReasoningModel(model)
+            ? [
+                { ...base, max_completion_tokens: 1500, reasoning_effort: 'low', ...json },
+                { ...base, max_completion_tokens: 1500, reasoning_effort: 'low' },
+                { ...base, max_completion_tokens: 1500 }
+              ]
+            : [
+                { ...base, max_tokens: 400, ...json },
+                { ...base, max_tokens: 400 }
+              ];
+
+        for (const body of variants) {
+            if (Date.now() - started > GROQ_DEADLINE_MS) break;
+            try {
+                const res = await axios.post(GROQ_URL, body, {
+                    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                    timeout: 20000
+                });
+                const content = res.data?.choices?.[0]?.message?.content || '';
+                if (content.trim()) return content;
+                lastErr = new Error(`Empty reply from ${model}`);
+                console.error(`❌ [AKI] Groq ${model}: empty reply`);
+            } catch (e) {
+                lastErr = e;
+                console.error(`❌ [AKI] Groq ${model}${body.response_format ? ' (json mode)' : ''}: ${describeError(e)}`);
+                // Groq attaches the model's text to a JSON-mode failure: use it if it parses.
+                const salvaged = e.response?.data?.error?.failed_generation;
+                if (salvaged && parseJson(salvaged)) return salvaged;
+            }
         }
     }
     throw lastErr || new Error('Groq request failed');
