@@ -27,6 +27,9 @@ function handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody) {
 
     if (quotedText) {
         const gameRedirects = [
+            // Akinator first: its messages are free-form questions, so an
+            // unrelated game keyword inside one must never steal the reply.
+            { pattern: 'AKINATOR', cmd: 'aki_ans' },
             { pattern: 'VAULT 8:', cmd: 'vault8' },
             { pattern: 'ESCAPE ROOM:', cmd: 'escape' },
             { pattern: 'CURSED ENERGY CONCENTRATION', cmd: 'guess' },
