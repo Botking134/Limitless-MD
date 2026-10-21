@@ -14,6 +14,9 @@
 module.exports = {
     // ─── Added: previously undocumented commands, written from their
     // actual plugin code rather than guessed from category groupings. ───
+    aki: "Play Akinator: it guesses the character you think of. Use 'aki start' / 'aki stop', answer by replying yes/no/idk/prob/probnot. (akinator)",
+    akinator: "Alias of aki.",
+    aki_ans: "Internal handler for replies to Akinator messages (not typed directly).",
     adapt: "Reprocess a replied image/video at high quality. (adapt-high)",
     'adapt-low': "Reprocess a replied image/video at low quality.",
     'adapt-mid': "Reprocess a replied image/video at medium quality.",
@@ -318,6 +321,7 @@ module.exports = {
     summon: "Summon a fictional character into the chat.",
     tag: "Tag specific members with a message.",
     tagall: "Mention every member of the group.",
+    autodm: "Owner only. DM the first N group members: autodm <number> <message> (default 30). Skips anyone messaged in the last 30 minutes. autodm stop cancels.",
     take: "Re-brand/take ownership of a sticker's pack info.",
     tdelete: "Delete a message after a timer.",
     tgs: "Download/convert a Telegram sticker.",
