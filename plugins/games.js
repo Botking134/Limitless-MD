@@ -8,6 +8,7 @@ const path = require('path');
 global.gameSessions = global.gameSessions || {};
 global.vault8Sessions = global.vault8Sessions || {};
 global.vault8SavedStories = global.vault8SavedStories || {};
+const Vault8 = require('../helpers/Vault8Engine');
 global.triviaSessions = global.triviaSessions || {};
 global.charadeSessions = global.charadeSessions || {};
 
@@ -293,67 +294,26 @@ async function askNextCharadePuzzle(sock, jid, sessionKey) {
 async function handleGameTurn(sock, msg, userChoice, sessionKey) {
     const jid = msg.key.remoteJid;
     const session = global.vault8Sessions[sessionKey];
-
-    await sock.sendMessage(jid, { text: "💾 `Processing decision...`" }, { quoted: msg });
-    session.step++;
-
-    const turnPrompt =
-        `The user chose: "${userChoice}". Evaluate this choice for Step ${session.step} of 20.\n\n` +
-        `If their choice leads to death, write a chilling description, and conclude with the exact text "GAME_OVER" at the very end.\n\n` +
-        `If they survive, generate Step ${session.step} of 20. Scenario must be brief (2-3 sentences max). Provide 3 new choices (1, 2, 3).\n\n` +
-        `If they reach Step 20 and survive, generate a triumphant ending and conclude with "VICTORY" at the very end.`;
-
-    session.history.push({ role: "user", content: turnPrompt });
-
-    const engineResponse = await queryVaultEngine(session.history);
-    if (!engineResponse) {
-        session.step--;
-        return await sock.sendMessage(jid, { text: "❌ Transmission lost inside Vault 8. Try again." }, { quoted: msg });
+    if (!session || session.busy) return;
+    session.busy = true;
+    try {
+        const result = await Vault8.handleTurn(sock, msg, userChoice, session);
+        if (result && result.finished) {
+            delete global.vault8Sessions[sessionKey];
+            const buttons = result.died
+                ? [
+                    { buttonId: `${config.prefix}v8_btn play`, buttonText: { displayText: 'New Vault 🔄' }, type: 1 },
+                    { buttonId: `${config.prefix}v8_btn cancel`, buttonText: { displayText: 'Give Up 🛑' }, type: 1 }
+                  ]
+                : null;
+            return await sock.sendMessage(jid, buttons ? { text: result.text, buttons, headerType: 1 } : { text: result.text }, { quoted: msg });
+        }
+    } catch (e) {
+        console.error('❌ [VAULT8] turn failed:', e.message);
+        await sock.sendMessage(jid, { text: "❌ Transmission lost inside Vault 8. Send your answer again." }, { quoted: msg });
+    } finally {
+        session.busy = false;
     }
-
-    session.history.push({ role: "assistant", content: engineResponse });
-
-    if (engineResponse.includes("GAME_OVER")) {
-        delete global.vault8Sessions[sessionKey];
-        const cleanDeathMsg = engineResponse.replace("GAME_OVER", "").trim();
-        const deathCard =
-            `💀 *VAULT 8: DIED AT STEP ${session.step}/20* 💀\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `${cleanDeathMsg}\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `❌ *TERMINAL SIGNAL LOST:* Do you want to try again?`;
-
-        const failButtons = {
-            text: deathCard,
-            buttons: [
-                { buttonId: `${config.prefix}v8_btn play`, buttonText: { displayText: 'Retry 🔄' }, type: 1 },
-                { buttonId: `${config.prefix}v8_btn cancel`, buttonText: { displayText: 'Give Up 🛑' }, type: 1 }
-            ],
-            headerType: 1
-        };
-        return await sock.sendMessage(jid, failButtons, { quoted: msg });
-    }
-
-    if (engineResponse.includes("VICTORY")) {
-        delete global.vault8Sessions[sessionKey];
-        delete global.vault8SavedStories[sessionKey];
-        const cleanVictoryMsg = engineResponse.replace("VICTORY", "").trim();
-        const victoryCard =
-            `🏆 *VAULT 8: SIMULATION COMPLETED!* 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `${cleanVictoryMsg}\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `🎉 *CONGRATULATIONS: You survived the horrors of Vault 8!*`;
-        return await sock.sendMessage(jid, { text: victoryCard }, { quoted: msg });
-    }
-
-    const gameCard =
-        `📁 *VAULT 8: STEP ${session.step}/20* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `${engineResponse}\n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `👉 *Reply directly to this message to submit your next choice (1, 2, or 3)!*`;
-
-    const prompt = await sock.sendMessage(jid, { text: gameCard }, { quoted: msg });
-    session.lastQuestionMsgId = prompt.key.id;
 }
 
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
@@ -643,14 +603,13 @@ module.exports = [
                 await delay(800);
                 const bannerText =
                     `🖥️ *VAULT 8 SECURE INTEL PORTAL* 🖥️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `⚠️ *WARNING:* You are entering a restricted psychological text adventure game. Scenarios are highly dangerous. *Any wrong decision will result in your death.*\n\n` +
+                    `⚠️ *WARNING:* Reach the house with a fire. Collect the oil lamp, cloth, wood and matchsticks. Every vault is different. *One wrong input and you die.*\n\n` +
                     `Select an option below to proceed:`;
 
                 const buttonMessage = {
                     text: bannerText,
                     buttons: [
-                        { buttonId: `${config.prefix}v8_btn play`, buttonText: { displayText: 'Replay Story 🖥️' }, type: 1 },
-                        { buttonId: `${config.prefix}v8_btn refresh`, buttonText: { displayText: 'Refresh Story 🔄' }, type: 1 },
+                        { buttonId: `${config.prefix}v8_btn play`, buttonText: { displayText: 'Enter Vault 🖥️' }, type: 1 },
                         { buttonId: `${config.prefix}v8_btn cancel`, buttonText: { displayText: 'Cancel 🛑' }, type: 1 }
                     ],
                     headerType: 1
@@ -674,66 +633,18 @@ module.exports = [
             const sessionKey = jid + '_' + senderJid + '_v8';
             const action = args ? args.toLowerCase().trim() : '';
 
-            if (action === 'play' || action === 'retry') {
-                const saved = global.vault8SavedStories[sessionKey];
-
-                if (saved) {
-                    await sock.sendMessage(jid, { text: "💾 `[SYSTEM] Reloading saved scenario environment...`" }, { quoted: msg });
-
-                    const gameHeader =
-                        `📁 *VAULT 8: STEP 1/20 (REPLAY)* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `${saved.firstStep}\n\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                        `👉 *To progress, reply directly to this message with your choice (1, 2, or 3)!*`;
-
-                    const prompt = await sock.sendMessage(jid, { text: gameHeader }, { quoted: msg });
-
-                    global.vault8Sessions[sessionKey] = {
-                        step: 1,
-                        history: [
-                            { role: "system", content: saved.systemPrompt },
-                            { role: "assistant", content: saved.firstStep }
-                        ],
-                        lastQuestionMsgId: prompt.key.id
-                    };
-                    return;
-                } else {
-                    await sock.sendMessage(jid, { text: "👁️ `[SYSTEM] Generating new scenario file assets...`" }, { quoted: msg });
-
-                    const systemPrompt =
-                        "You are the terminal engine of 'Vault 8', a creepy psychological text adventure game. " +
-                        "Generate Step 1 of a creepy text adventure. Describe the dark, cold environment they wake up in. " +
-                        "Give them exactly 3 distinct choices (1, 2, 3). Keep scenarios brief and medium-length (maximum of 2-3 sentences), " +
-                        "and do not use conversational pleasantries.";
-
-                    const initialSession = [{ role: "system", content: systemPrompt }];
-                    const firstStep = await queryVaultEngine(initialSession);
-                    if (!firstStep) return await sock.sendMessage(jid, { text: "❌ Connection timeout." }, { quoted: msg });
-
-                    const gameHeader =
-                        `📁 *VAULT 8: STEP 1/20* 💻\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `${firstStep}\n\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                        `👉 *To progress, reply directly to this message with your choice (1, 2, or 3)!*`;
-
-                    const prompt = await sock.sendMessage(jid, { text: gameHeader }, { quoted: msg });
-
-                    global.vault8SavedStories[sessionKey] = { systemPrompt: systemPrompt, firstStep: firstStep };
-                    global.vault8Sessions[sessionKey] = {
-                        step: 1,
-                        history: [
-                            { role: "system", content: systemPrompt },
-                            { role: "assistant", content: firstStep }
-                        ],
-                        lastQuestionMsgId: prompt.key.id
-                    };
-                    return;
+            if (action === 'play' || action === 'retry' || action === 'refresh') {
+                if (global.vault8Sessions[sessionKey]?.starting) return;
+                global.vault8Sessions[sessionKey] = { starting: true, busy: true };
+                try {
+                    const session = await Vault8.startRun(sock, msg, queryLLM);
+                    global.vault8Sessions[sessionKey] = session;
+                } catch (e) {
+                    console.error('❌ [VAULT8] start failed:', e.message);
+                    delete global.vault8Sessions[sessionKey];
+                    await sock.sendMessage(jid, { text: "❌ Connection timeout. Try again." }, { quoted: msg });
                 }
-            } else if (action === 'refresh') {
-                delete global.vault8Sessions[sessionKey];
-                delete global.vault8SavedStories[sessionKey];
-                await sock.sendMessage(jid, { text: "🔄 `[SYSTEM] Connection wiped.`" });
-                return await commands['vault8']?.execute(sock, msg, '', { isOwner: false });
+                return;
             } else if (action === 'cancel' || action === 'giveup') {
                 delete global.vault8Sessions[sessionKey];
                 await sock.sendMessage(jid, { text: "🛑 Terminal connection closed safely." }, { quoted: msg });
