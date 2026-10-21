@@ -837,6 +837,74 @@ async function startBot() {
 
     activeSocketInstance = sock;
 
+    // ─── LEGACY BUTTON SUPPORT ────────────────────────────────────
+    // Old-style `buttons: [{ buttonId, buttonText, type: 1 }]` messages no
+    // longer render on current WhatsApp (and the plain Baileys library doesn't
+    // convert them). Here they are converted into native-flow quick-reply
+    // buttons and relayed with the <biz> node WhatsApp needs to draw them.
+    let _baileysModPromise = null;
+    const getBaileysMod = () => (_baileysModPromise = _baileysModPromise || import('@itsliaaa/baileys'));
+
+    const isLegacyButtons = (content) =>
+        !!content && typeof content === 'object' &&
+        Array.isArray(content.buttons) && content.buttons.length > 0 &&
+        content.buttons.every(b => b && b.buttonId && (b.buttonText?.displayText || typeof b.buttonText === 'string'));
+
+    const legacyButtonLabel = (b) => (typeof b.buttonText === 'string' ? b.buttonText : b.buttonText.displayText);
+
+    async function sendLegacyButtons(jid, content, options) {
+        const { generateWAMessageFromContent, prepareWAMessageMedia, proto } = await getBaileysMod();
+
+        const interactive = {
+            body: { text: content.caption || content.text || ' ' },
+            nativeFlowMessage: {
+                buttons: content.buttons.map(b => ({
+                    name: 'quick_reply',
+                    buttonParamsJson: JSON.stringify({ display_text: legacyButtonLabel(b), id: b.buttonId })
+                }))
+            }
+        };
+        if (content.footer) interactive.footer = { text: content.footer };
+
+        const mediaKey = content.image ? 'image' : (content.video ? 'video' : null);
+        if (mediaKey) {
+            const media = await prepareWAMessageMedia({ [mediaKey]: content[mediaKey] }, { upload: sock.waUploadToServer });
+            interactive.header = { hasMediaAttachment: true, ...media };
+        }
+
+        const quoted = options?.quoted;
+        if (quoted?.key?.id) {
+            interactive.contextInfo = {
+                stanzaId: quoted.key.id,
+                participant: quoted.key.participant || quoted.key.remoteJid,
+                quotedMessage: quoted.message
+            };
+        }
+
+        const fullMsg = generateWAMessageFromContent(jid, proto.Message.fromObject({
+            viewOnceMessage: {
+                message: {
+                    messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+                    interactiveMessage: interactive
+                }
+            }
+        }), { userJid: sock.user.id });
+
+        const nodes = [{
+            tag: 'biz',
+            attrs: {},
+            content: [{
+                tag: 'interactive',
+                attrs: { type: 'native_flow', v: '1' },
+                content: [{ tag: 'native_flow', attrs: { v: '9', name: 'mixed' } }]
+            }]
+        }];
+        if (!jid.endsWith('@g.us')) nodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
+
+        await sock.relayMessage(jid, fullMsg.message, { messageId: fullMsg.key.id, additionalNodes: nodes });
+        return fullMsg;
+    }
+
     // ─── UNBLOCKED SEND MESSAGE WRAPPER ───────────────────────────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
@@ -877,7 +945,20 @@ async function startBot() {
 
         let sent;
         try {
-            sent = await originalSendMessage(jid, content, options);
+            if (isLegacyButtons(content) && typeof sock.relayMessage === 'function') {
+                try {
+                    sent = await sendLegacyButtons(jid, content, options);
+                } catch (btnErr) {
+                    console.error('⚠️ [BUTTONS] Could not send buttons, falling back to plain text:', btnErr.message);
+                    const base = content.caption || content.text || '';
+                    const lines = content.buttons.map(b => `▫️ ${legacyButtonLabel(b)} → send: ${b.buttonId}`).join('\n');
+                    const plain = { text: `${base}\n\n${lines}` };
+                    if (content.mentions) plain.mentions = content.mentions;
+                    sent = await originalSendMessage(jid, plain, options);
+                }
+            } else {
+                sent = await originalSendMessage(jid, content, options);
+            }
         } catch (sendErr) {
             if (!sendErr.message?.includes('Connection Closed') && !sendErr.message?.includes('rate-overlimit')) {
                 console.error("❌ [SOCKET] sendMessage error:", sendErr.message);
