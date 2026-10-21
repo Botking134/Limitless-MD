@@ -601,10 +601,19 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                 rawButtonId = rawUnwrapped.buttonsResponseMessage.selectedButtonId;
             } else if (rawUnwrapped?.templateButtonReplyMessage?.selectedId) {
                 rawButtonId = rawUnwrapped.templateButtonReplyMessage.selectedId;
+            } else if (rawUnwrapped?.listResponseMessage?.singleSelectReply?.selectedRowId) {
+                rawButtonId = rawUnwrapped.listResponseMessage.singleSelectReply.selectedRowId;
             }
 
             if (rawButtonId) {
-                const cleanButton = rawButtonId.trim();
+                // Rows of the `.git` list menu carry ids like "git_pull"; turn them
+                // into the matching `.git <subcommand>` call.
+                const GIT_ROW_MAP = {
+                    git_pull: 'git pull', git_status: 'git status', git_push: 'git push',
+                    git_revert: 'git revert', git_setup: 'git setup', git_force: 'git force', git_info: 'git info'
+                };
+                const rawTrim = String(rawButtonId).trim();
+                const cleanButton = GIT_ROW_MAP[rawTrim.toLowerCase()] || rawTrim;
                 const targetText = cleanButton.startsWith(activePrefix) ? cleanButton.slice(activePrefix.length).trim() : cleanButton;
                 const spaceIndex = targetText.indexOf(' ');
                 command = spaceIndex === -1 ? targetText.toLowerCase() : targetText.slice(0, spaceIndex).toLowerCase();
