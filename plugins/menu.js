@@ -590,6 +590,55 @@ _Swipe through the cards below to explore command categories._ 🔮`;
     }
 }
 
+// ─── MENU 3: vansnowi richMenu carousel ───
+// Uses the richMenu helper from @vansnowi/baileys. Each card has one
+// quick-reply button whose text is the category command (menu_ai, ...),
+// so a tap is routed to that submenu. Falls back to the old card menu if
+// richMenu is missing or fails.
+async function renderRichMenu3(sock, msg) {
+    const jid = msg.key.remoteJid;
+    const uptime = formatUptime(process.uptime());
+
+    if (typeof sock.richMenu !== 'function') {
+        console.error('❌ [RICH MENU] sock.richMenu not available, using old card menu');
+        return await renderSequentialCardMenu(sock, msg);
+    }
+
+    const headerText =
+`┌─────────────┐
+│ *Limitless-MD*
+└─────────────┘
+_Owner: ${config.ownerName}_
+_User: ${msg.pushName || 'User'}_
+_Uptime: ${uptime}_
+_Version: 1.0.0_
+════════════════════════
+> Throughout Heaven And Earth_
+┌───────────────────┐
+│ *I alone am the Honoured one* 
+└───────────────────┘
+
+_Swipe through the cards below to explore command categories._ 🔮`;
+
+    try {
+        await sock.sendMessage(jid, { text: headerText }, { quoted: msg });
+
+        await sock.richMenu(jid, {
+            body: {
+                carousel: true,
+                cards: menuCategories.map((cat) => ({
+                    title: cat.name,
+                    buttons: [cat.cmd],
+                    toast: 'Opening ' + cat.name + '...'
+                }))
+            }
+        });
+    } catch (err) {
+        console.error('❌ [RICH MENU ERROR]:', err.message);
+        await renderSequentialCardMenu(sock, msg);
+    }
+}
+
 async function renderCarouselMenu(sock, msg) {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
@@ -772,14 +821,14 @@ module.exports = [
         name: 'menu3',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderSequentialCardMenu(sock, msg);
+            await renderRichMenu3(sock, msg);
         }
     },
     {
         name: 'list3',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderSequentialCardMenu(sock, msg);
+            await renderRichMenu3(sock, msg);
         }
     },
     {
@@ -883,7 +932,7 @@ Here's your prefix though`;
         name: 'menu_games',
         isPrefixless: true,
         execute: async (sock, msg) => {
-            const text = `┌────────┐\n│ 🎮 GAMES  \n└────────┘\n\n_┃ ⊱ .games_\n_┃ ⊱ .ttt_\n_┃ ⊱ .rps_\n_┃ ⊱ .guess_\n_┃ ⊱ .vault8_\n_┃ ⊱ .quiz_\n_┃ ⊱ .charade_\n_┃ ⊱ .anagram_\n_┃ ⊱ .wcg_\n_┃ ⊱ .millionaire_\n_┃ ⊱ .torf_\n_┃ ⊱ .pvp_\n_┃ ⊱ .escape_`;
+            const text = `┌────────┐\n│ 🎮 GAMES  \n└────────┘\n\n_┃ ⊱ .games_\n_┃ ⊱ .ttt_\n_┃ ⊱ .rps_\n_┃ ⊱ .guess_\n_┃ ⊱ .vault8_\n_┃ ⊱ .quiz_\n_┃ ⊱ .charade_\n_┃ ⊱ .aki_\n_┃ ⊱ .anagram_\n_┃ ⊱ .wcg_\n_┃ ⊱ .millionaire_\n_┃ ⊱ .torf_\n_┃ ⊱ .pvp_\n_┃ ⊱ .escape_`;
             await sendWithBackButton(sock, msg, text);
         }
     },
