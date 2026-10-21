@@ -837,11 +837,13 @@ async function startBot() {
 
     activeSocketInstance = sock;
 
-    // ─── LEGACY BUTTON SUPPORT ────────────────────────────────────
-    // Old-style `buttons: [{ buttonId, buttonText, type: 1 }]` messages no
-    // longer render on current WhatsApp (and the plain Baileys library doesn't
-    // convert them). Here they are converted into native-flow quick-reply
-    // buttons and relayed with the <biz> node WhatsApp needs to draw them.
+    // ─── LEGACY BUTTON + LIST SUPPORT ─────────────────────────────
+    // Old-style `buttons: [{ buttonId, buttonText, type: 1 }]` and
+    // `listMessage`-style content (title, buttonText, sections[].rows[].rowId)
+    // no longer render on current WhatsApp, and the plain Baileys library
+    // doesn't convert them. Here they are converted into native-flow
+    // interactive messages (quick_reply / single_select) and relayed with the
+    // <biz> node WhatsApp needs to draw them.
     let _baileysModPromise = null;
     const getBaileysMod = () => (_baileysModPromise = _baileysModPromise || import('@itsliaaa/baileys'));
 
@@ -850,26 +852,25 @@ async function startBot() {
         Array.isArray(content.buttons) && content.buttons.length > 0 &&
         content.buttons.every(b => b && b.buttonId && (b.buttonText?.displayText || typeof b.buttonText === 'string'));
 
+    const isLegacyList = (content) =>
+        !!content && typeof content === 'object' &&
+        typeof content.buttonText === 'string' &&
+        Array.isArray(content.sections) && content.sections.length > 0 &&
+        content.sections.every(sec => Array.isArray(sec?.rows) && sec.rows.length > 0 && sec.rows.every(r => r && (r.rowId || r.id) && r.title));
+
     const legacyButtonLabel = (b) => (typeof b.buttonText === 'string' ? b.buttonText : b.buttonText.displayText);
 
-    async function sendLegacyButtons(jid, content, options) {
+    // Builds the media header (if any), quote info, wrapper and <biz> nodes, then relays.
+    async function relayInteractive(jid, interactive, content, options) {
         const { generateWAMessageFromContent, prepareWAMessageMedia, proto } = await getBaileysMod();
-
-        const interactive = {
-            body: { text: content.caption || content.text || ' ' },
-            nativeFlowMessage: {
-                buttons: content.buttons.map(b => ({
-                    name: 'quick_reply',
-                    buttonParamsJson: JSON.stringify({ display_text: legacyButtonLabel(b), id: b.buttonId })
-                }))
-            }
-        };
-        if (content.footer) interactive.footer = { text: content.footer };
 
         const mediaKey = content.image ? 'image' : (content.video ? 'video' : null);
         if (mediaKey) {
             const media = await prepareWAMessageMedia({ [mediaKey]: content[mediaKey] }, { upload: sock.waUploadToServer });
             interactive.header = { hasMediaAttachment: true, ...media };
+        } else if (!interactive.header) {
+            // WhatsApp clients expect a header object even when it is empty
+            interactive.header = { title: '', subtitle: '', hasMediaAttachment: false };
         }
 
         const quoted = options?.quoted;
@@ -903,6 +904,45 @@ async function startBot() {
 
         await sock.relayMessage(jid, fullMsg.message, { messageId: fullMsg.key.id, additionalNodes: nodes });
         return fullMsg;
+    }
+
+    async function sendLegacyButtons(jid, content, options) {
+        const interactive = {
+            body: { text: content.caption || content.text || ' ' },
+            nativeFlowMessage: {
+                buttons: content.buttons.map(b => ({
+                    name: 'quick_reply',
+                    buttonParamsJson: JSON.stringify({ display_text: legacyButtonLabel(b), id: b.buttonId })
+                }))
+            }
+        };
+        if (content.footer) interactive.footer = { text: content.footer };
+        return relayInteractive(jid, interactive, content, options);
+    }
+
+    async function sendLegacyList(jid, content, options) {
+        const interactive = {
+            body: { text: content.text || content.caption || ' ' },
+            nativeFlowMessage: {
+                buttons: [{
+                    name: 'single_select',
+                    buttonParamsJson: JSON.stringify({
+                        title: content.buttonText,
+                        sections: content.sections.map(sec => ({
+                            title: sec.title || '',
+                            rows: sec.rows.map(r => ({
+                                title: r.title,
+                                description: r.description || '',
+                                id: r.rowId || r.id
+                            }))
+                        }))
+                    })
+                }]
+            }
+        };
+        if (content.footer) interactive.footer = { text: content.footer };
+        if (content.title) interactive.header = { title: content.title, hasMediaAttachment: false };
+        return relayInteractive(jid, interactive, {}, options);
     }
 
     // ─── UNBLOCKED SEND MESSAGE WRAPPER ───────────────────────────
@@ -945,13 +985,17 @@ async function startBot() {
 
         let sent;
         try {
-            if (isLegacyButtons(content) && typeof sock.relayMessage === 'function') {
+            if ((isLegacyButtons(content) || isLegacyList(content)) && typeof sock.relayMessage === 'function') {
                 try {
-                    sent = await sendLegacyButtons(jid, content, options);
+                    sent = isLegacyList(content)
+                        ? await sendLegacyList(jid, content, options)
+                        : await sendLegacyButtons(jid, content, options);
                 } catch (btnErr) {
-                    console.error('⚠️ [BUTTONS] Could not send buttons, falling back to plain text:', btnErr.message);
+                    console.error('⚠️ [BUTTONS] Could not send buttons/list, falling back to plain text:', btnErr.message);
                     const base = content.caption || content.text || '';
-                    const lines = content.buttons.map(b => `▫️ ${legacyButtonLabel(b)} → send: ${b.buttonId}`).join('\n');
+                    const lines = isLegacyList(content)
+                        ? content.sections.map(sec => (sec.title ? `*${sec.title}*\n` : '') + sec.rows.map(r => `▫️ ${r.title} → send: ${r.rowId || r.id}`).join('\n')).join('\n\n')
+                        : content.buttons.map(b => `▫️ ${legacyButtonLabel(b)} → send: ${b.buttonId}`).join('\n');
                     const plain = { text: `${base}\n\n${lines}` };
                     if (content.mentions) plain.mentions = content.mentions;
                     sent = await originalSendMessage(jid, plain, options);
