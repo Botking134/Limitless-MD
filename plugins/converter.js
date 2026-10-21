@@ -5,6 +5,7 @@ const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { uploadToImgBB, canUseImgBB } = require('../helpers/ImgHost');
 const FormData = require('form-data');
 const { exec } = require('child_process');
 const sharp = require('sharp');
@@ -44,6 +45,16 @@ async function uploadToCatbox(buffer, mimeType) {
     }
 
     const attempts = [];
+
+    // Host 0: ImgBB (images only, needs IMGBB_API_KEY)
+    const useImgBB = canUseImgBB(mimeType, buffer);
+    if (useImgBB) {
+        attempts.push(async () => {
+            const url = await uploadToImgBB(buffer, mimeType);
+            if (!url) throw new Error('ImgBB upload failed.');
+            return url;
+        });
+    }
 
     // Host 1: Direct Catbox.moe with Browser Spoofing (Fixes 412 Error)
     attempts.push(async () => {
@@ -87,23 +98,7 @@ async function uploadToCatbox(buffer, mimeType) {
         throw new Error('Unexpected response from Catbox proxy.');
     });
 
-    // Host 3: qu.ax Fallback
-    attempts.push(async () => {
-        const form = new FormData();
-        form.append('files[]', buffer, { filename, contentType: mimeType });
-        const response = await axios.post('https://qu.ax/upload.php', form, {
-            headers: { ...form.getHeaders() },
-            timeout: 30000,
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity
-        });
-        if (response.data?.success && response.data.files?.[0]?.url) {
-            return response.data.files[0].url.trim();
-        }
-        throw new Error('Unexpected response from qu.ax.');
-    });
-
-    const hostNames = ['Catbox (direct)', 'Catbox (proxy)', 'qu.ax'];
+    const hostNames = (useImgBB ? ['ImgBB'] : []).concat(['Catbox (direct)', 'Catbox (proxy)']);
     const errors = [];
 
     for (let i = 0; i < attempts.length; i++) {
