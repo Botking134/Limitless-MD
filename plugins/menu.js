@@ -300,9 +300,13 @@ const MENU_THEMES = {
     menu2: {
         title: '🩸 MALEVOLENT SHRINE',
         sub: 'Domain Expansion: Malevolent Shrine',
-        quote: 'Know your place, fool.\n│ *I alone am the King of Curses*'
+        quote: 'Know your place, fool.\n│ *Stand proud. You were strong.*'
     }
 };
+
+// WhatsApp shows "Read more" after a long run of invisible characters, so everything after
+// them (the quote box and the command list) is folded away.
+const READ_MORE = '\u200E'.repeat(4001);
 
 async function renderMenu(sock, msg, menuKey = 'menu') {
     const jid = msg.key.remoteJid;
@@ -312,7 +316,8 @@ async function renderMenu(sock, msg, menuKey = 'menu') {
     const theme = MENU_THEMES[menuKey] || MENU_THEMES.menu;
     const domain = Domains.DOMAINS[menuKey] || Domains.DOMAINS.menu;
 
-    const fullMenu =
+    // Visible part: the header block. Folded behind "Read more": quote box + command list.
+    const top =
 `┌──────────────┐
 │  *${config.botName || 'Limitless-MD'}*
 │  *${theme.title}*
@@ -322,16 +327,18 @@ _👑 Owner: ${config.ownerName || 'Unknown'}_
 _👤 User: ${pushName}_
 _⏱️ Uptime: ${uptime}_
 _🔑 Prefix: [ ${prefixVal} ]_
-════════════════════════
-┌───────────────────┐
+════════════════════════`;
+    const rest =
+`┌───────────────────┐
 │ ${theme.quote}
 └───────────────────┘
 
 ${menuText}`;
 
-    // The domain gif carries the whole menu as its caption. If the gif cannot be
-    // loaded, sendDomainGif falls back to plain text.
-    await Domains.sendDomainGif(sock, jid, msg, Domains.pick(domain.gifs), fullMenu);
+    // The domain gif carries the whole menu as its caption. If WhatsApp refuses the
+    // folded caption, the same menu is sent without the fold; if the gif cannot be
+    // loaded at all, it goes out as plain text.
+    await Domains.sendDomainGif(sock, jid, msg, Domains.pick(domain.gifs), `${top}\n${READ_MORE}\n${rest}`, `${top}\n${rest}`);
     await Domains.sendDomainAudio(sock, jid, domain.audio);
 }
 
@@ -443,11 +450,13 @@ _Tap below to browse command categories._ 🔮`;
         // a still image so the picker still goes out.
         let header = { hasMediaAttachment: false };
         try {
-            const video = await Domains.getVideo(Domains.DOMAINS.menu3.gifs[0]);
+            const gifs = Domains.DOMAINS.menu3.gifs;
+            if (!gifs.length) throw new Error('no menu 3 gif set');
+            const video = await Domains.getVideo(Domains.pick(gifs));
             const media = await prepareWAMessageMedia({ video, gifPlayback: true, mimetype: 'video/mp4' }, { upload: sock.waUploadToServer });
             header = { videoMessage: media.videoMessage, hasMediaAttachment: true };
         } catch (vidErr) {
-            console.error('❌ [CATEGORY PICKER] Header gif failed, trying an image:', vidErr.message);
+            if (Domains.DOMAINS.menu3.gifs.length) console.error('❌ [CATEGORY PICKER] Header gif failed, trying an image:', vidErr.message);
             const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
             const imageBuffer = await fetchImageBuffer(randomImage);
             if (imageBuffer) {
@@ -737,7 +746,7 @@ module.exports = [
             const caption =
                 `🩹 *REVERSE CURSED TECHNIQUE* 🩹\n\n` +
                 `@${String(mention).split('@')[0].split(':')[0]}'s mind has been mended.\n` +
-                `${result.wasBlocked ? `🧠 Brain damage from *${domain.name}* is healed.` : `✨ *${domain.name}* strain cleared (${result.count}/${Domains.MAX_USES}).`}`;
+                `${result.wasBlocked ? `🧠 Brain damage from *${domain.name}* is healed.` : `✨ *${domain.name}* strain cleared (${result.count}/${Domains.LIMIT}).`}`;
             try {
                 const video = await Domains.getVideo(Domains.pick(Domains.RCT_GIFS));
                 await sock.sendMessage(jid, { video, gifPlayback: true, mimetype: 'video/mp4', caption, mentions: [mention] }, { quoted: msg });
