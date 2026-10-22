@@ -1,36 +1,48 @@
-// plugins/akinator.js  (Groq-powered Akinator)
+// plugins/akinator.js  (AI Akinator v2)
 // Usage:
 //   .aki            -> help
 //   .aki start      -> start a game
 //   .aki stop       -> stop your game
-// Answer by REPLYING to the bot's message with: yes | no | idk | prob | probnot
-// ("back" undoes your last answer)
+// Answer by REPLYING to the bot's message: yes | no | idk | prob | probnot  ("back" undoes the last answer)
 //
-// The genie asks up to MAX_QUESTIONS questions and makes ONE guess, only when it is
-// sure (enough questions asked, high confidence, and the guess passes a second
-// fact-check against every answer). After that guess the game is over and the
-// command cools down for exactly 2 minutes.
+// How it differs from v1 (which just chatted with the AI):
+//  - The AI keeps a RANKED LIST OF CANDIDATES every turn and picks questions that split the top ones.
+//  - Q1 is multiple choice (anime / game / movie-TV / cartoon / comic / several).
+//  - Each question has a TOPIC and every topic has a limit, so it can't ask four colour questions
+//    or three wing questions. Reworded repeats are caught by CONCEPT, not exact text.
+//  - Questions must be short and plain (12 words, one yes/no).
+//  - It guesses EARLY when a candidate leads, and can guess up to 3 times.
+//  - Before showing a guess, a second AI check looks for answers the guess CONTRADICTS.
+//    A guess that breaks two or more of your Yes/No answers is thrown away.
+//  - "Probably" / "Don't know" are weak evidence, and one wrong answer from the player is tolerated.
 
 const axios = require('axios');
 const config = require('../config');
 const { normalizeToJid } = require('../stateManager');
 const { getRawMessage } = require('../helpers/Message');
+const BotRouter = require('../helpers/BotRouter');
 
 global.akiSessions = global.akiSessions || {};
 global.akiCooldowns = global.akiCooldowns || {};
 
 // ─── SETTINGS ────────────────────────────────────────────────────
-const MAX_QUESTIONS = 40;               // at this point it must guess
-const MIN_QUESTIONS_BEFORE_GUESS = 20;  // never guess before this many answers
-const MIN_CONFIDENCE = 90;              // model's own confidence needed to guess
-const MAX_VERIFY_REJECTIONS_BEFORE_PATIENCE = 4;
-const SESSION_TTL = 15 * 60 * 1000;     // 15 min of inactivity ends the game
-const COOLDOWN_MS = 2 * 60 * 1000;      // EXACTLY 2 minutes after the genie's guess
-const COOLDOWN_SCOPE = 'user';          // 'user' = per player, 'chat' = per chat, 'global' = everyone
+const MAX_QUESTIONS = 25;
+const MIN_QUESTIONS_BEFORE_GUESS = 7;
+const FORCE_GUESS_AT = 18;            // from here it guesses its best candidate
+const MAX_GUESSES = 3;
+const QUESTIONS_BETWEEN_GUESSES = 3;
+const COOLDOWN_MS = 2 * 60 * 1000;    // rest after a finished game
+const SESSION_TTL = 15 * 60 * 1000;   // 15 min of inactivity ends the game
+
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant']; // tried in order
-const GROQ_DEADLINE_MS = 45000;         // stop trying more models/variants after this long
+const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-20b']; // tried in order
 const PINTEREST_SEARCH = 'https://apis.davidcyril.name.ng/search/pinterest';
+
+// How many questions each topic may use in one game. Costume details share ONE slot ("outfit").
+const TOPIC_LIMITS = {
+    medium: 1, series: 4, gender: 1, species: 1, role: 1, powers: 3, flight: 1,
+    weapon: 1, outfit: 1, hair: 1, age: 1, team: 2, setting: 2, personality: 1, other: 3
+};
 
 const ANSWER_MAP = {
     yes: 'Yes', y: 'Yes',
@@ -40,29 +52,50 @@ const ANSWER_MAP = {
     probnot: 'Probably not', 'prob not': 'Probably not', probablynot: 'Probably not', pn: 'Probably not'
 };
 
-const SYSTEM_PROMPT =
-`You are Akinator, the genie who guesses the FICTIONAL character the player is thinking of. Players pick characters from anime, manga, DC, Marvel, cartoons, comics, games, movies and series. They very often pick a SPECIFIC FORM, VERSION, SUIT or ALTERNATE of a famous character (for example "Cosmic Armor Superman", "Super Saiyan Blue Goku", "Zombie Spider-Man", "Mark 85 Iron Man").
+const MEDIUM_CHOICES = [
+    { n: '1', label: 'Anime / Manga', words: ['anime', 'manga'] },
+    { n: '2', label: 'Video game', words: ['game', 'videogame', 'video game'] },
+    { n: '3', label: 'Movie / TV show', words: ['movie', 'tv', 'film', 'show', 'series'] },
+    { n: '4', label: 'Cartoon / Western animation', words: ['cartoon', 'animation'] },
+    { n: '5', label: 'Comic book', words: ['comic', 'comics'] },
+    { n: '6', label: 'Several of these (e.g. Marvel or DC: comics and movies)', words: ['several', 'both', 'many'] }
+];
 
-How to play:
-- Ask ONE short yes/no question at a time. Never repeat or reword a question that was already asked.
-- Questions 1-6: establish the medium/universe (anime, DC, Marvel, video game, cartoon, movie...), gender, species (human, alien, robot, animal, god...), and hero or villain.
-- Then narrow down with powers, abilities, costume or armor, appearance, origin, team, role and signature items.
-- Before guessing a famous character, ask whether the player means a special form, version, suit, alternate universe or power-up of that character. Different forms of one character are different answers.
-- Yes and No answers are strong evidence. Probably and Probably not are weak evidence. Don't know is no evidence. NEVER name a character that contradicts a Yes or No answer.
-- Keep a shortlist of the 3 most likely characters in "candidates" and keep it consistent with every answer so far.
-- Guess ONLY when you are at least ${MIN_CONFIDENCE}% sure AND at least ${MIN_QUESTIONS_BEFORE_GUESS} questions have been answered. You only get ONE guess, so do not guess to hurry things along.
-- Never guess a name on the "rejected" list. Once ${MAX_QUESTIONS} questions have been answered you MUST guess.
-Reply with ONLY one JSON object and nothing else:
-{"type":"question","text":"<your question>","candidates":["<name>","<name>","<name>"]}
-or
-{"type":"guess","name":"<character name, including the specific form if any>","from":"<series, universe or game>","confidence":<0-100>,"candidates":["<name>","<name>"]}`;
+const FALLBACK_QUESTIONS = [
+    { topic: 'gender', text: 'Is your character male?' },
+    { topic: 'species', text: 'Is your character human?' },
+    { topic: 'role', text: 'Is your character a hero?' },
+    { topic: 'powers', text: 'Does your character have supernatural powers?' },
+    { topic: 'age', text: 'Is your character an adult?' },
+    { topic: 'team', text: 'Is your character part of a team or group?' },
+    { topic: 'setting', text: 'Is your character from a fantasy or sci-fi world?' },
+    { topic: 'personality', text: 'Is your character known for being funny?' }
+];
+
+const SYSTEM_PROMPT =
+`You are Akinator, a genie who guesses the FICTIONAL character the player is thinking of (anime, manga, games, cartoons, movies, TV, comics).
+Each turn you receive the questions asked so far with the player's answers.
+Answer strength: Yes/No = strong. Probably/Probably not = weak. Don't know = no information.
+Players sometimes make one mistake, so prefer the character that fits MOST answers instead of dropping a candidate over a single contradicting answer.
+
+Every turn:
+1. List up to 6 candidate characters that fit the answers (name, series, confidence 0-100). Reconsider ALL answers from scratch each turn. Weigh identity facts (medium, series, role, kind of powers) far above costume details.
+2. Pick the next question. It must help tell the top candidates apart.
+
+Question rules:
+- ONE plain yes/no question, at most 12 words. No lists of options, no franchise trivia.
+- Prefer big questions (series, role, kind of powers, team, setting) over small details (clothes, colors, weapon types). Costume details are a LAST resort.
+- Never ask about something already covered, even in different words.
+- Give the question a "topic" from: ${Object.keys(TOPIC_LIMITS).join(', ')}.
+
+Reply with ONLY this JSON object:
+{"candidates":[{"name":"","from":"","confidence":0}],"topic":"","question":""}`;
 
 const VERIFY_PROMPT =
-`You are a strict fact-checker for an Akinator-style guessing game. You are given the questions asked, the player's answers, and a proposed guess.
-Check the guess against EVERY answer. Yes and No are strong evidence. Probably and Probably not are weak. Don't know is no evidence.
-Fail the guess if the character clearly contradicts any Yes/No answer, or if you do not know the character well enough to be sure it fits. Players may mean a specific form or version of a character, so also say if a different form fits better.
-Reply with ONLY one JSON object and nothing else:
-{"fits":true or false,"contradictions":["<short reason>"],"better_candidates":["<name>"]}`;
+`You check whether a guessed character fits a player's answers.
+You get numbered questions with answers, and a guessed character.
+List the numbers of the questions whose Yes/No answer the character CLEARLY contradicts (ignore Probably/Don't know answers).
+Reply with ONLY this JSON object: {"contradictions":[1,2]}`;
 
 // ─── HELPERS ─────────────────────────────────────────────────────
 function sessionKey(msg) {
@@ -84,38 +117,64 @@ function endSession(key) {
     delete global.akiSessions[key];
 }
 
-// ─── COOLDOWN (starts when the genie makes its guess) ────────────
-function cooldownKey(jid, sender) {
-    if (COOLDOWN_SCOPE === 'chat') return jid;
-    if (COOLDOWN_SCOPE === 'global') return 'all';
-    return sender;
+function startCooldown(key) {
+    global.akiCooldowns[key] = Date.now() + COOLDOWN_MS;
 }
 
-function cooldownLeft(jid, sender) {
-    const k = cooldownKey(jid, sender);
-    const until = global.akiCooldowns[k];
-    if (!until) return 0;
-    const left = until - Date.now();
-    if (left <= 0) { delete global.akiCooldowns[k]; return 0; }
-    return left;
+const GAME_OVER_TEXT = '🏁 *Game over.* The genie is resting for 2 minutes. Play again after that with `aki start`.';
+
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+
+// ── Repeat detection by CONCEPT (catches "wings" asked three different ways) ──
+const STOP = new Set(['is', 'the', 'character', 'characters', 'a', 'an', 'of', 'does', 'do', 'have', 'has', 'to', 'from', 'in', 'as', 'that', 'this', 'her', 'his', 'their', 'your', 'she', 'he', 'they', 'it', 'are', 'be', 'or', 'and', 'with', 'on', 'by', 'for', 'at', 'you', 'can', 'use', 'part', 'pair', 'primarily', 'any', 'kind']);
+const CONCEPTS = {
+    fly: ['fly', 'flying', 'flight', 'wing', 'wings'],
+    gun: ['gun', 'guns', 'pistol', 'pistols', 'firearm', 'firearms', 'rifle'],
+    blade: ['blade', 'blades', 'sword', 'swords', 'knife', 'dagger', 'axe'],
+    bow: ['bow', 'arrow', 'arrows'],
+    color: ['color', 'colour', 'red', 'blue', 'green', 'yellow', 'purple', 'black', 'white', 'gold', 'golden', 'orange', 'pink', 'silver'],
+    armor: ['armor', 'armour', 'mask', 'helmet', 'costume', 'outfit', 'suit', 'uniform', 'cape'],
+    insect: ['insect', 'sting', 'stinger', 'stingers', 'antenna', 'antennae', 'bug'],
+    size: ['shrink', 'shrinking', 'grow', 'growing', 'size', 'small', 'tiny', 'giant', 'tall', 'short'],
+    speed: ['speed', 'fast', 'quickly'],
+    strength: ['strength', 'strong'],
+    reality: ['reality', 'probability'],
+    teleport: ['teleport', 'teleportation'],
+    hair: ['hair', 'blonde', 'bald', 'ponytail'],
+    glasses: ['glasses', 'spectacles']
+};
+const WORD_TO_CONCEPT = {};
+for (const [concept, words] of Object.entries(CONCEPTS)) for (const w of words) WORD_TO_CONCEPT[w] = concept;
+
+function tokens(text) {
+    return norm(text).split(' ').filter(w => w && !STOP.has(w));
+}
+function conceptsOf(text) {
+    const set = new Set();
+    for (const w of tokens(text)) if (WORD_TO_CONCEPT[w]) set.add(WORD_TO_CONCEPT[w]);
+    return set;
+}
+function similar(a, b) {
+    if (norm(a) === norm(b)) return true;
+    const ta = new Set(tokens(a)), tb = new Set(tokens(b));
+    const inter = [...ta].filter(w => tb.has(w)).length;
+    const union = new Set([...ta, ...tb]).size || 1;
+    if (inter / union >= 0.5) return true;
+    const ca = conceptsOf(a), cb = conceptsOf(b);
+    return [...ca].some(c => cb.has(c));
 }
 
-function startCooldown(jid, sender) {
-    const k = cooldownKey(jid, sender);
-    const until = Date.now() + COOLDOWN_MS;
-    global.akiCooldowns[k] = until;
-    const t = setTimeout(() => { if (global.akiCooldowns[k] === until) delete global.akiCooldowns[k]; }, COOLDOWN_MS + 1000);
-    if (t.unref) t.unref();
+function topicCounts(session) {
+    const counts = {};
+    for (const x of session.answers) counts[x.topic] = (counts[x.topic] || 0) + 1;
+    return counts;
+}
+function remainingTopics(session) {
+    const counts = topicCounts(session);
+    return Object.keys(TOPIC_LIMITS).filter(t => (counts[t] || 0) < TOPIC_LIMITS[t]);
 }
 
-function formatLeft(ms) {
-    const total = Math.ceil(ms / 1000);
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
-}
-
-// NOTE: the word "AKINATOR" must stay in every question message below. helpers/GameInterceptors.js
+// NOTE: the word "AKINATOR" must stay in every message below. helpers/GameInterceptors.js
 // matches it to route replies to the aki_ans command.
 function questionText(session) {
     const n = session.answers.length + 1;
@@ -127,78 +186,46 @@ function questionText(session) {
     );
 }
 
-function transcript(session) {
-    const lines = session.answers.map((x, i) => `Q${i + 1}: ${x.q} -> ${x.a}`);
-    let text = lines.length ? lines.join('\n') : '(no questions asked yet)';
-    text += `\n\nQuestions answered so far: ${session.answers.length}`;
-    if (session.candidates.length) text += `\nYour current shortlist: ${session.candidates.join(', ')}`;
-    if (session.rejected.length) text += `\nRejected guesses (never guess these): ${session.rejected.map(r => r.name).join(', ')}`;
-    return text;
+function choiceText() {
+    return (
+        `🧞 *AKINATOR*\n\n` +
+        `*Q1:* Where is your character from?\n\n` +
+        MEDIUM_CHOICES.map(c => `${c.n}️⃣ ${c.label}`).join('\n') +
+        `\n\nReply to this message with a number (1-${MEDIUM_CHOICES.length}).`
+    );
 }
 
-// "gpt-oss"-style models think before answering, and that thinking counts
-// against the token limit (the old fixed 250 could run out mid-answer).
-const isReasoningModel = (model) => /gpt-oss|qwen3|deepseek-r1/i.test(model);
-
-// Turns an axios error into the one line that actually explains it.
-function describeError(e) {
-    const d = e.response?.data;
-    const err = d?.error;
-    const reason = err
-        ? [err.code || err.type, err.message].filter(Boolean).join(' - ')
-        : (typeof d === 'string' ? d : d ? JSON.stringify(d) : '');
-    return `${e.response?.status || 'ERR'} ${String(reason || e.message).replace(/\s+/g, ' ').slice(0, 300)}`;
-}
-
-// Tries each model, and for each model a few request shapes from strictest to
-// plainest. Groq's JSON mode answers HTTP 400 ("json_validate_failed") whenever
-// the model's text is not perfectly valid JSON, so a plain request is tried
-// next, and when the 400 carries the model's own text we use that directly.
-async function callGroq(userContent, systemPrompt = SYSTEM_PROMPT) {
-    const apiKey = config.groqApiKey;
+// ─── THE AI ──────────────────────────────────────────────────────
+async function callGroq(system, userContent, { maxTokens = 700 } = {}) {
+    const apiKey = config.groqApiKey || process.env.GROQ_API_KEY;
     if (!apiKey) throw new Error('GROQ API key is not set in config');
-    const started = Date.now();
+
     let lastErr;
-
     for (const model of GROQ_MODELS) {
-        const base = {
-            model,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userContent }
-            ],
-            temperature: 0.4
-        };
-        const json = { response_format: { type: 'json_object' } };
-        const variants = isReasoningModel(model)
-            ? [
-                { ...base, max_completion_tokens: 1500, reasoning_effort: 'low', ...json },
-                { ...base, max_completion_tokens: 1500, reasoning_effort: 'low' },
-                { ...base, max_completion_tokens: 1500 }
-              ]
-            : [
-                { ...base, max_tokens: 400, ...json },
-                { ...base, max_tokens: 400 }
-              ];
-
-        for (const body of variants) {
-            if (Date.now() - started > GROQ_DEADLINE_MS) break;
-            try {
-                const res = await axios.post(GROQ_URL, body, {
-                    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                    timeout: 20000
-                });
-                const content = res.data?.choices?.[0]?.message?.content || '';
-                if (content.trim()) return content;
-                lastErr = new Error(`Empty reply from ${model}`);
-                console.error(`❌ [AKI] Groq ${model}: empty reply`);
-            } catch (e) {
-                lastErr = e;
-                console.error(`❌ [AKI] Groq ${model}${body.response_format ? ' (json mode)' : ''}: ${describeError(e)}`);
-                // Groq attaches the model's text to a JSON-mode failure: use it if it parses.
-                const salvaged = e.response?.data?.error?.failed_generation;
-                if (salvaged && parseJson(salvaged)) return salvaged;
-            }
+        const reasoning = /gpt-oss/i.test(model);
+        try {
+            const res = await axios.post(GROQ_URL, {
+                model,
+                messages: [
+                    { role: 'system', content: system },
+                    { role: 'user', content: userContent }
+                ],
+                temperature: 0.3,
+                // gpt-oss "thinks" before answering and that counts against the limit, so it needs room
+                max_tokens: reasoning ? 2500 : maxTokens,
+                response_format: { type: 'json_object' },
+                ...(reasoning ? { reasoning_effort: 'low' } : {})
+            }, {
+                headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                timeout: 30000
+            });
+            const content = (res.data?.choices?.[0]?.message?.content || '').trim();
+            if (content) return content;
+            lastErr = new Error('Empty answer from the AI');
+        } catch (e) {
+            lastErr = e;
+            const status = e.response?.status;
+            if (status && ![400, 404].includes(status)) break;
         }
     }
     throw lastErr || new Error('Groq request failed');
@@ -213,106 +240,143 @@ function parseJson(text) {
     }
 }
 
-const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
-
-// Second opinion: does the proposed guess really fit every answer?
-// If the check itself cannot run, the guess is allowed (it must not block the game).
-async function verifyGuess(session, guess) {
-    const prompt =
-        transcript(session) +
-        `\n\nProposed guess: ${guess.name}${guess.from ? ` (${guess.from})` : ''}` +
-        `\n\nReply with the JSON now.`;
-    try {
-        const data = parseJson(await callGroq(prompt, VERIFY_PROMPT));
-        if (!data || typeof data.fits !== 'boolean') return { fits: true, contradictions: [], better: [] };
-        return {
-            fits: data.fits,
-            contradictions: Array.isArray(data.contradictions) ? data.contradictions.map(String).slice(0, 3) : [],
-            better: Array.isArray(data.better_candidates) ? data.better_candidates.map(String).slice(0, 3) : []
-        };
-    } catch (e) {
-        console.error('⚠️ [AKI] guess check unavailable, allowing the guess:', e.message);
-        return { fits: true, contradictions: [], better: [] };
-    }
+function transcript(session) {
+    const lines = session.answers.map((x, i) => `Q${i + 1} [${x.topic}]: ${x.q} -> ${x.a}`);
+    return lines.length ? lines.join('\n') : '(no questions asked yet)';
 }
 
-function rememberCandidates(session, data) {
-    if (Array.isArray(data.candidates)) {
-        const list = data.candidates.map(x => String(x).trim()).filter(Boolean).slice(0, 5);
-        if (list.length) session.candidates = list;
-    }
+function buildPrompt(session, hint) {
+    const excluded = [...session.wrong, ...session.rejected];
+    let text = transcript(session);
+    text += `\n\nQuestions answered so far: ${session.answers.length}`;
+    text += `\nTopics you may still ask about: ${remainingTopics(session).join(', ')}`;
+    if (excluded.length) text += `\nExcluded characters (never list them as candidates): ${excluded.join(', ')}`;
+    if (hint) text += `\n\n${hint}`;
+    return text + '\n\nReply with the JSON now.';
 }
 
-// Returns { type: 'question', text } or { type: 'guess', name, from } or { type: 'giveup' }
-async function nextStep(session) {
-    const answered = session.answers.length;
-    const mustGuess = answered >= MAX_QUESTIONS;
-    const askedSet = new Set(session.answers.map(x => norm(x.q)));
+function cleanCandidates(raw, session) {
+    const excluded = [...session.wrong, ...session.rejected].map(norm);
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .map(c => ({ name: String(c?.name || '').trim(), from: String(c?.from || '').trim(), confidence: Number(c?.confidence) || 0 }))
+        .filter(c => c.name && !excluded.includes(norm(c.name)))
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, 6);
+}
+
+// Decides if the top candidate is strong enough to guess now.
+function wantsGuess(session, cands) {
+    const n = session.answers.length;
+    if (!cands.length) return false;
+    if (n < MIN_QUESTIONS_BEFORE_GUESS) return false;
+    if (session.guessesMade > 0 && n - session.lastGuessAt < QUESTIONS_BETWEEN_GUESSES) return false;
+    const [top, second] = cands;
+    const margin = top.confidence - (second ? second.confidence : 0);
+    if (n >= FORCE_GUESS_AT) return true;
+    if (top.confidence >= 75) return true;
+    if (top.confidence >= 55 && margin >= 20) return true;
+    return false;
+}
+
+// Returns a problem description (sent back to the AI as a hint) or null when the question is fine.
+function checkQuestion(session, data) {
+    const text = String(data?.question || '').trim();
+    const topic = String(data?.topic || '').toLowerCase().trim();
+    if (!text) return 'You must include a "question".';
+    if (!TOPIC_LIMITS[topic]) return `The topic must be one of: ${Object.keys(TOPIC_LIMITS).join(', ')}.`;
+    if ((topicCounts(session)[topic] || 0) >= TOPIC_LIMITS[topic]) {
+        return `The topic "${topic}" is used up. Choose a different topic: ${remainingTopics(session).join(', ')}.`;
+    }
+    if (text.split(/\s+/).length > 14 || text.length > 100) return 'That question is too long. Use at most 12 words.';
+    if (!text.endsWith('?')) return 'The question must end with a question mark.';
+    if ((text.match(/\bor\b/gi) || []).length > 1) return 'No lists of options. Ask ONE simple yes/no question.';
+    const dup = session.answers.find(a => similar(a.q, text));
+    if (dup) return `That is too similar to an earlier question ("${dup.q}"). Ask about something different.`;
+    return null;
+}
+
+function fallbackQuestion(session) {
+    const counts = topicCounts(session);
+    return FALLBACK_QUESTIONS.find(f =>
+        (counts[f.topic] || 0) < TOPIC_LIMITS[f.topic] && !session.answers.some(a => similar(a.q, f.text))
+    ) || null;
+}
+
+// Returns { type: 'guess', candidates } | { type: 'question', text, topic } | { type: 'giveup' }
+async function nextStep(session, { noGuess = false } = {}) {
+    const n = session.answers.length;
+    const atCap = n >= MAX_QUESTIONS;
     let hint = '';
-    let lastGuess = null;
+    let lastCandidates = [];
+    let gotResponse = false;   // did the AI answer at all (even badly)?
+    let lastError = null;
 
-    for (let attempt = 0; attempt < 4; attempt++) {
-        const prompt = transcript(session) + (hint ? `\n\n${hint}` : '') + '\n\nReply with the JSON now.';
-        const data = parseJson(await callGroq(prompt));
-        if (!data) { hint = 'Your last reply was not valid JSON. Reply with ONLY the JSON object.'; continue; }
-        rememberCandidates(session, data);
-
-        if (data.type === 'guess' && data.name) {
-            const name = String(data.name).trim();
-            const from = String(data.from || '').trim();
-            lastGuess = { type: 'guess', name, from };
-
-            if (mustGuess) return lastGuess;
-
-            const rejected = session.rejected.find(r => norm(r.name) === norm(name));
-            if (rejected && answered - rejected.at < 5) {
-                hint = `${name} was already rejected by the fact-check. Ask more questions before suggesting anyone.`; continue;
-            }
-            if (answered < MIN_QUESTIONS_BEFORE_GUESS) {
-                hint = `Too early to guess (${answered} of ${MIN_QUESTIONS_BEFORE_GUESS} questions). Ask another yes/no question.`; continue;
-            }
-            if (Number(data.confidence || 0) < MIN_CONFIDENCE) {
-                hint = `You are not confident enough (need ${MIN_CONFIDENCE}%). Ask another question that separates your shortlist.`; continue;
-            }
-
-            const check = await verifyGuess(session, lastGuess);
-            if (!check.fits) {
-                session.rejected.push({ name, at: answered });
-                const why = check.contradictions.length ? check.contradictions.join('; ') : 'it does not fit the answers well enough';
-                hint = `A fact-check rejected ${name}: ${why}.` +
-                       (check.better.length ? ` Characters that may fit better: ${check.better.join(', ')}.` : '') +
-                       ` Do not guess yet. Ask a question that separates the remaining candidates, including special forms or versions.`;
-                console.log(`[AKI] fact-check rejected "${name}" at ${answered} answers: ${why}`);
-                continue;
-            }
-            return lastGuess;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        let data;
+        try {
+            data = parseJson(await callGroq(SYSTEM_PROMPT, buildPrompt(session, hint)));
+            gotResponse = true;
+        } catch (e) {
+            lastError = e;
+            continue;
         }
+        if (!data) { hint = 'Reply with ONLY the JSON object.'; continue; }
 
-        if (data.type === 'question' && data.text) {
-            if (mustGuess) { hint = `${MAX_QUESTIONS} questions are answered. You MUST guess now.`; continue; }
-            if (askedSet.has(norm(data.text))) { hint = 'That question was already asked. Ask a different one.'; continue; }
-            return { type: 'question', text: String(data.text).trim() };
-        }
+        const cands = cleanCandidates(data.candidates, session);
+        if (cands.length) lastCandidates = cands;
 
-        hint = 'Invalid format. Reply with ONLY one JSON object of type "question" or "guess".';
+        if (cands.length && !noGuess && (wantsGuess(session, cands) || atCap)) return { type: 'guess', candidates: cands };
+        if (atCap) break;
+
+        const problem = checkQuestion(session, data);
+        if (problem) { hint = problem; continue; }
+
+        return { type: 'question', text: String(data.question).trim(), topic: String(data.topic).toLowerCase().trim() };
     }
 
-    // Out of attempts. At the question limit we must still answer.
-    if (mustGuess) {
-        if (lastGuess) return lastGuess;
-        if (session.candidates[0]) return { type: 'guess', name: session.candidates[0], from: '' };
-        return { type: 'giveup' };
+    // The AI never answered (outage, bad key...): say so, instead of limping on with canned questions
+    // and then claiming "I give up". The player can simply answer again.
+    if (!gotResponse) throw lastError || new Error('The AI did not answer');
+
+    if (atCap) return lastCandidates.length && !noGuess ? { type: 'guess', candidates: lastCandidates } : { type: 'giveup' };
+    if (lastCandidates.length && n >= MIN_QUESTIONS_BEFORE_GUESS && !noGuess) return { type: 'guess', candidates: lastCandidates };
+    const fb = fallbackQuestion(session);
+    if (fb) return { type: 'question', text: fb.text, topic: fb.topic };
+    return lastCandidates.length && !noGuess ? { type: 'guess', candidates: lastCandidates } : { type: 'giveup' };
+}
+
+// Second opinion: does the guess break the player's firm answers? Fails open (accepts) if the AI is unreachable.
+async function guessFits(session, cand) {
+    try {
+        const prompt = `${session.answers.map((x, i) => `Q${i + 1}: ${x.q} -> ${x.a}`).join('\n')}\n\nGuessed character: ${cand.name}${cand.from ? ` (${cand.from})` : ''}\n\nReply with the JSON now.`;
+        const data = parseJson(await callGroq(VERIFY_PROMPT, prompt, { maxTokens: 200 }));
+        const bad = Array.isArray(data?.contradictions) ? data.contradictions.filter(x => Number.isFinite(Number(x))) : [];
+        return bad.length < 2;   // one clash is tolerated: players make mistakes
+    } catch (e) {
+        return true;
     }
-    const fallbacks = [
-        'Is your character from an anime?', 'Is your character male?', 'Is your character human?',
-        'Does your character have special powers?', 'Is your character a villain?',
-        'Does your character use a weapon?', 'Does your character have a cellphone?',
-        'Is your character a main character?', 'Does your character fly?',
-        'Does your character wear armor or a special suit?', 'Is your character from a comic book?',
-        'Is your character a special form or version of another character?'
-    ];
-    const pick = fallbacks.find(q => !askedSet.has(norm(q)));
-    return pick ? { type: 'question', text: pick } : { type: 'giveup' };
+}
+
+async function pickVerifiedGuess(session, candidates) {
+    for (const cand of candidates.slice(0, 3)) {
+        if (await guessFits(session, cand)) return cand;
+        session.rejected.push(cand.name);   // silently dropped, never shown to the player
+    }
+    return null;
+}
+
+// ─── SENDING ─────────────────────────────────────────────────────
+// A reply counts if it answers ANY bot message from the current turn (the question itself or a
+// "reply with..." hint), so a player who replies to the latest message is never silently ignored.
+function markMain(session, sent) {
+    session.lastMsgId = sent?.key?.id || '';
+    session.validIds = new Set(session.lastMsgId ? [session.lastMsgId] : []);
+}
+async function hint(sock, jid, msg, session, text) {
+    const sent = await sock.sendMessage(jid, { text }, { quoted: msg });
+    if (sent?.key?.id) (session.validIds = session.validIds || new Set()).add(sent.key.id);
+    return sent;
 }
 
 async function findPicture(name, from) {
@@ -340,23 +404,22 @@ async function findPicture(name, from) {
 
 async function sendQuestion(sock, jid, msg, session) {
     const sent = await sock.sendMessage(jid, { text: questionText(session) }, { quoted: msg });
-    session.lastMsgId = sent?.key?.id || '';
+    markMain(session, sent);
     session.state = 'asking';
 }
 
-// The ONE guess. The game ends here and the 2-minute cooldown starts the moment
-// the guess is sent (so "2 minutes" is measured from the guess itself).
-async function sendGuess(sock, jid, msg, key, session, guess) {
-    const { sender } = sessionKey(msg);
+async function sendGuess(sock, jid, msg, session, guess) {
+    session.state = 'guessing';
+    session.guess = guess;
+    session.guessesMade += 1;
+    session.lastGuessAt = session.answers.length;
+
     const caption =
         `🧞 *AKINATOR*\n\n` +
         `I think it's... *${guess.name}*\n` +
         (guess.from ? `_${guess.from}_\n` : '') +
-        `\nGuessed in ${session.answers.length} questions 🎯\n\n` +
-        `🏁 *Game over.* The genie is resting for 2 minutes. Play again after that with \`aki start\`.`;
-
-    // Stop the game first, so nothing can answer it while the picture loads.
-    endSession(key);
+        `\nGuess ${session.guessesMade} of ${MAX_GUESSES} · after ${session.answers.length} questions 🎯\n\n` +
+        `Reply to this message with *yes* if I got it, or *no* and I'll keep going.`;
 
     const buffer = await findPicture(guess.name, guess.from);
     let sent;
@@ -368,22 +431,26 @@ async function sendGuess(sock, jid, msg, key, session, guess) {
         }
     }
     if (!sent) sent = await sock.sendMessage(jid, { text: caption }, { quoted: msg });
-    startCooldown(jid, sender);
-    return sent;
+    markMain(session, sent);
 }
 
-// Ask the model for the next step and send it
+async function giveUp(sock, jid, msg, key) {
+    endSession(key);
+    startCooldown(key);
+    return sock.sendMessage(jid, { text: `🧞 *AKINATOR*\n\nI give up, you beat me! 🏳️\n\n${GAME_OVER_TEXT}` }, { quoted: msg });
+}
+
+// Ask the AI for the next step and send it
 async function advance(sock, jid, msg, key, session) {
-    const step = await nextStep(session);
-    if (step.type === 'guess') return sendGuess(sock, jid, msg, key, session, step);
-    if (step.type === 'giveup') {
-        const { sender } = sessionKey(msg);
-        endSession(key);
-        const sent = await sock.sendMessage(jid, { text: '🧞 *AKINATOR*\n\nI give up, you beat me! 🏳️\n\n🏁 *Game over.* The genie is resting for 2 minutes.' }, { quoted: msg });
-        startCooldown(jid, sender);
-        return sent;
+    let step = await nextStep(session);
+    if (step.type === 'guess') {
+        const verified = await pickVerifiedGuess(session, step.candidates);
+        if (verified) return sendGuess(sock, jid, msg, session, verified);
+        step = await nextStep(session, { noGuess: true });   // every candidate clashed: keep asking
     }
+    if (step.type === 'giveup') return giveUp(sock, jid, msg, key);
     session.currentQ = step.text;
+    session.currentTopic = step.topic;
     return sendQuestion(sock, jid, msg, session);
 }
 
@@ -395,7 +462,9 @@ const akiCommand = {
     category: 'games',
     usage: 'aki start | aki stop',
     execute: async (sock, msg, args) => {
-        const { jid, sender, key } = sessionKey(msg);
+        const { jid, key } = sessionKey(msg);
+        // With several bots in one group, only the first one to see this message answers it.
+        if (!BotRouter.claimMessage('aki-cmd', jid, msg.key.id)) return;
         const sub = (args || '').toString().trim().toLowerCase();
 
         if (sub === 'stop') {
@@ -410,19 +479,24 @@ const akiCommand = {
             if (global.akiSessions[key]) {
                 return sock.sendMessage(jid, { text: '⚠️ You already have a game running. Reply to my last message, or use `aki stop`.' }, { quoted: msg });
             }
-            const left = cooldownLeft(jid, sender);
-            if (left > 0) {
-                return sock.sendMessage(jid, { text: `⏳ The genie is resting. Try again in *${formatLeft(left)}*.` }, { quoted: msg });
+            const rest = (global.akiCooldowns[key] || 0) - Date.now();
+            if (rest > 0) {
+                return sock.sendMessage(jid, { text: `🧞 *AKINATOR*\n\nThe genie is resting. Try again in ${Math.ceil(rest / 1000)}s.` }, { quoted: msg });
             }
+
             const session = {
-                answers: [], candidates: [], rejected: [], currentQ: '',
-                state: 'asking', lastMsgId: '', busy: true, timer: null
+                answers: [], wrong: [], rejected: [], currentQ: '', currentTopic: '', guess: null,
+                guessesMade: 0, lastGuessAt: 0,
+                state: 'choice', lastMsgId: '', validIds: new Set(), busy: true, timer: null
             };
             global.akiSessions[key] = session;
             resetTimer(key);
             try {
-                await sock.sendMessage(jid, { text: '🧞 *AKINATOR*\n\nThink of a character (anime, DC, Marvel, game, cartoon...) and I will guess it in up to ' + MAX_QUESTIONS + ' questions!\n\n_I only get one guess, so I take my time._' }, { quoted: msg });
-                await advance(sock, jid, msg, key, session);
+                await sock.sendMessage(jid, {
+                    text: `🧞 *AKINATOR*\n\nThink of a character (anime, DC, Marvel, game, cartoon...) and I will guess it in up to ${MAX_QUESTIONS} questions!\n\n_I can guess up to ${MAX_GUESSES} times, so I won't wait too long._`
+                }, { quoted: msg });
+                const sent = await sock.sendMessage(jid, { text: choiceText() }, { quoted: msg });
+                markMain(session, sent);
             } catch (e) {
                 console.error('❌ [AKI] start failed:', e.message);
                 endSession(key);
@@ -439,10 +513,8 @@ const akiCommand = {
                 `Think of a character and I'll guess it!\n\n` +
                 `• \`aki start\` — start a game\n` +
                 `• \`aki stop\` — stop your game\n\n` +
-                `Answer by replying to my message with:\nyes | no | idk | prob | probnot\n` +
-                `(\`back\` undoes your last answer)\n\n` +
-                `I ask up to ${MAX_QUESTIONS} questions and make *one* guess when I'm sure. ` +
-                `After my guess the game ends and I rest for 2 minutes.`
+                `Answer by replying to my message with:\nyes | no | idk | prob | probnot\n\n` +
+                `I ask up to ${MAX_QUESTIONS} questions, but I guess earlier if I'm sure.`
         }, { quoted: msg });
     }
 };
@@ -457,40 +529,78 @@ const akiAnswerCommand = {
         const session = global.akiSessions[key];
         if (!session || session.busy) return;
 
-        // Must be a reply to my latest Akinator question
+        // Must be a reply to my latest Akinator message
         const rawMsg = getRawMessage(msg.message);
         const contextInfo = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
         const quotedMsgId = contextInfo?.stanzaId;
-        if (!quotedMsgId || quotedMsgId !== session.lastMsgId) return;
+        if (!quotedMsgId || !session.validIds?.has(quotedMsgId)) return;
 
         const input = (args || '').toString().trim().toLowerCase();
         session.busy = true;
         resetTimer(key);
 
         try {
+            // ── Q1: where is the character from ──
+            if (session.state === 'choice') {
+                const picked = MEDIUM_CHOICES.find(c => c.n === input || c.words.includes(input));
+                if (!picked) {
+                    return await hint(sock, jid, msg, session, `Reply with a number from 1 to ${MEDIUM_CHOICES.length}.`);
+                }
+                session.answers.push({ q: 'Where is your character from?', a: picked.label, topic: 'medium' });
+                return await advance(sock, jid, msg, key, session);
+            }
+
+            // ── Reply to a guess ──
+            if (session.state === 'guessing') {
+                if (input === 'yes' || input === 'y') {
+                    const n = session.answers.length;
+                    const name = session.guess?.name || 'your character';
+                    endSession(key);
+                    startCooldown(key);
+                    return await sock.sendMessage(jid, { text: `🧞 *AKINATOR*\n\nGreat, I got *${name}* in ${n} questions! 🎉\n\n${GAME_OVER_TEXT}` }, { quoted: msg });
+                }
+                if (input === 'no' || input === 'n') {
+                    if (session.guess?.name) session.wrong.push(session.guess.name);
+                    session.guess = null;
+                    if (session.guessesMade >= MAX_GUESSES || session.answers.length >= MAX_QUESTIONS) {
+                        return await giveUp(sock, jid, msg, key);
+                    }
+                    return await advance(sock, jid, msg, key, session);
+                }
+                return await hint(sock, jid, msg, session, 'Reply with *yes* or *no*.');
+            }
+
+            // ── Reply to a question ──
             if (input === 'back') {
                 if (!session.answers.length) {
-                    return await sock.sendMessage(jid, { text: "⚠️ Can't go back any further." }, { quoted: msg });
+                    return await hint(sock, jid, msg, session, "⚠️ Can't go back any further.");
                 }
                 const last = session.answers.pop();
+                if (last.topic === 'medium') {
+                    session.state = 'choice';
+                    const sent = await sock.sendMessage(jid, { text: choiceText() }, { quoted: msg });
+                    markMain(session, sent);
+                    return;
+                }
                 session.currentQ = last.q;
+                session.currentTopic = last.topic;
                 return await sendQuestion(sock, jid, msg, session);
             }
 
             if (!(input in ANSWER_MAP)) {
-                return await sock.sendMessage(jid, { text: 'Reply with: yes | no | idk | prob | probnot' }, { quoted: msg });
+                return await hint(sock, jid, msg, session, 'Reply with: yes | no | idk | prob | probnot');
             }
 
-            session.answers.push({ q: session.currentQ, a: ANSWER_MAP[input] });
+            session.answers.push({ q: session.currentQ, a: ANSWER_MAP[input], topic: session.currentTopic || 'other' });
             try {
                 await advance(sock, jid, msg, key, session);
             } catch (e) {
-                session.answers.pop(); // undo so the player can answer again
+                session.answers.pop();   // undo so the player can answer again
                 throw e;
             }
         } catch (e) {
             console.error('❌ [AKI] answer failed:', e.message);
-            await sock.sendMessage(jid, { text: '⚠️ Akinator had a hiccup. Reply to my last message again, or use `aki stop`.' }, { quoted: msg });
+            await hint(sock, jid, msg, session, '⚠️ Akinator had a hiccup. Reply to my last message again, or use `aki stop`.');
         } finally {
             if (global.akiSessions[key]) session.busy = false;
         }
