@@ -872,109 +872,6 @@ async function startBot() {
 
     activeSocketInstance = sock;
 
-    // ─── LEGACY BUTTON + LIST SUPPORT (via richMenu) ──────────────
-    // Old-style `buttons: [{ buttonId, buttonText, type: 1 }]` and
-    // `listMessage`-style content (title, buttonText, sections[].rows[].rowId)
-    // are not drawn by current WhatsApp. The @vansnowi/baileys `richMenu`
-    // helper is the format that renders, so such messages are sent as:
-    //   1) the normal text (or image + caption), then
-    //   2) a richMenu with quick-reply buttons.
-    // A richMenu button sends its own label as a chat message when tapped, so
-    // every label is a full command (prefix included), e.g. "!update proceed".
-    const cmdPrefix = () => (Array.isArray(config.prefix) ? (config.prefix[0] || '!') : (config.prefix || '!'));
-
-    const isLegacyButtons = (content) =>
-        !!content && typeof content === 'object' &&
-        Array.isArray(content.buttons) && content.buttons.length > 0 &&
-        content.buttons.every(b => b && b.buttonId && (b.buttonText?.displayText || typeof b.buttonText === 'string'));
-
-    const isLegacyList = (content) =>
-        !!content && typeof content === 'object' &&
-        typeof content.buttonText === 'string' &&
-        Array.isArray(content.sections) && content.sections.length > 0 &&
-        content.sections.every(sec => Array.isArray(sec?.rows) && sec.rows.length > 0 && sec.rows.every(r => r && (r.rowId || r.id) && r.title));
-
-    const legacyButtonLabel = (b) => (typeof b.buttonText === 'string' ? b.buttonText : b.buttonText.displayText);
-
-    // Ids of the `.git` list rows -> the real command
-    const GIT_ROWS = {
-        git_pull: 'git pull', git_status: 'git status', git_push: 'git push',
-        git_revert: 'git revert', git_setup: 'git setup', git_force: 'git force', git_info: 'git info'
-    };
-    const rowToCommand = (id) => {
-        const raw = String(id).trim();
-        const pfx = cmdPrefix();
-        if (GIT_ROWS[raw.toLowerCase()]) return pfx + GIT_ROWS[raw.toLowerCase()];
-        return raw.startsWith(pfx) ? raw : pfx + raw;
-    };
-
-    const chunk = (arr, n) => {
-        const out = [];
-        for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
-        return out;
-    };
-
-    // Builds the richMenu options: one button group, or a carousel when > 3 buttons
-    const richBody = (labels, title, toast) => {
-        if (labels.length <= 3) return { body: { title: title || 'Tap an option', buttons: labels, toast: toast || 'Sending...' } };
-        const groups = chunk(labels, 3);
-        return {
-            body: {
-                carousel: true,
-                cards: groups.map((g, i) => ({ title: groups.length > 1 ? `${title || 'Options'} ${i + 1}` : (title || 'Options'), buttons: g, toast: toast || 'Sending...' }))
-            }
-        };
-    };
-
-    async function sendLegacyButtons(jid, content, options) {
-        if (typeof sock.richMenu !== 'function') throw new Error('sock.richMenu is not available in this Baileys build');
-        const base = (content.caption || content.text || ' ') + (content.footer ? `\n\n_${content.footer}_` : '');
-
-        let sent;
-        if (content.image) sent = await originalSendMessage(jid, { image: content.image, caption: base, ...(content.mentions ? { mentions: content.mentions } : {}) }, options);
-        else if (content.video) sent = await originalSendMessage(jid, { video: content.video, caption: base, ...(content.mentions ? { mentions: content.mentions } : {}) }, options);
-        else sent = await originalSendMessage(jid, { text: base, ...(content.mentions ? { mentions: content.mentions } : {}) }, options);
-
-        const labels = content.buttons.map(b => String(b.buttonId).trim());
-        try {
-            await sock.richMenu(jid, richBody(labels, 'Tap an option'));
-        } catch (e) {
-            console.error('⚠️ [BUTTONS] richMenu failed, sending command list instead:', e.message);
-            await originalSendMessage(jid, { text: 'Send one of these:\n' + labels.map(l => '▫️ ' + l).join('\n') }, options);
-        }
-        return sent;
-    }
-
-    async function sendLegacyList(jid, content, options) {
-        if (typeof sock.richMenu !== 'function') throw new Error('sock.richMenu is not available in this Baileys build');
-        const rows = content.sections.flatMap(sec => sec.rows.map(r => ({ ...r, section: sec.title || content.title || 'Options' })));
-
-        const lines = rows.map(r => `▫️ *${r.title}*${r.description ? ` — ${r.description}` : ''}`).join('\n');
-        const head = (content.title ? `*${content.title}*\n\n` : '') + (content.text || '');
-        const text = `${head}\n\n${lines}` + (content.footer ? `\n\n_${content.footer}_` : '');
-        const sent = await originalSendMessage(jid, { text }, options);
-
-        // One carousel card per section chunk of 3 commands
-        const cards = [];
-        for (const sec of content.sections) {
-            const labels = sec.rows.map(r => rowToCommand(r.rowId || r.id));
-            const groups = chunk(labels, 3);
-            groups.forEach((g, i) => cards.push({
-                title: (sec.title || content.title || 'Options') + (groups.length > 1 ? ` ${i + 1}` : ''),
-                buttons: g,
-                toast: 'Sending...'
-            }));
-        }
-        try {
-            await sock.richMenu(jid, { body: { carousel: true, cards } });
-        } catch (e) {
-            console.error('⚠️ [BUTTONS] richMenu failed, sending command list instead:', e.message);
-            const all = cards.flatMap(c => c.buttons);
-            await originalSendMessage(jid, { text: 'Send one of these:\n' + all.map(l => '▫️ ' + l).join('\n') }, options);
-        }
-        return sent;
-    }
-
     // ─── UNBLOCKED SEND MESSAGE WRAPPER ───────────────────────────
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (jid, content, options) => {
@@ -1015,26 +912,7 @@ async function startBot() {
 
         let sent;
         try {
-            // Only convert when the library has richMenu (vansnowi). With itsliaaa the
-            // old button/list formats are handled by the library itself.
-            if ((isLegacyButtons(content) || isLegacyList(content)) && typeof sock.richMenu === 'function') {
-                try {
-                    sent = isLegacyList(content)
-                        ? await sendLegacyList(jid, content, options)
-                        : await sendLegacyButtons(jid, content, options);
-                } catch (btnErr) {
-                    console.error('⚠️ [BUTTONS] Could not send buttons/list, falling back to plain text:', btnErr.message);
-                    const base = content.caption || content.text || '';
-                    const lines = isLegacyList(content)
-                        ? content.sections.map(sec => (sec.title ? `*${sec.title}*\n` : '') + sec.rows.map(r => `▫️ ${r.title} → send: ${r.rowId || r.id}`).join('\n')).join('\n\n')
-                        : content.buttons.map(b => `▫️ ${legacyButtonLabel(b)} → send: ${b.buttonId}`).join('\n');
-                    const plain = { text: `${base}\n\n${lines}` };
-                    if (content.mentions) plain.mentions = content.mentions;
-                    sent = await originalSendMessage(jid, plain, options);
-                }
-            } else {
-                sent = await originalSendMessage(jid, content, options);
-            }
+            sent = await originalSendMessage(jid, content, options);
         } catch (sendErr) {
             if (!sendErr.message?.includes('Connection Closed') && !sendErr.message?.includes('rate-overlimit')) {
                 console.error("❌ [SOCKET] sendMessage error:", sendErr.message);
