@@ -11,7 +11,7 @@
   "dependencies": {
     "@google/genai": "^2.8.0",
     "@hapi/boom": "^10.0.1",
-    "@itsliaaa/baileys": "npm:@vansnowi/baileys@1.10.0",
+    "@itsliaaa/baileys": "0.3.18-final",
     "aki-api": "^6.0.0",
     "axios": "^0.27.2",
     "cheerio": "^1.0.0-rc.12",
