@@ -789,33 +789,68 @@ async function startBot() {
 
     const QRCode = require('qrcode');
 
-    // Pick a current WhatsApp Web version. Some forks return a very old one
-    // (e.g. 2.2413.1), which makes WhatsApp reject the connection with 405.
-    const isFreshVersion = (v) => Array.isArray(v) && v.length === 3 && v[0] === 2 && v[1] >= 3000;
+    // Pick a current WhatsApp Web version. A stale version makes WhatsApp reject
+    // the connection with 405. The library's own fetchLatestBaileysVersion() does
+    // NOT go online: it only returns the version baked into the installed package,
+    // which goes out of date. Priority:
+    //   0) manual override: env WA_VERSION or config.waVersion, e.g. "2,3000,1043857760"
+    //   1) the version written in the WhiskeySockets repo (src/Defaults/index.ts)
+    //   2) the older baileys-version.json in that repo
+    //   3) the library's baked-in version
+    const isFreshVersion = (v) => Array.isArray(v) && v.length === 3 && v.every(n => Number.isInteger(n)) && v[0] === 2 && v[1] >= 3000;
+    const parseVersion = (text) => {
+        const m = String(text).match(/version\s*[:=]\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]/);
+        return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+    };
     let waVersion;
-    try {
-        const res = await require('axios').get(
-            'https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/baileys-version.json',
-            { timeout: 10000 }
-        );
-        if (isFreshVersion(res.data && res.data.version)) waVersion = res.data.version;
-    } catch (e) {
-        console.log('⚠️ GitHub version lookup failed: ' + e.message);
+    let waVersionSource = '';
+
+    const manual = process.env.WA_VERSION || config.waVersion;
+    if (manual) {
+        const arr = Array.isArray(manual) ? manual.map(Number) : String(manual).split(/[^0-9]+/).filter(Boolean).map(Number);
+        if (isFreshVersion(arr)) { waVersion = arr; waVersionSource = 'manual override'; }
+        else console.log('⚠️ WA_VERSION ignored. Expected something like 2,3000,1043857760');
     }
+
+    if (!waVersion) {
+        try {
+            const res = await require('axios').get(
+                'https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/index.ts',
+                { timeout: 10000, responseType: 'text', transformResponse: [d => d] }
+            );
+            const v = parseVersion(res.data);
+            if (isFreshVersion(v)) { waVersion = v; waVersionSource = 'WhiskeySockets index.ts'; }
+        } catch (e) {
+            console.log('⚠️ index.ts version lookup failed: ' + e.message);
+        }
+    }
+
+    if (!waVersion) {
+        try {
+            const res = await require('axios').get(
+                'https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/baileys-version.json',
+                { timeout: 10000 }
+            );
+            if (isFreshVersion(res.data && res.data.version)) { waVersion = res.data.version; waVersionSource = 'baileys-version.json'; }
+        } catch (e) {
+            console.log('⚠️ baileys-version.json lookup failed: ' + e.message);
+        }
+    }
+
     if (!waVersion) {
         try {
             const baileysMod = await import('@itsliaaa/baileys');
             if (typeof baileysMod.fetchLatestBaileysVersion === 'function') {
                 const { version } = await baileysMod.fetchLatestBaileysVersion();
-                if (isFreshVersion(version)) waVersion = version;
+                if (isFreshVersion(version)) { waVersion = version; waVersionSource = 'library'; }
             }
         } catch (e) {
             console.log('⚠️ Library version lookup failed: ' + e.message);
         }
     }
     console.log(waVersion
-        ? '🌐 Using WhatsApp version: ' + waVersion.join('.')
-        : '⚠️ No fresh WA version found, using the library default');
+        ? '🌐 Using WhatsApp version: ' + waVersion.join('.') + ' (' + waVersionSource + ')'
+        : '⚠️ No fresh WA version found, using the library default (set WA_VERSION to override)');
 
     const sock = makeWASocket({
         ...(waVersion ? { version: waVersion } : {}),
@@ -980,7 +1015,9 @@ async function startBot() {
 
         let sent;
         try {
-            if (isLegacyButtons(content) || isLegacyList(content)) {
+            // Only convert when the library has richMenu (vansnowi). With itsliaaa the
+            // old button/list formats are handled by the library itself.
+            if ((isLegacyButtons(content) || isLegacyList(content)) && typeof sock.richMenu === 'function') {
                 try {
                     sent = isLegacyList(content)
                         ? await sendLegacyList(jid, content, options)
