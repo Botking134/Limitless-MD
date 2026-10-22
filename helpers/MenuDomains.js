@@ -4,8 +4,9 @@
 //   menu2 / list2  -> Malevolent Shrine (Sukuna)
 //   menu3 / list3  -> category picker
 //
-// Each person may use each menu 5 times in an hour. The next try is blocked ("brain
-// damage") until one hour after their first use in that window, with a live countdown.
+// Using the same menu 5 times within an hour causes "brain damage": the 5th use is blocked
+// until one hour after the first use in that window, with a live countdown. Devs and owners
+// are not exempt.
 // Only a dev / primary owner can heal early, with: rct menu | rct menu2 | rct menu3
 // (also: reverse-ct ...), optionally on a tagged / replied-to person.
 
@@ -17,7 +18,7 @@ const { execFile } = require('child_process');
 const { normalizeToJid } = require('../stateManager');
 
 // ─── CONFIG ──────────────────────────────────────────────────────
-const MAX_USES = 5;                       // uses allowed per window, per menu
+const LIMIT = 5;                          // the 5th use of a menu within the window triggers brain damage (nobody is exempt)
 const WINDOW_MS = 60 * 60 * 1000;         // 1 hour
 const TICK_MS = 15 * 1000;                // how often the live countdown message updates
 const LIVE_MAX_MS = 14 * 60 * 1000;       // WhatsApp only lets a message be edited for ~15 minutes
@@ -27,16 +28,16 @@ const DOMAINS = {
     menu: {
         key: 'menu', name: 'Infinite Void',
         gifs: ['https://files.catbox.moe/y3uv0b.mp4', 'https://files.catbox.moe/7aru8f.mp4'],
-        audio: 'https://files.catbox.moe/ab9x6e.mp4'
+        audio: 'https://files.catbox.moe/uldbxq.mp4'
     },
     menu2: {
         key: 'menu2', name: 'Malevolent Shrine',
-        gifs: ['https://files.catbox.moe/mzodiu.mp4', 'https://files.catbox.moe/g6zrky.mp4'],
-        audio: 'https://files.catbox.moe/uldbxq.mp4'
+        gifs: ['https://files.catbox.moe/mzodiu.mp4'],
+        audio: 'https://files.catbox.moe/ab9x6e.mp4'
     },
     menu3: {
         key: 'menu3', name: 'Domain Expansion',
-        gifs: ['https://files.catbox.moe/g6zrky.mp4'],
+        gifs: ['https://files.catbox.moe/dj8g0z.gif'],
         audio: null
     }
 };
@@ -77,18 +78,47 @@ async function viaFfmpeg(buffer, inExt, outExt, args) {
     }
 }
 
-// Video buffer for a gif-style message. .mp4 is used as is; real .gif files are
-// converted to mp4 because WhatsApp only plays gifs as short mp4 videos.
+// Every gif is re-encoded small: max 480px wide, 15 fps, first 10 seconds, no sound, h264.
+// If a result is still big it is squeezed harder. A .gif is converted to mp4 at the same
+// time, because WhatsApp only plays gifs as short mp4 videos. If ffmpeg cannot handle a
+// file, the original is used as it is (a .gif that cannot convert will fail later).
+const SIZE_TARGET = 700 * 1024;
+const PROFILES = [
+    { width: 480, crf: 30 },
+    { width: 360, crf: 34 },
+    { width: 240, crf: 38 }
+];
+
+async function compressVideo(buf, ext) {
+    let best = null;
+    for (const p of PROFILES) {
+        const out = await viaFfmpeg(buf, ext, '.mp4', [
+            '-t', '10',
+            '-vf', `fps=15,scale='trunc(min(${p.width},iw)/2)*2':-2:flags=lanczos,format=yuv420p`,
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(p.crf),
+            '-movflags', '+faststart', '-an'
+        ]);
+        if (!best || out.length < best.length) best = out;
+        if (out.length <= SIZE_TARGET) break;
+    }
+    return best;
+}
+
 async function getVideo(url) {
     const hit = cache.get('v:' + url);
     if (hit) return hit;
-    let buf = await download(url);
-    if (/\.gif(\?|$)/i.test(url)) {
-        buf = await viaFfmpeg(buf, '.gif', '.mp4', [
-            '-movflags', 'faststart', '-pix_fmt', 'yuv420p',
-            '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-an'
-        ]);
+    const original = await download(url);
+    const isGif = /\.gif(\?|$)/i.test(url);
+    let buf = original;
+    try {
+        buf = await compressVideo(original, isGif ? '.gif' : '.mp4');
+        // never make an mp4 bigger
+        if (!isGif && buf.length >= original.length) buf = original;
+    } catch (e) {
+        console.error(`⚠️ [MENU] could not compress ${url.split('/').pop()}: ${e.message}`);
+        if (isGif) throw e;
     }
+    console.log(`[MENU] ${url.split('/').pop()}: ${Math.round(original.length / 1024)} KB -> ${Math.round(buf.length / 1024)} KB`);
     cache.set('v:' + url, buf);
     return buf;
 }
@@ -103,13 +133,23 @@ async function getAudio(url) {
     return mp3;
 }
 
-async function sendDomainGif(sock, jid, msg, url, caption) {
+async function sendDomainGif(sock, jid, msg, url, caption, altCaption = null) {
+    let video;
     try {
-        const video = await getVideo(url);
-        return await sock.sendMessage(jid, { video, gifPlayback: true, mimetype: 'video/mp4', caption }, { quoted: msg });
+        video = await getVideo(url);
     } catch (e) {
         console.error('❌ [MENU] gif failed, sending text only:', e.message);
         return await sock.sendMessage(jid, { text: caption }, { quoted: msg });
+    }
+    try {
+        return await sock.sendMessage(jid, { video, gifPlayback: true, mimetype: 'video/mp4', caption }, { quoted: msg });
+    } catch (e) {
+        console.error('❌ [MENU] gif send failed:', e.message);
+        if (altCaption) {
+            try { return await sock.sendMessage(jid, { video, gifPlayback: true, mimetype: 'video/mp4', caption: altCaption }, { quoted: msg }); }
+            catch (e2) { console.error('❌ [MENU] gif send failed again:', e2.message); }
+        }
+        return await sock.sendMessage(jid, { text: altCaption || caption }, { quoted: msg });
     }
 }
 
@@ -141,8 +181,8 @@ function registerUse(menuKey, user, now = Date.now()) {
     const k = slot(menuKey, user);
     let rec = global.menuUses[k];
     if (rec && now >= rec.start + WINDOW_MS) { delete global.menuUses[k]; rec = null; }
-    if (!rec) { global.menuUses[k] = { start: now, count: 1 }; return { allowed: true }; }
-    if (rec.count < MAX_USES) { rec.count++; return { allowed: true }; }
+    if (!rec) { global.menuUses[k] = { start: now, count: 1 }; return { allowed: true, count: 1 }; }
+    if (rec.count < LIMIT - 1) { rec.count++; return { allowed: true, count: rec.count }; }
     return { allowed: false, healAt: rec.start + WINDOW_MS };
 }
 
@@ -212,7 +252,9 @@ async function sendBlocked(sock, jid, msg, domain, healAt) {
 async function gate(sock, msg, menuKey) {
     const jid = msg.key.remoteJid;
     const domain = DOMAINS[menuKey];
-    const res = registerUse(menuKey, userKey(msg));
+    const user = userKey(msg);
+    const res = registerUse(menuKey, user);
+    console.log(`[MENU] ${menuKey} by ${user.split('@')[0]}: ${res.allowed ? `use ${res.count}/${LIMIT}` : 'BLOCKED (brain damage)'}`);
     if (res.allowed) return true;
     await sendBlocked(sock, jid, msg, domain, res.healAt);
     return false;
@@ -227,11 +269,11 @@ async function heal(menuKey, user) {
     if (live) {
         try { await live.sock.sendMessage(live.jid, { text: `🩹 *Brain damage healed.* You can use the ${live.domain.name} menu again.`, edit: live.key }); } catch (e) { /* ignore */ }
     }
-    return { had: !!rec, count: rec ? rec.count : 0, wasBlocked: !!rec && rec.count >= MAX_USES };
+    return { had: !!rec, count: rec ? rec.count : 0, wasBlocked: !!rec && rec.count >= LIMIT - 1 };
 }
 
 module.exports = {
-    DOMAINS, RCT_GIFS, MAX_USES, WINDOW_MS,
+    DOMAINS, RCT_GIFS, LIMIT, WINDOW_MS,
     pick, getVideo, getAudio, sendDomainGif, sendDomainAudio,
     gate, heal, userKey, registerUse, clock, lagosTime, blockedText
 };
