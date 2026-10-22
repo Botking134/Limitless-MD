@@ -5,6 +5,7 @@ const fs = require('fs');
 const axios = require('axios');
 const { saveState, normalizeToJid } = require('../stateManager');
 const commandDescriptions = require('../helpers/CommandDescriptions');
+const Domains = require('../helpers/MenuDomains');
 // NOTE: '../commands' is required lazily inside sendHelpList (below), not
 // here — commands.js requires every plugin file including this one at
 // startup, so a top-level require here would be circular and would hand
@@ -126,6 +127,7 @@ _┃ ⊱ millionaire_
 _┃ ⊱ torf_
 _┃ ⊱ pvp_
 _┃ ⊱ escape_
+_┃ ⊱ aki_
 
 _❖ ── [ GROUP MGT ] ── ❖_
 _┃ ⊱ mute_
@@ -289,40 +291,48 @@ _┃ ⊱ qty_
 _┃ ⊱ currency_
 `;
 
-async function renderMenu(sock, msg) {
+const MENU_THEMES = {
+    menu: {
+        title: '♾️ INFINITE VOID',
+        sub: 'Domain Expansion: Infinite Void',
+        quote: 'Throughout Heaven And Earth\n│ *I alone am the Honoured one*'
+    },
+    menu2: {
+        title: '🩸 MALEVOLENT SHRINE',
+        sub: 'Domain Expansion: Malevolent Shrine',
+        quote: 'Know your place, fool.\n│ *I alone am the King of Curses*'
+    }
+};
+
+async function renderMenu(sock, msg, menuKey = 'menu') {
     const jid = msg.key.remoteJid;
     const uptime = formatUptime(process.uptime());
     const prefixVal = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
     const pushName = msg.pushName || 'User';
+    const theme = MENU_THEMES[menuKey] || MENU_THEMES.menu;
+    const domain = Domains.DOMAINS[menuKey] || Domains.DOMAINS.menu;
 
     const fullMenu =
 `┌──────────────┐
 │  *${config.botName || 'Limitless-MD'}*
+│  *${theme.title}*
 └──────────────┘
+_${theme.sub}_
 _👑 Owner: ${config.ownerName || 'Unknown'}_
 _👤 User: ${pushName}_
 _⏱️ Uptime: ${uptime}_
 _🔑 Prefix: [ ${prefixVal} ]_
 ════════════════════════
-> Throughout Heaven And Earth
 ┌───────────────────┐
-│ *I alone am the Honoured one* 
+│ ${theme.quote}
 └───────────────────┘
 
 ${menuText}`;
 
-    const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
-    const imageBuffer = await fetchImageBuffer(randomImage);
-
-    if (imageBuffer) {
-        await sock.sendMessage(jid, {
-            image: imageBuffer,
-            mimetype: 'image/jpeg',
-            caption: fullMenu
-        }, { quoted: msg });
-    } else {
-        await sock.sendMessage(jid, { text: fullMenu }, { quoted: msg });
-    }
+    // The domain gif carries the whole menu as its caption. If the gif cannot be
+    // loaded, sendDomainGif falls back to plain text.
+    await Domains.sendDomainGif(sock, jid, msg, Domains.pick(domain.gifs), fullMenu);
+    await Domains.sendDomainAudio(sock, jid, domain.audio);
 }
 
 // Shared list of categories so the picker and nothing else has to repeat it
@@ -429,15 +439,24 @@ _Tap below to browse command categories._ 🔮`;
         // cards into a carousel is the unreliable part we're avoiding), but
         // one banner image on the message as a whole is well-supported.
         const { prepareWAMessageMedia } = await import('@itsliaaa/baileys');
-        const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
-        const imageBuffer = await fetchImageBuffer(randomImage);
+        // Header media is the menu 3 gif. If a video header cannot be built, fall back to
+        // a still image so the picker still goes out.
         let header = { hasMediaAttachment: false };
-        if (imageBuffer) {
-            try {
-                const media = await prepareWAMessageMedia({ image: imageBuffer }, { upload: sock.waUploadToServer });
-                header = { imageMessage: media.imageMessage, hasMediaAttachment: true };
-            } catch (imgErr) {
-                console.error('❌ [CATEGORY PICKER] Header image failed, sending without it:', imgErr.message);
+        try {
+            const video = await Domains.getVideo(Domains.DOMAINS.menu3.gifs[0]);
+            const media = await prepareWAMessageMedia({ video, gifPlayback: true, mimetype: 'video/mp4' }, { upload: sock.waUploadToServer });
+            header = { videoMessage: media.videoMessage, hasMediaAttachment: true };
+        } catch (vidErr) {
+            console.error('❌ [CATEGORY PICKER] Header gif failed, trying an image:', vidErr.message);
+            const randomImage = menuImages[Math.floor(Math.random() * menuImages.length)];
+            const imageBuffer = await fetchImageBuffer(randomImage);
+            if (imageBuffer) {
+                try {
+                    const media = await prepareWAMessageMedia({ image: imageBuffer }, { upload: sock.waUploadToServer });
+                    header = { imageMessage: media.imageMessage, hasMediaAttachment: true };
+                } catch (imgErr) {
+                    console.error('❌ [CATEGORY PICKER] Header image failed, sending without it:', imgErr.message);
+                }
             }
         }
 
@@ -488,146 +507,6 @@ _Tap below to browse command categories._ 🔮`;
         }
         await renderMenu(sock, msg);
     }
-}
-
-// The original per-category version — one image+button message per
-// category, sent in sequence. Kept available on request, even though it's
-// the version most likely to look spammy since it's 8 rapid messages in a
-// row. There's no way to fully eliminate that risk while still sending 8
-// separate messages — spacing them out (already does 500ms between each)
-// helps a little, but the real fix for the spam concern is the picker
-// below, not this one. Use sparingly / in your own chats rather than in
-// large groups if you're worried about it.
-async function renderSequentialCardMenu(sock, msg) {
-    const jid = msg.key.remoteJid;
-    const uptime = formatUptime(process.uptime());
-
-    const headerText =
-`┌─────────────┐
-│ *Limitless-MD*
-└─────────────┘
-_Owner: ${config.ownerName}_
-_User: ${msg.pushName || 'User'}_
-_Uptime: ${uptime}_
-_Version: 1.0.0_
-════════════════════════
-> Throughout Heaven And Earth_
-┌───────────────────┐
-│ *I alone am the Honoured one* 
-└───────────────────┘
-
-_Swipe through the cards below to explore command categories._ 🔮`;
-
-    let loadingMsg = null;
-
-    try {
-        const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
-
-        loadingMsg = await sock.sendMessage(jid, { text: "▱▱▱▱▱▱▱▱▱▱ Expanding Domain..." }, { quoted: msg });
-
-        const frames = [
-            { text: "▰▱▱▱▱▱▱▱▱▱ Channelling Cursed Energy...", delay: 400 },
-            { text: "▰▰▰▱▱▱▱▱▱▱ Six Eyes Activating...", delay: 400 },
-            { text: "▰▰▰▰▰▱▱▱▱▱ Infinite Void Opening...", delay: 400 },
-            { text: "▰▰▰▰▰▰▰▰▰▰ Domain Expansion: Complete! 🌌", delay: 500 }
-        ];
-
-        for (const frame of frames) {
-            await delay(frame.delay);
-            try { await sock.sendMessage(jid, { text: frame.text, edit: loadingMsg.key }); } catch (editErr) {}
-        }
-
-        try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
-        await sock.sendMessage(jid, { text: headerText }, { quoted: msg });
-
-        const shuffledImages = [...menuImages].sort(() => 0.5 - Math.random());
-
-        const rawBotJid = sock.user?.id || sock.user?.jid || jid;
-        const cleanBotUserJid = rawBotJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
-
-        for (let i = 0; i < menuCategories.length; i++) {
-            const cat = menuCategories[i];
-            const card = await createCard(
-                sock, cat.name, cat.desc, shuffledImages[i % shuffledImages.length], cat.cmd, "Explore Commands 🔮"
-            );
-
-            const messageContent = {
-                viewOnceMessage: {
-                    message: {
-                        messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-                        interactiveMessage: {
-                            header: card.header,
-                            body: card.body,
-                            footer: card.footer,
-                            nativeFlowMessage: card.nativeFlowMessage
-                        }
-                    }
-                }
-            };
-
-            try {
-                const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(messageContent), { userJid: cleanBotUserJid });
-                await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
-            } catch (cardErr) {
-                console.error(`❌ [SEQ MENU] Card failed for ${cat.name}:`, cardErr.message);
-                const buffer = await fetchImageBuffer(shuffledImages[i % shuffledImages.length]);
-                if (buffer) {
-                    await sock.sendMessage(jid, { image: buffer, caption: `*${cat.name}*\n${cat.desc}` });
-                } else {
-                    await sock.sendMessage(jid, { text: `*${cat.name}*\n${cat.desc}` });
-                }
-            }
-
-            await delay(500);
-        }
-
-    } catch (error) {
-        console.error("❌ [SEQUENTIAL CARD MENU ERROR]:", error.message);
-        if (loadingMsg) {
-            try { await sock.sendMessage(jid, { delete: loadingMsg.key }); } catch (e) {}
-        }
-        await renderMenu(sock, msg);
-    }
-}
-
-// ─── MENU 3: vansnowi richMenu (title + banner + grouped button cards) ───
-// A richMenu button sends its own label as a chat message when tapped, so each
-// label is a full command (prefix included), e.g. "!menu_ai".
-// Several layouts are tried from richest to simplest; the old card menu is the
-// last resort. Every failure is logged with the reason.
-async function renderRichMenu3(sock, msg) {
-    const jid = msg.key.remoteJid;
-
-    if (typeof sock.richMenu !== 'function') {
-        console.error('❌ [RICH MENU] sock.richMenu is not a function. Installed Baileys fork has no richMenu. Using old card menu.');
-        return await renderSequentialCardMenu(sock, msg);
-    }
-
-    const pfx = Array.isArray(config.prefix) ? (config.prefix[0] || '!') : (config.prefix || '!');
-    const banner = menuImages[Math.floor(Math.random() * menuImages.length)];
-    const labels = menuCategories.map(c => pfx + c.cmd);
-
-    const cards = [];
-    for (let i = 0; i < labels.length; i += 3) {
-        cards.push({ title: 'Menu' + (cards.length + 1), buttons: labels.slice(i, i + 3), toast: 'Opening...' });
-    }
-
-    const attempts = [
-        { name: 'banner + carousel', payload: { header: { title: 'Limitless-MD Menu', image: { url: banner, inline: false } }, body: { carousel: true, cards } } },
-        { name: 'title + carousel',  payload: { header: { title: 'Limitless-MD Menu' }, body: { carousel: true, cards } } },
-        { name: 'carousel only',     payload: { body: { carousel: true, cards } } }
-    ];
-
-    for (const attempt of attempts) {
-        try {
-            await sock.richMenu(jid, attempt.payload);
-            console.log('✅ [RICH MENU] sent with layout: ' + attempt.name);
-            return;
-        } catch (err) {
-            console.error('❌ [RICH MENU] layout "' + attempt.name + '" failed: ' + (err && err.message ? err.message : err));
-        }
-    }
-    await renderSequentialCardMenu(sock, msg);
 }
 
 async function renderCarouselMenu(sock, msg) {
@@ -780,46 +659,48 @@ module.exports = [
         name: 'menu',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderMenu(sock, msg);
-            const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
-            await sock.sendMessage(msg.key.remoteJid, { audio: { url: randomAudio }, mimetype: "audio/mpeg", ptt: false });
+            if (!(await Domains.gate(sock, msg, 'menu'))) return;
+            await renderMenu(sock, msg, 'menu');
         }
     },
     {
         name: 'list',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderMenu(sock, msg);
-            const randomAudio = menuAudios[Math.floor(Math.random() * menuAudios.length)];
-            await sock.sendMessage(msg.key.remoteJid, { audio: { url: randomAudio }, mimetype: "audio/mpeg", ptt: false });
+            if (!(await Domains.gate(sock, msg, 'menu'))) return;
+            await renderMenu(sock, msg, 'menu');
         }
     },
     {
         name: 'menu2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderCategoryPicker(sock, msg);
+            if (!(await Domains.gate(sock, msg, 'menu2'))) return;
+            await renderMenu(sock, msg, 'menu2');
         }
     },
     {
         name: 'list2',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderCategoryPicker(sock, msg);
+            if (!(await Domains.gate(sock, msg, 'menu2'))) return;
+            await renderMenu(sock, msg, 'menu2');
         }
     },
     {
         name: 'menu3',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderRichMenu3(sock, msg);
+            if (!(await Domains.gate(sock, msg, 'menu3'))) return;
+            await renderCategoryPicker(sock, msg);
         }
     },
     {
         name: 'list3',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
-            await renderRichMenu3(sock, msg);
+            if (!(await Domains.gate(sock, msg, 'menu3'))) return;
+            await renderCategoryPicker(sock, msg);
         }
     },
     {
@@ -829,6 +710,43 @@ module.exports = [
             await renderCategoryPicker(sock, msg);
         }
     },
+
+    // ─── RCT: Reverse Cursed Technique (dev / primary owner only, hidden) ───
+    ...['rct', 'reverse-ct'].map(cmdName => ({
+        name: cmdName,
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isDev, isPrimaryOwner } = {}) => {
+            if (!(isDev || isPrimaryOwner)) return; // silent for everyone else
+            const jid = msg.key.remoteJid;
+            const first = (args || '').toString().trim().split(/\s+/)[0].toLowerCase();
+            const menuKey = { menu: 'menu', list: 'menu', menu1: 'menu', menu2: 'menu2', list2: 'menu2', menu3: 'menu3', list3: 'menu3' }[first];
+            if (!menuKey) {
+                return sock.sendMessage(jid, { text: `🩹 Use: *${cmdName} menu* | *${cmdName} menu2* | *${cmdName} menu3*\n_Reply to or tag someone to heal them; otherwise it heals you._` }, { quoted: msg });
+            }
+
+            // Target: tagged person, else the person replied to, else the sender
+            const raw = getRawMessage(msg.message);
+            const ctx = raw?.extendedTextMessage?.contextInfo || raw?.contextInfo || {};
+            const targetRaw = (ctx.mentionedJid && ctx.mentionedJid[0]) || ctx.participant || msg.key.participant || msg.key.remoteJid;
+            const targetNorm = normalizeToJid(targetRaw);
+            const target = global.lidCache?.[targetNorm] || targetNorm;
+            const mention = target.endsWith('@s.whatsapp.net') ? target : targetRaw;
+
+            const result = await Domains.heal(menuKey, target);
+            const domain = Domains.DOMAINS[menuKey];
+            const caption =
+                `🩹 *REVERSE CURSED TECHNIQUE* 🩹\n\n` +
+                `@${String(mention).split('@')[0].split(':')[0]}'s mind has been mended.\n` +
+                `${result.wasBlocked ? `🧠 Brain damage from *${domain.name}* is healed.` : `✨ *${domain.name}* strain cleared (${result.count}/${Domains.MAX_USES}).`}`;
+            try {
+                const video = await Domains.getVideo(Domains.pick(Domains.RCT_GIFS));
+                await sock.sendMessage(jid, { video, gifPlayback: true, mimetype: 'video/mp4', caption, mentions: [mention] }, { quoted: msg });
+            } catch (e) {
+                console.error('❌ [RCT] gif failed, sending text only:', e.message);
+                await sock.sendMessage(jid, { text: caption, mentions: [mention] }, { quoted: msg });
+            }
+        }
+    })),
 
     // ─── SEARCH COMMAND (Gemini 3.5 Flash Command Search Engine) ───
     {
@@ -923,7 +841,7 @@ Here's your prefix though`;
         name: 'menu_games',
         isPrefixless: true,
         execute: async (sock, msg) => {
-            const text = `┌────────┐\n│ 🎮 GAMES  \n└────────┘\n\n_┃ ⊱ .games_\n_┃ ⊱ .ttt_\n_┃ ⊱ .rps_\n_┃ ⊱ .guess_\n_┃ ⊱ .vault8_\n_┃ ⊱ .quiz_\n_┃ ⊱ .charade_\n_┃ ⊱ .aki_\n_┃ ⊱ .anagram_\n_┃ ⊱ .wcg_\n_┃ ⊱ .millionaire_\n_┃ ⊱ .torf_\n_┃ ⊱ .pvp_\n_┃ ⊱ .escape_`;
+            const text = `┌────────┐\n│ 🎮 GAMES  \n└────────┘\n\n_┃ ⊱ .games_\n_┃ ⊱ .ttt_\n_┃ ⊱ .rps_\n_┃ ⊱ .guess_\n_┃ ⊱ .vault8_\n_┃ ⊱ .quiz_\n_┃ ⊱ .charade_\n_┃ ⊱ .anagram_\n_┃ ⊱ .wcg_\n_┃ ⊱ .millionaire_\n_┃ ⊱ .torf_\n_┃ ⊱ .pvp_\n_┃ ⊱ .escape_\n_┃ ⊱ .aki_`;
             await sendWithBackButton(sock, msg, text);
         }
     },
