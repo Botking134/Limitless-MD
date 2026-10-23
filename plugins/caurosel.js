@@ -224,7 +224,7 @@ module.exports = [
 • *${settings.prefix}warn* — Issues admin warnings (auto-kicks at 5 marks).
 • *${settings.prefix}togcstatus* — Post media directly to current group status.
 • *${settings.prefix}togcjid <group_jid>* — Post media to a specific group's status.
-• *${settings.prefix}antigm <on/off>* — Discards group status mentions.
+• *${settings.prefix}antigm <delete/warn/kick/off>* — Blocks group mentions, status mentions and group status posts.
 • *${settings.prefix}gclog <on/off/check>* — Conversation logger & AI summarizer.
 • *${settings.prefix}creategc <name>* — Automatically instantiates a new group.
 • *${settings.prefix}kickall* — Exorcises all non-admin targets (Owner Only).
@@ -234,7 +234,6 @@ module.exports = [
 • *${settings.prefix}antispam <on/off/trig>* — Rate-limiting spam shield.
 • *${settings.prefix}silence <-s/-m/all>* — Auto-delete chat constraints.
 • *${settings.prefix}gcalerts <promote/demote/welcome/goodbye> <on/off>* — Real-time event notifications.
-• *${settings.prefix}antigcstatus <warn/delete/kick/off>* — Blocks unapproved status posts.
 • *${settings.prefix}spamtag <count> <text>* — Repeatedly tags group members with mentions.`;
             await sock.sendMessage(jid, { text: subText }, { quoted: msg });
         }
