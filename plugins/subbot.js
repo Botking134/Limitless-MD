@@ -31,9 +31,12 @@ module.exports = [
 
             try {
                 const codePromise = new Promise((resolve, reject) => {
-                    SubBotManager.createSubBot(phoneNumber, requesterJid, (code, qrBuffer) => {
-                        resolve({ code, qrBuffer });
-                    }).catch(reject);
+                    SubBotManager.createSubBot(
+                        phoneNumber,
+                        requesterJid,
+                        (code, qrBuffer) => resolve({ code, qrBuffer }),
+                        reject
+                    ).catch(reject);
                 });
 
                 const { code, qrBuffer } = await withTimeout(
@@ -42,7 +45,7 @@ module.exports = [
                     'Timed out waiting for WhatsApp to issue a pairing code. Try again in a minute.'
                 );
 
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                try { if (statusMsg?.key) await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
 
                 const instructions =
                     `🔗 *BOT PAIRING — ${phoneNumber}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -52,18 +55,29 @@ module.exports = [
                     `4️⃣ Enter the *8-character code* sent in the next message.\n\n` +
                     `⏱️ *The code expires in about 60 seconds* — have WhatsApp open and ready before you request it.`;
 
-                // Instructions go out first, as a caption on the QR image...
+                // Instructions go out first (with the QR image if one was provided)...
                 if (qrBuffer) {
                     await sock.sendMessage(jid, { image: qrBuffer, caption: instructions });
                 } else {
                     await sock.sendMessage(jid, { text: instructions });
                 }
 
-                // ...then the pairing code follows as its own separate message.
-                await sock.sendMessage(jid, { text: `🔑 *Pairing Code:* \`${code}\`` });
+                // ...then the pairing code follows as its own message, with a tap-to-copy button.
+                const sent = await sock.sendMessage(jid, {
+                    text: `🔑 *Pairing Code:* \`${code}\`\n\nTap the button below to copy it.`,
+                    footer: 'Expires in ~60 seconds',
+                    interactiveButtons: [{
+                        name: 'cta_copy',
+                        buttonParamsJson: JSON.stringify({ display_text: '📋 Copy Code', copy_code: code })
+                    }]
+                });
+                // The sendMessage wrapper returns null on failure instead of throwing,
+                // so fall back to plain text if the button message didn't go through.
+                if (!sent) await sock.sendMessage(jid, { text: `🔑 *Pairing Code:* \`${code}\`` });
 
             } catch (err) {
-                try { await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+                if (err.message.startsWith('Timed out')) await SubBotManager.removeSubBot(phoneNumber).catch(() => {});
+                try { if (statusMsg?.key) await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
                 await sock.sendMessage(jid, { text: `❌ Couldn't create a session: ${err.message}` }, { quoted: msg });
             }
         }
