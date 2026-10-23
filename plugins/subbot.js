@@ -76,10 +76,20 @@ module.exports = [
         execute: async (sock, msg, args, { isOwner, isSudo, isDev }) => {
             const jid = msg.key.remoteJid;
             const requesterJid = msg.key.participant || msg.key.remoteJid;
-            const phoneNumber = (args || '').replace(/[^0-9]/g, '');
+            let phoneNumber = (args || '').replace(/[^0-9]/g, '');
 
             if (!phoneNumber) {
-                return await sock.sendMessage(jid, { text: `❌ *Usage:* \`${config.prefix}delbot <number>\`` }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: `❌ *Usage:* \`${config.prefix}delbot <number>\`\n_Use the number from \`${config.prefix}listbots\` (e.g. \`${config.prefix}delbot 1\`) or the bot's phone number._` }, { quoted: msg });
+            }
+
+            // A short number (up to 3 digits) is a position in .listbots, not a phone number.
+            if (phoneNumber.length <= 3) {
+                const position = parseInt(phoneNumber, 10);
+                const all = SubBotManager.listActive();
+                if (position < 1 || position > all.length) {
+                    return await sock.sendMessage(jid, { text: `❌ There is no bot #${position}. Use \`${config.prefix}listbots\` to see the list.` }, { quoted: msg });
+                }
+                phoneNumber = all[position - 1].number;
             }
 
             const active = SubBotManager.listActive().find(b => b.number === phoneNumber);
@@ -113,6 +123,7 @@ module.exports = [
             active.forEach((b, i) => {
                 layout += `${i + 1}. \`${b.number}\` — ${b.status}\n`;
             });
+            layout += `\n👉 Remove one with \`${config.prefix}delbot <number>\` (e.g. \`${config.prefix}delbot 1\`)`;
 
             await sock.sendMessage(jid, { text: layout }, { quoted: msg });
         }
