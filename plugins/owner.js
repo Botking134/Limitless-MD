@@ -174,6 +174,18 @@ function parseTarget(msg, args) {
     return target;
 }
 
+// A plain small number ("2") means "item 2 of the list". It only counts when the message
+// has no reply and no @mention, and it is at most 3 digits, so phone numbers (7+ digits)
+// still work exactly as before.
+function indexArg(msg, args) {
+    const t = (args || '').trim();
+    if (!/^\d{1,3}$/.test(t)) return null;
+    const rawMsg = getRawMessage(msg.message);
+    const ci = rawMsg?.contextInfo || rawMsg?.extendedTextMessage?.contextInfo;
+    if (ci?.participant || (ci?.mentionedJid && ci.mentionedJid.length)) return null;
+    return parseInt(t, 10);
+}
+
 // ─── SIMPLE EXEC WITH TIMEOUT (for .update) ─────────────────────
 function execWithTimeout(cmd, timeoutMs, callback) {
     const child = exec(cmd, (err, stdout, stderr) => {
@@ -311,7 +323,7 @@ module.exports = [
                     const senderNum = rem.sender.split('@')[0];
                     response += `${idx + 1}. @${senderNum} • *In ${remainingStr}*:\n   \`"${rem.text}"\`\n   _ID:_ \`${rem.id}\`\n\n`;
                 });
-                response += `👉 To cancel: \`${config.prefix}reminder cancel <id>\``;
+                response += `👉 To cancel: \`${config.prefix}reminder cancel <number>\` (e.g. \`${config.prefix}reminder cancel 1\`)`;
 
                 const mentions = list.map(r => r.sender);
                 return await sock.sendMessage(jid, { text: response, mentions }, { quoted: msg });
@@ -322,27 +334,29 @@ module.exports = [
                 const targetId = parts[1];
 
                 if (!targetId) {
-                    return await sock.sendMessage(jid, { text: `❌ Provide the ID to cancel.\nUsage: \`${config.prefix}reminder cancel <id>\`` }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: `❌ Give the reminder's number from the list.\nUsage: \`${config.prefix}reminder cancel <number>\`` }, { quoted: msg });
                 }
 
                 const data = readReminders();
                 const list = data[jid] || [];
-                const matched = list.find(r => r.id === targetId);
+                // "1" = first reminder in this chat's list. The long ID still works too.
+                const matched = /^\d{1,3}$/.test(targetId) ? list[parseInt(targetId, 10) - 1] : list.find(r => r.id === targetId);
 
                 if (!matched) {
-                    return await sock.sendMessage(jid, { text: "❌ No active reminder found with that ID." }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: `❌ No reminder ${/^\d{1,3}$/.test(targetId) ? `#${targetId}` : 'with that ID'} in this chat. Use \`${config.prefix}reminder\` to see the list.` }, { quoted: msg });
+                }
+                const cancelId = matched.id;
+
+                if (global.activeReminderTimers[cancelId]) {
+                    clearTimeout(global.activeReminderTimers[cancelId]);
+                    delete global.activeReminderTimers[cancelId];
                 }
 
-                if (global.activeReminderTimers[targetId]) {
-                    clearTimeout(global.activeReminderTimers[targetId]);
-                    delete global.activeReminderTimers[targetId];
-                }
-
-                data[jid] = list.filter(r => r.id !== targetId);
+                data[jid] = list.filter(r => r.id !== cancelId);
                 if (data[jid].length === 0) delete data[jid];
                 saveReminders(data);
 
-                await sock.sendMessage(jid, { text: `✅ Reminder \`${targetId}\` has been cancelled.` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `✅ Reminder #${list.indexOf(matched) + 1} (\"${matched.text}\") has been cancelled.` }, { quoted: msg });
             }
         }
     },
@@ -591,6 +605,42 @@ module.exports = [
         }
     },
 
+    // ─── OWNERS / SUDOS (numbered lists, for delowner / delsudo) ───
+    {
+        name: 'owners',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+            const list = config.secondaryOwners || [];
+            let text = `👑 *BOT OWNERS* 👑\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            const mentions = [];
+            if (config.ownerJid) { text += `⭐ *Primary:* ${labelFor(config.ownerJid)}\n\n`; mentions.push(config.ownerJid); }
+            if (!list.length) {
+                text += `_No secondary owners._`;
+            } else {
+                text += `*Secondary owners:*\n`;
+                list.forEach((j, i) => { text += `${i + 1}. ${labelFor(j)}\n`; mentions.push(j); });
+                text += `\n👉 Remove one with \`${config.prefix}delowner <number>\``;
+            }
+            await sock.sendMessage(jid, { text, mentions }, { quoted: msg });
+        }
+    },
+    {
+        name: 'sudos',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { isOwner, isDev }) => {
+            const jid = msg.key.remoteJid;
+            if (!isOwner && !isDev) return;
+            const list = config.sudos || [];
+            if (!list.length) return await sock.sendMessage(jid, { text: '📋 *No sudo users.*' }, { quoted: msg });
+            let text = `🛡️ *SUDO USERS* 🛡️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+            list.forEach((j, i) => { text += `${i + 1}. ${labelFor(j)}\n`; });
+            text += `\n👉 Remove one with \`${config.prefix}delsudo <number>\``;
+            await sock.sendMessage(jid, { text, mentions: [...list] }, { quoted: msg });
+        }
+    },
+
     // ─── DELSUDO ─────────────────────────────────────────────────
     {
         name: 'delsudo',
@@ -599,9 +649,19 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isOwner) return;
 
-            const targetJid = parseTarget(msg, args);
+            let targetJid;
+            const idx = indexArg(msg, args);
+            if (idx !== null) {
+                const list = config.sudos || [];
+                if (idx < 1 || idx > list.length) {
+                    return await sock.sendMessage(jid, { text: `❌ There is no sudo #${idx}. Use \`${config.prefix}sudos\` to see the list.` }, { quoted: msg });
+                }
+                targetJid = list[idx - 1];
+            } else {
+                targetJid = parseTarget(msg, args);
+            }
             if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: `❌ Reply to a message, mention the user, type their number, or give their number from \`${config.prefix}sudos\` (e.g. \`${config.prefix}delsudo 2\`).` }, { quoted: msg });
             }
 
             const removed = removeSudo(targetJid);
@@ -665,9 +725,19 @@ module.exports = [
             const jid = msg.key.remoteJid;
             if (!isDev && !isPrimaryOwner) return;
 
-            const targetJid = parseTarget(msg, args);
+            let targetJid;
+            const idx = indexArg(msg, args);
+            if (idx !== null) {
+                const list = config.secondaryOwners || [];
+                if (idx < 1 || idx > list.length) {
+                    return await sock.sendMessage(jid, { text: `❌ There is no owner #${idx}. Use \`${config.prefix}owners\` to see the list.` }, { quoted: msg });
+                }
+                targetJid = list[idx - 1];
+            } else {
+                targetJid = parseTarget(msg, args);
+            }
             if (!targetJid) {
-                return await sock.sendMessage(jid, { text: "❌ Please reply to a message, mention the user, or type their number." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: `❌ Reply to a message, mention the user, type their number, or give their number from \`${config.prefix}owners\` (e.g. \`${config.prefix}delowner 1\`).` }, { quoted: msg });
             }
 
             if (targetJid === config.ownerJid || targetJid === config.ownerLid) {
