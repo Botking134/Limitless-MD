@@ -5,6 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { uploadToImgBB, BROWSER_UA } = require('../helpers/ImgHost');
 const FormData = require('form-data');
 
 // ─── NOTES PATH ──────────────────────────────────────────────────
@@ -93,30 +94,30 @@ async function uploadToCloud(buffer, mimeType) {
     ext = ext.split(';')[0].trim();
     const filename = `file_${Date.now()}.${ext}`;
 
-    try {
-        const form = new FormData();
-        form.append('files[]', buffer, { filename, contentType: mimeType });
-        const response = await axios.post('https://qu.ax/upload.php', form, {
-            headers: { ...form.getHeaders() }
-        });
-        if (response.data?.success && response.data.files?.[0]?.url) {
-            return response.data.files[0].url.trim();
-        }
-    } catch (err) { /* ignore */ }
+    // 1) ImgBB for images (needs IMGBB_API_KEY). qu.ax is no longer used:
+    //    it blocks the bot's server.
+    const imgbbUrl = await uploadToImgBB(buffer, mimeType);
+    if (imgbbUrl) return imgbbUrl;
 
+    // 2) Catbox for everything else (and as the image fallback)
     try {
         const form = new FormData();
         form.append('reqtype', 'fileupload');
         form.append('fileToUpload', buffer, { filename, contentType: mimeType });
         const response = await axios.post('https://catbox.moe/user/api.php', form, {
-            headers: { ...form.getHeaders() }
+            headers: { ...form.getHeaders(), 'User-Agent': BROWSER_UA },
+            timeout: 45000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
         });
         if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
             return response.data.trim();
         }
-    } catch (err) { /* ignore */ }
+    } catch (err) {
+        console.error("❌ [UPLOAD] catbox failed:", err.message);
+    }
 
-    throw new Error("Cloud upload gateways failed.");
+    throw new Error("Cloud upload hosts failed.");
 }
 
 async function getQuickWeather() {
