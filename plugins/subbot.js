@@ -5,6 +5,9 @@ const SubBotManager = require('../helpers/SubBotManager');
 let DEV_LIDS = [], DEV_JIDS = [], DEV_PHONE_JIDS = [];
 try { ({ DEV_LIDS = [], DEV_JIDS = [], DEV_PHONE_JIDS = [] } = require('./devs')); } catch (e) {}
 
+let baileysPromise = null;
+const getBaileys = () => baileysPromise || (baileysPromise = import('@itsliaaa/baileys'));
+
 function withTimeout(promise, ms, message) {
     return Promise.race([
         promise,
@@ -76,32 +79,55 @@ async function startPairing(sock, jid, phoneNumber, requesterJid, quoted) {
         await dropStatus();
 
         const text = buildPairingText(phoneNumber, code);
+        const b = await getBaileys();
 
-        const sent = await safeSend(sock, jid, {
-            text,
-            footer: 'Tap a button below',
-            interactiveButtons: [
-                {
-                    name: 'cta_copy',
-                    buttonParamsJson: JSON.stringify({ display_text: '📋 Copy Pair Code', id: `sb_copy:${phoneNumber}`, copy_code: code })
-                },
-                {
-                    name: 'quick_reply',
-                    buttonParamsJson: JSON.stringify({ display_text: '🗑️ Delete Session', id: `sb_del:${phoneNumber}` })
-                },
-                {
-                    name: 'quick_reply',
-                    buttonParamsJson: JSON.stringify({ display_text: '🔄 New Code', id: `sb_new:${phoneNumber}` })
+        // ── MATCH SHARINGAN.JS PROTOBUF STRUCTURE ──
+        const content = {
+            viewOnceMessage: {
+                message: {
+                    interactiveMessage: {
+                        header: { hasMediaAttachment: false },
+                        body: { text: text },
+                        footer: { text: 'Tap a button below' },
+                        nativeFlowMessage: {
+                            buttons: [
+                                {
+                                    name: 'cta_copy',
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: '📋 Copy Pair Code',
+                                        id: `sb_copy:${phoneNumber}`,
+                                        copy_code: code
+                                    })
+                                },
+                                {
+                                    name: 'quick_reply',
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: '🗑️ Delete Session',
+                                        id: `sb_del:${phoneNumber}`
+                                    })
+                                },
+                                {
+                                    name: 'quick_reply',
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: '🔄 New Code',
+                                        id: `sb_new:${phoneNumber}`
+                                    })
+                                }
+                            ]
+                        }
+                    }
                 }
-            ]
-        });
+            }
+        };
 
-        // Buttons didn't go through → still ONE message, plain text with commands instead.
-        if (!sent) {
-            await safeSend(sock, jid, {
-                text: `${text}\n\n_Buttons unavailable — use_ \`${config.prefix}delbot ${phoneNumber}\` _to delete or_ \`${config.prefix}addbot ${phoneNumber}\` _for a new code._`
-            });
-        }
+        const generated = b.generateWAMessageFromContent(
+            jid,
+            b.proto.Message.fromObject(content),
+            { userJid: sock.user.id }
+        );
+
+        await sock.relayMessage(jid, generated.message, { messageId: generated.key.id });
+
     } catch (err) {
         if (err.message.startsWith('Timed out')) await SubBotManager.removeSubBot(phoneNumber).catch(() => {});
         await dropStatus();
@@ -110,8 +136,6 @@ async function startPairing(sock, jid, phoneNumber, requesterJid, quoted) {
 }
 
 // ─── BUTTON TAP HANDLER ────────────────────────────────────────
-// Quick-reply taps come back as a message, not a command, so each socket that
-// sends pairing messages gets one listener (registered once per socket).
 const armedSockets = new WeakSet();
 const handledTaps = new Set();
 
