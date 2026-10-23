@@ -12,10 +12,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const QRCode = require('qrcode');
 const config = require('../config');
 const { normalizeToJid } = require('../stateManager');
 const BotContext = require('./BotContext');
+const { getWaVersion } = require('./waVersion');
 
 const SUBBOTS_DIR = path.join(__dirname, '../storage/sub_sessions');
 const REGISTRY_PATH = path.join(__dirname, '../storage/subbots.json');
@@ -62,9 +62,11 @@ function listActive() {
  * Spins up a new sub-bot socket for phoneNumber and requests a pairing code.
  * onCode(code, qrPngBuffer) fires once the code is ready — the caller
  * (the .addbot command) uses this to message the requester.
- * Resolves once the pairing code has been delivered (not once WA connects).
+ * onFail(error) fires if pairing fails before a code is delivered or before
+ * the code is accepted.
+ * Resolves once the socket is created (not once WA connects).
  */
-async function createSubBot(phoneNumber, requesterJid, onCode) {
+async function createSubBot(phoneNumber, requesterJid, onCode, onFail) {
     if (global.subBotSockets.has(phoneNumber)) {
         throw new Error(`A sub-bot for ${phoneNumber} is already ${isActive(phoneNumber) ? 'connected' : 'pairing'}. Use ${config.prefix}delbot ${phoneNumber} first if you want to re-pair.`);
     }
@@ -80,7 +82,12 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
     if (!fs.existsSync(authFolder)) fs.mkdirSync(authFolder, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
+    // A stale WhatsApp version makes WhatsApp reject the connection (405), so no
+    // pairing code is ever issued. Use the same fresh version as the main bot.
+    const version = await getWaVersion();
+
     const sock = makeWASocket({
+        ...(version ? { version } : {}),
         auth: state,
         printQRInTerminal: false,
         logger: require('pino')({ level: 'silent' }),
@@ -101,24 +108,40 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
 
     let codeRequested = false;
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+    const fail = (msg) => {
+        if (entry.status === 'failed') return;
+        entry.status = 'failed';
+        console.error(`❌ [SUBBOT ${phoneNumber}] ${msg}`);
+        try { sock.ev.removeAllListeners(); if (sock.ws) sock.ws.close(); } catch (e) {}
+        global.subBotSockets.delete(phoneNumber);
+        BotContext.forgetBot(phoneNumber);
+        if (!state.creds.registered) {
+            try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch (e) {}
+        }
+        if (onFail) onFail(new Error(msg));
+    };
 
-        if (!state.creds.registered && !codeRequested) {
+    // Give up if the code is never entered within 3 minutes
+    setTimeout(() => {
+        if (!state.creds.registered && entry.status !== 'connected' && entry.status !== 'failed') {
+            fail('Pairing expired — the code was never entered.');
+        }
+    }, 180000);
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        // The `qr` event means the socket is ready to pair. Request the code then.
+        if (qr && !state.creds.registered && !codeRequested) {
             codeRequested = true;
             setTimeout(async () => {
                 try {
                     const code = await sock.requestPairingCode(phoneNumber, 'INFINITY');
-                    let qrBuffer = null;
-                    try {
-                        qrBuffer = await QRCode.toBuffer(code, { margin: 2, scale: 8 });
-                    } catch (e) { /* QR is a visual nicety — code still works without it */ }
-                    onCode(code, qrBuffer);
+                    onCode(code, null);
                 } catch (e) {
-                    console.error(`❌ [SUBBOT ${phoneNumber}] Pairing code request failed:`, e.message);
-                    entry.status = 'failed';
+                    fail(`Pairing code request failed: ${e.message}`);
                 }
-            }, 3000);
+            }, 1000);
         }
 
         if (connection === 'open') {
@@ -134,6 +157,7 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
         if (connection === 'close') {
             const { Boom } = require('@hapi/boom');
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            console.error(`❌ [SUBBOT ${phoneNumber}] Disconnected. Reason code:`, reason);
 
             if (reason === DisconnectReason.loggedOut) {
                 console.log(`🧹 [SUBBOT] ${phoneNumber} logged out — removing session.`);
@@ -146,7 +170,13 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
                 return;
             }
 
-            // Otherwise reconnect this sub-bot the same way the main bot does.
+            // Closed before pairing finished. 515 (restartRequired) is normal right after
+            // the code is accepted, so only treat other codes as failures.
+            if (!state.creds.registered && reason !== DisconnectReason.restartRequired) {
+                return fail(`WhatsApp closed the connection (code ${reason}) before pairing.`);
+            }
+
+            try { sock.ev.removeAllListeners(); } catch (e) {}
             entry.status = 'reconnecting';
             setTimeout(() => {
                 global.subBotSockets.delete(phoneNumber);
@@ -175,12 +205,11 @@ async function createSubBot(phoneNumber, requesterJid, onCode) {
         }
     });
 
-    // Sub-bots used to register only the three listeners above, so group
-    // alerts (join/leave/promote/demote), antijoin, welcome/goodbye cards,
-    // antipromote/antidemote and deletion handling silently never ran for
-    // them. Lazy-required like Infinity above to avoid a circular import
-    // (pair.js -> plugins -> this file). Each dispatcher scopes settings to
-    // this bot and makes sure only one bot acts per group event.
+    // Group alerts (join/leave/promote/demote), antijoin, welcome/goodbye cards,
+    // antipromote/antidemote and deletion handling for sub-bots. Lazy-required
+    // like Infinity above to avoid a circular import (pair.js -> plugins -> this
+    // file). Each dispatcher scopes settings to this bot and makes sure only one
+    // bot acts per group event.
     sock.ev.on('group-participants.update', async (anu) => {
         try {
             const { dispatchGroupParticipantsUpdate } = require('../pair');
