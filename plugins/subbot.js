@@ -2,6 +2,9 @@
 const config = require('../config');
 const SubBotManager = require('../helpers/SubBotManager');
 
+let DEV_LIDS = [], DEV_JIDS = [], DEV_PHONE_JIDS = [];
+try { ({ DEV_LIDS = [], DEV_JIDS = [], DEV_PHONE_JIDS = [] } = require('./devs')); } catch (e) {}
+
 function withTimeout(promise, ms, message) {
     return Promise.race([
         promise,
@@ -9,6 +12,179 @@ function withTimeout(promise, ms, message) {
     ]);
 }
 
+// ─── HELPERS ───────────────────────────────────────────────────
+const digitsOf = (s) => String(s || '').split('@')[0].split(':')[0];
+
+function isPrivileged(sender) {
+    const list = [
+        config.ownerJid, config.ownerLid,
+        ...(config.ownerLids || []), ...(config.secondaryOwners || []), ...(config.sudos || []),
+        ...DEV_LIDS, ...DEV_JIDS, ...DEV_PHONE_JIDS
+    ].filter(Boolean).map(digitsOf);
+    return list.includes(digitsOf(sender));
+}
+
+async function safeSend(sock, jid, content, options) {
+    try { return await sock.sendMessage(jid, content, options); } catch (e) { return null; }
+}
+
+// ─── THE ONE PAIRING MESSAGE ───────────────────────────────────
+function buildPairingText(phoneNumber, code) {
+    const pretty = code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+    return (
+        `╭━━━━━━━━━━━━━━━━━━━━╮\n` +
+        `      🔗 *BOT PAIRING*\n` +
+        `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+        `📱 *Number :* ${phoneNumber}\n` +
+        `🔑 *Code :* \`${pretty}\`\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `1️⃣ Open *WhatsApp* on that phone\n` +
+        `2️⃣ *Settings → Linked Devices → Link a Device*\n` +
+        `3️⃣ Tap *"Link with phone number instead"*\n` +
+        `4️⃣ Enter the code above\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `⏱️ _Code expires in about 60 seconds_`
+    );
+}
+
+/** Creates the session and sends ONE message: details + code + 3 buttons. */
+async function startPairing(sock, jid, phoneNumber, requesterJid, quoted) {
+    const statusMsg = await safeSend(sock, jid, {
+        text: `⏳ Spinning up a session for \`${phoneNumber}\`... this can take up to 20 seconds.`
+    }, quoted ? { quoted } : undefined);
+
+    const dropStatus = async () => {
+        try { if (statusMsg?.key) await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
+    };
+
+    try {
+        const codePromise = new Promise((resolve, reject) => {
+            SubBotManager.createSubBot(
+                phoneNumber,
+                requesterJid,
+                (code) => resolve(code),
+                reject
+            ).catch(reject);
+        });
+
+        const code = await withTimeout(
+            codePromise,
+            25000,
+            'Timed out waiting for WhatsApp to issue a pairing code. Try again in a minute.'
+        );
+
+        await dropStatus();
+
+        const text = buildPairingText(phoneNumber, code);
+
+        const sent = await safeSend(sock, jid, {
+            text,
+            footer: 'Tap a button below',
+            interactiveButtons: [
+                {
+                    name: 'cta_copy',
+                    buttonParamsJson: JSON.stringify({ display_text: '📋 Copy Pair Code', id: `sb_copy:${phoneNumber}`, copy_code: code })
+                },
+                {
+                    name: 'quick_reply',
+                    buttonParamsJson: JSON.stringify({ display_text: '🗑️ Delete Session', id: `sb_del:${phoneNumber}` })
+                },
+                {
+                    name: 'quick_reply',
+                    buttonParamsJson: JSON.stringify({ display_text: '🔄 New Code', id: `sb_new:${phoneNumber}` })
+                }
+            ]
+        });
+
+        // Buttons didn't go through → still ONE message, plain text with commands instead.
+        if (!sent) {
+            await safeSend(sock, jid, {
+                text: `${text}\n\n_Buttons unavailable — use_ \`${config.prefix}delbot ${phoneNumber}\` _to delete or_ \`${config.prefix}addbot ${phoneNumber}\` _for a new code._`
+            });
+        }
+    } catch (err) {
+        if (err.message.startsWith('Timed out')) await SubBotManager.removeSubBot(phoneNumber).catch(() => {});
+        await dropStatus();
+        await safeSend(sock, jid, { text: `❌ Couldn't create a session: ${err.message}` }, quoted ? { quoted } : undefined);
+    }
+}
+
+// ─── BUTTON TAP HANDLER ────────────────────────────────────────
+// Quick-reply taps come back as a message, not a command, so each socket that
+// sends pairing messages gets one listener (registered once per socket).
+const armedSockets = new WeakSet();
+const handledTaps = new Set();
+
+function unwrap(message) {
+    let c = message;
+    for (let i = 0; i < 4 && c; i++) {
+        if (c.ephemeralMessage) c = c.ephemeralMessage.message;
+        else if (c.viewOnceMessage) c = c.viewOnceMessage.message;
+        else if (c.documentWithCaptionMessage) c = c.documentWithCaptionMessage.message;
+        else break;
+    }
+    return c || {};
+}
+
+function getButtonId(m) {
+    const c = unwrap(m.message);
+    const params = c.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+    if (params) {
+        try { return JSON.parse(params).id || ''; } catch (e) { return ''; }
+    }
+    return c.buttonsResponseMessage?.selectedButtonId || c.templateButtonReplyMessage?.selectedId || '';
+}
+
+function armButtons(sock) {
+    if (armedSockets.has(sock)) return;
+    armedSockets.add(sock);
+
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        for (const m of messages || []) {
+            try {
+                if (!m?.message || m.key.fromMe) continue;
+                const id = getButtonId(m);
+                const match = /^sb_(del|new):(\d+)$/.exec(id);
+                if (!match) continue;
+
+                if (handledTaps.has(m.key.id)) continue;
+                handledTaps.add(m.key.id);
+                if (handledTaps.size > 200) handledTaps.delete(handledTaps.values().next().value);
+
+                const [, action, phoneNumber] = match;
+                const chat = m.key.remoteJid;
+                const sender = m.key.participant || m.key.remoteJid;
+
+                const active = SubBotManager.listActive().find(b => b.number === phoneNumber);
+                const isRequester = active && digitsOf(active.ownerJid) === digitsOf(sender);
+
+                if (!isRequester && !isPrivileged(sender)) {
+                    await safeSend(sock, chat, { text: '❌ Only the person who paired this bot (or a bot owner/sudo) can use these buttons.' }, { quoted: m });
+                    continue;
+                }
+
+                if (action === 'del') {
+                    const removed = await SubBotManager.removeSubBot(phoneNumber);
+                    await safeSend(sock, chat, {
+                        text: removed ? `✅ Session for \`${phoneNumber}\` deleted.` : `❌ No active session found for \`${phoneNumber}\`.`
+                    }, { quoted: m });
+                } else if (action === 'new') {
+                    if (SubBotManager.isActive(phoneNumber)) {
+                        await safeSend(sock, chat, { text: `⚠️ \`${phoneNumber}\` is already connected. Delete the session first if you want to re-pair.` }, { quoted: m });
+                        continue;
+                    }
+                    const ownerJid = active?.ownerJid || sender;
+                    await SubBotManager.removeSubBot(phoneNumber).catch(() => {});
+                    await startPairing(sock, chat, phoneNumber, ownerJid, m);
+                }
+            } catch (e) {
+                console.error('⚠️ [SUBBOT BUTTON] Handler error:', e.message);
+            }
+        }
+    });
+}
+
+// ─── COMMANDS ──────────────────────────────────────────────────
 module.exports = [
     // 1. ADDBOT — pair THIS host to someone else's WhatsApp number
     {
@@ -25,61 +201,8 @@ module.exports = [
                 }, { quoted: msg });
             }
 
-            const statusMsg = await sock.sendMessage(jid, {
-                text: `⏳ Spinning up a session for \`${phoneNumber}\`... this can take up to 20 seconds.`
-            }, { quoted: msg });
-
-            try {
-                const codePromise = new Promise((resolve, reject) => {
-                    SubBotManager.createSubBot(
-                        phoneNumber,
-                        requesterJid,
-                        (code, qrBuffer) => resolve({ code, qrBuffer }),
-                        reject
-                    ).catch(reject);
-                });
-
-                const { code, qrBuffer } = await withTimeout(
-                    codePromise,
-                    25000,
-                    'Timed out waiting for WhatsApp to issue a pairing code. Try again in a minute.'
-                );
-
-                try { if (statusMsg?.key) await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
-
-                const instructions =
-                    `🔗 *BOT PAIRING — ${phoneNumber}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `1️⃣ Open *WhatsApp* on the phone for this number.\n` +
-                    `2️⃣ Go to *Settings → Linked Devices → Link a Device*.\n` +
-                    `3️⃣ Tap *"Link with phone number instead"*.\n` +
-                    `4️⃣ Enter the *8-character code* sent in the next message.\n\n` +
-                    `⏱️ *The code expires in about 60 seconds* — have WhatsApp open and ready before you request it.`;
-
-                // Instructions go out first (with the QR image if one was provided)...
-                if (qrBuffer) {
-                    await sock.sendMessage(jid, { image: qrBuffer, caption: instructions });
-                } else {
-                    await sock.sendMessage(jid, { text: instructions });
-                }
-
-                // ...then the pairing code follows as its own message, with a tap-to-copy button.
-                const sent = await sock.sendMessage(jid, {
-                    text: `🔑 *Pairing Code:* \`${code}\`\n\nTap the button below to copy it.`,
-                    footer: 'Expires in ~60 seconds',
-                    interactiveButtons: [{
-                        name: 'cta_copy',
-                        buttonParamsJson: JSON.stringify({ display_text: '📋 Copy Code', copy_code: code })
-                    }]
-                });
-                // The sendMessage wrapper returns null on failure instead of throwing,
-                // so fall back to plain text if the button message didn't go through.
-                if (!sent) await sock.sendMessage(jid, { text: `🔑 *Pairing Code:* \`${code}\`` });
-
-            } catch (err) {
-                if (err.message.startsWith('Timed out')) await SubBotManager.removeSubBot(phoneNumber).catch(() => {});
-                try { if (statusMsg?.key) await sock.sendMessage(jid, { delete: statusMsg.key }); } catch (e) {}
-                await sock.sendMessage(jid, { text: `❌ Couldn't create a session: ${err.message}` }, { quoted: msg });
-            }
+            armButtons(sock);
+            await startPairing(sock, jid, phoneNumber, requesterJid, msg);
         }
     },
 
