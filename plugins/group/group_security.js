@@ -10,8 +10,19 @@ global.silencedUsers = global.silencedUsers || {};
 config.antilink = config.antilink || {};
 config.antitag = config.antitag || {};
 config.antibot = config.antibot || {};
-config.antigm = config.antigm || {};
-config.antigcstatus = (config.antigcstatus && typeof config.antigcstatus === 'object') ? config.antigcstatus : {};
+config.antigm = (config.antigm && typeof config.antigm === 'object') ? config.antigm : {};
+// antigcstatus was merged into antigm (one setting now covers group mentions AND group status
+// posts). Carry over any group that still has an old antigcstatus setting, then clear the old one.
+if (config.antigcstatus && typeof config.antigcstatus === 'object') {
+    let moved = false;
+    for (const [gid, policy] of Object.entries(config.antigcstatus)) {
+        if (!policy || policy === 'off') continue;
+        const current = config.antigm[gid];
+        if (!current || current === 'off') { config.antigm[gid] = policy; moved = true; }
+    }
+    config.antigcstatus = {};
+    if (moved) { try { saveState(); } catch (e) { /* saved on the next change */ } }
+}
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
@@ -254,7 +265,7 @@ const securityCommands = [
         }
     },
 
-    // 4. ANTI GROUP MENTION (antigm)
+    // 4. ANTIGM: group mentions AND group status posts (this also replaces the old antigcstatus)
     {
         name: 'antigm',
         isPrefixless: false,
@@ -270,12 +281,14 @@ const securityCommands = [
 
             if (!args) {
                 const current = config.antigm[jid] || 'off';
-                const prompt = `🔮 *Limitless Antigm Settings:* (Current: \`${current}\`)\n\nSelect an option:`;
+                const prompt = `🔮 *Limitless Antigm Settings:* (Current: \`${current}\`)\n\n` +
+                               `Covers group mentions, status mentions and group status posts.\n\nSelect an option:`;
                 const buttonMessage = {
                     text: prompt,
                     buttons: [
                         { buttonId: `${config.prefix}antigm delete`, buttonText: { displayText: 'Delete' }, type: 1 },
                         { buttonId: `${config.prefix}antigm warn`, buttonText: { displayText: 'Warn' }, type: 1 },
+                        { buttonId: `${config.prefix}antigm kick`, buttonText: { displayText: 'Kick' }, type: 1 },
                         { buttonId: `${config.prefix}antigm off`, buttonText: { displayText: 'Disable' }, type: 1 }
                     ],
                     headerType: 1
@@ -285,12 +298,13 @@ const securityCommands = [
                 }
             }
 
-            const action = args.toLowerCase().trim();
+            let action = args.toLowerCase().trim();
+            if (action === 'on') action = 'delete';
 
             if (['warn', 'delete', 'kick', 'off'].includes(action)) {
                 config.antigm[jid] = action;
                 saveState();
-                await sock.sendMessage(jid, { text: `🔒 *Antigm updated:* \`${action.toUpperCase()}\`` }, { quoted: msg });
+                await sock.sendMessage(jid, { text: `🔒 *Antigm updated:* \`${action.toUpperCase()}\`\n_Group mentions and group status posts_` }, { quoted: msg });
             }
         }
     },
@@ -345,56 +359,6 @@ const securityCommands = [
             const rate = config.antispam[jid]?.rate ? `${config.antispam[jid].rate.count}/${config.antispam[jid].rate.seconds}s` : '1/2s';
             const prompt = `🛡️ *Antispam Moderation Panel:* (Status: \`${current.toUpperCase()}\`)\nThreshold: \`${rate}\``;
             await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
-        }
-    },
-
-    // 6. ANTIGCSTATUS
-    {
-        name: 'antigcstatus',
-        isPrefixless: false,
-        execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin }) => {
-            const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-            if (!isGroup) return;
-
-            const isAuthorized = await verifyPermissions(sock, msg, jid, isOwner, isDev, isSudo, 'antigcstatus', isAdmin);
-            if (!isAuthorized) return;
-
-            // Per-group, like every other anti-* policy — this used to be a
-            // single bot-wide string, so turning it on in one group silently
-            // turned it on for every group the bot is in.
-            config.antigcstatus = (config.antigcstatus && typeof config.antigcstatus === 'object') ? config.antigcstatus : {};
-
-            if (!args) {
-                const current = config.antigcstatus[jid] || 'off';
-                const prompt = `🛡️ *Anti-Status Protection Panel (antigcstatus)* 🛡️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                               `Status: \`${current.toUpperCase()}\`\n\n` +
-                               `Select a moderate policy below:`;
-
-                const buttonMessage = {
-                    text: prompt,
-                    buttons: [
-                        { buttonId: `${config.prefix}antigcstatus warn`, buttonText: { displayText: 'Warn ⚠️' }, type: 1 },
-                        { buttonId: `${config.prefix}antigcstatus delete`, buttonText: { displayText: 'Delete 🗑️' }, type: 1 },
-                        { buttonId: `${config.prefix}antigcstatus kick`, buttonText: { displayText: 'Kick 🛑' }, type: 1 }
-                    ],
-                    headerType: 1
-                };
-
-                try {
-                    return await sock.sendMessage(jid, buttonMessage, { quoted: msg });
-                } catch (e) {
-                    return await sock.sendMessage(jid, { text: prompt }, { quoted: msg });
-                }
-            }
-
-            const action = args.toLowerCase().trim();
-
-            if (['warn', 'delete', 'kick', 'off'].includes(action)) {
-                config.antigcstatus[jid] = action;
-                saveState();
-                await sock.sendMessage(jid, { text: `🔒 *Anti-Status Protection updated:* \`${action.toUpperCase()}\`` }, { quoted: msg });
-            }
         }
     },
 
@@ -950,6 +914,7 @@ const aliases = [];
 securityCommands.forEach(cmd => {
     if (cmd.name === 'antilink') aliases.push({ ...cmd, name: 'infinity' });
     if (cmd.name === 'resetwarn') aliases.push({ ...cmd, name: 'mercy' });
+    if (cmd.name === 'antigm') aliases.push({ ...cmd, name: 'antigcstatus' });
 });
 securityCommands.push(...aliases);
 
