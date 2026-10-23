@@ -270,8 +270,9 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             const m = msg.message || {};
             const isGcStatus = !!findTopLevelType(m, ['groupStatusMessageV2', 'groupStatusMessage']) || msg.mtype === 'groupStatusMessageV2';
             const isStatusMention = !!findTopLevelType(m, ['groupStatusMentionMessage', 'groupMentionedMessage']);
-            const gcPolicy = config.antigcstatus?.[cleanChatJid] || 'off';
+            // antigcstatus was merged into antigm: one setting covers group status posts and group mentions
             const gmPolicy = config.antigm?.[jid] || 'off';
+            const gcPolicy = gmPolicy;
 
             // Diagnostic: anything status-shaped that reaches the handler is logged, so a
             // missed status can be told apart from one that never arrived.
