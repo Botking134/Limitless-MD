@@ -25,14 +25,14 @@ function getThematicWarning(violationReason, senderNumber, count, threshold) {
         reasonSlanted = '𝘶𝘯𝘴𝘢𝘯𝘤𝘵𝘪𝘰𝘯𝘦𝘥 𝘮𝘢𝘴𝘴 𝘵𝘢𝘨𝘨𝘪𝘯𝘨';
         footerSlanted = '𝘔𝘢𝘴𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯𝘴 𝘢𝘳𝘦 𝘧𝘰𝘳𝘣𝘪𝘥𝘥𝘦𝘯';
     } else if (reason === 'antibot') {
-        reasonSlanted = '𝘢u𝘵𝘰𝘮𝘢𝘵𝘦𝘥 𝘣𝘰𝘵 𝘢𝘤𝘵𝘪𝘷𝘪𝘵𝘺 𝘥𝘦𝘵𝘦𝘤𝘵𝘦𝘥';
+        reasonSlanted = '𝘢𝘶𝘵𝘰𝘮𝘢𝘵𝘦𝘥 𝘣𝘰𝘵 𝘢𝘤𝘵𝘪𝘷𝘪𝘵𝘺 𝘥𝘦𝘵𝘦𝘤𝘵𝘦𝘥';
         footerSlanted = '𝘖𝘯𝘭𝘺 𝘩𝘶𝘮𝘢𝘯𝘴 𝘢𝘭𝘭𝘰𝘸𝘦𝘥 𝘩𝘦𝘳𝘦';
     } else if (reason === 'anti-group-mention') {
         reasonSlanted = '𝘪𝘭𝘭𝘦𝘨𝘢𝘭 𝘨𝘳𝘰𝘶𝘱 𝘰𝘳 𝘴𝘵𝘢𝘵𝘶𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯';
         footerSlanted = '𝘎𝘳𝘰𝘶𝘱 / 𝘴𝘵𝘢𝘵𝘶𝘴 𝘮𝘦𝘯𝘵𝘪𝘰𝘯𝘴 𝘢𝘳𝘦 𝘯𝘰𝘵 𝘢𝘭𝘭𝘰𝘸𝘦𝘥';
     } else if (reason === 'antigcstatus') {
-        reasonSlanted = '𝘶𝘯𝘢𝘶𝘵𝘩𝘰𝘳𝘪𝘻𝘦𝘥 𝘨𝘳𝘰𝘶𝘱 𝘴𝘵𝘢𝘵𝘶𝘴 𝘱𝘰𝘴𝘵';
-        footerSlanted = '𝘎𝘳𝘰𝘶𝘱 𝘴𝘵𝘢𝘵𝘶𝘴 𝘱𝘰𝘴𝘵𝘴 𝘢𝘳𝘦 𝘯𝘰𝘵 𝘢𝘭𝘭𝘰𝘸𝘦𝘥';
+        reasonSlanted = '𝘶𝘯𝘢𝘶𝘵𝘩𝘰𝘳𝘪𝘻𝘦𝘥 𝘤𝘩𝘢𝘯𝘨𝘦𝘴 𝘵𝘰 𝘨𝘳𝘰𝘶𝘱 𝘴𝘦𝘵𝘵𝘪𝘯𝘨𝘴';
+        footerSlanted = '𝘎𝘳𝘰𝘶𝘱 𝘮𝘦𝘵𝘢𝘥𝘢𝘵𝘢 𝘪𝘴 𝘳𝘦𝘴𝘵𝘳𝘪𝘤𝘵𝘦𝘥';
     } else {
         reasonSlanted = `𝘷𝘪𝘰𝘭𝘢𝘵𝘦𝘥 ${violationReason} 𝘳𝘶𝘭𝘦𝘴`;
         footerSlanted = '𝘗𝘭𝘦𝘢𝘴𝘦 𝘧𝘰𝘭𝘭𝘰𝘸 𝘵𝘩𝘦 𝘨𝘳𝘰𝘶𝘱 𝘨𝘶𝘪𝘥𝘦𝘭𝘪𝘯𝘦𝘴';
@@ -78,40 +78,37 @@ async function deleteOffendingMessage(sock, jid, msg, reason = '') {
         fromMe: false,
         participant: msg.key?.participant || msg.participant || undefined
     };
-    let accepted = false;
     try {
         await sock.sendMessage(key.remoteJid, { delete: key });
         console.log(`[SECURITY] Delete request sent for ${key.id} (${reason || 'policy'}), participant=${key.participant || 'none'}`);
-        accepted = true;
+        return true;
     } catch (err) {
         console.error(`[SECURITY] Delete failed (${reason || 'policy'}):`, err?.message || err, JSON.stringify(key));
+        return false;
     }
+}
 
-    // Group status posts and status mentions sometimes survive the plain revoke: WhatsApp accepts
-    // the request and the post stays. So follow up with the other two revoke forms (the same forms
-    // .testdel tries). Extra revokes on an already-deleted message are ignored. This runs in the
-    // background so the warning below isn't held up.
-    if (/status|mention/i.test(reason || '')) {
-        (async () => {
-            const wait = (ms) => new Promise(r => setTimeout(r, ms));
-            try {
-                await wait(800);
-                if (key.participant && key.participant.endsWith('@lid')) {
-                    const phone = await getPhoneJid(sock, key.participant, key.remoteJid);
-                    if (phone && phone !== key.participant) {
-                        await sock.sendMessage(key.remoteJid, { delete: { ...key, participant: phone } });
-                        console.log(`[SECURITY] Follow-up revoke (phone participant) sent for ${key.id}`);
-                    }
-                }
-                await wait(800);
-                await sock.relayMessage(key.remoteJid, { protocolMessage: { key, type: 0 } }, { additionalAttributes: { edit: '7' } });
-                console.log(`[SECURITY] Follow-up revoke (edit=7) sent for ${key.id}`);
-            } catch (err) {
-                console.error('[SECURITY] Follow-up revoke error:', err?.message || err);
-            }
-        })();
+// ─── ANTITAG SUKUNA SPEECHES (gif + caption) ───────────────────
+const ANTITAG_WARN_GIF = 'https://media.tenor.com/X5CSOIp4OGsAAAPo/knowyourplace-sukuna.mp4';
+const ANTITAG_KICK_GIF = 'https://media.tenor.com/Ggzn6TeKP4QAAAPo/sukuna-jjk.mp4';
+// "I will allow it only once" -> the 2nd offence is the last
+const ANTITAG_WARN_THRESHOLD = 2;
+
+function antitagWarnCaption(senderNumber, count, threshold) {
+    return `Since we shared a laugh at the expense of the brat, I will allow it only once. There will be no second time.\n\n*Know your place, you fool.*\n\n@${senderNumber}  •  ${count} / ${threshold}`;
+}
+function antitagKickCaption(senderNumber) {
+    return `I told you, didn't I? That there wouldn't be a second time. Whether it be you or that brat... I couldn't care less who dies. Except for that one guy, I don't give a damn.\n\n@${senderNumber}`;
+}
+
+// Sends a looping gif with a caption; falls back to plain text if the gif cannot be sent.
+async function sendGifCaption(sock, jid, gifUrl, caption, mentions) {
+    try {
+        await sock.sendMessage(jid, { video: { url: gifUrl }, gifPlayback: true, caption, mentions });
+    } catch (e) {
+        console.error('❌ [ANTITAG GIF]', e?.message || e);
+        await sock.sendMessage(jid, { text: caption, mentions });
     }
-    return accepted;
 }
 
 // ─── SECURITY POLICY EXECUTION LAYER ───────────────────────────
@@ -120,9 +117,6 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
 
     // POLICY NORMALIZATION: Automatically map 'on' to 'delete'
     const effectivePolicy = policy === 'on' ? 'delete' : policy;
-
-    // Plain-language label for the notices below ("violated group status rules")
-    const reasonLabel = ({ 'antigcstatus': 'group status', 'anti-group-mention': 'group mention' })[String(violationReason).trim().toLowerCase()] || violationReason;
 
     // Delete FIRST. This used to run after the sender's LID was resolved to a phone
     // number (a network lookup), which is time the offending post stayed visible.
@@ -162,7 +156,9 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
 
     if (effectivePolicy === 'delete') {
         try {
-            const deleteMsgText = `❌ *Message Deleted:* @${senderNumber} violated ${reasonLabel} rules.`;
+            const deleteMsgText = String(violationReason).toLowerCase() === 'antitag'
+                ? `🚫 *Message Deleted*\n\n@${senderNumber}, mass tagging is not allowed here.`
+                : `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`;
             await sock.sendMessage(jid, { text: deleteMsgText, mentions: [mentionJid] });
         } catch (e) { /* ignore */ }
     } else if (effectivePolicy === 'warn') {
@@ -171,7 +167,8 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
             config.warns = config.warns || {};
             config.warns[warnKey] = (config.warns[warnKey] || 0) + 1;
             const count = config.warns[warnKey];
-            const threshold = Number(config.warnThreshold) || 5;
+            const isAntitag = String(violationReason).toLowerCase() === 'antitag';
+            const threshold = isAntitag ? ANTITAG_WARN_THRESHOLD : (Number(config.warnThreshold) || 5);
 
             if (count >= threshold) {
                 const kickTargets = await getKickTargets(resolvedSender);
@@ -180,12 +177,20 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
                 } catch (kErr) {
                     console.error("❌ [SECURITY KICK ERROR]:", kErr.message);
                 }
-                const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${senderNumber}. Warnings exceeded (${count}/${threshold}) for violating ${reasonLabel} rules.`;
-                await sock.sendMessage(jid, { text: kickText, mentions: [mentionJid] });
+if (isAntitag) {
+                    await sendGifCaption(sock, jid, ANTITAG_KICK_GIF, antitagKickCaption(senderNumber), [mentionJid]);
+                } else {
+                    const kickText = `💀 *Domain Expansion: Malevolent Shrine!*\n\nSayonara @${senderNumber}. Warnings exceeded (${count}/${threshold}) for violating ${violationReason} rules.`;
+                    await sock.sendMessage(jid, { text: kickText, mentions: [mentionJid] });
+                }
                 config.warns[warnKey] = 0;
             } else {
-                const warningText = getThematicWarning(violationReason, senderNumber, count, threshold);
-                await sock.sendMessage(jid, { text: warningText, mentions: [mentionJid] });
+if (isAntitag) {
+                    await sendGifCaption(sock, jid, ANTITAG_WARN_GIF, antitagWarnCaption(senderNumber, count, threshold), [mentionJid]);
+                } else {
+                    const warningText = getThematicWarning(violationReason, senderNumber, count, threshold);
+                    await sock.sendMessage(jid, { text: warningText, mentions: [mentionJid] });
+                }
             }
             saveState();
         } catch (e) {
@@ -195,7 +200,9 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
         try {
             const kickTargets = await getKickTargets(resolvedSender);
             await sock.groupParticipantsUpdate(jid, kickTargets, "remove");
-            const directKickText = `👋 Exorcised @${senderNumber} for violating ${reasonLabel} rules.`;
+            const directKickText = String(violationReason).toLowerCase() === 'antitag'
+                ? `👋 Exorcised @${senderNumber} for mass tagging.`
+                : `👋 Exorcised @${senderNumber} for violating ${violationReason} rules.`;
             await sock.sendMessage(jid, { text: directKickText, mentions: [mentionJid] });
         } catch (e) {
             console.error("❌ [KICK POLICY ERROR]:", e.message);
@@ -323,8 +330,7 @@ async function handleGroupStatusProtection(sock, msg, cleanChatJid, senderNumber
     const isImmune = isAuthorized || isDev || isAdmin;
     if (isImmune) return false;
 
-    // antigcstatus was merged into antigm: one setting covers group status posts and group mentions
-    const policy = config.antigm?.[cleanChatJid] || 'off';
+    const policy = config.antigcstatus?.[cleanChatJid] || 'off';
     if (policy !== 'off') {
         await applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, cleanChatJid, "Antigcstatus");
         return true;
