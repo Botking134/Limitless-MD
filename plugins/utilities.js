@@ -5,7 +5,6 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { uploadToImgBB, BROWSER_UA } = require('../helpers/ImgHost');
 const FormData = require('form-data');
 
 // ─── NOTES PATH ──────────────────────────────────────────────────
@@ -68,6 +67,78 @@ function formatUptime(seconds) {
     return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${Math.floor(s)}s`;
 }
 
+// ─── DEL / TDEL HELPERS ───────────────────────────────────────────
+const DEL_MAX = 50;
+const DEL_GIF = "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4";
+
+// `del 5` -> 5, bare `del` -> the number saved with setdel (default 1)
+function parseDelCount(args) {
+    const m = (args || '').toString().trim().match(/^(\d+)\b/);
+    const n = m ? parseInt(m[1], 10) : (Number(config.delCount) || 1);
+    return Math.min(Math.max(n, 1), DEL_MAX);
+}
+
+// Works out which recorded messages to remove.
+//   reply  -> the replied message plus the ones recorded right after it, up to `count`
+//   no reply -> the latest `count` recorded messages before the command
+// If fewer are recorded than asked for, it takes what exists instead of failing.
+async function planDeletion(sock, msg, count) {
+    const jid = msg.key.remoteJid;
+    const isGroup = jid.endsWith('@g.us');
+    const botIds = [sock.user?.id, sock.user?.lid].filter(Boolean).map(x => normalizeToJid(x));
+
+    const rawMsg = getRawMessage(msg.message);
+    const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
+    const repliedId = contextInfo?.stanzaId || null;
+
+    const store = global.messageStore || {};
+    const chat = Object.values(store).filter(m => m?.key?.remoteJid === jid && m.key.id !== msg.key.id);
+
+    let picked = [];
+    if (repliedId) {
+        const idx = chat.findIndex(m => m.key.id === repliedId);
+        if (idx >= 0) {
+            picked = chat.slice(idx, idx + count).map(m => m.key);
+        } else {
+            // replied message was not recorded: still delete that one
+            const sender = contextInfo.participant || contextInfo.remoteJid || '';
+            picked = [{ remoteJid: jid, id: repliedId, fromMe: botIds.includes(normalizeToJid(sender)), participant: isGroup ? contextInfo.participant : undefined }];
+        }
+    } else {
+        picked = chat.slice(-count).map(m => m.key);
+        if (!picked.length) return { error: "❌ I have no recorded messages here to delete yet. Reply to a message, or try again once the chat has some." };
+    }
+
+    // Permission filter
+    let botIsAdmin = false;
+    if (isGroup) {
+        try {
+            const meta = await sock.groupMetadata(jid);
+            botIsAdmin = meta.participants.some(p => botIds.includes(normalizeToJid(p.id)));
+        } catch (e) { /* treated as not admin */ }
+    }
+    const keys = [];
+    let skipped = 0;
+    for (const k of picked) {
+        const own = !!k.fromMe || botIds.includes(normalizeToJid(k.participant || ''));
+        if (own || (isGroup && botIsAdmin)) {
+            keys.push({ remoteJid: jid, id: k.id, fromMe: own, participant: (isGroup && !own) ? k.participant : undefined });
+        } else skipped++;
+    }
+    if (!keys.length) {
+        return { error: isGroup ? "❌ I need to be an admin to delete messages from other users." : "❌ You can only delete your own messages in private DMs." };
+    }
+    return { keys, skipped };
+}
+
+async function deleteKeys(sock, jid, keys) {
+    for (const key of keys) {
+        try { await sock.sendMessage(jid, { delete: key }); } catch (e) { /* ignore */ }
+        if (global.messageStore) delete global.messageStore[key.id];
+        if (keys.length > 1) await new Promise(r => setTimeout(r, 350));
+    }
+}
+
 function parseDuration(str) {
     const match = str.match(/^(\d+)([smh])$/i);
     if (!match) return null;
@@ -94,30 +165,30 @@ async function uploadToCloud(buffer, mimeType) {
     ext = ext.split(';')[0].trim();
     const filename = `file_${Date.now()}.${ext}`;
 
-    // 1) ImgBB for images (needs IMGBB_API_KEY). qu.ax is no longer used:
-    //    it blocks the bot's server.
-    const imgbbUrl = await uploadToImgBB(buffer, mimeType);
-    if (imgbbUrl) return imgbbUrl;
+    try {
+        const form = new FormData();
+        form.append('files[]', buffer, { filename, contentType: mimeType });
+        const response = await axios.post('https://qu.ax/upload.php', form, {
+            headers: { ...form.getHeaders() }
+        });
+        if (response.data?.success && response.data.files?.[0]?.url) {
+            return response.data.files[0].url.trim();
+        }
+    } catch (err) { /* ignore */ }
 
-    // 2) Catbox for everything else (and as the image fallback)
     try {
         const form = new FormData();
         form.append('reqtype', 'fileupload');
         form.append('fileToUpload', buffer, { filename, contentType: mimeType });
         const response = await axios.post('https://catbox.moe/user/api.php', form, {
-            headers: { ...form.getHeaders(), 'User-Agent': BROWSER_UA },
-            timeout: 45000,
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity
+            headers: { ...form.getHeaders() }
         });
         if (response.data && typeof response.data === 'string' && response.data.startsWith('http')) {
             return response.data.trim();
         }
-    } catch (err) {
-        console.error("❌ [UPLOAD] catbox failed:", err.message);
-    }
+    } catch (err) { /* ignore */ }
 
-    throw new Error("Cloud upload hosts failed.");
+    throw new Error("Cloud upload gateways failed.");
 }
 
 async function getQuickWeather() {
@@ -415,70 +486,38 @@ module.exports = [
         }
     },
 
-    // 4. DELETE (Safe DM, LID checks, and deletion crash guards)
+    // 4. DELETE  —  del | del <number>   (reply = start from that message; no reply = latest messages)
     {
         name: 'delete',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-            if (!contextInfo || !contextInfo.stanzaId) {
-                return await sock.sendMessage(jid, { text: "❌ Reply to a message to delete." }, { quoted: msg });
-            }
-
+            const count = parseDelCount(args);
             try {
-                const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-                const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
-
-                const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
-                const normalizedSender = normalizeToJid(quotedSender);
-
-                const isFromMe = (botJid && normalizedSender === botJid) ||
-                                 (botLid && normalizedSender === botLid);
-
-                // Safe DM check: block trying to delete other user's message in private DMs
-                if (!isGroup && !isFromMe) {
-                    return await sock.sendMessage(jid, { text: "❌ You can only delete your own messages in private DMs." }, { quoted: msg });
-                }
-
-                // Group Admin check
-                if (isGroup && !isFromMe) {
-                    const groupMetadata = await sock.groupMetadata(jid);
-                    const isBotAdmin = groupMetadata.participants.some(p => {
-                        const pId = normalizeToJid(p.id);
-                        return (botJid && pId === botJid) || (botLid && pId === botLid);
-                    });
-
-                    if (!isBotAdmin) {
-                        return await sock.sendMessage(jid, {
-                            text: "❌ I need to be an admin to delete messages from other users."
-                        }, { quoted: msg });
-                    }
-                }
-
-                const quotedKey = {
-                    remoteJid: jid,
-                    id: contextInfo.stanzaId,
-                    fromMe: isFromMe,
-                    participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
-                };
+                const plan = await planDeletion(sock, msg, count);
+                if (plan.error) return await sock.sendMessage(jid, { text: plan.error }, { quoted: msg });
 
                 const gifMsg = await sock.sendMessage(jid, {
-                    video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
+                    video: { url: DEL_GIF },
                     gifPlayback: true,
                     caption: "Amaterasu!!!!"
                 });
 
-                await sock.sendMessage(jid, { delete: quotedKey });
+                await deleteKeys(sock, jid, plan.keys);
                 try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
+
+                if (plan.keys.length < count || plan.skipped) {
+                    const note = await sock.sendMessage(jid, {
+                        text: `ℹ️ Deleted *${plan.keys.length}* of ${count}. ` +
+                              `${plan.keys.length < count ? 'Only that many were recorded' : ''}` +
+                              `${plan.skipped ? `${plan.keys.length < count ? ', and ' : ''}${plan.skipped} could not be deleted (not mine and I'm not allowed to)` : ''}.`
+                    });
+                    setTimeout(async () => { try { await sock.sendMessage(jid, { delete: note.key }); } catch (e) {} }, 6000);
+                }
 
                 setTimeout(async () => {
                     try { await sock.sendMessage(jid, { delete: gifMsg.key }); } catch (err) { /* ignore */ }
                 }, 10000);
-
             } catch (error) {
                 console.error("❌ [DELETE] Error:", error);
                 await sock.sendMessage(jid, { text: `❌ Delete failed: ${error.message}` }, { quoted: msg });
@@ -486,76 +525,69 @@ module.exports = [
         }
     },
 
-    // 5. TDELETE (Timed Delete - Safe DM checks & try-catch timeouts)
+    // 4b. SETDEL  —  how many messages a bare `del` removes (default 1)
+    {
+        name: 'setdel',
+        isPrefixless: false,
+        execute: async (sock, msg, args, ctx = {}) => {
+            const jid = msg.key.remoteJid;
+            if (!(ctx.isOwner || ctx.isSudo || ctx.isDev || ctx.isAdmin)) return;
+            const raw = (args || '').toString().trim();
+            const current = Number(config.delCount) || 1;
+            if (!raw) {
+                return await sock.sendMessage(jid, {
+                    text: `🗑️ *del* currently removes *${current}* message(s).\nChange it: \`setdel <number>\` (1-${DEL_MAX})`
+                }, { quoted: msg });
+            }
+            const n = parseInt(raw, 10);
+            if (!/^\d+$/.test(raw) || n < 1) {
+                return await sock.sendMessage(jid, { text: `❌ Give a number from 1 to ${DEL_MAX}, e.g. \`setdel 5\`.` }, { quoted: msg });
+            }
+            config.delCount = Math.min(n, DEL_MAX);
+            saveState();
+            await sock.sendMessage(jid, {
+                text: `✅ \`del\` will now remove *${config.delCount}* message(s).${n > DEL_MAX ? `\n(${DEL_MAX} is the maximum.)` : ''}`
+            }, { quoted: msg });
+        }
+    },
+
+    // 5. TDELETE  —  tdel <time> | tdel <number> <time>
     {
         name: 'tdelete',
         isPrefixless: false,
         execute: async (sock, msg, args) => {
             const jid = msg.key.remoteJid;
-            const isGroup = jid.endsWith('@g.us');
-
-            const rawMsg = getRawMessage(msg.message);
-            const contextInfo = rawMsg?.contextInfo || msg.message?.extendedTextMessage?.contextInfo;
-            if (!contextInfo || !contextInfo.stanzaId) {
-                return await sock.sendMessage(jid, { text: "❌ Reply to a message and specify a duration." }, { quoted: msg });
+            const input = (args || '').toString().trim();
+            if (!input) {
+                return await sock.sendMessage(jid, { text: "❌ Provide duration, e.g. `tdel 5s`, or `tdel 3 2m` to delete 3 messages after 2 minutes." }, { quoted: msg });
             }
 
-            if (!args) {
-                return await sock.sendMessage(jid, { text: "❌ Provide duration (e.g., `5s`, `2m`, `1h`)." }, { quoted: msg });
-            }
+            // "<number> <time>"  or just "<time>" (then the setdel number is used)
+            let count = Number(config.delCount) || 1;
+            let timeStr = input;
+            const m = input.match(/^(\d+)\s+(\S+)$/);
+            if (m) { count = Math.min(Math.max(parseInt(m[1], 10), 1), DEL_MAX); timeStr = m[2]; }
 
-            const durationMs = parseDuration(args.trim());
+            const durationMs = parseDuration(timeStr);
             if (!durationMs) {
-                return await sock.sendMessage(jid, { text: "❌ Invalid duration format. Use `5s`, `2m`, `1h`." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Invalid duration format. Use `5s`, `2m`, `1h` — e.g. `tdel 3 2m`." }, { quoted: msg });
             }
 
             try {
-                const botJid = sock.user?.id ? normalizeToJid(sock.user.id) : '';
-                const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+                const plan = await planDeletion(sock, msg, count);
+                if (plan.error) return await sock.sendMessage(jid, { text: plan.error }, { quoted: msg });
 
-                const quotedSender = contextInfo.participant || contextInfo.remoteJid || '';
-                const normalizedSender = normalizeToJid(quotedSender);
-
-                const isFromMe = (botJid && normalizedSender === botJid) ||
-                                 (botLid && normalizedSender === botLid);
-
-                if (!isGroup && !isFromMe) {
-                    return await sock.sendMessage(jid, { text: "❌ You can only delete your own messages in private DMs." }, { quoted: msg });
-                }
-
-                if (isGroup && !isFromMe) {
-                    const groupMetadata = await sock.groupMetadata(jid);
-                    const isBotAdmin = groupMetadata.participants.some(p => {
-                        const pId = normalizeToJid(p.id);
-                        return (botJid && pId === botJid) || (botLid && pId === botLid);
-                    });
-
-                    if (!isBotAdmin) {
-                        return await sock.sendMessage(jid, {
-                            text: "❌ I need to be an admin to delete messages from other users."
-                        }, { quoted: msg });
-                    }
-                }
-
-                const quotedKey = {
-                    remoteJid: jid,
-                    id: contextInfo.stanzaId,
-                    fromMe: isFromMe,
-                    participant: (isGroup && !isFromMe && contextInfo.participant) ? contextInfo.participant : undefined
-                };
-
-                const promptText = `⏳ Message will be deleted in *${args.trim()}*...`;
+                const promptText = `⏳ *${plan.keys.length}* message(s) will be deleted in *${timeStr}*...`;
                 const countdownMsg = await sock.sendMessage(jid, { text: promptText }, { quoted: msg });
 
                 const gifMsg = await sock.sendMessage(jid, {
-                    video: { url: "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYWl1emR6Z3UzaDZ2ZTlqZXR5Mzl6emw2bzFmeGtycGE1dGN3ODJ3cyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3fNmJ20ErpkjK/giphy.mp4" },
+                    video: { url: DEL_GIF },
                     gifPlayback: true,
                     caption: "Amaterasu!!!!"
                 });
 
-                // Isolated try-catch timeout block
                 setTimeout(async () => {
-                    try { await sock.sendMessage(jid, { delete: quotedKey }); } catch (e) { /* ignore */ }
+                    await deleteKeys(sock, jid, plan.keys);
                     try { await sock.sendMessage(jid, { delete: countdownMsg.key }); } catch (e) { /* ignore */ }
                     try { await sock.sendMessage(jid, { delete: msg.key }); } catch (e) { /* ignore */ }
                     setTimeout(async () => {
