@@ -618,49 +618,117 @@ _Swipe through the cards below to explore command categories._ 🔮`;
 
 // ─── EXPORT COMMANDS ──────────────────────────────────────────────
 
-// Full alphabetical command list with descriptions. Requires '../commands'
-// lazily (see note near the top of this file) so the live, currently
-// registered set of commands is what gets listed — new commands show up
-// automatically without this needing to be hand-updated.
-async function sendHelpList(sock, msg) {
-    const jid = msg.key.remoteJid;
+// ─── PAGED COMMAND INDEX (help / commands) ──────────────────────────
+// One page at a time with Previous / Next buttons that only the person who
+// ran the command can use. Internal button-handler commands (purple_ans,
+// quiz_join, menu_ai ...) are hidden; aliases are folded into one entry.
+const HELP_PAGE_SIZE = 15;
+// Anything that exists only as a button/reply handler, a panel sub-action or a
+// developer internal is hidden, so the index shows the real commands only.
+const HIDDEN_COMMAND = new RegExp('(' + [
+    '_ans$', '_join$', '_btn$', '_listener$', '_choose$', '_fight$', '_defend$',
+    '_accept$', '_life$', '_call$', '_decision$', '_lobby',
+    '^menu_', '^pvp_', '^millionaire_', '^escape_', '^quiz_cat$',
+    '^(prop|ask|wed|purple|silence|jail|aki|charade|anagram|wcg|torf|quiz|ttt|v8)_',
+    '^sg(afk|autovv|kamui|off|reset|save|vv)$',
+    '^(wow|whoa|git|gitinfo|silent_decrypter)$',
+    '^help_page$', '^repo_url$', '^btntest$', '^testdel$', '^reload$',
+    '^games_reg$', '^games_closeall$', '!$'
+].join('|') + ')', 'i');
+// …but these have an underscore and ARE real commands the user types
+const HIDDEN_EXCEPTIONS = new Set(['anagram_mode', 'ttt_mode', 'alive-set']);
+
+function buildHelpEntries() {
     const commands = require('../commands');
-
-    const names = Object.keys(commands)
-        .filter(k => k !== 'reload')
-        .sort((a, b) => a.localeCompare(b));
-
     const prefixVal = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+    const names = Object.keys(commands).filter(n => n !== 'reload' && (HIDDEN_EXCEPTIONS.has(n) || !HIDDEN_COMMAND.test(n)));
 
-    const lines = names.map(name => {
-        const entry = commands[name];
-        const desc = commandDescriptions[name] || 'No description available yet.';
-        const showPrefix = entry?.isPrefixless ? '' : prefixVal;
-        return `▸ *${showPrefix}${name}* — ${desc}`;
-    });
+    const describe = (n) => {
+        if (commandDescriptions[n]) return commandDescriptions[n];
+        const d = commands[n]?.metadata?.description;
+        return (d && d !== `${n} command`) ? d : '';
+    };
+    const isAlias = (n) => /^Alias of/i.test(describe(n));
 
-    const header = `📖 *ALL COMMANDS (${names.length})* — alphabetical\n_Prefix: [ ${prefixVal} ] — prefixless commands are shown without one_\n`;
-
-    // Chunk so this never becomes one unreadable wall of text, and so it
-    // stays well under any single-message size concerns regardless of how
-    // many commands get added later.
-    const CHUNK_SIZE = 4000;
-    let chunks = [];
-    let current = header;
-    for (const line of lines) {
-        if (current.length + line.length + 1 > CHUNK_SIZE) {
-            chunks.push(current);
-            current = '';
-        }
-        current += line + '\n';
+    // Fold aliases (commands sharing the same handler) into their main command
+    const groups = new Map();
+    for (const n of names) {
+        const key = commands[n]?.execute || n;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(n);
     }
-    if (current.trim().length) chunks.push(current);
-
-    for (let i = 0; i < chunks.length; i++) {
-        const suffix = chunks.length > 1 ? `\n_(${i + 1}/${chunks.length})_` : '';
-        await sock.sendMessage(jid, { text: chunks[i] + suffix }, i === 0 ? { quoted: msg } : {});
-        if (i < chunks.length - 1) await delay(400);
+    const entries = [];
+    for (const list of groups.values()) {
+        list.sort((x, y) => (isAlias(x) - isAlias(y)) || x.length - y.length || x.localeCompare(y));
+        const main = list[0];
+        const entry = commands[main];
+        entries.push({
+            name: main,
+            tag: (entry?.isPrefixless ? '' : prefixVal) + main,
+            desc: describe(main).replace(/^Alias of ([\w-]+)\.?$/i, 'Same as $1.') || 'No description yet.',
+            also: list.slice(1).map(a => (commands[a]?.isPrefixless ? '' : prefixVal) + a)
+        });
     }
+    entries.sort((x, y) => x.name.localeCompare(y.name));
+    return { entries, prefixVal };
+}
+
+function helpPageText(page) {
+    const { entries, prefixVal } = buildHelpEntries();
+    const pages = Math.max(1, Math.ceil(entries.length / HELP_PAGE_SIZE));
+    const p = Math.min(Math.max(page, 1), pages);
+    const slice = entries.slice((p - 1) * HELP_PAGE_SIZE, p * HELP_PAGE_SIZE);
+    const first = slice[0]?.name || '';
+    const last = slice[slice.length - 1]?.name || '';
+    const body = slice.map(e =>
+        `▸ *${e.tag}*${e.also.length ? ` _(also ${e.also.join(', ')})_` : ''}\n   ${e.desc}`
+    ).join('\n');
+    const text =
+`┌──────────────────────┐
+│ 📖 *COMMAND INDEX*
+│ Page ${p} / ${pages}  •  ${entries.length} commands
+│ ${first}${last !== first ? ' → ' + last : ''}
+└──────────────────────┘
+_Prefix: [ ${prefixVal} ]_
+
+${body}
+
+──────────────────
+> ${p < pages ? 'Tap Next for more 🔮' : 'End of the list 🔮'}`;
+    return { text, page: p, pages };
+}
+
+// Sends one page. `runner` is the number of whoever ran the command; only they
+// can use the buttons (the check is in the help_page command below).
+async function sendHelpPage(sock, msg, page, runner) {
+    const jid = msg.key.remoteJid;
+    const { text, page: p, pages } = helpPageText(page);
+    const buttons = [];
+    if (p > 1) buttons.push({ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '⬅️ Previous', id: `help_page ${p - 1} ${runner}` }) });
+    if (p < pages) buttons.push({ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Next ➡️', id: `help_page ${p + 1} ${runner}` }) });
+    try {
+        if (!buttons.length) return await sock.sendMessage(jid, { text }, { quoted: msg });
+        const { generateWAMessageFromContent, proto } = await import('@itsliaaa/baileys');
+        const rawBotJid = sock.user?.id || sock.user?.jid || jid;
+        const cleanBotUserJid = rawBotJid.split('@')[0].split(':')[0] + '@s.whatsapp.net';
+        const content = {
+            viewOnceMessage: { message: {
+                messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+                interactiveMessage: { body: { text }, nativeFlowMessage: { buttons } }
+            } }
+        };
+        const msgProto = generateWAMessageFromContent(jid, proto.Message.fromObject(content), { userJid: cleanBotUserJid });
+        await sock.relayMessage(jid, msgProto.message, { messageId: msgProto.key.id });
+    } catch (e) {
+        console.error('❌ [HELP] button page failed, sending plain text:', e.message);
+        await sock.sendMessage(jid, { text }, { quoted: msg });
+    }
+}
+
+async function sendHelpList(sock, msg, args, senderNumber) {
+    const n = parseInt(String(args || '').trim(), 10);
+    const runner = senderNumber || String(msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
+    await sendHelpPage(sock, msg, Number.isFinite(n) ? n : 1, runner);
 }
 
 module.exports = [
@@ -905,15 +973,31 @@ Here's your prefix though`;
     {
         name: 'help',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            await sendHelpList(sock, msg);
+        execute: async (sock, msg, args, { senderNumber } = {}) => {
+            await sendHelpList(sock, msg, args, senderNumber);
         }
     },
     {
         name: 'commands',
         isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            await sendHelpList(sock, msg);
+        execute: async (sock, msg, args, { senderNumber } = {}) => {
+            await sendHelpList(sock, msg, args, senderNumber);
+        }
+    },
+    // Previous / Next buttons of the command index. Only the person who ran
+    // help can use them; everyone else is ignored.
+    {
+        name: 'help_page',
+        isPrefixless: false,
+        execute: async (sock, msg, args, { senderNumber } = {}) => {
+            const jid = msg.key.remoteJid;
+            const [pageStr, runner] = String(args || '').trim().split(/\s+/);
+            const me = String(senderNumber || msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
+            if (runner && me && runner !== me) return;
+            const old = getRawMessage(msg.message)?.contextInfo?.stanzaId
+                || msg.message?.interactiveResponseMessage?.contextInfo?.stanzaId;
+            await sendHelpPage(sock, msg, parseInt(pageStr, 10) || 1, runner || me);
+            if (old) { try { await sock.sendMessage(jid, { delete: { remoteJid: jid, id: old, fromMe: true } }); } catch (e) {} }
         }
     }
 ];
