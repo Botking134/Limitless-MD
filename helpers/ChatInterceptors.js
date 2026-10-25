@@ -121,10 +121,20 @@ function antitagKickCaption(senderNumber) {
 
 // Sends a looping gif with a caption; falls back to plain text if the gif cannot be sent.
 async function sendGifCaption(sock, jid, gifUrl, caption, mentions) {
+    // Re-encode through the same helper the menus use (small H.264 mp4, cached). Sending the raw link
+    // is what produced a gif that would not play: the file's format/size was not WhatsApp-friendly.
+    let video = null;
     try {
-        await sock.sendMessage(jid, { video: { url: gifUrl }, gifPlayback: true, caption, mentions });
+        video = await require('./MenuDomains').getVideo(gifUrl);
     } catch (e) {
-        console.error('❌ [ANTITAG GIF]', e?.message || e);
+        console.error('❌ [ANTITAG GIF] could not prepare the gif:', e?.message || e);
+    }
+    try {
+        await sock.sendMessage(jid, video
+            ? { video, gifPlayback: true, mimetype: 'video/mp4', caption, mentions }
+            : { video: { url: gifUrl }, gifPlayback: true, mimetype: 'video/mp4', caption, mentions });
+    } catch (e) {
+        console.error('❌ [ANTITAG GIF] send failed, using text:', e?.message || e);
         await sock.sendMessage(jid, { text: caption, mentions });
     }
 }
