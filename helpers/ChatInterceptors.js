@@ -94,6 +94,24 @@ const ANTITAG_KICK_GIF = 'https://media.tenor.com/Ggzn6TeKP4QAAAPo/sukuna-jjk.mp
 // "I will allow it only once" -> the 2nd offence is the last
 const ANTITAG_WARN_THRESHOLD = 2;
 
+// Delete mode (antitag): a Thragg gif and one of these lines after the message is removed.
+// To add the Tenor "Omni-Man fatality" gif, put its direct .mp4 link in this list.
+const ANTITAG_DELETE_GIFS = [
+    'https://files.catbox.moe/zhxmfl.mp4',
+    'https://files.catbox.moe/les0mx.mp4'
+];
+const ANTITAG_DELETE_LINES = [
+    "{user}, you summoned a crowd with one breath. The crowd is dismissed, and so is your message.",
+    "Mass tagging is a weakness of the unworthy, {user}. This message is erased.",
+    "I have crushed worlds for less than a noisy tag, {user}. Consider this mercy.",
+    "You called everyone, {user}, and no one was listening. That message no longer exists.",
+    "Order is the Empire's law, {user}. Mass tags disrupt it. Do not repeat the offence.",
+    "Delete. Without hesitation, without regret, {user}. Tag one person next time, or none.",
+    "{user}, even the strongest do not shout at the whole galaxy. Learn restraint.",
+    "One warning, {user}. The Empire does not give a second one lightly."
+];
+const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
 function antitagWarnCaption(senderNumber, count, threshold) {
     return `Since we shared a laugh at the expense of the brat, I will allow it only once. There will be no second time.\n\n*Know your place, you fool.*\n\n@${senderNumber}  •  ${count} / ${threshold}`;
 }
@@ -156,10 +174,14 @@ async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, j
 
     if (effectivePolicy === 'delete') {
         try {
-            const deleteMsgText = String(violationReason).toLowerCase() === 'antitag'
-                ? `🚫 *Message Deleted*\n\n@${senderNumber}, mass tagging is not allowed here.`
-                : `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`;
-            await sock.sendMessage(jid, { text: deleteMsgText, mentions: [mentionJid] });
+            if (String(violationReason).toLowerCase() === 'antitag') {
+                // Thragg-themed notice: random gif + random line, falls back to plain text if the gif fails
+                const caption = pickOne(ANTITAG_DELETE_LINES).replace(/\{user\}/g, `@${senderNumber}`);
+                await sendGifCaption(sock, jid, pickOne(ANTITAG_DELETE_GIFS), caption, [mentionJid]);
+            } else {
+                const deleteMsgText = `❌ *Message Deleted:* @${senderNumber} violated ${violationReason} rules.`;
+                await sock.sendMessage(jid, { text: deleteMsgText, mentions: [mentionJid] });
+            }
         } catch (e) { /* ignore */ }
     } else if (effectivePolicy === 'warn') {
         try {
