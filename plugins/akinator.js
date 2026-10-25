@@ -41,8 +41,38 @@ const QUESTIONS_BETWEEN_GUESSES = 3;
 const COOLDOWN_MS = 2 * 60 * 1000;    // rest after a finished game
 const SESSION_TTL = 15 * 60 * 1000;   // 15 min of inactivity ends the game
 
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-20b']; // tried in order
+// AI providers, tried in this order. A provider is used only if its key is set, and a provider
+// that is rate-limited or down is skipped for a short while so players are not kept waiting.
+//   GEMINI_API_KEY (or config.geminiApiKey)     -> smartest free option
+//   GROQ_API_KEY   (or config.groqApiKey)       -> fast fallback
+//   CEREBRAS_API_KEY (or config.cerebrasApiKey) -> last resort
+// Model names can be changed without touching the code: GEMINI_MODELS / GROQ_MODELS / CEREBRAS_MODELS
+// (comma separated, tried in order).
+const envList = (v, d) => (v ? String(v).split(',').map(x => x.trim()).filter(Boolean) : d);
+const PROVIDERS = [
+    {
+        id: 'gemini',
+        url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+        key: () => config.geminiApiKey || process.env.GEMINI_API_KEY,
+        models: () => envList(process.env.GEMINI_MODELS, ['gemini-3.8-flash', 'gemini-3.6-flash']),
+        reasoning: () => true
+    },
+    {
+        id: 'groq',
+        url: 'https://api.groq.com/openai/v1/chat/completions',
+        key: () => config.groqApiKey || process.env.GROQ_API_KEY,
+        models: () => envList(process.env.GROQ_MODELS, ['openai/gpt-oss-120b', 'llama-3.3-70b-versatile', 'openai/gpt-oss-20b']),
+        reasoning: (m) => /gpt-oss/i.test(m)
+    },
+    {
+        id: 'cerebras',
+        url: 'https://api.cerebras.ai/v1/chat/completions',
+        key: () => config.cerebrasApiKey || process.env.CEREBRAS_API_KEY,
+        models: () => envList(process.env.CEREBRAS_MODELS, ['gpt-oss-120b', 'llama-3.3-70b']),
+        reasoning: (m) => /gpt-oss/i.test(m)
+    }
+];
+const providerDownUntil = {};   // provider id -> time it may be tried again
 const PINTEREST_SEARCH = 'https://apis.davidcyril.name.ng/search/pinterest';
 
 // How many questions each topic may use in one game. Costume details share ONE slot ("outfit").
@@ -224,39 +254,59 @@ function choiceText() {
 }
 
 // ─── THE AI ──────────────────────────────────────────────────────
-async function callGroq(system, userContent, { maxTokens = 700 } = {}) {
-    const apiKey = config.groqApiKey || process.env.GROQ_API_KEY;
-    if (!apiKey) throw new Error('GROQ API key is not set in config');
+// think: 'low' (normal turns) or 'medium' (deciding on a guess / checking one). Thinking tokens are real
+// tokens, so they use quota and add delay; that is why normal turns stay on 'low'.
+async function callGroq(system, userContent, { maxTokens = 700, think = 'low' } = {}) {
+    const usable = PROVIDERS.filter(p => p.key());
+    if (!usable.length) throw new Error('No AI key is set (GEMINI_API_KEY, GROQ_API_KEY or CEREBRAS_API_KEY)');
 
     let lastErr;
-    for (const model of GROQ_MODELS) {
-        const reasoning = /gpt-oss/i.test(model);
-        try {
-            const res = await axios.post(GROQ_URL, {
-                model,
-                messages: [
-                    { role: 'system', content: system },
-                    { role: 'user', content: userContent }
-                ],
-                temperature: 0.3,
-                // gpt-oss "thinks" before answering and that counts against the limit, so it needs room
-                max_tokens: reasoning ? 2500 : maxTokens,
-                response_format: { type: 'json_object' },
-                ...(reasoning ? { reasoning_effort: 'low' } : {})
-            }, {
-                headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                timeout: 30000
-            });
-            const content = (res.data?.choices?.[0]?.message?.content || '').trim();
-            if (content) return content;
-            lastErr = new Error('Empty answer from the AI');
-        } catch (e) {
-            lastErr = e;
-            const status = e.response?.status;
-            if (status && ![400, 404].includes(status)) break;
+    let tried = 0;
+    // Providers that are cooling down go last instead of being dropped, in case nothing else works
+    const ordered = [...usable.filter(p => !(providerDownUntil[p.id] > Date.now())), ...usable.filter(p => providerDownUntil[p.id] > Date.now())];
+    for (const prov of ordered) {
+        const apiKey = prov.key();
+        for (const model of prov.models()) {
+            const reasoning = prov.reasoning(model);
+            tried++;
+            try {
+                const res = await axios.post(prov.url, {
+                    model,
+                    messages: [
+                        { role: 'system', content: system },
+                        { role: 'user', content: userContent }
+                    ],
+                    temperature: 0.3,
+                    // thinking counts against the limit, so reasoning models need room
+                    max_tokens: reasoning ? Math.max(maxTokens, think === 'medium' ? 3500 : 2500) : maxTokens,
+                    response_format: { type: 'json_object' },
+                    ...(reasoning ? { reasoning_effort: think } : {})
+                }, {
+                    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                    timeout: 30000
+                });
+                const content = (res.data?.choices?.[0]?.message?.content || '').trim();
+                if (content) {
+                    delete providerDownUntil[prov.id];
+                    console.log(`[AKI] answered by ${prov.id}/${model}`);
+                    return content;
+                }
+                lastErr = new Error('Empty answer from the AI');
+            } catch (e) {
+                lastErr = e;
+                const status = e.response?.status;
+                if ([400, 404].includes(status)) continue;          // bad model name for this provider: next model
+                if ([401, 403].includes(status)) providerDownUntil[prov.id] = Date.now() + 10 * 60 * 1000;   // bad key
+                else {
+                    const retry = Number(e.response?.headers?.['retry-after']);
+                    providerDownUntil[prov.id] = Date.now() + (Number.isFinite(retry) && retry > 0 ? Math.min(retry, 120) : 60) * 1000;
+                }
+                console.error(`⚠️ [AKI] ${prov.id}/${model} failed (${status || e.code || e.message}), trying the next provider`);
+                break;                                              // next provider
+            }
         }
     }
-    throw lastErr || new Error('Groq request failed');
+    throw lastErr || new Error('AI request failed');
 }
 
 function parseJson(text) {
@@ -389,7 +439,9 @@ async function nextStep(session, { noGuess = false } = {}) {
     for (let attempt = 0; attempt < 3; attempt++) {
         let data;
         try {
-            data = parseJson(await callGroq(SYSTEM_PROMPT, buildPrompt(session, hint)));
+            // Think a little harder once a guess is possible: that is where being wrong is most visible
+            const nearGuess = n >= Math.max(MIN_QUESTIONS_BEFORE_GUESS - 3, 1);
+            data = parseJson(await callGroq(SYSTEM_PROMPT, buildPrompt(session, hint), { think: nearGuess ? 'medium' : 'low' }));
             gotResponse = true;
         } catch (e) {
             lastError = e;
@@ -430,7 +482,7 @@ async function nextStep(session, { noGuess = false } = {}) {
 async function guessFits(session, cand) {
     try {
         const prompt = `${session.answers.map((x, i) => `Q${i + 1}: ${x.q} -> ${x.a}`).join('\n')}\n\nGuessed character: ${cand.name}${cand.from ? ` (${cand.from})` : ''}\n\nReply with the JSON now.`;
-        const data = parseJson(await callGroq(VERIFY_PROMPT, prompt, { maxTokens: 200 }));
+        const data = parseJson(await callGroq(VERIFY_PROMPT, prompt, { maxTokens: 300, think: 'medium' }));
         const numbers = Array.isArray(data?.contradictions) ? data.contradictions.map(Number).filter(Number.isFinite) : [];
         const clashed = numbers.map(i => session.answers[i - 1]).filter(Boolean);
         if (clashed.some(x => IDENTITY_TOPICS.has(x.topic) && (x.topic === 'medium' || x.a === 'Yes' || x.a === 'No'))) return false;
