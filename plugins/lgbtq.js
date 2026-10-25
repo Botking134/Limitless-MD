@@ -157,28 +157,28 @@ const UI_GIFS = [
 ];
 
 const GAY_BURNS = [
-    "[Category: Gay] Autonomous Ultra Instinct engaged. That tag was deflected before it could connect.",
-    "[Category: Gay] Divine aura active. You're swinging at an afterimage.",
-    "[Category: Gay] My body moved on its own. Mention completely evaded.",
-    "[Category: Gay] Silver eyes locked in. You don't have the speed to reach them.",
-    "[Category: Gay] Zero contact permitted. The barrier intercepted that message.",
-    "[Category: Gay] Autonomous reaction triggered. Your mention never landed.",
-    "[Category: Gay] Too slow. Your tag was dodged cleanly before you even hit send.",
-    "[Category: Gay] Hands off. The divine heat alone pushes that mention back.",
-    "[Category: Gay] Evasion complete. You can't reach them with that power level.",
-    "[Category: Gay] Pure instinct active. You're completely out of range."
+    "[Category: Gay🏳‍🌈] Autonomous Ultra Instinct engaged. That tag was deflected before it could connect.",
+    "[Category: Gay🏳‍🌈] Divine aura active. You're swinging at an afterimage.",
+    "[Category: Gay🏳‍🌈] My body moved on its own. Mention completely evaded.",
+    "[Category: Gay🏳‍🌈] Silver eyes locked in. You don't have the speed to reach them.",
+    "[Category: Gay🏳‍🌈] Zero contact permitted. The barrier intercepted that message.",
+    "[Category: Gay🏳‍🌈] Autonomous reaction triggered. Your mention never landed.",
+    "[Category: Gay🏳‍🌈] Too slow. Your tag was dodged cleanly before you even hit send.",
+    "[Category: Gay🏳‍🌈] Hands off. The divine heat alone pushes that mention back.",
+    "[Category: Gay🏳‍🌈] Evasion complete. You can't reach them with that power level.",
+    "[Category: Gay🏳‍🌈] Pure instinct active. You're completely out of range."
 ];
 
 const LES_BURNS = [
     "[Category: Lesbian] Autonomous Ultra Instinct engaged. That mention never landed.",
-    "[Category: Lesbian] Evasion successful. You're far too slow to get their attention.",
-    "[Category: Lesbian] Stepping into the realm of the gods requires more speed than that.",
-    "[Category: Lesbian] Reflexes triggered instantly. That tag was dodged cleanly.",
-    "[Category: Lesbian] Absolute defense active. The divine pressure pushed that mention away.",
-    "[Category: Lesbian] Silver eyes locked on. You're aiming at an empty space.",
-    "[Category: Lesbian] Hands off. You don't have the clearance to bypass this defense.",
-    "[Category: Lesbian] Pure reflex. That mention was phased out before contact.",
-    "[Category: Lesbian] Clean dodge. Keep your tags to yourself.",
+    "[Category: Lesbian🏳‍🌈] Evasion successful. You're far too slow to get their attention.",
+    "[Category: Lesbian🏳‍🌈] Stepping into the realm of the gods requires more speed than that.",
+    "[Category: Lesbian🏳‍🌈] Reflexes triggered instantly. That tag was dodged cleanly.",
+    "[Category: Lesbian🏳‍🌈] Absolute defense active. The divine pressure pushed that mention away.",
+    "[Category: Lesbian🏳‍🌈] Silver eyes locked on. You're aiming at an empty space.",
+    "[Category: Lesbian🏳‍🌈] Hands off. You don't have the clearance to bypass this defense.",
+    "[Category: Lesbian🏳‍🌈] Pure reflex. That mention was phased out before contact.",
+    "[Category: Lesbian🏳‍🌈] Clean dodge. Keep your tags to yourself.",
     "[Category: Lesbian] You're thinking before moving; the defense is already three steps ahead."
 ];
 
