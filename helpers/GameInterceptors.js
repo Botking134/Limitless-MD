@@ -25,6 +25,12 @@ function handleGameRedirects(sock, msg, contextInfo, trimmedMessageBody) {
         ''
     ).toUpperCase();
 
+    // Menu and help cards list every game name (".charade", ".anagram"...). Replying to one of them must never
+    // be taken for an answer to a game, or any reply like "repo" would start a game for whoever sent it,
+    // even in private mode.
+    const MENU_MARKERS = ['⊱', 'COMMAND INDEX', '▸ *', 'MALEVOLENT SHRINE', 'INFINITE VOID'];
+    if (quotedText && MENU_MARKERS.some(m => quotedText.includes(m.toUpperCase()))) return null;
+
     if (quotedText) {
         const gameRedirects = [
             // Akinator first: its messages are free-form questions, so an
