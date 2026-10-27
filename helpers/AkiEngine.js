@@ -17,7 +17,12 @@
 const fs = require('fs');
 const path = require('path');
 
-const DIR = process.env.AKI_DATA_DIR || path.join(__dirname, '..', 'data', 'akinator');
+// The data folder: AKI_DATA_DIR if set, otherwise database/akinator or data/akinator (whichever has the files).
+const DIR = (() => {
+    const root = path.join(__dirname, '..');
+    const candidates = [process.env.AKI_DATA_DIR, path.join(root, 'database', 'akinator'), path.join(root, 'data', 'akinator')].filter(Boolean);
+    return candidates.find(d => fs.existsSync(path.join(d, 'aki-questions.json'))) || candidates[0];
+})();
 const Q_FILE = 'aki-questions.json';
 const C_FILE = 'aki-characters.json';
 const G_FILE = 'aki-games.json';
