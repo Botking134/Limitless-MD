@@ -25,14 +25,8 @@ config.dominance = (config.dominance && typeof config.dominance === 'object') ? 
 const ON_GIF = 'https://tenor.com/bMnXA.gif';
 const ALL_GIF = 'https://tenor.com/bqado.gif';
 
-const ON_TEXT =
-    '🌌 *DOMINANCE — ON*\n\n' +
-    '_Spiritual pressure fills the room._\n' +
-    'Only admins may speak here. Everyone else\'s messages are deleted without a word.';
-const ALL_TEXT =
-    '🌑 *DOMINANCE — ALL*\n\n' +
-    '_The pressure crushes everyone._\n' +
-    'No one may speak, admins included. Only the developers are untouched.';
+const ON_TEXT = '🌌 *DOMINANCE — ON*\n\n_Spiritual pressure fills the room._';
+const ALL_TEXT = '🌑 *DOMINANCE — ALL*\n\n_The pressure crushes everyone._';
 const OFF_TEXT = '🕊️ *DOMINANCE — OFF*\nThe pressure lifts. Everyone may speak again.';
 
 // ─── HELPERS ─────────────────────────────────────────────────────
