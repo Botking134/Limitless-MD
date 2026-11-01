@@ -191,17 +191,23 @@ async function reactToStatus(sock, msg) {
     const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
     const statusJidList = [...new Set([poster, phone, botPhone, botLid].filter(Boolean))];
 
-    const send = (e) => sock.sendMessage('status@broadcast', { react: { text: e, key: msg.key } }, { statusJidList });
-    try {
-        await send(emoji);
-        console.log(`✅ [AUTORS] reacted ${emoji} to status from ${poster.split('@')[0]}`);
-    } catch (e) {
-        console.error(`⚠️ [AUTORS] "${emoji}" failed for ${poster.split('@')[0]}:`, e?.message || e);
-        if (emoji !== STATUS_DEFAULT_EMOJI) {
-            try { await send(STATUS_DEFAULT_EMOJI); console.log('✅ [AUTORS] fallback default react sent'); }
-            catch (e2) { console.error('⚠️ [AUTORS] fallback react failed too:', e2?.message || e2); }
-        }
-    }
+    // Two routes, sent together: straight to the poster (how WhatsApp itself delivers a status
+    // reaction) and the status broadcast list. A reaction replaces the previous one, so if both
+    // land the poster still sees just one.
+    const target = phone || poster;
+    const attempt = async (e) => {
+        const [direct, broadcast] = await Promise.allSettled([
+            sock.sendMessage(target, { react: { text: e, key: msg.key } }),
+            sock.sendMessage('status@broadcast', { react: { text: e, key: msg.key } }, { statusJidList })
+        ]);
+        const who = poster.split('@')[0];
+        if (direct.status === 'fulfilled') console.log(`✅ [AUTORS] direct ${e} -> ${who}`);
+        else console.error(`⚠️ [AUTORS] direct react failed for ${who}:`, direct.reason?.message || direct.reason);
+        if (broadcast.status === 'fulfilled') console.log(`✅ [AUTORS] broadcast ${e} -> ${who}`);
+        else console.error(`⚠️ [AUTORS] broadcast react failed for ${who}:`, broadcast.reason?.message || broadcast.reason);
+        return direct.status === 'fulfilled' || broadcast.status === 'fulfilled';
+    };
+    if (!(await attempt(emoji)) && emoji !== STATUS_DEFAULT_EMOJI) await attempt(STATUS_DEFAULT_EMOJI);
 }
 
 async function processStatus(sock, msg) {
