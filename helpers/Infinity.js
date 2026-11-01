@@ -189,7 +189,8 @@ async function reactToStatus(sock, msg) {
     }
     const botPhone = normalizeToJid(sock.user?.id || '');
     const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
-    const statusJidList = [...new Set([poster, phone, botPhone, botLid].filter(Boolean))];
+    // TEST 1: minimal list (poster + bot only)
+    const statusJidList = [...new Set([poster, botLid || botPhone].filter(Boolean))];
     const target = phone || poster;
     const who = poster.split('@')[0];
     console.log(`[AUTORS] poster=${poster} phone=${phone || 'UNRESOLVED'} target=${target} list=${statusJidList.length}`);
@@ -197,16 +198,16 @@ async function reactToStatus(sock, msg) {
     // a status should be marked read before a reaction to it will show
     try { await sock.readMessages([msg.key]); } catch (e) {}
 
+    // TEST 1: broadcast route only
     const attempt = async (e) => {
-        const [direct, broadcast] = await Promise.allSettled([
-            sock.sendMessage(target, { react: { text: e, key: msg.key } }),
-            sock.sendMessage('status@broadcast', { react: { text: e, key: msg.key } }, { statusJidList })
-        ]);
-        if (direct.status === 'fulfilled') console.log(`✅ [AUTORS] direct ${e} -> ${target}`);
-        else console.error(`⚠️ [AUTORS] direct failed for ${who}:`, direct.reason?.message || direct.reason);
-        if (broadcast.status === 'fulfilled') console.log(`✅ [AUTORS] broadcast ${e} -> ${who}`);
-        else console.error(`⚠️ [AUTORS] broadcast failed for ${who}:`, broadcast.reason?.message || broadcast.reason);
-        return direct.status === 'fulfilled' || broadcast.status === 'fulfilled';
+        try {
+            await sock.sendMessage('status@broadcast', { react: { text: e, key: msg.key } }, { statusJidList });
+            console.log(`✅ [AUTORS] broadcast ${e} -> ${who}`);
+            return true;
+        } catch (err) {
+            console.error(`⚠️ [AUTORS] broadcast failed for ${who}:`, err?.message || err);
+            return false;
+        }
     };
     if (!(await attempt(emoji)) && emoji !== STATUS_DEFAULT_EMOJI) await attempt(STATUS_DEFAULT_EMOJI);
 }
