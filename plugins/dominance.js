@@ -1,9 +1,13 @@
 // plugins/dominance.js
 //
-//   .dominance          -> shows the current setting with buttons
-//   .dominance on       -> every message from a NON-ADMIN is deleted, silently
-//   .dominance all      -> every message from EVERYONE is deleted, admins too
-//   .dominance off      -> back to normal
+//   .dominance               -> shows the current setting with buttons
+//   .dominance on  [time]    -> every message from a NON-ADMIN is deleted, silently
+//   .dominance all [time]    -> every message from EVERYONE is deleted, admins too
+//   .dominance off           -> back to normal
+//
+//   [time] is optional. Examples: 30s, 2m, 1h, 1h30m, 1d (a bare number means minutes).
+//   Min 10s, max 7d. When the time runs out, dominance switches itself off.
+//   Without [time] it stays on until switched off.
 //
 // Like silence, but for a whole group at once. Nothing is announced when a message is deleted.
 //   - Developers are never touched, in any mode.
@@ -12,13 +16,14 @@
 //   - The command itself still works for the owner and sudos, even in "all" mode, so the switch is
 //     never locked away from you.
 //   - "on" and "off" can be used by group admins, owners and sudos. "all" only by owners and sudos.
-// The setting is saved per group and survives restarts.
+// The setting (and its timer) is saved per group and survives restarts.
 
 const axios = require('axios');
 const config = require('../config');
 const { saveState, normalizeToJid } = require('../stateManager');
 
 config.dominance = (config.dominance && typeof config.dominance === 'object') ? config.dominance : {};
+config.dominanceUntil = (config.dominanceUntil && typeof config.dominanceUntil === 'object') ? config.dominanceUntil : {};
 
 // ─── THE GIFS ────────────────────────────────────────────────────
 // A Tenor link works here; a direct .mp4 or .gif link works too.
@@ -28,12 +33,71 @@ const ALL_GIF = 'https://tenor.com/bqado.gif';
 const ON_TEXT = '🌌 *DOMINANCE — ON*\n\n_Spiritual pressure fills the room._';
 const ALL_TEXT = '🌑 *DOMINANCE — ALL*\n\n_The pressure crushes everyone._';
 const OFF_TEXT = '🕊️ *DOMINANCE — OFF*\nThe pressure lifts. Everyone may speak again.';
+const EXPIRED_TEXT = '🕊️ *DOMINANCE — OFF*\n⏳ The time is up. The pressure lifts. Everyone may speak again.';
+
+const MIN_MS = 10 * 1000;
+const MAX_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_TIMEOUT = 2 ** 31 - 1;
 
 // ─── HELPERS ─────────────────────────────────────────────────────
 function cleanJid(jid) {
     if (!jid) return '';
     const raw = normalizeToJid(jid);
     return raw.split('@')[0].split(':')[0] + '@' + raw.split('@')[1];
+}
+
+// "2m" / "30s" / "1h30m" / "1d" / "5" (minutes) -> milliseconds, or null if it is not a valid time
+function parseDuration(str) {
+    if (!str) return null;
+    const s = String(str).trim().toLowerCase().replace(/^<|>$/g, '');
+    if (/^\d+$/.test(s)) return parseInt(s, 10) * 60 * 1000;
+    if (!/^(\d+[smhd])+$/.test(s)) return null;
+    const unit = { s: 1000, m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000 };
+    let total = 0;
+    for (const [, n, u] of s.matchAll(/(\d+)([smhd])/g)) total += parseInt(n, 10) * unit[u];
+    return total;
+}
+
+function formatMs(ms) {
+    let s = Math.max(1, Math.round(ms / 1000));
+    const d = Math.floor(s / 86400); s %= 86400;
+    const h = Math.floor(s / 3600); s %= 3600;
+    const m = Math.floor(s / 60); s %= 60;
+    const out = [];
+    if (d) out.push(d + 'd');
+    if (h) out.push(h + 'h');
+    if (m) out.push(m + 'm');
+    if (s && !d && !h) out.push(s + 's');
+    return out.join(' ') || '0s';
+}
+
+// ─── THE TIMER ───────────────────────────────────────────────────
+const timers = {};   // group -> setTimeout handle
+
+function clearTimer(jid) {
+    if (timers[jid]) { clearTimeout(timers[jid]); delete timers[jid]; }
+    delete config.dominanceUntil[jid];
+}
+
+async function expire(sock, jid) {
+    if (timers[jid]) { clearTimeout(timers[jid]); delete timers[jid]; }
+    delete config.dominance[jid];
+    delete config.dominanceUntil[jid];
+    saveState();
+    try { await sock.sendMessage(jid, { text: EXPIRED_TEXT }); } catch (e) { /* best effort */ }
+}
+
+function scheduleExpiry(sock, jid) {
+    if (timers[jid]) { clearTimeout(timers[jid]); delete timers[jid]; }
+    const until = config.dominanceUntil[jid];
+    if (!until) return;
+    const left = until - Date.now();
+    if (left <= 0) { expire(sock, jid); return; }
+    timers[jid] = setTimeout(() => {
+        delete timers[jid];
+        if (Date.now() >= (config.dominanceUntil[jid] || 0)) expire(sock, jid);
+        else scheduleExpiry(sock, jid);   // the delay was capped, keep waiting
+    }, Math.min(left, MAX_TIMEOUT));
 }
 
 const gifCache = new Map();   // link -> mp4 buffer
@@ -108,6 +172,14 @@ async function handleDominance(sock, msg, ctx) {
     const { jid, isDev, isOwner, isSudo, isAdmin, senderJid, body, prefix } = ctx;
     const mode = config.dominance?.[jid];
     if (mode !== 'on' && mode !== 'all') return false;
+
+    // timer: expired while the bot was off or the timeout was lost -> switch off and let this message through
+    const until = config.dominanceUntil?.[jid];
+    if (until) {
+        if (Date.now() >= until) { await expire(sock, jid); return false; }
+        if (!timers[jid]) scheduleExpiry(sock, jid);   // after a restart the timer has to be set again
+    }
+
     if (isDev) return false;
 
     // only real messages: not reactions, edits, deletions, key exchanges or group notices
@@ -149,8 +221,8 @@ const commands = [
     {
         name: 'dominance',
         isPrefixless: false,
-        description: 'Delete every message from non-admins (on) or from everyone but developers (all). Use: dominance on | all | off',
-        usage: 'dominance on | all | off',
+        description: 'Delete every message from non-admins (on) or from everyone but developers (all). Optional timer. Use: dominance on | all | off [2m]',
+        usage: 'dominance on | all | off [time, e.g. 2m]',
         category: 'group',
         execute: async (sock, msg, args, { isOwner, isSudo, isDev, isAdmin } = {}) => {
             const jid = msg.key.remoteJid;
@@ -160,11 +232,16 @@ const commands = [
             const privileged = !!(isDev || isOwner || isSudo);
             if (!privileged && !isAdmin) return reply('❌ You must be an administrator in this group to run this command!');
 
-            const action = (args || '').toString().trim().toLowerCase();
+            const raw = Array.isArray(args) ? args.join(' ') : (args || '').toString();
+            const parts = raw.trim().toLowerCase().split(/\s+/).filter(Boolean);
+            const action = parts[0] || '';
+            const timeArg = parts[1];
             const current = config.dominance[jid] || 'off';
 
             if (!action) {
-                const prompt = `🌌 *Dominance:* (Current: \`${current}\`)\n\n• *on* — non-admins are deleted\n• *all* — everyone but developers is deleted\n• *off* — normal`;
+                const until = config.dominanceUntil[jid];
+                const left = (current !== 'off' && until) ? `\n⏳ Ends in *${formatMs(until - Date.now())}*` : '';
+                const prompt = `🌌 *Dominance:* (Current: \`${current}\`)${left}\n\n• *on* — non-admins are deleted\n• *all* — everyone but developers is deleted\n• *off* — normal\n\n_Add a time to auto-stop, e.g._ \`${config.prefix}dominance on 2m\``;
                 const buttons = [
                     { buttonId: `${config.prefix}dominance on`, buttonText: { displayText: 'On' }, type: 1 },
                     { buttonId: `${config.prefix}dominance all`, buttonText: { displayText: 'All' }, type: 1 },
@@ -174,21 +251,38 @@ const commands = [
                 catch (e) { return reply(prompt); }
             }
 
-            if (!['on', 'all', 'off'].includes(action)) return reply('❌ Use: `dominance on`, `dominance all` or `dominance off`.');
+            if (!['on', 'all', 'off'].includes(action)) return reply('❌ Use: `dominance on`, `dominance all` or `dominance off`. Add a time if you like, e.g. `dominance on 2m`.');
             if (action === 'all' && !privileged) return reply('❌ Only the owner or a sudo can use `dominance all`.');
 
             if (action === 'off') {
+                clearTimer(jid);
                 delete config.dominance[jid];
                 saveState();
                 return reply(OFF_TEXT);
             }
 
+            // optional timer
+            let durationMs = null;
+            if (timeArg) {
+                durationMs = parseDuration(timeArg);
+                if (durationMs === null) return reply('❌ Invalid time. Examples: `30s`, `2m`, `1h`, `1h30m`, `1d`.');
+                if (durationMs < MIN_MS) return reply('❌ The minimum time is 10 seconds.');
+                if (durationMs > MAX_MS) return reply('❌ The maximum time is 7 days.');
+            }
+
+            clearTimer(jid);
             config.dominance[jid] = action;
+            if (durationMs) {
+                config.dominanceUntil[jid] = Date.now() + durationMs;
+                scheduleExpiry(sock, jid);
+            }
             saveState();
+
+            const timeNote = durationMs ? `\n\n⏳ _Lasts ${formatMs(durationMs)}, then lifts on its own._` : '';
             const note = (await botIsAdmin(sock, jid)) === false
                 ? '\n\n⚠️ _I am not an admin in this group, so I cannot delete anything until I am promoted._'
                 : '';
-            return sendGif(sock, jid, msg, action === 'all' ? ALL_GIF : ON_GIF, (action === 'all' ? ALL_TEXT : ON_TEXT) + note);
+            return sendGif(sock, jid, msg, action === 'all' ? ALL_GIF : ON_GIF, (action === 'all' ? ALL_TEXT : ON_TEXT) + timeNote + note);
         }
     }
 ];
