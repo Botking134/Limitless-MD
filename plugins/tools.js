@@ -1178,13 +1178,15 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
-            if (!args) return await sock.sendMessage(jid, { text: "❌ Please provide an emoji (e.g. .statusemoji 💖)" }, { quoted: msg });
+            if (!args) return await sock.sendMessage(jid, { text: `❌ Give an emoji (e.g. .statusemoji 💖) or \`.statusemoji default\` for WhatsApp's own react.\nCurrent: ${config.statusemoji && config.statusemoji !== 'default' ? config.statusemoji : 'default (💚)'}` }, { quoted: msg });
 
-            const emoji = args.trim();
-            setVar('statusemoji', emoji);
-            config.statusemoji = emoji;
+            const input = String(args).trim();
+            const isDefault = ['default', 'reset'].includes(input.toLowerCase());
+            const value = isDefault ? 'default' : input;
+            setVar('statusemoji', value);
+            config.statusemoji = value;
             saveState();
-            await sock.sendMessage(jid, { text: `✅ *Status reaction emoji updated to:* ${emoji}` }, { quoted: msg });
+            await sock.sendMessage(jid, { text: isDefault ? "✅ *Status reaction reset to WhatsApp's default (💚)*" : `✅ *Status reaction emoji updated to:* ${input}` }, { quoted: msg });
         }
     },
 
