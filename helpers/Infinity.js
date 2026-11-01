@@ -440,6 +440,16 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
 
+        // ─── DOMINANCE ────────────────────────────────────────────────
+        // When .dominance is on in this group, messages from non-admins (everyone but devs, in "all" mode)
+        // are deleted silently, before anything else gets to see them.
+        if (isGroup && config.dominance && config.dominance[jid]) {
+            try {
+                const dominance = require('../plugins/dominance');
+                if (await dominance.handleDominance(sock, msg, { jid, isDev, isOwner, isSudo, isAdmin, senderJid, body: trimmedMessageBody, prefix: activePrefix })) return;
+            } catch (e) { /* must never break message handling */ }
+        }
+
         // ─── SHARINGAN ───────────────────────────────────────────────
         // Past the line above, a fromMe message is one the owner really sent
         // (the bot's own sends were dropped). It resets the AFK quiet-timer.
@@ -574,6 +584,14 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             if (secured) return;
         }
 
+        // Hush list: a listed person who tags/replies to whoever listed them gets a themed reply (never deletes anything)
+        if (isGroup && !msg.key.fromMe) {
+            try {
+                const hush = require('../plugins/hush');
+                if (hush.handleHushInterceptor) await hush.handleHushInterceptor(sock, msg, senderJid);
+            } catch (e) { /* must never break message handling */ }
+        }
+
         const isGroupStatus = msg.message?.groupStatusMessageV2 || msg.mtype === "groupStatusMessageV2";
         if (isGroup && isGroupStatus && !msg.key.fromMe && !isAuthorized && !isDev) {
             await handleGroupStatusProtection(sock, msg, cleanChatJid, senderNumber, senderJid, isAuthorized, isDev, isAdmin);
@@ -669,7 +687,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
             'quiz_join', 'ttt_join', 'pvp_join', 'anagram_join', 'wcg_join',
             'pvp_lobby_accept', 'pvp_choose', 'pvp_fight', 'repo_url', 'pvp_defend',
             'menu_ai', 'menu_games', 'menu_group', 'menu_tools', 'menu_download',
-            'menu_fun', 'menu_owner', 'menu_utilities', 'silence_ans', 'cas',
+            'menu_fun', 'menu_owner', 'menu_utilities', 'help_page', 'silence_ans', 'cas',
             'vault8', 'escape', 'guess', 'millionaire', 'ttt', 'rps', 'torf',
             'charade', 'wcg', 'anagram', 'quiz_ans', 'charade_ans', 'anagram_ans',
             'wcg_ans', 'torf_ans', 'millionaire_ans', 'quiz_cat', 'jail_ans'
