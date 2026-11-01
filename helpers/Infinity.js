@@ -221,6 +221,7 @@ async function processStatus(sock, msg) {
 
     const doView = config.autoviewstatus === 'on';
     const doReact = config.autoreactstatus === 'on';
+    console.log(`[STATUS-CFG] bot=${BotContext.getActiveBotId()} autoview=${config.autoviewstatus} autoreact=${config.autoreactstatus}`);
     if (!doView && !doReact) return;
 
     await acquireStatusSlot();
@@ -260,6 +261,7 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     SleepGate.guardSocket(sock);
     const first = chatUpdate.messages && chatUpdate.messages[0];
     if (first && first.key && first.key.remoteJid === 'status@broadcast') {
+        console.log(`[STATUS-IN] bot=${sock.__botId || 'main'} from=${first.key.participant || '-'} hasMessage=${!!first.message} batch=${chatUpdate.messages.length} type=${chatUpdate.type || '-'}`);
         // fire and forget, in parallel: the status never waits for (or blocks) other messages
         if (first.message) Promise.resolve(BotContext.runAsBot(sock.__botId, () => processStatus(sock, first))).catch(() => {});
         return;
