@@ -30,10 +30,10 @@ config.dominanceUntil = (config.dominanceUntil && typeof config.dominanceUntil =
 const ON_GIF = 'https://tenor.com/bMnXA.gif';
 const ALL_GIF = 'https://tenor.com/bqado.gif';
 
-const ON_TEXT = '🌌 *DOMINANCE — ON*\n\n_Spiritual pressure fills the room._';
-const ALL_TEXT = '🌑 *DOMINANCE — ALL*\n\n_The pressure crushes everyone._';
-const OFF_TEXT = '🕊️ *DOMINANCE — OFF*\nThe pressure lifts. Everyone may speak again.';
-const EXPIRED_TEXT = '🕊️ *DOMINANCE — OFF*\n⏳ The time is up. The pressure lifts. Everyone may speak again.';
+const ON_TEXT = '🌌 *DOMINANCE — ON*\n\n_A heavy spiritual pressure fills the room..._\n_Those with weak spiritual pressure are erased. Only admins can still stand._';
+const ALL_TEXT = '🌑 *DOMINANCE — ALL*\n\n_The pressure becomes absolute._\n_No one can stand beneath it. Every voice is erased._';
+const OFF_TEXT = '🕊️ *DOMINANCE — OFF*\n\n_The pressure lifts. The weak may breathe again._';
+const EXPIRED_TEXT = '🕊️ *DOMINANCE — OFF*\n\n_The pressure fades with time. The weak may breathe again._';
 
 const MIN_MS = 10 * 1000;
 const MAX_MS = 7 * 24 * 60 * 60 * 1000;
@@ -230,7 +230,7 @@ const commands = [
 
             const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
             const privileged = !!(isDev || isOwner || isSudo);
-            if (!privileged && !isAdmin) return reply('❌ You must be an administrator in this group to run this command!');
+            if (!privileged && !isAdmin) return reply('❌ Only admins can command the pressure here.');
 
             const raw = Array.isArray(args) ? args.join(' ') : (args || '').toString();
             const parts = raw.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -240,8 +240,8 @@ const commands = [
 
             if (!action) {
                 const until = config.dominanceUntil[jid];
-                const left = (current !== 'off' && until) ? `\n⏳ Ends in *${formatMs(until - Date.now())}*` : '';
-                const prompt = `🌌 *Dominance:* (Current: \`${current}\`)${left}\n\n• *on* — non-admins are deleted\n• *all* — everyone but developers is deleted\n• *off* — normal\n\n_Add a time to auto-stop, e.g._ \`${config.prefix}dominance on 2m\``;
+                const left = (current !== 'off' && until) ? `\n⏳ Fades in *${formatMs(until - Date.now())}*` : '';
+                const prompt = `🌌 *DOMINANCE* — pressure: \`${current}\`${left}\n\n• *on* — the weak are erased\n• *all* — everyone is crushed\n• *off* — the pressure lifts\n\n_Add a time and it fades on its own, e.g._ \`${config.prefix}dominance on 2m\``;
                 const buttons = [
                     { buttonId: `${config.prefix}dominance on`, buttonText: { displayText: 'On' }, type: 1 },
                     { buttonId: `${config.prefix}dominance all`, buttonText: { displayText: 'All' }, type: 1 },
@@ -252,7 +252,7 @@ const commands = [
             }
 
             if (!['on', 'all', 'off'].includes(action)) return reply('❌ Use: `dominance on`, `dominance all` or `dominance off`. Add a time if you like, e.g. `dominance on 2m`.');
-            if (action === 'all' && !privileged) return reply('❌ Only the owner or a sudo can use `dominance all`.');
+            if (action === 'all' && !privileged) return reply('❌ Only the owner or a sudo can unleash `dominance all`.');
 
             if (action === 'off') {
                 clearTimer(jid);
@@ -278,9 +278,9 @@ const commands = [
             }
             saveState();
 
-            const timeNote = durationMs ? `\n\n⏳ _Lasts ${formatMs(durationMs)}, then lifts on its own._` : '';
+            const timeNote = durationMs ? `\n\n⏳ _The pressure holds for ${formatMs(durationMs)}, then fades._` : '';
             const note = (await botIsAdmin(sock, jid)) === false
-                ? '\n\n⚠️ _I am not an admin in this group, so I cannot delete anything until I am promoted._'
+                ? '\n\n⚠️ _I am not an admin here, so the pressure has no power until I am promoted._'
                 : '';
             return sendGif(sock, jid, msg, action === 'all' ? ALL_GIF : ON_GIF, (action === 'all' ? ALL_TEXT : ON_TEXT) + timeNote + note);
         }
