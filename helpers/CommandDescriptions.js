@@ -95,6 +95,8 @@ module.exports = {
     poll: "Create a poll: `.poll Question? (Option1/Option2)`.",
     htag: "Tag every member with a hidden/invisible mention, then delete the trigger. (ghost)",
     spamtag: "Repeatedly tag group members with a given text.",
+    dominance: "Delete every message from non-admins (on), or from everyone except developers (all). Use: dominance on | all | off.",
+    blitz: "Temporary: faster spamtag, one tagged message every 0.5s. Use: blitz [count] [text] (default 20, max 100) | blitz stop.",
     gmode: "Show an interactive group mode configuration panel for admins.",
     gcjid: "Show this group's JID.",
     active: "List members who have been active in the group today.",
