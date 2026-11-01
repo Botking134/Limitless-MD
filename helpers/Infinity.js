@@ -180,31 +180,32 @@ async function reactToStatus(sock, msg) {
     const poster = msg.key.participant || msg.participant || '';
     if (!poster) { console.error('⚠️ [AUTORS] status has no poster, skipped'); return; }
 
-    // the poster can come as @lid or as a phone jid: give WhatsApp both
+    // resolve phone jid if poster is a LID
     let phone = poster;
     if (poster.endsWith('@lid')) {
         const alt = msg.key.participantAlt || msg.key.participantPn || '';
-        phone = (alt && alt.endsWith('@s.whatsapp.net')) ? alt : (global.lidCache?.[poster] || '');
-        if (!phone) { try { phone = await raceTimeout(getPhoneJid(sock, poster, null), 1500) || ''; } catch (e) { phone = ''; } }
+        phone = (alt && alt.endsWith('@s.whatsapp.net')) ? normalizeToJid(alt) : (global.lidCache?.[poster] || '');
+        if (!phone) { try { phone = await raceTimeout(getPhoneJid(sock, poster, null), 3000) || ''; } catch (e) { phone = ''; } }
     }
     const botPhone = normalizeToJid(sock.user?.id || '');
     const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
     const statusJidList = [...new Set([poster, phone, botPhone, botLid].filter(Boolean))];
-
-    // Two routes, sent together: straight to the poster (how WhatsApp itself delivers a status
-    // reaction) and the status broadcast list. A reaction replaces the previous one, so if both
-    // land the poster still sees just one.
     const target = phone || poster;
+    const who = poster.split('@')[0];
+    console.log(`[AUTORS] poster=${poster} phone=${phone || 'UNRESOLVED'} target=${target} list=${statusJidList.length}`);
+
+    // a status should be marked read before a reaction to it will show
+    try { await sock.readMessages([msg.key]); } catch (e) {}
+
     const attempt = async (e) => {
         const [direct, broadcast] = await Promise.allSettled([
             sock.sendMessage(target, { react: { text: e, key: msg.key } }),
             sock.sendMessage('status@broadcast', { react: { text: e, key: msg.key } }, { statusJidList })
         ]);
-        const who = poster.split('@')[0];
-        if (direct.status === 'fulfilled') console.log(`✅ [AUTORS] direct ${e} -> ${who}`);
-        else console.error(`⚠️ [AUTORS] direct react failed for ${who}:`, direct.reason?.message || direct.reason);
+        if (direct.status === 'fulfilled') console.log(`✅ [AUTORS] direct ${e} -> ${target}`);
+        else console.error(`⚠️ [AUTORS] direct failed for ${who}:`, direct.reason?.message || direct.reason);
         if (broadcast.status === 'fulfilled') console.log(`✅ [AUTORS] broadcast ${e} -> ${who}`);
-        else console.error(`⚠️ [AUTORS] broadcast react failed for ${who}:`, broadcast.reason?.message || broadcast.reason);
+        else console.error(`⚠️ [AUTORS] broadcast failed for ${who}:`, broadcast.reason?.message || broadcast.reason);
         return direct.status === 'fulfilled' || broadcast.status === 'fulfilled';
     };
     if (!(await attempt(emoji)) && emoji !== STATUS_DEFAULT_EMOJI) await attempt(STATUS_DEFAULT_EMOJI);
