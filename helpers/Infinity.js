@@ -161,8 +161,101 @@ async function quickImmunity(sock, jid, senderJid) {
     return false;
 }
 
+// ─── STATUS ENGINE (autoviewstatus / autoreactstatus) ────────────────────────
+// Statuses are handled the moment they arrive, in parallel, and never wait behind other
+// messages of the same batch. (They used to go through the one-by-one message queue, which is
+// why autoview felt slow.)
+const STATUS_DEFAULT_EMOJI = '💚';   // WhatsApp's own quick-react on a status
+const statusSeen = new Set();
+let statusSlots = 6;
+const statusWaiters = [];
+const raceTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve => setTimeout(() => resolve(null), ms))]);
+async function acquireStatusSlot() { if (statusSlots > 0) { statusSlots--; return; } await new Promise(r => statusWaiters.push(r)); }
+function releaseStatusSlot() { const next = statusWaiters.shift(); if (next) next(); else statusSlots++; }
+
+async function reactToStatus(sock, msg) {
+    let emoji = config.statusemoji;
+    if (!emoji || String(emoji).toLowerCase() === 'default') emoji = STATUS_DEFAULT_EMOJI;
+
+    const poster = msg.key.participant || msg.participant || '';
+    if (!poster) { console.error('⚠️ [AUTORS] status has no poster, skipped'); return; }
+
+    // the poster can come as @lid or as a phone jid: give WhatsApp both
+    let phone = poster;
+    if (poster.endsWith('@lid')) {
+        const alt = msg.key.participantAlt || msg.key.participantPn || '';
+        phone = (alt && alt.endsWith('@s.whatsapp.net')) ? alt : (global.lidCache?.[poster] || '');
+        if (!phone) { try { phone = await raceTimeout(getPhoneJid(sock, poster, null), 1500) || ''; } catch (e) { phone = ''; } }
+    }
+    const botPhone = normalizeToJid(sock.user?.id || '');
+    const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+    const statusJidList = [...new Set([poster, phone, botPhone, botLid].filter(Boolean))];
+
+    const send = (e) => sock.sendMessage('status@broadcast', { react: { text: e, key: msg.key } }, { statusJidList });
+    try {
+        await send(emoji);
+        console.log(`✅ [AUTORS] reacted ${emoji} to status from ${poster.split('@')[0]}`);
+    } catch (e) {
+        console.error(`⚠️ [AUTORS] "${emoji}" failed for ${poster.split('@')[0]}:`, e?.message || e);
+        if (emoji !== STATUS_DEFAULT_EMOJI) {
+            try { await send(STATUS_DEFAULT_EMOJI); console.log('✅ [AUTORS] fallback default react sent'); }
+            catch (e2) { console.error('⚠️ [AUTORS] fallback react failed too:', e2?.message || e2); }
+        }
+    }
+}
+
+async function processStatus(sock, msg) {
+    const id = msg.key?.id;
+    if (!id || msg.key.fromMe) return;
+    if (statusSeen.has(id)) return;
+    statusSeen.add(id);
+    if (statusSeen.size > 800) statusSeen.delete(statusSeen.values().next().value);
+
+    const doView = config.autoviewstatus === 'on';
+    const doReact = config.autoreactstatus === 'on';
+    if (!doView && !doReact) return;
+
+    await acquireStatusSlot();
+    try {
+        if (doView) {
+            try { await sock.readMessages([msg.key]); }
+            catch (e) { console.error('⚠️ [AUTOVIEWSTATUS] readMessages failed:', e?.message || e); }
+        }
+        if (doReact) await reactToStatus(sock, msg);
+    } finally { releaseStatusSlot(); }
+}
+
+// ─── DOMINANCE (runs first, before filters / downloaders / games can swallow the message) ───
+async function dominanceEarly(sock, msg, jid, senderJid, body, prefix) {
+    const dominance = require('../plugins/dominance');
+    let dev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderJid);
+    const ids = [senderJid];
+    if (senderJid.endsWith('@lid')) {
+        let ph = global.lidCache?.[senderJid] || '';
+        if (!ph) { try { ph = await raceTimeout(getPhoneJid(sock, senderJid, jid), 1200) || ''; } catch (e) {} }
+        if (ph) { ids.push(ph); if (DEV_JIDS.includes(ph) || DEV_PHONE_JIDS.includes(ph)) dev = true; }
+    }
+    const has = (arr) => Array.isArray(arr) && ids.some(i => arr.includes(i));
+    const isOwner = ids.some(i => i === config.ownerJid || (config.ownerLid && i === config.ownerLid)) || has(config.secondaryOwners);
+    const isSudo = has(config.sudos) || has(config.sudoLids);
+
+    let isAdmin = false;
+    if (!dev) {
+        const meta = await raceTimeout(getCachedGroupMetadata(sock, jid), 2500);
+        const me = (meta?.participants || []).find(p => ids.some(i => cleanJid(p.id) === cleanJid(i) || (p.lid && cleanJid(p.lid) === cleanJid(i))));
+        isAdmin = !!(me && (me.admin === 'admin' || me.admin === 'superadmin'));
+    }
+    return dominance.handleDominance(sock, msg, { jid, isDev: dev, isOwner, isSudo, isAdmin, senderJid, body, prefix });
+}
+
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     SleepGate.guardSocket(sock);
+    const first = chatUpdate.messages && chatUpdate.messages[0];
+    if (first && first.key && first.key.remoteJid === 'status@broadcast') {
+        // fire and forget, in parallel: the status never waits for (or blocks) other messages
+        if (first.message) Promise.resolve(BotContext.runAsBot(sock.__botId, () => processStatus(sock, first))).catch(() => {});
+        return;
+    }
     return BotContext.runAsBot(sock.__botId, () => handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds));
 }
 
@@ -181,59 +274,7 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
 
         const jid = msg.key.remoteJid;
 
-        if (jid === 'status@broadcast') {
-            if (config.autoviewstatus === 'on') {
-                try {
-                    await sock.readMessages([msg.key]);
-                } catch (e) {
-                    console.error('⚠️ [AUTOVIEWSTATUS] readMessages failed:', e.message);
-                }
-            }
-            if (config.autoreactstatus === 'on') {
-                // ❤️ is WhatsApp's own built-in default status-react (the one you
-                // get from the app's quick-tap react), so it's guaranteed to be
-                // accepted — used as both the fallback default and the retry
-                // target if a custom emoji fails, in case WhatsApp is rejecting
-                // that specific emoji rather than the react call itself failing
-                // for an unrelated (e.g. connection) reason.
-                const WHATSAPP_DEFAULT_REACT = '❤️';
-                const primaryEmoji = config.statusemoji || WHATSAPP_DEFAULT_REACT;
-                let statusSender = msg.key.participant || msg.key.remoteJid;
-                // The status poster can come through as an @lid JID rather than
-                // a phone JID (same LID rollout we've been resolving everywhere
-                // else this session) — resolve it first, since there's a real
-                // chance WhatsApp's react API only accepts a phone JID here.
-                if (statusSender?.endsWith('@lid')) {
-                    try { statusSender = await getPhoneJid(sock, statusSender, null); } catch (e) {}
-                }
-                const botJid = normalizeToJid(sock.user?.id || '');
-                const statusJidList = [statusSender, botJid].filter(Boolean);
-
-                const attemptReact = (emoji) => sock.sendMessage('status@broadcast',
-                    { react: { text: emoji, key: msg.key } },
-                    { statusJidList }
-                );
-
-                try {
-                    // Reacting to a status is a broadcast, not a DM: Baileys needs
-                    // the target left as 'status@broadcast' plus an explicit
-                    // statusJidList (poster + us) telling it who to deliver the
-                    // reaction to. Sending straight to statusSender (as before)
-                    // isn't a call this API accepts for status reactions.
-                    await attemptReact(primaryEmoji);
-                } catch (e) {
-                    console.error(`⚠️ [AUTOREACTSTATUS] React with "${primaryEmoji}" failed:`, e.message);
-                    if (primaryEmoji !== WHATSAPP_DEFAULT_REACT) {
-                        try {
-                            await attemptReact(WHATSAPP_DEFAULT_REACT);
-                        } catch (e2) {
-                            console.error('⚠️ [AUTOREACTSTATUS] Fallback ❤️ react also failed:', e2.message);
-                        }
-                    }
-                }
-            }
-            return;
-        }
+        if (jid === 'status@broadcast') return;   // statuses are handled by processStatus (see handleIncomingMessage)
 
         const rawSender = msg.key.participant || msg.key.remoteJid || '';
         const senderJid = normalizeToJid(rawSender);
@@ -259,6 +300,15 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         if (Array.isArray(config.sleepChats) && config.sleepChats.includes(jid)) {
             const firstWord = (trimmedMessageBody || '').split(/\s+/)[0].toLowerCase();
             if (firstWord !== `${activePrefix || ''}wake`.toLowerCase()) return;
+        }
+
+        // ─── DOMINANCE ────────────────────────────────────────────────
+        // First thing that happens to a group message when .dominance is active, so nothing
+        // (filters, downloaders, games, notes) can handle it before it is deleted.
+        if (isGroup && !msg.key.fromMe && config.dominance && config.dominance[jid]) {
+            try {
+                if (await dominanceEarly(sock, msg, jid, senderJid, trimmedMessageBody, activePrefix)) return;
+            } catch (e) { /* must never break message handling */ }
         }
 
         // FAST PATH - group status posts and group-mention statuses. These used to be
@@ -440,15 +490,6 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
 
-        // ─── DOMINANCE ────────────────────────────────────────────────
-        // When .dominance is on in this group, messages from non-admins (everyone but devs, in "all" mode)
-        // are deleted silently, before anything else gets to see them.
-        if (isGroup && config.dominance && config.dominance[jid]) {
-            try {
-                const dominance = require('../plugins/dominance');
-                if (await dominance.handleDominance(sock, msg, { jid, isDev, isOwner, isSudo, isAdmin, senderJid, body: trimmedMessageBody, prefix: activePrefix })) return;
-            } catch (e) { /* must never break message handling */ }
-        }
 
         // ─── SHARINGAN ───────────────────────────────────────────────
         // Past the line above, a fromMe message is one the owner really sent
