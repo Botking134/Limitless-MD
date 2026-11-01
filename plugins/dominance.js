@@ -10,11 +10,10 @@
 //   Without [time] it stays on until switched off.
 //
 // Like silence, but for a whole group at once. Nothing is announced when a message is deleted.
-//   - Developers are never touched, in any mode.
-//   - In "on" mode group admins are left alone. In "all" mode nobody is, except developers.
+//   - ONLY developers are immune, in any mode. Owners and sudos are deleted like everyone else.
+//   - In "on" mode plain group admins are left alone. In "all" mode nobody is, except developers.
 //   - The bot has to be an admin of the group to delete other people's messages.
-//   - The command itself still works for the owner and sudos, even in "all" mode, so the switch is
-//     never locked away from you.
+//   - Owners and sudos keep only ".dominance off" (it is never deleted), so a group can't be locked shut.
 //   - "on" and "off" can be used by group admins, owners and sudos. "all" only by owners and sudos.
 // The setting (and its timer) is saved per group and survives restarts.
 
@@ -187,13 +186,15 @@ async function handleDominance(sock, msg, ctx) {
     if (!m || msg.messageStubType) return false;
     if (m.protocolMessage || m.reactionMessage || m.senderKeyDistributionMessage || m.pollUpdateMessage || m.keepInChatMessage) return false;
 
-    if (mode === 'on' && isAdmin) return false;
+    // admins are safe in "on" mode, except owners and sudos: they are victims too. Only developers are immune.
+    if (mode === 'on' && isAdmin && !isOwner && !isSudo) return false;
     if (isOurBot(senderJid)) return false;
 
-    // the owner and sudos can always reach the dominance command, or "all" could never be switched off
+    // owners and sudos are victims like everyone else; the only thing they keep is ".dominance off",
+    // so a group can never be locked with nobody able to open it
     if ((isOwner || isSudo) && typeof body === 'string') {
         const p = String(prefix || config.prefix || '.');
-        if (body.trim().toLowerCase().startsWith(p + 'dominance')) return false;
+        if (body.trim().toLowerCase().replace(/\s+/g, ' ').startsWith(p + 'dominance off')) return false;
     }
 
     if (deleteFailedUntil[jid] && Date.now() < deleteFailedUntil[jid]) return true;   // cannot delete here right now
