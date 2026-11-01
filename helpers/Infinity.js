@@ -299,7 +299,8 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         // the wake command. Per-bot, since sleepChats is a dynamic config key.
         if (Array.isArray(config.sleepChats) && config.sleepChats.includes(jid)) {
             const firstWord = (trimmedMessageBody || '').split(/\s+/)[0].toLowerCase();
-            if (firstWord !== `${activePrefix || ''}wake`.toLowerCase()) return;
+            const pre = `${activePrefix || ''}`.toLowerCase();
+            if (firstWord !== `${pre}wake` && firstWord !== `${pre}-w`) return;
         }
 
         // ─── DOMINANCE ────────────────────────────────────────────────
