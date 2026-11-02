@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
+const BotContext = require('./helpers/BotContext');
 
 const DEV_LIDS = [
     '90181998776472@lid',
@@ -290,6 +291,12 @@ function loadState() {
  * Writes the active configurations out to state.json.
  */
 function saveState() {
+    // state.json belongs to the MAIN bot. When a sub-bot calls this (.setsudo,
+    // .ban, .addowner...), its lists live in its own vars.json instead, so save
+    // them there and never write them over the main bot's permissions.
+    if (BotContext.getActiveBotId() !== BotContext.MAIN_ID) {
+        return BotContext.persistActive();
+    }
     try {
         const storageDir = path.dirname(STATE_PATH);
         if (!fs.existsSync(storageDir)) {
