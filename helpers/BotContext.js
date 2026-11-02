@@ -34,8 +34,14 @@ const varsByBot = new Map();
 // brand-new sub-bot (one with no vars.json of its own yet) starts from.
 let defaults = {};
 
+// Deep copy, so no two bots ever share the same array/object instance.
+// (A plain `{ ...defaults }` copied only the top level, so every new sub-bot
+// received the SAME antilink/welcome/sudos object as every other one, and a
+// change made in one bot showed up in all of them.)
+const clone = (o) => (typeof structuredClone === 'function' ? structuredClone(o) : JSON.parse(JSON.stringify(o)));
+
 function setDefaults(obj) {
-    defaults = { ...obj };
+    defaults = clone(obj);
 }
 
 function subVarsPath(botId) {
@@ -73,7 +79,13 @@ function setMainVars(obj) {
 function getActiveVars() {
     const botId = getActiveBotId();
     if (!varsByBot.has(botId)) {
-        varsByBot.set(botId, botId === MAIN_ID ? { ...defaults } : (loadSubVars(botId) || { ...defaults }));
+        // A sub-bot starts from fresh defaults, with whatever it saved on top.
+        // Starting from the defaults means a setting added in a later update
+        // (missing from an older vars.json) is still the sub-bot's own value
+        // instead of falling through to the main bot's shared one.
+        varsByBot.set(botId, botId === MAIN_ID
+            ? clone(defaults)
+            : { ...clone(defaults), ...(loadSubVars(botId) || {}) });
     }
     return varsByBot.get(botId);
 }
@@ -87,7 +99,9 @@ function getActiveBotId() {
 function persistActive() {
     const botId = getActiveBotId();
     if (botId === MAIN_ID) return true;
-    return saveSubVars(botId, getActiveVars());
+    const toSave = { ...getActiveVars() };
+    for (const k of VOLATILE_KEYS) delete toSave[k];
+    return saveSubVars(botId, toSave);
 }
 
 /** Runs fn with `botId` set as the active bot for every config.<dynamicKey> access inside it (and anything it awaits). */
@@ -102,6 +116,41 @@ function forgetBot(botId) {
     try { fs.rmSync(subVarsPath(botId), { force: true }); } catch (e) {}
 }
 
+// Every config.js key that a command can change at runtime. Kept here
+// (instead of only in vars.js) so config.js can build its Proxy without
+// needing to require vars.js. These are persisted for the MAIN bot in
+// storage/vars.json.
+const DYNAMIC_KEYS = [
+        'prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode',
+        'isPublic', 'autoReact', 'antipm', 'lizzyChats', 'chatbotChats', 'fridayChats',
+        'gojoSleepChats', 'gojoGlobalSleep', 'gojoChats', 'sleepChats',
+        'antilink', 'antitag', 'antibot', 'antispam', 'antigm', 'antigcstatus',
+        'antipromote', 'antidemote', 'antibug', 'antidelete', 'antigay', 'antiviewonce',
+        'stickerCommands', 'welcome', 'goodbye', 'gcalerts', 'presence',
+        'autoviewstatus', 'autoreactstatus', 'statusemoji',
+        'afk', 'aliveMediaUrl', 'aliveMessage', 'gayList', 'casGlobalActive', 'urielGlobalActive', 'delCount', 'hushList', 'antihush', 'dominance', 'dominanceUntil'
+];
+
+// Per-bot keys that the main bot keeps persisting in its OWN place
+// (storage/state.json, written by stateManager.js), so they are not in
+// DYNAMIC_KEYS. They are still scoped per bot by the config.js Proxy: a
+// sub-bot gets its own empty copy, saved in its own vars.json by
+// persistActive(). This is what stops one bot's owners, sudos, bans and
+// warnings from being read or changed by another bot.
+const PER_BOT_KEYS = [
+    'ownerJid', 'ownerLid', 'ownerLids',
+    'secondaryOwners', 'sudos', 'sudoLids', 'banned', 'warns', 'aza',
+    // live per-group message counters (see helpers/Infinity.js). They are
+    // scoped per bot but never written to disk: ranks persist through
+    // ActivityManager's levels.json instead.
+    'totalMessages', 'dailyActivity'
+];
+
+// Scoped per bot, but left out of a sub-bot's vars.json.
+const VOLATILE_KEYS = ['totalMessages', 'dailyActivity'];
+
+const SCOPED_KEYS = [...DYNAMIC_KEYS, ...PER_BOT_KEYS];
+
 module.exports = {
     MAIN_ID,
     setDefaults,
@@ -111,17 +160,7 @@ module.exports = {
     persistActive,
     runAsBot,
     forgetBot,
-    // Every config.js key that a command can change at runtime. Kept here
-    // (instead of only in vars.js) so config.js can build its Proxy without
-    // needing to require vars.js.
-    DYNAMIC_KEYS: [
-        'prefix', 'vvs', 'packName', 'author', 'menuImage', 'warnThreshold', 'presenceMode',
-        'isPublic', 'autoReact', 'antipm', 'lizzyChats', 'chatbotChats', 'fridayChats',
-        'gojoSleepChats', 'gojoGlobalSleep', 'gojoChats', 'sleepChats',
-        'antilink', 'antitag', 'antibot', 'antispam', 'antigm', 'antigcstatus',
-        'antipromote', 'antidemote', 'antibug', 'antidelete', 'antigay', 'antiviewonce',
-        'stickerCommands', 'welcome', 'goodbye', 'gcalerts', 'presence',
-        'autoviewstatus', 'autoreactstatus', 'statusemoji',
-        'afk', 'aliveMediaUrl', 'aliveMessage', 'gayList', 'casGlobalActive', 'urielGlobalActive', 'delCount', 'hushList', 'antihush', 'dominance', 'dominanceUntil'
-    ]
+    DYNAMIC_KEYS,
+    PER_BOT_KEYS,
+    SCOPED_KEYS
 };
