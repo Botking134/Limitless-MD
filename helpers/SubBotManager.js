@@ -44,6 +44,31 @@ function saveRegistry(data) {
     }
 }
 
+// Makes the person who paired a sub-bot that bot's own owner. The owner lives
+// in the sub-bot's own settings, so it is not the main bot's owner.
+function applySubBotOwner(phoneNumber, requesterJid) {
+    BotContext.runAsBot(phoneNumber, () => {
+        const jid = normalizeToJid(requesterJid || '');
+        if (!jid) return;
+        const cache = global.lidCache || {};
+        let phone = '';
+        let lid = '';
+        if (jid.endsWith('@lid')) {
+            lid = jid;
+            phone = cache[jid] || '';
+        } else {
+            phone = jid;
+            lid = Object.keys(cache).find(l => cache[l] === jid) || '';
+        }
+        if (phone) config.ownerJid = phone;
+        if (lid) {
+            config.ownerLid = lid;
+            config.ownerLids = [lid];
+        }
+        BotContext.persistActive();
+    });
+}
+
 function isActive(phoneNumber) {
     const entry = global.subBotSockets.get(phoneNumber);
     return !!(entry && entry.status === 'connected');
@@ -100,6 +125,7 @@ async function createSubBot(phoneNumber, requesterJid, onCode, onFail) {
     // it triggers (via Infinity.js) is scoped to this sub-bot's own settings
     // object instead of bleeding into the main bot or other sub-bots.
     sock.__botId = phoneNumber;
+    applySubBotOwner(phoneNumber, requesterJid);
 
     const entry = { sock, ownerJid: requesterJid, status: 'pairing', connectedAt: null };
     global.subBotSockets.set(phoneNumber, entry);
