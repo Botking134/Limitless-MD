@@ -1,7 +1,10 @@
 // plugins/devs.js
 /**
- * Developer-Only Plugin – Git Management & Code Upgrades
- * All commands here are restricted to DEV_LIDS / DEV_JIDS.
+ * Developer Plugin – Git Management, Code Upgrades & Dev List
+ *  - .devs is a regular command: anyone can use it.
+ *  - Every other command here is strictly dev-only:
+ *      non-dev  -> reacts with 🖕 / 💩 / ❌ (random) and is ignored
+ *      dev      -> reacts with 👨‍💻 and the command runs
  */
 
 const config = require('../config');
@@ -125,6 +128,26 @@ try { loadTempDevs(); } catch (e) { console.error('[DEVS] temp dev load failed:'
 
 function getPrefix() {
     return Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+}
+
+// ─── DEV GATE ───────────────────────────────────────────────────
+// Used by every dev-only command.
+//   non-dev -> random 🖕 / 💩 / ❌ reaction, then ignored (returns false)
+//   dev     -> 👨‍💻 reaction, command continues (returns true)
+const DENY_REACTIONS = ['🖕', '💩', '❌'];
+const DEV_REACTION = '👨‍💻';
+
+async function devGate(sock, msg, isDev) {
+    const jid = msg.key.remoteJid;
+    const react = async (text) => {
+        try { await sock.sendMessage(jid, { react: { text, key: msg.key } }); } catch (e) { /* best effort */ }
+    };
+    if (!isDev) {
+        await react(DENY_REACTIONS[Math.floor(Math.random() * DENY_REACTIONS.length)]);
+        return false;
+    }
+    await react(DEV_REACTION);
+    return true;
 }
 
 // exec() errors carry the full command line, and some commands here embed the
@@ -275,11 +298,12 @@ function ago(ts) {
     return `${Math.floor(s / 86400)}d ago`;
 }
 
-// The devs list. Everyone is shown as a real @mention, whether stored as a LID or a phone JID.
+// The devs list. Everyone is shown as a real @mention. Phone JIDs are used
+// because WhatsApp resolves those to a contact name / number, while a bare LID
+// very often shows up as "Unknown user".
 function buildDevList() {
-    const p = getPrefix();
     const mentions = [];
-    const permanent = [...new Set(DEV_LIDS.filter(id => HARD_IDS.has(id)))];
+    const permanent = [...new Set(DEV_PHONE_JIDS.filter(id => HARD_IDS.has(id)))];
     const out = [];
 
     out.push(`╭━━━━━━━━━━━━━━━━━━━━╮`);
@@ -298,15 +322,20 @@ function buildDevList() {
         out.push(`┃  _nobody yet_`);
     } else {
         tempDevs.forEach((e, i) => {
-            out.push(`┃  *${i + 1}* ❯ ${tag(e.id)}`);
+            // prefer the phone form; fall back to the cached LID -> phone mapping
+            let who = idsOf(e).find(isPhone);
+            if (!who) {
+                const c = global.lidCache && global.lidCache[e.id];
+                if (c && isPhone(cleanId(c))) who = cleanId(c);
+            }
+            who = who || e.id;
+            out.push(`┃  *${i + 1}* ❯ ${tag(who)}`);
             out.push(`┃       ┕ _added ${ago(e.addedAt)}_`);
-            mentions.push(e.id);
+            mentions.push(who);
         });
     }
     out.push(`┃`);
     out.push(`┗━━━━━━━━━━━━━━━━━━━━`);
-    out.push(``);
-    out.push(`✦ \`${p}add-dev\`  ·  \`${p}del-dev <number>\``);
     return { text: out.join('\n'), mentions };
 }
 
@@ -521,15 +550,13 @@ async function handleGitForce(sock, jid, msg, option) {
 // ─── EXPORT COMMANDS ────────────────────────────────────────────
 
 const commands = [
-    // ─── .git COMMAND ──────────────────────────────────────────
+    // ─── .git COMMAND (dev only) ───────────────────────────────
     {
         name: 'git',
         isPrefixless: false,
         execute: async (sock, msg, args, { isDev } = {}) => {
+            if (!(await devGate(sock, msg, isDev))) return;
             const jid = msg.key.remoteJid;
-            if (!isDev) {
-                return await sock.sendMessage(jid, { text: "❌ Only developers can use Git commands." }, { quoted: msg });
-            }
 
             try {
                 console.log('[GIT] Command triggered with args:', args);
@@ -598,28 +625,24 @@ const commands = [
         }
     },
 
-    // ─── .gitinfo COMMAND ──────────────────────────────────────
+    // ─── .gitinfo COMMAND (dev only) ───────────────────────────
     {
         name: 'gitinfo',
         isPrefixless: false,
         execute: async (sock, msg, args, { isDev } = {}) => {
+            if (!(await devGate(sock, msg, isDev))) return;
             const jid = msg.key.remoteJid;
-            if (!isDev) {
-                return await sock.sendMessage(jid, { text: "❌ Only developers can use this command." }, { quoted: msg });
-            }
             await showGitHelp(sock, jid, msg);
         }
     },
 
-    // ─── .upgrade COMMAND ──────────────────────────────────────
+    // ─── .upgrade COMMAND (dev only) ───────────────────────────
     {
         name: 'upgrade',
         isPrefixless: false,
         execute: async (sock, msg, args, { isDev } = {}) => {
+            if (!(await devGate(sock, msg, isDev))) return;
             const jid = msg.key.remoteJid;
-            if (!isDev) {
-                return await sock.sendMessage(jid, { text: "❌ Only developers can use the upgrade command." }, { quoted: msg });
-            }
 
             const GITHUB_TOKEN = config.githubToken;
             if (!GITHUB_TOKEN) {
@@ -716,15 +739,14 @@ const commands = [
         }
     },
 
-    // ─── .devs / .add-dev / .del-dev ───────────────────────────
+    // ─── .devs (REGULAR COMMAND: anyone can use it) ────────────
     {
         name: 'devs',
         isPrefixless: false,
-        category: 'owner',
+        category: 'general',
         description: 'List the bot developers (permanent and temporary), tagged.',
-        execute: async (sock, msg, args, { isDev, isOwner, isSudo } = {}) => {
+        execute: async (sock, msg) => {
             const jid = msg.key.remoteJid;
-            if (!(isDev || isOwner || isSudo)) return;
             try {
                 loadTempDevs();
                 const { text, mentions } = buildDevList();
@@ -735,6 +757,8 @@ const commands = [
             }
         }
     },
+
+    // ─── .add-dev (dev only) ───────────────────────────────────
     {
         name: 'add-dev',
         isPrefixless: false,
@@ -742,8 +766,8 @@ const commands = [
         description: 'Add a temporary developer (reply, @tag or number). Only the permanent devs can use it.',
         usage: 'add-dev (reply | @tag | number)',
         execute: async (sock, msg, args, { isDev } = {}) => {
+            if (!(await devGate(sock, msg, isDev))) return;
             const jid = msg.key.remoteJid;
-            if (!isDev) return await sock.sendMessage(jid, { text: '❌ Only developers can use this command.' }, { quoted: msg });
             try {
                 loadTempDevs();
                 if (!isPermanentDev(msg)) {
@@ -780,6 +804,8 @@ const commands = [
             }
         }
     },
+
+    // ─── .del-dev (dev only) ───────────────────────────────────
     {
         name: 'del-dev',
         isPrefixless: false,
@@ -787,8 +813,8 @@ const commands = [
         description: 'Remove a temporary developer by its number in the devs list (del-dev 1). Hardcoded devs cannot be removed.',
         usage: 'del-dev <number>',
         execute: async (sock, msg, args, { isDev } = {}) => {
+            if (!(await devGate(sock, msg, isDev))) return;
             const jid = msg.key.remoteJid;
-            if (!isDev) return await sock.sendMessage(jid, { text: '❌ Only developers can use this command.' }, { quoted: msg });
             try {
                 loadTempDevs();
                 if (!isPermanentDev(msg)) {
