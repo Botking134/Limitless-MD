@@ -16,6 +16,9 @@
 //   - Owners and sudos keep only ".dominance off" (it is never deleted), so a group can't be locked shut.
 //   - "on" and "off" can be used by group admins, owners and sudos. "all" only by owners and sudos.
 // The setting (and its timer) is saved per group and survives restarts.
+//
+// It runs FIRST in helpers/Infinity.js (guard), before anything else can drop the message, and it also
+// catches messages this bot could not decrypt (they carry no body, but they still have a sender to delete).
 
 const axios = require('axios');
 const config = require('../config');
@@ -163,11 +166,150 @@ function isOurBot(senderJid) {
     return false;
 }
 
+// ─── THE EARLY GUARD (called FIRST by helpers/Infinity.js, for every group message) ───
+// It works out who sent the message on its own, from the message key and the group member list,
+// so it no longer depends on anything that Infinity.js works out later (or never gets to).
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const metaCache = new Map();
+const noticeAt = {};   // group -> last time the "cannot delete" notice was posted
+
+async function getMeta(sock, jid) {
+    const key = (sock.__botId || 'main') + '|' + jid;
+    const c = metaCache.get(key);
+    if (c && Date.now() - c.t < 60000) return c.data;
+    try {
+        const data = await Promise.race([sock.groupMetadata(jid), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))]);
+        metaCache.set(key, { t: Date.now(), data });
+        return data;
+    } catch (e) { return c ? c.data : null; }
+}
+
+const flat = (...vals) => vals.flat(Infinity).filter(Boolean).map(cleanJid).filter(Boolean);
+
+// every form (lid, phone jid) of the sender that can be found, and whether they are a group admin
+function identify(msg, meta) {
+    const raw = cleanJid(msg.key.participant || '');
+    const forms = new Set(raw ? [raw] : []);
+    const cache = global.lidCache || {};
+    if (raw && cache[raw]) forms.add(cleanJid(cache[raw]));
+    let admin = false;
+    for (const p of (meta?.participants || [])) {
+        const pf = flat(p.id, p.lid, p.phoneNumber);
+        if (pf.some(x => forms.has(x))) {
+            pf.forEach(x => forms.add(x));
+            admin = p.admin === 'admin' || p.admin === 'superadmin';
+            break;
+        }
+    }
+    if (![...forms].some(f => f.endsWith('@lid'))) {
+        try { for (const [k, v] of Object.entries(cache)) if (v && forms.has(cleanJid(v))) forms.add(cleanJid(k)); } catch (e) { /* best effort */ }
+    }
+    return { forms: [...forms], admin };
+}
+
+function bodyOf(msg) {
+    try {
+        const { getRawMessage } = require('../helpers/Message');
+        const m = getRawMessage(msg.message) || msg.message || {};
+        return m.conversation || m.extendedTextMessage?.text || m.imageMessage?.caption || m.videoMessage?.caption || '';
+    } catch (e) { return ''; }
+}
+
+// Returns true when the message was deleted (the caller then drops it).
+async function guard(sock, msg, { botSentMessageIds, prefix } = {}) {
+    const jid = msg?.key?.remoteJid;
+    if (!jid || !jid.endsWith('@g.us')) return false;
+    const mode = config.dominance?.[jid];
+    if (mode !== 'on' && mode !== 'all') return false;
+    msg.__domChecked = true;
+
+    // timer ran out while the bot was off, or the timeout got lost: switch off and let this message through
+    const until = config.dominanceUntil?.[jid];
+    if (until) {
+        if (Date.now() >= until) { await expire(sock, jid); return false; }
+        if (!timers[jid]) scheduleExpiry(sock, jid);
+    }
+
+    // only real messages. "Could not decrypt" messages (stub type 2) have no body, but they are still
+    // somebody's message, so they are deleted too. Reactions, edits, deletions and group notices are not.
+    const m = msg.message;
+    if (m) {
+        if (msg.messageStubType) return false;
+        if (m.protocolMessage || m.reactionMessage || m.senderKeyDistributionMessage || m.pollUpdateMessage || m.keepInChatMessage) return false;
+    } else if (msg.messageStubType !== 2) {
+        return false;
+    }
+
+    // our own account: the bot's replies are never touched. On the main bot, something typed by a human on
+    // that account counts as a normal sender (its echo is told apart from the bot's replies by id).
+    if (msg.key.fromMe) {
+        if (sock.__botId && sock.__botId !== 'main') return false;
+        if (!botSentMessageIds || botSentMessageIds.has(msg.key.id)) return false;
+        await sleep(1500);   // the echo of a bot reply can arrive before its id is recorded
+        if (botSentMessageIds.has(msg.key.id)) return false;
+    }
+
+    const meta = await getMeta(sock, jid);
+    const who = identify(msg, meta);
+
+    // developers (hardcoded and temporary) are immune in every mode
+    let devs = {};
+    try { devs = require('./devs'); } catch (e) { /* no devs file */ }
+    const devSet = new Set(flat(devs.DEV_LIDS || [], devs.DEV_JIDS || [], devs.DEV_PHONE_JIDS || []));
+    if (who.forms.some(f => devSet.has(f))) return false;
+
+    if (!msg.key.fromMe && who.forms.some(f => isOurBot(f))) return false;
+
+    const ownerSet = new Set(flat(config.ownerJid, config.ownerLid, config.ownerLids || [], config.secondaryOwners || []));
+    const sudoSet = new Set(flat(config.sudos || [], config.sudoLids || []));
+    const isOwner = !!msg.key.fromMe || who.forms.some(f => ownerSet.has(f));
+    const isSudo = who.forms.some(f => sudoSet.has(f));
+
+    // admins are safe in "on" mode, except owners and sudos: they are deleted like everyone else
+    if (mode === 'on' && who.admin && !isOwner && !isSudo) return false;
+
+    // owners and sudos keep ".dominance off" so a group can never be locked shut
+    if (isOwner || isSudo) {
+        const text = bodyOf(msg);
+        if (text) {
+            const p = String(prefix || config.prefix || '.');
+            if (text.trim().toLowerCase().replace(/\s+/g, ' ').startsWith(p + 'dominance off')) return false;
+        }
+    }
+
+    if (deleteFailedUntil[jid] && Date.now() < deleteFailedUntil[jid]) return true;
+
+    let ok = true, reason = '';
+    try {
+        const sent = await sock.sendMessage(jid, {
+            delete: { remoteJid: jid, id: msg.key.id, fromMe: !!msg.key.fromMe, participant: msg.key.participant || undefined }
+        });
+        if (sent === null) { ok = false; reason = 'WhatsApp refused it'; }   // the socket wrapper swallows send errors and returns null
+    } catch (e) { ok = false; reason = e?.message || String(e); }
+
+    if (ok) {
+        if (global.messageStore) delete global.messageStore[msg.key.id];
+        return true;
+    }
+
+    deleteFailedUntil[jid] = Date.now() + 20 * 1000;
+    console.error(`❌ [DOMINANCE] could not delete a message in ${jid}: ${reason}`);
+    // one short notice (at most every 10 minutes per group), so a broken setup is not silent
+    if (!noticeAt[jid] || Date.now() - noticeAt[jid] > 10 * 60 * 1000) {
+        noticeAt[jid] = Date.now();
+        const admin = await botIsAdmin(sock, jid);
+        const why = admin === false ? 'I am not an admin of this group.' : 'WhatsApp refused the delete (see the console).';
+        try { await sock.sendMessage(jid, { text: `⚠️ _Dominance cannot delete messages here: ${why}_` }); } catch (e) { /* best effort */ }
+    }
+    return true;
+}
+
 // ─── THE INTERCEPTOR (called by helpers/Infinity.js for every group message) ───
 const deleteFailedUntil = {};      // group -> time; stops hammering when the bot is not an admin
 
 // Returns true when the message was deleted (the caller then drops it).
 async function handleDominance(sock, msg, ctx) {
+    if (msg.__domChecked) return false;   // the early guard already dealt with this message
     const { jid, isDev, isOwner, isSudo, isAdmin, senderJid, body, prefix } = ctx;
     const mode = config.dominance?.[jid];
     if (mode !== 'on' && mode !== 'all') return false;
@@ -289,4 +431,5 @@ const commands = [
 ];
 
 commands.handleDominance = handleDominance;
+commands.guard = guard;
 module.exports = commands;
