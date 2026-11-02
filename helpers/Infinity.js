@@ -41,13 +41,16 @@ try {
 const groupMetadataCache = new Map();
 
 async function getCachedGroupMetadata(sock, jid) {
-    const cached = groupMetadataCache.get(jid);
+    // Keyed per bot: the main bot and each sub-bot can have different admin
+    // status in the same group, so they must never share a cached entry.
+    const cacheKey = `${sock.__botId || 'main'}:${jid}`;
+    const cached = groupMetadataCache.get(cacheKey);
     if (cached && (Date.now() - cached.time < 60000)) {
         return cached.data;
     }
     try {
         const metadata = await sock.groupMetadata(jid);
-        groupMetadataCache.set(jid, { data: metadata, time: Date.now() });
+        groupMetadataCache.set(cacheKey, { data: metadata, time: Date.now() });
         return metadata;
     } catch (e) {
         return cached ? cached.data : null;
@@ -215,13 +218,14 @@ async function reactToStatus(sock, msg) {
 async function processStatus(sock, msg) {
     const id = msg.key?.id;
     if (!id || msg.key.fromMe) return;
-    if (statusSeen.has(id)) return;
-    statusSeen.add(id);
+    // Per bot: every bot that receives this status should handle it once.
+    const seenKey = `${BotContext.getActiveBotId()}:${id}`;
+    if (statusSeen.has(seenKey)) return;
+    statusSeen.add(seenKey);
     if (statusSeen.size > 800) statusSeen.delete(statusSeen.values().next().value);
 
     const doView = config.autoviewstatus === 'on';
     const doReact = config.autoreactstatus === 'on';
-    console.log(`[STATUS-CFG] bot=${BotContext.getActiveBotId()} autoview=${config.autoviewstatus} autoreact=${config.autoreactstatus}`);
     if (!doView && !doReact) return;
 
     await acquireStatusSlot();
@@ -261,7 +265,6 @@ async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     SleepGate.guardSocket(sock);
     const first = chatUpdate.messages && chatUpdate.messages[0];
     if (first && first.key && first.key.remoteJid === 'status@broadcast') {
-        console.log(`[STATUS-IN] bot=${sock.__botId || 'main'} from=${first.key.participant || '-'} hasMessage=${!!first.message} batch=${chatUpdate.messages.length} type=${chatUpdate.type || '-'}`);
         // fire and forget, in parallel: the status never waits for (or blocks) other messages
         if (first.message) Promise.resolve(BotContext.runAsBot(sock.__botId, () => processStatus(sock, first))).catch(() => {});
         return;
@@ -390,11 +393,14 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                 config.dailyActivity[activityKey].count += 1;
             }
 
-            global.saveStateTimeout = global.saveStateTimeout || null;
-            if (!global.saveStateTimeout) {
-                global.saveStateTimeout = setTimeout(() => {
+            // One debounce timer per bot, so a sub-bot's pending save can't
+            // block the main bot's (or the other way round).
+            const saveBotId = BotContext.getActiveBotId();
+            global.saveStateTimers = global.saveStateTimers || {};
+            if (!global.saveStateTimers[saveBotId]) {
+                global.saveStateTimers[saveBotId] = setTimeout(() => {
                     try { saveState(); } catch (e) {}
-                    global.saveStateTimeout = null;
+                    global.saveStateTimers[saveBotId] = null;
                 }, 30000);
             }
         }
