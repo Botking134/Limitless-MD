@@ -99,12 +99,6 @@ async function executeBotCommand(cmdName, sock, msg, args, opts) {
     return false;
 }
 
-// ─── MAIN MESSAGE DISPATCHER / ROUTER ───────────────────────────
-// Every incoming message — from the main bot's socket OR any sub-bot's
-// socket — comes through here. Wrapping the whole thing in runAsBot() scopes
-// every config.<setting> read/write during this message to whichever bot
-// (sock.__botId, tagged when the socket was created) it actually came from,
-// so a sub-bot owner's settings changes never leak onto the main bot.
 // Finds a message-type key at the top level of a message, looking through the
 // usual wrapper layers (ephemeral, view-once, device-sent...). It deliberately does
 // NOT look inside contextInfo, so a normal reply that merely quotes a status is
@@ -169,6 +163,7 @@ async function quickImmunity(sock, jid, senderJid) {
 // messages of the same batch. (They used to go through the one-by-one message queue, which is
 // why autoview felt slow.)
 const STATUS_DEFAULT_EMOJI = '💚';   // WhatsApp's own quick-react on a status
+const WHATSAPP_DEFAULT_REACT = '❤️'; // WhatsApp's built-in default status-react; last-resort retry target
 const statusSeen = new Set();
 let statusSlots = 6;
 const statusWaiters = [];
@@ -183,7 +178,9 @@ async function reactToStatus(sock, msg) {
     const poster = msg.key.participant || msg.participant || '';
     if (!poster) { console.error('⚠️ [AUTORS] status has no poster, skipped'); return; }
 
-    // resolve phone jid if poster is a LID
+    // The status poster can come through as an @lid JID rather than a phone JID
+    // (same LID rollout resolved everywhere else) — resolve it first, since WhatsApp's
+    // react API may only accept a phone JID here.
     let phone = poster;
     if (poster.endsWith('@lid')) {
         const alt = msg.key.participantAlt || msg.key.participantPn || '';
@@ -192,6 +189,10 @@ async function reactToStatus(sock, msg) {
     }
     const botPhone = normalizeToJid(sock.user?.id || '');
     const botLid = sock.user?.lid ? normalizeToJid(sock.user.lid) : '';
+    // Reacting to a status is a broadcast, not a DM: Baileys needs the target left as
+    // 'status@broadcast' plus an explicit statusJidList (poster + us) telling it who to
+    // deliver the reaction to. Sending straight to the poster isn't a call this API
+    // accepts for status reactions.
     // TEST 1: minimal list (poster + bot only)
     const statusJidList = [...new Set([poster, botLid || botPhone].filter(Boolean))];
     const target = phone || poster;
@@ -212,7 +213,13 @@ async function reactToStatus(sock, msg) {
             return false;
         }
     };
-    if (!(await attempt(emoji)) && emoji !== STATUS_DEFAULT_EMOJI) await attempt(STATUS_DEFAULT_EMOJI);
+    // If a custom emoji fails, retry with the default (in case WhatsApp is rejecting that
+    // specific emoji rather than the react call itself failing for an unrelated reason),
+    // and finally with WhatsApp's guaranteed-accepted ❤️.
+    if (!(await attempt(emoji)) && emoji !== STATUS_DEFAULT_EMOJI) {
+        const retried = await attempt(STATUS_DEFAULT_EMOJI);
+        if (!retried && STATUS_DEFAULT_EMOJI !== WHATSAPP_DEFAULT_REACT) await attempt(WHATSAPP_DEFAULT_REACT);
+    }
 }
 
 async function processStatus(sock, msg) {
@@ -241,6 +248,7 @@ async function processStatus(sock, msg) {
 // ─── DOMINANCE (runs first, before filters / downloaders / games can swallow the message) ───
 async function dominanceEarly(sock, msg, jid, senderJid, body, prefix) {
     const dominance = require('../plugins/dominance');
+    if (typeof dominance.handleDominance !== 'function') return false;
     let dev = DEV_LIDS.includes(senderJid) || DEV_JIDS.includes(senderJid) || DEV_PHONE_JIDS.includes(senderJid);
     const ids = [senderJid];
     if (senderJid.endsWith('@lid')) {
@@ -261,6 +269,12 @@ async function dominanceEarly(sock, msg, jid, senderJid, body, prefix) {
     return dominance.handleDominance(sock, msg, { jid, isDev: dev, isOwner, isSudo, isAdmin, senderJid, body, prefix });
 }
 
+// ─── MAIN MESSAGE DISPATCHER / ROUTER ───────────────────────────
+// Every incoming message — from the main bot's socket OR any sub-bot's
+// socket — comes through here. Wrapping the whole thing in runAsBot() scopes
+// every config.<setting> read/write during this message to whichever bot
+// (sock.__botId, tagged when the socket was created) it actually came from,
+// so a sub-bot owner's settings changes never leak onto the main bot.
 async function handleIncomingMessage(sock, chatUpdate, botSentMessageIds) {
     SleepGate.guardSocket(sock);
     const first = chatUpdate.messages && chatUpdate.messages[0];
@@ -277,6 +291,15 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
         const activePrefix = getActivePrefix();
         if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
         const msg = chatUpdate.messages[0];
+        // ─── DOMINANCE: the very first thing, before anything else can drop the message ───
+        // (also sees messages that could not be decrypted and have no body)
+        if (msg?.key?.remoteJid?.endsWith('@g.us') && config.dominance && config.dominance[msg.key.remoteJid]) {
+            try {
+                const dominancePlugin = require('../plugins/dominance');
+                if (typeof dominancePlugin.guard === 'function' &&
+                    await dominancePlugin.guard(sock, msg, { botSentMessageIds, prefix: activePrefix })) return;
+            } catch (e) { console.error('⚠️ [DOMINANCE] guard error:', e?.message || e); }
+        }
         // Diagnostic: a group event that arrives with NO message body (e.g. a stub) is
         // dropped just below. If a status post shows up like that it would otherwise
         // be invisible, so log it (group chats only, never our own messages).
@@ -287,7 +310,13 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
 
         const jid = msg.key.remoteJid;
 
-        if (jid === 'status@broadcast') return;   // statuses are handled by processStatus (see handleIncomingMessage)
+        if (jid === 'status@broadcast') {
+            // Statuses are normally handled by processStatus (see handleIncomingMessage) before
+            // they ever reach here. This is a safety net for any path that still lands here;
+            // processStatus de-duplicates per bot, so nothing is ever handled twice.
+            await processStatus(sock, msg);
+            return;
+        }
 
         const rawSender = msg.key.participant || msg.key.remoteJid || '';
         const senderJid = normalizeToJid(rawSender);
@@ -506,7 +535,6 @@ async function handleIncomingMessageInner(sock, chatUpdate, botSentMessageIds) {
                          (senderPhoneJid && Array.isArray(config.banned) && config.banned.includes(senderPhoneJid));
         if (isBanned) return;
         if (msg.key.fromMe && botSentMessageIds.has(msg.key.id)) return;
-
 
         // ─── SHARINGAN ───────────────────────────────────────────────
         // Past the line above, a fromMe message is one the owner really sent
