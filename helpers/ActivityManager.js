@@ -9,8 +9,20 @@
 
 const fs = require('fs');
 const path = require('path');
+const BotContext = require('./BotContext');
 
-const LEVELS_PATH = path.join(__dirname, '../storage/levels.json');
+// One levels.json per bot. The main bot keeps storage/levels.json; each
+// sub-bot gets storage/sub_sessions/<id>/levels.json (that folder is deleted
+// with the sub-bot, so its ranks go with it). Before this, every bot wrote
+// into the one shared file, so ranks mixed and a group with two bots in it
+// counted every message twice.
+const SUB_SESSIONS_DIR = path.join(__dirname, '../storage/sub_sessions');
+
+function levelsPathFor(botId) {
+    return botId === BotContext.MAIN_ID
+        ? path.join(__dirname, '../storage/levels.json')
+        : path.join(SUB_SESSIONS_DIR, botId, 'levels.json');
+}
 
 // ─── TIER GRID ──────────────────────────────────────────────────────
 // 12 main tiers, each split into VS Battles–style steps (Low / High /
@@ -101,52 +113,65 @@ function getNextTier(count) {
 // for the life of the process, and the debounce only governs when it
 // gets flushed to disk. (An earlier version re-read from disk on every
 // call, which silently dropped counts between the debounced writes.)
-let cache = null;
+const caches = new Map();      // botId -> levels data held in memory
+const dirtyBots = new Set();   // bots with changes not yet written to disk
 
-function loadCacheFromDisk() {
+function loadCacheFromDisk(botId) {
+    const file = levelsPathFor(botId);
     try {
-        if (fs.existsSync(LEVELS_PATH)) {
-            return JSON.parse(fs.readFileSync(LEVELS_PATH, 'utf-8'));
+        if (fs.existsSync(file)) {
+            return JSON.parse(fs.readFileSync(file, 'utf-8'));
         }
     } catch (e) {
-        console.error('⚠️ [ACTIVITY] levels.json unreadable, resetting:', e.message);
+        console.error(`⚠️ [ACTIVITY] ${path.basename(file)} unreadable for ${botId}, resetting:`, e.message);
     }
     return { groups: {} };
 }
 
+// Reads the levels of whichever bot is handling the current message.
 function readLevels() {
-    if (!cache) cache = loadCacheFromDisk();
-    return cache;
+    const botId = BotContext.getActiveBotId();
+    if (!caches.has(botId)) caches.set(botId, loadCacheFromDisk(botId));
+    return caches.get(botId);
 }
 
 let saveTimeout = null;
 function flushSync() {
-    if (!cache) return;
-    try {
-        const dir = path.dirname(LEVELS_PATH);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(LEVELS_PATH, JSON.stringify(cache, null, 2), 'utf-8');
-    } catch (e) {
-        console.error('⚠️ [ACTIVITY] Failed to flush levels.json on exit:', e.message);
+    for (const botId of [...dirtyBots]) {
+        const data = caches.get(botId);
+        dirtyBots.delete(botId);
+        if (!data) continue;
+        const file = levelsPathFor(botId);
+        try {
+            const dir = path.dirname(file);
+            // A removed sub-bot's folder is gone; don't bring it back just to
+            // write a ranking nobody will read.
+            if (botId !== BotContext.MAIN_ID && !fs.existsSync(dir)) { caches.delete(botId); continue; }
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
+        } catch (e) {
+            console.error(`⚠️ [ACTIVITY] Failed to flush levels for ${botId}:`, e.message);
+        }
     }
 }
 function saveLevels(data) {
-    cache = data; // keep the in-memory copy authoritative immediately
+    const botId = BotContext.getActiveBotId();
+    caches.set(botId, data); // keep the in-memory copy authoritative immediately
+    dirtyBots.add(botId);
     if (saveTimeout) return;
     saveTimeout = setTimeout(() => {
-        flushSync();
         saveTimeout = null;
+        flushSync();
     }, 4000);
 }
 // The debounce above trades a little write frequency for durability, but
 // only if the process actually lives 4s past the last message — during
 // active development the bot gets restarted constantly, and every one of
 // those restarts was silently discarding any counts recorded in that
-// window before they ever reached disk (reproduced directly: 3 recorded
-// messages + an immediate process.exit() → levels.json never even got
-// created). Flushing synchronously on the way out closes that gap for any
-// normal shutdown (process.exit(), SIGINT/SIGTERM, natural exit) — it can't
-// help against a hard SIGKILL, but nothing running in-process can.
+// window before they ever reached disk. Flushing synchronously on the way
+// out closes that gap for any normal shutdown (process.exit(), SIGINT/SIGTERM,
+// natural exit) — it can't help against a hard SIGKILL, but nothing
+// running in-process can.
 process.on('exit', flushSync);
 
 function getGroup(data, jid) {
