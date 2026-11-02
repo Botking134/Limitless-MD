@@ -238,9 +238,9 @@ telegramBotToken: [
 // a command can change at runtime — before the Proxy below starts routing
 // reads/writes elsewhere. This snapshot is what a brand-new sub-bot (no
 // vars.json of its own yet) starts from.
-const DYNAMIC_KEY_SET = new Set(BotContext.DYNAMIC_KEYS);
+const DYNAMIC_KEY_SET = new Set(BotContext.SCOPED_KEYS);
 const dynamicDefaults = {};
-for (const key of BotContext.DYNAMIC_KEYS) {
+for (const key of BotContext.SCOPED_KEYS) {
     if (key in baseConfig) dynamicDefaults[key] = baseConfig[key];
 }
 BotContext.setDefaults(dynamicDefaults);
