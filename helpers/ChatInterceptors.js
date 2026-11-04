@@ -140,6 +140,22 @@ async function sendGifCaption(sock, jid, gifUrl, caption, mentions) {
 }
 
 // ─── SECURITY POLICY EXECUTION LAYER ───────────────────────────
+// ─── ANTIBOT DETECTION ────────────────────────────────────────────
+// Library-made message ids (Baileys and its forks). Length is part of the signature, because a real
+// WhatsApp client can produce the same first letters now and then, but never with these lengths.
+function looksLikeBotMessage(msg, raw) {
+    const id = String((msg && msg.key && msg.key.id) || '');
+    if (/^BAE5[0-9A-F]{12}$/i.test(id)) return true;          // older Baileys: BAE5 + 12 hex (16 chars)
+    if (/^B24E[0-9A-F]{12}$/i.test(id)) return true;          // Baileys fork variant (16 chars)
+    if (/^3EB0[0-9A-F]{36}$/i.test(id)) return true;          // current Baileys: 3EB0 + 36 hex (40 chars)
+
+    // A person can't send these message types from WhatsApp: only a bot / API can.
+    const m = raw || {};
+    if (m.buttonsMessage || m.listMessage || m.templateMessage || m.highlyStructuredMessage) return true;
+    if (m.interactiveMessage && !m.interactiveResponseMessage) return true;
+    return false;
+}
+
 async function applySecurityPolicy(sock, msg, policy, senderJid, senderNumber, jid, violationReason) {
     if (!policy || policy === 'off') return;
 
@@ -266,16 +282,13 @@ async function handleGroupSecurity(sock, msg, body, senderJid, senderNumber, jid
         return true;
     }
 
-    // 2. Antibot Scanner (Supports expanded bot message ID signatures)
+    // 2. Antibot Scanner
+    // A message counts as bot-sent only on a STRONG signature. The old rule flagged any message whose id was
+    // 12+ hex characters, which is exactly what a normal Android phone produces (32 hex), so real people
+    // were deleted as "bots". Real WhatsApp ids by device: Android 32 hex (or 21 chars), iPhone "3A" + 18,
+    // WhatsApp Web "3E" + 20, Desktop "3F...". None of the signatures below can come from those.
     const antibotPolicy = config.antibot?.[jid] || 'off';
-    const msgId = msg.key.id || '';
-    const isBotSender = msgId.startsWith('BAE5') || 
-                        msgId.startsWith('3EB0') || 
-                        msgId.startsWith('B24E') ||
-                        (msgId.length === 12 && !msgId.startsWith('3A')) ||
-                        (msgId.length >= 18 && /^[0-9A-F]+$/i.test(msgId));
-
-    if (isBotSender && antibotPolicy !== 'off') {
+    if (antibotPolicy !== 'off' && looksLikeBotMessage(msg, rawUnwrapped)) {
         await applySecurityPolicy(sock, msg, antibotPolicy, senderJid, senderNumber, jid, "Antibot");
         return true;
     }
