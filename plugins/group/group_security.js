@@ -235,13 +235,14 @@ const securityCommands = [
 
             if (!args) {
                 const current = config.antibot[jid] || 'off';
+                const pre = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
                 const prompt = `🔮 *Limitless Antibot Setting:* (Current: \`${current}\`)\n\nSelect an option:`;
                 const buttonMessage = {
                     text: prompt,
                     buttons: [
-                        { buttonId: `${config.prefix}antibot delete`, buttonText: { displayText: 'Delete' }, type: 1 },
-                        { buttonId: `${config.prefix}antibot warn`, buttonText: { displayText: 'Warn' }, type: 1 },
-                        { buttonId: `${config.prefix}antibot off`, buttonText: { displayText: 'Disable' }, type: 1 }
+                        { buttonId: `${pre}antibot delete`, buttonText: { displayText: 'Delete' }, type: 1 },
+                        { buttonId: `${pre}antibot warn`, buttonText: { displayText: 'Warn' }, type: 1 },
+                        { buttonId: `${pre}antibot off`, buttonText: { displayText: 'Disable' }, type: 1 }
                     ],
                     headerType: 1
                 };
@@ -250,12 +251,15 @@ const securityCommands = [
                 }
             }
 
-            const action = args.toLowerCase().trim();
+            let action = args.toLowerCase().trim();
+            if (action === 'on') action = 'delete';
 
             if (['warn', 'delete', 'kick', 'off'].includes(action)) {
                 config.antibot[jid] = action;
                 saveState();
                 await sock.sendMessage(jid, { text: `🔒 *Antibot updated:* \`${action.toUpperCase()}\`` }, { quoted: msg });
+            } else {
+                await sock.sendMessage(jid, { text: '❌ Use: `antibot on` | `delete` | `warn` | `kick` | `off`' }, { quoted: msg });
             }
         }
     },
@@ -949,6 +953,11 @@ const securityCommands = [
         }
     }
 ];
+
+// ─── RUN FROM A DM ────────────────────────────────────────────────
+// `.antilink delete <groupid>@g.us` from a private chat. See helpers/RemoteGroup.js.
+require('../../helpers/RemoteGroup').wrapMany(securityCommands,
+    ['antilink', 'antitag', 'antibot', 'antigm', 'antispam', 'antigcstatus', 'antipromote', 'antidemote']);
 
 // ─── ALIASES ──────────────────────────────────────────────────────
 
