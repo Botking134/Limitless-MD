@@ -95,7 +95,7 @@ async function run(sock, msg, args, ctx) {
     return reply('Usage:\n.badword add <word or phrase>\n.badword remove <word>\n.badword warn | delete | kick | off\n.badword clear\n.badwords');
 }
 
-module.exports = [
+const commands = [
     { name: 'badword', isPrefixless: false, execute: run },
     { name: 'antiword', isPrefixless: false, execute: run },
     {
@@ -108,3 +108,5 @@ module.exports = [
         }
     }
 ];
+
+module.exports = require('../../helpers/RemoteGroup').wrapMany(commands, ['badword', 'antiword', 'badwords']);
