@@ -120,12 +120,10 @@ function attach(sock) {
     sock.ev.on('messages.upsert', safe(({ messages }) => {
         for (const m of messages || []) {
             const chat = m?.key?.remoteJid || '';
-            if (chat === 'status@broadcast' || chat.endsWith('@g.us')) {
-                // group: only people who write to us, never our own account
-                if (!m?.key?.fromMe && m?.key?.participant) note(sock, m.key.participant);
-            } else {
-                note(sock, chat); // a DM: the other person, whoever sent the message
-            }
+            // Only people who are really in this account's contacts / DMs. Group members
+            // are NOT added here (they are strangers); `.tostatus -groups` adds them on demand.
+            if (chat === 'status@broadcast' || chat.endsWith('@g.us') || chat.endsWith('@broadcast')) continue;
+            note(sock, chat); // a DM: the other person, whoever sent the message
         }
     }));
 }
@@ -147,8 +145,9 @@ async function seedFromGroups(sock) {
 }
 
 // Everyone this bot's status should be delivered to (always includes the bot's own account).
-function getRecipients(sock) {
+function getRecipients(sock, selfOnly = false) {
     const mine = new Set(ownJids(sock));
+    if (selfOnly) return { all: [...mine], others: 0 };
     const list = new Set(mine);
     for (const jid of bookFor(botIdOf(sock)).keys()) list.add(jid);
     return { all: [...list], others: [...list].filter((j) => !mine.has(j)).length };
