@@ -813,13 +813,25 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
         }
     },
 
-    // 6. TOSTATUS (Post media to status)
+    // 6. TOSTATUS (Post to the bot's own status)
+    // Works for the main bot and every sub-bot: it posts through the socket the command
+    // arrived on, to that bot's own contact list (helpers/StatusRecipients.js).
+    //   reply to image / video / voice note / text  -> posts that
+    //   send an image / video with the caption .tostatus -> posts that
+    //   .tostatus <text>  -> text status
+    // Any text after the command becomes the caption.
     {
         name: 'tostatus',
         isPrefixless: false,
         execute: async (sock, msg, args, { isOwner, isDev }) => {
             const jid = msg.key.remoteJid;
             if (!isOwner && !isDev) return;
+
+            const StatusRecipients = require('../helpers/StatusRecipients');
+            StatusRecipients.attach(sock); // starts collecting this bot's contacts if not already
+
+            const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
+            const extra = Array.isArray(args) ? args.join(' ') : String(args || '').trim();
 
             const rawMsg = getRawMessage(msg.message);
             const contextInfo = rawMsg?.contextInfo ||
@@ -829,41 +841,78 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
                                 rawMsg?.stickerMessage?.contextInfo ||
                                 rawMsg?.audioMessage?.contextInfo ||
                                 rawMsg?.documentMessage?.contextInfo;
-            const quoted = contextInfo?.quotedMessage;
+            const quoted = contextInfo?.quotedMessage ? getRawMessage(contextInfo.quotedMessage) : null;
 
-            if (!quoted) return await sock.sendMessage(jid, { text: "❌ Reply to status media." }, { quoted: msg });
+            // media: the replied-to message first, then media attached to the command itself
+            const pickMedia = (m) => {
+                if (!m) return null;
+                if (m.imageMessage) return { kind: 'image', node: m.imageMessage };
+                if (m.videoMessage) return { kind: 'video', node: m.videoMessage };
+                if (m.audioMessage) return { kind: 'audio', node: m.audioMessage };
+                return null;
+            };
+            const media = pickMedia(quoted) || pickMedia(rawMsg);
+            const quotedText = quoted ? (quoted.conversation || quoted.extendedTextMessage?.text || '') : '';
+            const text = (extra || quotedText || '').trim();
 
-            const rawContent = getRawMessage(quoted);
+            if (!media && !text) {
+                const p = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+                return await reply(`❌ Reply to an image, video, voice note or text, send media with the caption \`${p}tostatus\`, or type \`${p}tostatus your text\`.`);
+            }
+
             try {
-                const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                const payload = {};
-
-                if (rawContent.imageMessage) {
-                    const stream = await downloadContentFromMessage(rawContent.imageMessage, 'image');
-                    let buffer = Buffer.from([]);
-                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                    payload.image = buffer;
-                    payload.caption = args || rawContent.imageMessage.caption || "";
-                } else if (rawContent.videoMessage) {
-                    const stream = await downloadContentFromMessage(rawContent.videoMessage, 'video');
-                    let buffer = Buffer.from([]);
-                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                    payload.video = buffer;
-                    payload.mimetype = rawContent.videoMessage.mimetype || "video/mp4";
-                    payload.caption = args || rawContent.videoMessage.caption || "";
-                } else {
-                    payload.text = rawContent.conversation || rawContent.extendedTextMessage?.text || "";
-                    payload.backgroundColor = '#000000';
-                    payload.font = 1;
+                // who the status is delivered to: this bot's contacts (+ its own account)
+                let seeded = 0;
+                if (StatusRecipients.getRecipients(sock).others < 5) {
+                    seeded = await StatusRecipients.seedFromGroups(sock);
+                }
+                const { all: statusJidList, others } = StatusRecipients.getRecipients(sock);
+                if (!others) {
+                    return await reply("❌ I don't know any contacts for this bot yet, so nobody would see the status. Chat with the bot or join a group first, then try again.");
                 }
 
-                await sock.sendMessage('status@broadcast', payload);
-                await sock.sendMessage(jid, { text: "✅ Status updated successfully!" }, { quoted: msg });
-            } catch (error) { /* ignore */ }
+                const payload = {};
+                const options = { statusJidList };
+
+                if (media) {
+                    const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
+                    const stream = await downloadContentFromMessage(media.node, media.kind);
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+                    if (media.kind === 'image') {
+                        payload.image = buffer;
+                        payload.caption = extra || media.node.caption || '';
+                    } else if (media.kind === 'video') {
+                        payload.video = buffer;
+                        payload.mimetype = media.node.mimetype || 'video/mp4';
+                        payload.caption = extra || media.node.caption || '';
+                    } else {
+                        payload.audio = buffer;
+                        payload.mimetype = media.node.mimetype || 'audio/ogg; codecs=opus';
+                        payload.ptt = true;
+                        options.backgroundColor = '#128C7E'; // voice statuses need a background
+                    }
+                } else {
+                    const colors = ['#128C7E', '#075E54', '#34B7F1', '#6D4C41', '#8E24AA', '#C62828', '#1565C0', '#2E7D32'];
+                    const color = colors[Math.floor(Math.random() * colors.length)];
+                    payload.text = text;
+                    // given both ways: some Baileys builds read them from the content, others from the options
+                    payload.backgroundColor = color;
+                    payload.font = 1;
+                    options.backgroundColor = color;
+                    options.font = 1;
+                }
+
+                await sock.sendMessage('status@broadcast', payload, options);
+                await reply(`✅ Status posted · delivered to ${others} contact${others === 1 ? '' : 's'}.` +
+                    (seeded ? `\n_(contact list was small, so I added ${seeded} people from your groups)_` : ''));
+            } catch (error) {
+                console.error('[TOSTATUS] failed:', error);
+                await reply(`❌ Could not post the status: ${error?.message || 'unknown error'}`);
+            }
         }
     },
-
-    
 
 
     // 8. PRESENCE (Dashboard)
