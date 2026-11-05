@@ -1,6 +1,6 @@
 // plugins/group/badword.js
-//   .badword add <word or phrase>[, another, ...]   add (comma or new line separated)
-//   .badword remove <word or phrase>[, ...]          remove
+//   .badword add <word or phrase>[ | another | ...]  add (separate entries with |)
+//   .badword remove <word or phrase>[ | ...]         remove
 //   .badword warn | delete | kick | off              what happens when someone says one
 //   .badword clear                                   empty the list
 //   .badwords                                        show the list + current mode
@@ -65,7 +65,7 @@ async function run(sock, msg, args, ctx) {
 
     if (sub === 'add' || sub === 'set') {
         const terms = BadWords.parseTerms(rest);
-        if (!terms.length) return reply('Usage: .badword add <word or phrase>[, another one]');
+        if (!terms.length) return reply('Usage: .badword add <word or phrase>[ | another one]');
         const { added, existed } = BadWords.add(sock, jid, terms);
         await hide(sock, jid, msg);
         const g = BadWords.getGroup(sock, jid);
