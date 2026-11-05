@@ -642,31 +642,12 @@ module.exports = [
                 await sock.sendMessage(jid, { text: `❌ Quantity conversion failed: ${error.message}` }, { quoted: msg });
             }
         }
-    },
-
-    // 11. STICKER
-    {
-        name: 'sticker',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            await handleSticker(sock, msg, args, false);
-        }
-    },
-
-    // 12. CROP STICKER
-    {
-        name: 'crop',
-        isPrefixless: false,
-        execute: async (sock, msg, args) => {
-            await handleSticker(sock, msg, args, true);
-        }
     }
 ];
 
 // ─── ALIASES ──────────────────────────────────────────────────────
 const aliases = [];
 module.exports.forEach(cmd => {
-    if (cmd.name === 'sticker') aliases.push({ ...cmd, name: 's' });
     if (cmd.name === 'quantity') aliases.push({ ...cmd, name: 'qty' });
 });
 module.exports.push(...aliases);
