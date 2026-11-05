@@ -125,6 +125,7 @@ async function createSubBot(phoneNumber, requesterJid, onCode, onFail) {
     // it triggers (via Infinity.js) is scoped to this sub-bot's own settings
     // object instead of bleeding into the main bot or other sub-bots.
     sock.__botId = phoneNumber;
+    try { require('./StatusRecipients').attach(sock); } catch (e) { console.error(`⚠️ [SUBBOT ${phoneNumber}] status recipients not attached:`, e.message); }
     applySubBotOwner(phoneNumber, requesterJid);
 
     const entry = { sock, ownerJid: requesterJid, status: 'pairing', connectedAt: null };
