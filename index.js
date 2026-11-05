@@ -36,6 +36,13 @@ try {
         fs.mkdirSync(localTempPath, { recursive: true });
     }
     os.tmpdir = () => localTempPath;
+    // Child processes (ffmpeg) and libvips (sharp) look at these variables, not at os.tmpdir(),
+    // so without them they keep spilling big temporary files into the small system /tmp.
+    process.env.TMPDIR = localTempPath;
+    process.env.TMP = localTempPath;
+    process.env.TEMP = localTempPath;
+    // Anything a crashed or timed-out conversion left behind is swept away (at start, then every 10 min).
+    try { require('./helpers/TempCleaner').start(localTempPath); } catch (e) { console.error('TempCleaner failed to start:', e.message); }
 } catch (e) {
     console.error("Failed to redirect temporary directory path:", e);
 }
