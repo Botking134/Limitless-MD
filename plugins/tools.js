@@ -831,7 +831,12 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
             StatusRecipients.attach(sock); // starts collecting this bot's contacts if not already
 
             const reply = (text) => sock.sendMessage(jid, { text }, { quoted: msg });
-            const extra = Array.isArray(args) ? args.join(' ') : String(args || '').trim();
+            let extra = Array.isArray(args) ? args.join(' ') : String(args || '').trim();
+            // flags:  -self  = only your own status tab (good for testing)
+            //         -groups = also deliver to members of the groups this bot is in
+            const selfOnly = /(^|\s)-self\b/i.test(extra);
+            const withGroups = /(^|\s)-groups?\b/i.test(extra);
+            extra = extra.replace(/(^|\s)-(self|groups?)\b/gi, ' ').trim();
 
             const rawMsg = getRawMessage(msg.message);
             const contextInfo = rawMsg?.contextInfo ||
@@ -861,15 +866,11 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
             }
 
             try {
-                // who the status is delivered to: this bot's contacts (+ its own account)
+                // who the status is delivered to: this bot's own account + its contacts.
+                // Group members are only included when you ask for it with -groups.
                 let seeded = 0;
-                if (StatusRecipients.getRecipients(sock).others < 5) {
-                    seeded = await StatusRecipients.seedFromGroups(sock);
-                }
-                const { all: statusJidList, others } = StatusRecipients.getRecipients(sock);
-                if (!others) {
-                    return await reply("❌ I don't know any contacts for this bot yet, so nobody would see the status. Chat with the bot or join a group first, then try again.");
-                }
+                if (withGroups && !selfOnly) seeded = await StatusRecipients.seedFromGroups(sock);
+                const { all: statusJidList, others } = StatusRecipients.getRecipients(sock, selfOnly);
 
                 const payload = {};
                 const options = { statusJidList };
@@ -904,9 +905,14 @@ I Am A Multifunctional WhatsApp Bot Built With Baileys Library, Assembled By My 
                     options.font = 1;
                 }
 
-                await sock.sendMessage('status@broadcast', payload, options);
-                await reply(`✅ Status posted · delivered to ${others} contact${others === 1 ? '' : 's'}.` +
-                    (seeded ? `\n_(contact list was small, so I added ${seeded} people from your groups)_` : ''));
+                const sent = await sock.sendMessage('status@broadcast', payload, options);
+                if (!sent || !sent.key) {
+                    return await reply('⚠️ WhatsApp did not confirm the status, so it probably did not post. Try `-self` first to test.');
+                }
+                console.log(`[TOSTATUS] sent ${sent.key.id} to ${statusJidList.length} jids`);
+                const who = selfOnly ? 'only your own status tab'
+                    : `your status tab + ${others} contact${others === 1 ? '' : 's'}${seeded ? ` (incl. group members)` : ''}`;
+                await reply(`📤 Status sent to WhatsApp → ${who}.\n_Check your Status tab; if it is missing there, try \`-self\` and tell me._`);
             } catch (error) {
                 console.error('[TOSTATUS] failed:', error);
                 await reply(`❌ Could not post the status: ${error?.message || 'unknown error'}`);
