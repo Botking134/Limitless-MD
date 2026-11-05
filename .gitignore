@@ -28,3 +28,6 @@ temp_out_*
 # ─── OS / editor cruft ──────────────────────────────────────────
 .DS_Store
 *.log
+
+# ─── Antiword lists (.badword) — per bot, must survive updates ──
+storage/badwords/
