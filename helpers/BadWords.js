@@ -82,12 +82,8 @@ function getGroup(sock, jid) {
 }
 
 function parseTerms(input) {
-    const text = String(input || '').trim();
-    // "quoted text" (straight or curly quotes) is kept whole, commas and all, so long
-    // phrases with punctuation can be added as one entry
-    const q = text.match(/^["“”'‘’]([\s\S]+)["“”'‘’]$/);
-    if (q) return [squash(q[1])].filter(Boolean);
-    return [...new Set(text.split(/[\n,]+/).map(squash).filter(Boolean))];
+    // Entries are separated by | (or a new line). Commas are part of the phrase.
+    return [...new Set(String(input || '').split(/[|\n]+/).map(squash).filter(Boolean))];
 }
 
 function ensure(sock, jid) {
