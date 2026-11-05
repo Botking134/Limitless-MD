@@ -13,6 +13,8 @@ const axios = require('axios');
 const FormData = require('form-data');
 const sharp = require('sharp');
 const crypto = require('crypto');
+const StickerEngine = require('../helpers/StickerEngine');
+const QuoteSticker = require('../helpers/QuoteSticker');
 
 // ─── CREDENTIALS & BRANDING DEFAULTS ──────────────────────────────
 const KLIPY_API_KEY = process.env.KLIPY_API_KEY || '7wvbG3l5iJ1h21e3beb2xebaZuglezPhnMIHiJ0ooZodo39pceCYOxTQtKGOYMw6';
@@ -59,16 +61,10 @@ function getRawMessage(message) {
     return message;
 }
 
+// True for anything that moves: animated WebP stickers, GIFs, mp4 / webm / mov.
+// Decided from the file's own bytes (see helpers/StickerEngine.js).
 async function isVideoBuffer(buffer) {
-    try {
-        const metadata = await sharp(buffer).metadata();
-        return metadata.pages && metadata.pages > 1;
-    } catch {
-        const header = buffer.slice(0, 12).toString('hex');
-        return header.startsWith('1a45dfa3') || // webm
-               header.startsWith('0000001c66747970') || // mp4
-               header.startsWith('0000002066747970');
-    }
+    return StickerEngine.sniff(buffer) !== 'image';
 }
 
 // ─── DOWNLOAD A STICKER OBJECT FROM A RECEIVED stickerPackMessage ──
@@ -109,82 +105,37 @@ async function sendStickerPackNative(sock, jid, { name, publisher, stickers, cov
     }, { quoted: quotedMsg });
 }
 
-// ─── ADAPTIVE VIDEO/GIF TO WEBP CONVERTER (<900KB & UP TO 15s) ───
+// ─── ADAPTIVE VIDEO / GIF / ANIMATED-STICKER CONVERTER ───────────
+// Steps down fps, resolution and quality until the sticker fits WhatsApp's ~500 KB limit,
+// then only adds the pack/author metadata (no second re-encode). See helpers/StickerEngine.js.
 async function convertVideoAdaptive(buffer, isCropped = false, pack = DEFAULT_PACK, author = DEFAULT_AUTHOR) {
-    const tempId = crypto.randomBytes(6).toString('hex');
-    const inputPath = path.join(os.tmpdir(), `input_${tempId}.bin`);
-    const outputPath = path.join(os.tmpdir(), `output_${tempId}.webp`);
+    const opts = { crop: isCropped, pack: pack || DEFAULT_PACK, author: author || DEFAULT_AUTHOR };
+    return StickerEngine.sniff(buffer) === 'animwebp'
+        ? StickerEngine.animWebpToSticker(buffer, opts)
+        : StickerEngine.videoToSticker(buffer, opts);
+}
 
-    try {
-        await fs.promises.writeFile(inputPath, buffer);
-
-        // 1. Probe video duration
-        let duration = 6;
-        try {
-            const { stdout } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`);
-            const parsed = parseFloat(stdout.trim());
-            if (!isNaN(parsed) && parsed > 0) duration = Math.min(15, parsed);
-        } catch (e) {
-            duration = 8;
-        }
-
-        // 2. Adaptive FPS & CRF based on duration
-        let fps = 10;
-        let quality = 22;
-        if (duration <= 4) {
-            fps = 14;
-            quality = 35;
-        } else if (duration <= 8) {
-            fps = 11;
-            quality = 28;
-        } else {
-            fps = 8;
-            quality = 18;
-        }
-
-        const filter = isCropped
-            ? `fps=${fps},scale=512:512:force_original_aspect_ratio=increase,crop=512:512,flags=lanczos`
-            : `fps=${fps},scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000,flags=lanczos`;
-
-        // 3. Encode to WebP
-        const ffmpegCmd = `ffmpeg -y -i "${inputPath}" -t 15 -vf "${filter}" -vcodec libwebp -lossless 0 -q:v ${quality} -compression_level 4 -loop 0 -an -vsync 0 "${outputPath}"`;
-        await execAsync(ffmpegCmd);
-
-        let webpBuffer = await fs.promises.readFile(outputPath);
-
-        // 4. Strict Safety Net Guard: If still > 900KB, crush down
-        if (webpBuffer.length > 900000) {
-            const reducedFilter = isCropped
-                ? `fps=7,scale=400:400:force_original_aspect_ratio=increase,crop=400:400,pad=512:512:(512-400)/2:(512-400)/2:color=0x00000000`
-                : `fps=7,scale=400:400:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000`;
-            const retryCmd = `ffmpeg -y -i "${inputPath}" -t 12 -vf "${reducedFilter}" -vcodec libwebp -lossless 0 -q:v 15 -compression_level 5 -loop 0 -an -vsync 0 "${outputPath}"`;
-            await execAsync(retryCmd);
-            webpBuffer = await fs.promises.readFile(outputPath);
-        }
-
-        // 5. Inject WhatsApp EXIF Metadata
-        const sticker = new Sticker(webpBuffer, {
-            pack: pack || DEFAULT_PACK,
-            author: author || DEFAULT_AUTHOR,
-            type: isCropped ? StickerTypes.CROPPED : StickerTypes.FULL,
-            quality: 70
-        });
-
-        return await sticker.toBuffer();
-
-    } catch (err) {
-        // Fallback to standard wa-sticker-formatter
+// A still sticker, lowering the quality until it is under WhatsApp's 100 KB limit.
+async function makeStaticSticker(buffer, isCropped, pack, author) {
+    let out = null;
+    for (const quality of [70, 50, 35, 20]) {
         const sticker = new Sticker(buffer, {
-            pack: pack || DEFAULT_PACK,
-            author: author || DEFAULT_AUTHOR,
+            pack, author,
             type: isCropped ? StickerTypes.CROPPED : StickerTypes.FULL,
-            quality: 20
+            quality
         });
-        return await sticker.toBuffer();
-    } finally {
-        try { await fs.promises.unlink(inputPath); } catch (e) {}
-        try { await fs.promises.unlink(outputPath); } catch (e) {}
+        out = await sticker.toBuffer();
+        if (out.length <= StickerEngine.MAX_STATIC_BYTES) break;
     }
+    return out;
+}
+
+// Rejects if a download stalls, so a dead media link can't hang the command forever.
+function withDeadline(promise, ms, message) {
+    return Promise.race([
+        promise,
+        new Promise((_, rej) => setTimeout(() => rej(new Error(message)), ms))
+    ]);
 }
 
 // ─── API CONVERTER FALLBACK ───────────────────────────────────────
@@ -198,7 +149,7 @@ async function convertViaApi(buffer, isCropped = false) {
 
         const response = await axios.post('https://apis.davidcyril.name.ng/converter/sticker', form, {
             headers: { ...form.getHeaders() },
-            timeout: 15000
+            timeout: 8000
         });
 
         if (response.data && response.data.success && response.data.sticker) {
@@ -207,6 +158,46 @@ async function convertViaApi(buffer, isCropped = false) {
         return null;
     } catch {
         return null;
+    }
+}
+
+// ─── TEXT -> CHAT-BUBBLE STICKER ──────────────────────────────────
+// The sender's name and profile picture are looked up, the text is drawn in a WhatsApp-style
+// bubble on a wallpaper (helpers/QuoteSticker.js), and the picture is sent as a sticker.
+// Works through whichever socket received the command, so main bot and sub-bots each use
+// their own session to fetch profile pictures.
+async function sendQuoteSticker(sock, msg, text, contextInfo, quotedRaw) {
+    const jid = msg.key.remoteJid;
+    const isGroup = jid.endsWith('@g.us');
+    try {
+        await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
+
+        const botJid = normalizeToJid(sock.user?.id || '');
+        const senderJid = msg.key.fromMe ? botJid : normalizeToJid(msg.key.participant || msg.key.remoteJid);
+        const quotedId = contextInfo?.stanzaId || null;
+        const authorJid = quotedRaw
+            ? normalizeToJid(contextInfo?.participant || (isGroup ? senderJid : jid))
+            : senderJid;
+
+        const stored = quotedId && global.messageStore ? global.messageStore[quotedId] : null;
+        const name = QuoteSticker.resolveName(sock, msg, authorJid, quotedRaw ? quotedId : null);
+        const mentioned = quotedRaw?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+        const avatar = await QuoteSticker.fetchAvatar(sock, authorJid, isGroup ? jid : null);
+
+        const card = await QuoteSticker.renderQuoteCard({
+            name,
+            text: QuoteSticker.nameMentions(text, mentioned, sock, msg),
+            avatar,
+            time: QuoteSticker.formatTime(quotedRaw ? stored?.messageTimestamp : null),
+            seed: authorJid
+        });
+
+        const stickerBuffer = await makeStaticSticker(card, false, config.packName || DEFAULT_PACK, config.author || DEFAULT_AUTHOR);
+        await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
+        await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } });
+    } catch (error) {
+        console.error('❌ [QUOTE-STICKER] Failed:', error);
+        await sock.sendMessage(jid, { text: `❌ Could not make the text sticker: ${error.message}` }, { quoted: msg });
     }
 }
 
@@ -222,15 +213,24 @@ async function handleSticker(sock, msg, args, isCropped = false) {
     let mediaType = mediaContent?.imageMessage ? "image" : (mediaContent?.videoMessage ? "video" : (mediaContent?.stickerMessage ? "sticker" : ""));
 
     if (!mediaMessage) {
-        return await sock.sendMessage(jid, { text: "❌ Please reply to an image, video, or sticker to convert." }, { quoted: msg });
+        // No picture / video / sticker: a text message becomes a chat-bubble sticker
+        // (reply to the text, or type  .s your words  to quote yourself).
+        const quotedRaw = quoted ? getRawMessage(quoted) : null;
+        const typed = (Array.isArray(args) ? args.join(' ') : String(args || '')).trim();
+        const text = QuoteSticker.textOf(quotedRaw) || (!quoted ? typed : '');
+        if (text) return await sendQuoteSticker(sock, msg, text, contextInfo, quotedRaw);
+        return await sock.sendMessage(jid, { text: "❌ Please reply to an image, video, sticker or text message to convert." }, { quoted: msg });
     }
 
     try {
         await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
         const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-        const stream = await downloadContentFromMessage(mediaMessage, mediaType);
-        let buffer = Buffer.from([]);
-        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+        const buffer = await withDeadline((async () => {
+            const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+            let buf = Buffer.from([]);
+            for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+            return buf;
+        })(), 30000, 'Could not download the media (it may have expired). Send it again.');
 
         const pack = config.packName || DEFAULT_PACK;
         const author = config.author || DEFAULT_AUTHOR;
@@ -245,22 +245,16 @@ async function handleSticker(sock, msg, args, isCropped = false) {
             }
         }
 
-        const isVideo = await isVideoBuffer(buffer);
+        // A video message is always treated as moving; otherwise decide from the file itself.
+        const moving = mediaType === 'video' || await isVideoBuffer(buffer);
         let stickerBuffer = null;
 
-        if (isVideo) {
+        if (moving) {
             stickerBuffer = await convertVideoAdaptive(buffer, isCropped, pack, author);
         } else {
             stickerBuffer = await convertViaApi(buffer, isCropped);
-            if (!stickerBuffer) {
-                const sticker = new Sticker(buffer, {
-                    pack: pack,
-                    author: author,
-                    type: isCropped ? StickerTypes.CROPPED : StickerTypes.FULL,
-                    quality: 60
-                });
-                stickerBuffer = await sticker.toBuffer();
-            }
+            if (stickerBuffer && stickerBuffer.length > StickerEngine.MAX_STATIC_BYTES) stickerBuffer = null;
+            if (!stickerBuffer) stickerBuffer = await makeStaticSticker(buffer, isCropped, pack, author);
         }
 
         stickerCache.set(cacheKey, { buffer: stickerBuffer, timestamp: Date.now() });
@@ -693,14 +687,15 @@ module.exports = [
                 }
 
                 const isAnimated = await isVideoBuffer(buffer);
-                const sticker = new Sticker(buffer, {
-                    pack: pack,
-                    author: author,
-                    type: StickerTypes.FULL,
-                    quality: isAnimated ? 25 : 60
-                });
-
-                const stickerBuffer = await sticker.toBuffer();
+                // Animated stickers only get their metadata swapped (no re-encode, no quality loss).
+                const stickerBuffer = isAnimated
+                    ? await convertVideoAdaptive(buffer, false, pack, author)
+                    : await new Sticker(buffer, {
+                        pack: pack,
+                        author: author,
+                        type: StickerTypes.FULL,
+                        quality: 60
+                    }).toBuffer();
                 await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
                 await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } });
             } catch (error) {
@@ -789,7 +784,7 @@ module.exports = [
         }
     },
 
-    // 5. SMEME (Auto-wrapping, non-overflowing meme sticker)
+    // 5. SMEME (Auto-wrapping, non-overflowing meme sticker; works on animated stickers, GIFs and videos too)
     {
         name: 'smeme',
         isPrefixless: false,
@@ -800,23 +795,25 @@ module.exports = [
             const quoted = contextInfo?.quotedMessage;
             const rawContent = getRawMessage(quoted || msg.message);
 
-            const mediaMessage = rawContent?.imageMessage || rawContent?.stickerMessage;
+            const mediaMessage = rawContent?.imageMessage || rawContent?.stickerMessage || rawContent?.videoMessage;
             if (!mediaMessage) {
-                return await sock.sendMessage(jid, { text: "❌ Reply to an image or static sticker to create a meme sticker." }, { quoted: msg });
+                return await sock.sendMessage(jid, { text: "❌ Reply to an image, sticker (animated too), GIF or video to create a meme sticker." }, { quoted: msg });
             }
 
-            if (!args || !args.trim()) {
-                return await sock.sendMessage(jid, { text: `❌ *Usage:* Reply to media with \`${config.prefix}smeme <text>\` or \`${config.prefix}smeme top | bottom\`` }, { quoted: msg });
+            const prefix = Array.isArray(config.prefix) ? (config.prefix[0] || '.') : (config.prefix || '.');
+            const argText = Array.isArray(args) ? args.join(' ') : String(args || '');
+            if (!argText.trim()) {
+                return await sock.sendMessage(jid, { text: `❌ *Usage:* Reply to media with \`${prefix}smeme <text>\` or \`${prefix}smeme top | bottom\`` }, { quoted: msg });
             }
 
             let topText = '';
             let bottomText = '';
-            const input = args.trim();
+            const input = argText.trim();
 
             if (input.includes('|')) {
                 const parts = input.split('|');
                 topText = parts[0].trim();
-                bottomText = parts[1].trim();
+                bottomText = (parts[1] || '').trim();
             } else if (input.toLowerCase().startsWith('top ')) {
                 topText = input.slice(4).trim();
             } else if (input.toLowerCase().startsWith('bottom ')) {
@@ -825,43 +822,48 @@ module.exports = [
                 bottomText = input;
             }
 
+            const mediaType = rawContent?.imageMessage ? 'image' : (rawContent?.stickerMessage ? 'sticker' : 'video');
             await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
-            console.log(`⚙️ [SMEME] Starting: media=${rawContent?.imageMessage ? 'image' : 'sticker'}, topText="${topText}", bottomText="${bottomText}"`);
+            console.log(`⚙️ [SMEME] Starting: media=${mediaType}, topText="${topText}", bottomText="${bottomText}"`);
 
-            // Hard timeout around the whole download+process+send pipeline.
-            // Without this, a stalled downloadContentFromMessage stream (e.g.
-            // an expired/broken media reference) or a hung sharp/toBuffer call
-            // leaves the command running forever: no success, no thrown error,
-            // nothing in .logs, nothing sent to WhatsApp — exactly the silent
-            // "no reply" failure mode this was built to catch.
-            const withTimeout = (p, ms = 30000) => Promise.race([
+            // Hard timeout around the whole download + process + send pipeline, so a stalled
+            // download or a hung converter ends in an error message instead of silence.
+            // Moving media gets longer because the converter tries several quality levels.
+            const limitMs = mediaType === 'image' ? 30000 : 110000;
+            const withTimeout = (p) => Promise.race([
                 p,
-                new Promise((_, rej) => setTimeout(() => rej(new Error('Timed out after 30s — the quoted media may be expired or unreadable.')), ms))
+                new Promise((_, rej) => setTimeout(() => rej(new Error(`Timed out after ${Math.round(limitMs / 1000)}s — the media may be expired, unreadable or too heavy.`)), limitMs))
             ]);
 
+            const overlayFile = path.join(os.tmpdir(), `smeme_${crypto.randomBytes(6).toString('hex')}.png`);
             try {
                 await withTimeout((async () => {
                     const { downloadContentFromMessage } = await import('@itsliaaa/baileys');
-                    const mediaType = rawContent?.imageMessage ? 'image' : 'sticker';
                     const stream = await downloadContentFromMessage(mediaMessage, mediaType);
                     let buffer = Buffer.from([]);
                     for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-                    const baseImage = await sharp(buffer).resize(512, 512, { fit: 'cover' }).png().toBuffer();
+                    const pack = config.packName || DEFAULT_PACK;
+                    const author = config.author || DEFAULT_AUTHOR;
                     const svgOverlay = generateMemeSvg(topText, bottomText);
-                    const memedBuffer = await sharp(baseImage)
-                        .composite([{ input: svgOverlay, top: 0, left: 0 }])
-                        .png()
-                        .toBuffer();
+                    const moving = mediaType === 'video' || StickerEngine.sniff(buffer) !== 'image';
 
-                    const sticker = new Sticker(memedBuffer, {
-                        pack: config.packName || DEFAULT_PACK,
-                        author: config.author || DEFAULT_AUTHOR,
-                        type: StickerTypes.FULL,
-                        quality: 60
-                    });
+                    let stickerBuffer;
+                    if (moving) {
+                        // The caption is drawn once as a 512x512 picture, then laid over every frame.
+                        await fs.promises.writeFile(overlayFile, await sharp(svgOverlay).png().toBuffer());
+                        stickerBuffer = StickerEngine.sniff(buffer) === 'animwebp'
+                            ? await StickerEngine.animWebpToSticker(buffer, { overlay: overlayFile, pack, author })
+                            : await StickerEngine.videoToSticker(buffer, { overlay: overlayFile, crop: true, pack, author });
+                    } else {
+                        const baseImage = await sharp(buffer).resize(512, 512, { fit: 'cover' }).png().toBuffer();
+                        const memedBuffer = await sharp(baseImage)
+                            .composite([{ input: svgOverlay, top: 0, left: 0 }])
+                            .png()
+                            .toBuffer();
+                        stickerBuffer = await makeStaticSticker(memedBuffer, false, pack, author);
+                    }
 
-                    const stickerBuffer = await sticker.toBuffer();
                     await sock.sendMessage(jid, { sticker: stickerBuffer }, { quoted: msg });
                     await sock.sendMessage(jid, { react: { text: "✅", key: msg.key } });
                 })());
@@ -873,6 +875,8 @@ module.exports = [
                 } catch (sendErr) {
                     console.error('❌ [SMEME] Also failed to send the error message itself:', sendErr.message);
                 }
+            } finally {
+                try { await fs.promises.unlink(overlayFile); } catch (e) { /* ignore */ }
             }
         }
     },
