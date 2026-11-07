@@ -115,11 +115,16 @@ async function convertVideoAdaptive(buffer, isCropped = false, pack = DEFAULT_PA
         : StickerEngine.videoToSticker(buffer, opts);
 }
 
-// A still sticker, lowering the quality until it is under WhatsApp's 100 KB limit.
+// A still sticker: walks the fixed size/quality steps in StickerEngine.STATIC_STEPS until it is
+// under MAX_STATIC_BYTES (80 KB).
 async function makeStaticSticker(buffer, isCropped, pack, author) {
+    const sharp = require('sharp');
     let out = null;
-    for (const quality of [70, 50, 35, 20]) {
-        const sticker = new Sticker(buffer, {
+    for (const [side, quality] of StickerEngine.STATIC_STEPS) {
+        let input = buffer;
+        try { input = await sharp(buffer).rotate().resize(side, side, { fit: 'inside', withoutEnlargement: true }).png().toBuffer(); }
+        catch (e) { /* not decodable by sharp: let the sticker library try the original */ }
+        const sticker = new Sticker(input, {
             pack, author,
             type: isCropped ? StickerTypes.CROPPED : StickerTypes.FULL,
             quality
